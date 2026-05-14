@@ -1,0 +1,30 @@
+transcribe:
+    beam_size : 7
+    best_of : 7
+    repetition_penalty:1.1
+    no_repeat_ngram_size:2
+    temperature:[0.0,0.2,0.3,0.4,0.5]
+    compression_ratio_threshold:2.2
+    log_prob_threshold: -1.0
+    no_speech_threshold:0.7
+    prompt_reset_on_temperature:0.8
+    languate_detection_threshold:0.7
+
+asr_model:
+    target_langs: ["ko", "en"]
+
+
+repetition:
+    max_head_mismatch:1
+    max_middle_edits:1
+    min_match_len:3
+
+server:
+    no_speech_thresh:0.7
+    same_output_threshold:10
+    language_cnt_threshod:3
+
+port:1234
+model_serve :'llama'
+model_name:'synatra'
+log_status:True
