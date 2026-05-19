@@ -19,23 +19,41 @@
 ### 2.1 개발 / 테스트 환경 (현재 작업 환경)
 - Windows PC, **RTX 3080**, 인터넷 연결 가능
 - VS Code IDE에서 클로드 코드를 통해 개발/테스트
-- **테스트 입력 경로 — `test_client.py` 직접 송신 방식 채택**
-  - 마이크 입력 대신, WhisperLiveKit 내장 헤드리스 클라이언트 [whisperlivekit/test_client.py](whisperlivekit/test_client.py)로 **로컬 mp3/wav 파일을 WebSocket `/asr`에 직접 송신**한다.
+- **테스트 입력 경로 — 두 가지 방식 병렬 운영**
+
+**경로 A — 파일 기반 (정량적, 기존 방식)**
+  - WhisperLiveKit 내장 헤드리스 클라이언트 [whisperlivekit/test_client.py](whisperlivekit/test_client.py)로 **`test_data/` 내 로컬 mp3/wav 파일을 WebSocket `/asr`에 직접 송신**한다.
   - **가상 오디오 케이블(VB-Cable, VoiceMeeter 등)에 의존하지 않는다.** 사운드 카드/드라이버 설치도 불필요.
   - 의존성: 시스템 `ffmpeg` 설치 필수 (파일을 PCM s16le 16kHz mono로 변환).
   - 서버는 `--pcm-input` 플래그로 기동 → 클라이언트가 PCM 청크를 직접 송신.
   - 실행 예:
-    - 서버 기동: `whisperlivekit-server --model-dir whisperlivekit/model/whisper-large-v3-turbo --backend whisper --lan auto --pcm-input`
-    - 파일 송신: `python -m whisperlivekit.test_client samples/ko_sample.wav --live`
+    - 서버 기동: `whisperlivekit-server --model_dir whisperlivekit/model/whisper-large-v3-turbo --backend whisper --backend-policy localagreement --lan auto --pcm-input --warmup-file test_data/sbs1_10s.mp3`
+    - 파일 송신: `python -m whisperlivekit.test_client test_data/sbs1.mp3 --live`
+    - Windows PowerShell에서 한국어 출력 깨짐 방지: `$env:PYTHONIOENCODING = "utf-8"` 선행 실행 필요
   - 옵션: `--speed 1.0`(실시간) / `--speed 0`(가능한 한 빠르게), `--language ko`/`--language en` 강제, `--live`로 비확정/확정 진행 출력, `--json`으로 원본 응답 로깅.
+
+**경로 B — 마이크 직접 녹음 (정성적, 신규)**
+  - 서버를 `--pcm-input` 플래그 없이 기동 → 브라우저가 `MediaRecorder` 방식으로 마이크 음성을 실시간 캡처
+  - 브라우저에서 `http://localhost:8000/` 접속 → 내장 웹 UI ([whisperlivekit/web/live_transcription.html](whisperlivekit/web/live_transcription.html))에서 마이크 직접 녹음
+  - 마이크에 직접 말하면서 전사 결과를 실시간 확인 (정성적 평가)
+  - 서버 기동 예: `whisperlivekit-server --model_dir whisperlivekit/model/whisper-large-v3-turbo --backend whisper --backend-policy localagreement --lan auto --warmup-file test_data/sbs1_10s.mp3`
+  - 목적: 파일 기반 정량 평가와 함께, 실제 마이크 입력에 대한 정성적 평가 병행
+
+**test_data 디렉토리 구조**
+  - `test_data/` 디렉토리: 음성 파일(mp3/wav) + 선택적 정답 스크립트(txt)
+  - 파일명 규칙: 음성파일과 정답 스크립트 파일명 동일, 확장자만 다름 (예: `sbs1.mp3` ↔ `sbs1.txt`)
+  - 정답 스크립트가 없는 음성파일도 존재 가능
+  - 현재: `sbs1.mp3` (음성), `sbs1.txt` (정답 스크립트)
+  - 용도: 향후 음성파일 기반 STT 성능 분석 시 활용
 - **STT 동작 확인용 UI 선택지** (필요에 따라 선택):
-  - **터미널 (기본)**: `test_client.py --live` 출력으로 `lines[]`(확정) + `buffer_transcription`(비확정) 흐름까지 확인 가능. 백엔드 로그/print 병행.
-  - **WhisperLiveKit 내장 웹 UI** ([whisperlivekit/web/live_transcription.html](whisperlivekit/web/live_transcription.html) + `live_transcription.js`, `live_transcription.css`, 서버 실행 시 `GET /`에서 자동 서빙됨): 현 상태로는 `getUserMedia()` 기반 마이크 캡처 전용이라 `test_client.py` 흐름으로는 시각 검증 불가. **시각 검증이 필요해지는 시점에 별도 의논** (§7 참조).
+  - **터미널**: `test_client.py --live` 또는 `--json` 출력으로 `lines[]`(확정) + `buffer_transcription`(비확정) 흐름까지 확인 가능. 백엔드 로그/print 병행. (경로 A 파일 기반 테스트용)
+  - **WhisperLiveKit 내장 웹 UI** ([whisperlivekit/web/live_transcription.html](whisperlivekit/web/live_transcription.html) + `live_transcription.js`, `live_transcription.css`, 서버 실행 시 `GET /`에서 자동 서빙됨): 서버 기동 후 브라우저에서 접속하면 마이크 캡처 및 실시간 전사 결과를 UI상에서 시각적으로 확인 가능. (경로 B 마이크 직접 녹음 테스트용)
   - **기존 React 웹 UI**: 번역(llama) 파이프라인까지 묶어 최종 검증할 때 연결.
 - **검증 순서 (권장)**:
-  1. `test_client.py`로 mp3/wav 송신 → 터미널에서 번역 제외, 실시간 STT 전사 동작 확인
-  2. `test_client.py --live` 터미널 출력으로 확정/비확정 플래그 + 언어 전환 동작 확인 (내장 웹 UI 시각 검증은 §7 보류 항목)
-  3. 기존 React 웹 UI 연결 후 번역 + 최종 UI 표출까지 확인
+  1. `test_client.py`로 mp3/wav 송신 (경로 A) → 터미널에서 번역 제외, 실시간 STT 전사 동작 확인 (정량 평가)
+  2. 서버 기동 후 브라우저 + 마이크 직접 녹음 (경로 B) → 내장 웹 UI에서 실시간 전사 결과 시각 확인 (정성 평가)
+  3. `test_client.py --live` 터미널 출력으로 확정/비확정 플래그 + 언어 전환 동작 확인
+  4. 기존 React 웹 UI 연결 후 번역 + 최종 UI 표출까지 확인
 
 ### 2.2 배포 환경
 - **폐쇄망** Windows PC, **RTX 5090**, 외부 인터넷 차단

@@ -6,14 +6,17 @@ whisperlivekit 위에서 whisper-large-v3-turbo 로컬 모델이 실시간으로
 
  1-1. uv 가상환경 구성 및 whisperlivekit 의존성 설치
  1-2. whisperlivekit/model/whisper-large-v3-turbo/ 로컬 경로로 모델 로드 확인
- 1-3. WhisperLiveKit 내장 `test_client.py`로 로컬 mp3/wav 파일을 WebSocket `/asr`에 송신하여 실시간 전사 동작 확인 (서버는 `--pcm-input`으로 기동, 터미널 출력 기준)
+ 1-3. 두 가지 경로로 실시간 전사 동작 확인
+→ 경로 A (파일 기반, 정량): WhisperLiveKit 내장 `test_client.py`로 `test_data/` 내 mp3/wav 파일을 WebSocket `/asr`에 송신 (서버는 `--pcm-input`으로 기동, 터미널 출력 기준)
+→ 경로 B (마이크 직접, 정성): 서버를 `--pcm-input` 없이 기동, 브라우저에서 `http://localhost:8000/` 접속 → 내장 웹 UI로 마이크 직접 녹음하며 실시간 전사 결과 확인
 → 가상 오디오 케이블(VB-Cable, VoiceMeeter 등) 의존 없음. 시스템 `ffmpeg` 설치만 필요.
  1-4. 런타임에 외부 네트워크 호출이 없는지 확인 (HF Hub, PyPI, GitHub 접속 차단 상태에서 동작)
 
 완료 기준
 
-고정 음성 파일(한국어/영어 각 1개)을 `python -m whisperlivekit.test_client`로 송신 → 터미널에 전사 텍스트가 실시간 스트리밍 출력됨
-HF_HUB_OFFLINE=1 환경에서 서버 기동~첫 전사 출력까지 외부 HTTP 요청 0건 확인
+고정 음성 파일(`test_data/sbs1.mp3` 등)을 `python -m whisperlivekit.test_client`로 송신 → 터미널에 전사 텍스트가 실시간 스트리밍 출력됨 (경로 A)
+브라우저에서 `http://localhost:8000/` 접속 후 마이크 직접 녹음 → 내장 웹 UI에서 실시간 전사 결과 출력 확인 (경로 B)
+HF_HUB_OFFLINE=1 환경에서 서버 기동~첫 전사 출력까지 외부 HTTP 요청 0건 확인 (두 경로 모두)
 
 
 Phase 2 — 문장 단위 확정 로직 구현
