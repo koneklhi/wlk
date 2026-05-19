@@ -32,6 +32,8 @@ dependencies = [
     "torchaudio>=2.0.0",
     "tqdm",
     "tiktoken",
+    "safetensors",
+    "python-multipart",
 ]
 
 [project.optional-dependencies]
@@ -54,7 +56,7 @@ voxtral-hf = [
 ]
 listen = ["sounddevice>=0.4.6"]
 cpu = ["torch>=2.0.0", "torchaudio>=2.0.0"]
-cu129 = [
+cu128 = [
     "torch>=2.0.0",
     "torchaudio>=2.0.0",
     'triton>=2.0.0; platform_machine == "x86_64" and (sys_platform == "linux" or sys_platform == "linux2")',
@@ -76,11 +78,11 @@ dev = ["rich>=14.3.3"]
 conflicts = [
     [
         { extra = "cpu" },
-        { extra = "cu129" },
+        { extra = "cu128" },
     ],
     [
         { extra = "diarization-diart" },
-        { extra = "cu129" },
+        { extra = "cu128" },
     ],
     [
         { extra = "voxtral-hf" },
@@ -90,14 +92,10 @@ conflicts = [
 
 [tool.uv.sources]
 torch = [
-    { index = "pytorch-cpu", extra = "cpu", marker = "platform_system != 'Darwin'" },
-    { index = "pytorch-cpu", extra = "diarization-diart", marker = "platform_system != 'Darwin'" },
-    { index = "pytorch-cu129", extra = "cu129", marker = "platform_system == 'Linux' and platform_machine == 'x86_64'" },
+    { index = "pytorch-cu128", marker = "platform_system != 'Darwin' and (platform_machine == 'x86_64' or platform_machine == 'AMD64')" },
 ]
 torchaudio = [
-    { index = "pytorch-cpu", extra = "cpu", marker = "platform_system != 'Darwin'" },
-    { index = "pytorch-cpu", extra = "diarization-diart", marker = "platform_system != 'Darwin'" },
-    { index = "pytorch-cu129", extra = "cu129", marker = "platform_system == 'Linux' and platform_machine == 'x86_64'" },
+    { index = "pytorch-cu128", marker = "platform_system != 'Darwin' and (platform_machine == 'x86_64' or platform_machine == 'AMD64')" },
 ]
 torchvision = [
     { index = "pytorch-cpu", extra = "diarization-diart", marker = "platform_system != 'Darwin'" },
@@ -109,8 +107,8 @@ url = "https://download.pytorch.org/whl/cpu"
 explicit = true
 
 [[tool.uv.index]]
-name = "pytorch-cu129"
-url = "https://download.pytorch.org/whl/cu129"
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
 explicit = true
 
 [project.urls]
