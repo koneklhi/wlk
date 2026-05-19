@@ -7,12 +7,12 @@
 ## 1. 프로젝트 정체성
 
 - **목적**: 기존 `whisperlive` 라이브러리 기반 실시간 STT 통역 시스템을, `whisperlivekit` 라이브러리 기반으로 새로 개발한다.
-- **현 단계**: 요구사항 정리 완료. 구체 설계·구현 방식은 클로드 코드와 함께 결정한다.
+- **현 단계**: ROADMAP Phase 1 완료 (기본 STT 전사 동작 확인). Phase 2(문장 단위 확정 로직) 진입 직전.
 - **상위 라이브러리**: `whisperlivekit` 패키지 본체가 이 저장소에 포함되어 있다. 우리 시스템은 이 위에 얹혀 동작한다.
 - **기존 `whisperlive` 코드 참조 디렉터리**: [whisperlive_code/](whisperlive_code/)
   - 공식 `whisperlive` GitHub 코드를 기반으로 우리 요구사항에 맞게 수정했던 **주요 파일들**이 들어 있다.
   - **기본 용도**: 요구사항을 이해하기 위한 참고 자료. 임시방편 로직(같은 문장 N회 반복 시 확정, 타임스탬프 변화량 임계치 등)은 **그대로 이식하지 않는다**.
-  - **예외 — 그대로 이식하는 영역**: §3.4 번역 파이프라인, §3.5 필터링/단어 교정, §3.6 Glossary 동적 관리, 그리고 §4의 React UI 연결 + 번역(llama) 통합 부분은 `whisperlive_code/`의 코드·로직을 **그대로 사용**한다.
+  - **예외 — 그대로 이식하는 영역**: §3.4 번역 파이프라인, §3.5 필터링/단어 교정, §3.6 Glossary 동적 관리, 그리고 ROADMAP Phase 4(React UI 연결 + 번역 통합) 부분은 `whisperlive_code/`의 코드·로직을 **그대로 사용**한다.
 
 ## 2. 환경
 
@@ -89,9 +89,9 @@
 - **현 단계에서는 스키마 형태를 못박지 않는다.**
 - 의미상 가져갈 가능성이 높은 필드 (기존 `whisperlive` 기준): `text`(원본 메시지), `start` / `end`(타임스탬프), `completed`(확정/비확정 플래그), `lang`(언어 정보) 등.
 - `whisperlivekit` 기본 출력은 `lines[]` + `buffer_transcription` / `buffer_diarization` / `buffer_translation` 형태로 다르다. 이에 맞춰 **새 스키마로 최적화하고 React 구조도 함께 변경할 수 있다**.
-- 따라서 메시지 스키마의 최종 형태와 React 측 변경 범위는 **§4 우선순위 4단계(React UI 연결 + 번역 통합) 진입 직전에 사용자와 의논해 결정**한다. 자세한 미정 사항은 §7 참조.
+- 따라서 메시지 스키마의 최종 형태와 React 측 변경 범위는 **ROADMAP Phase 4(React UI 연결 + 번역 통합) 진입 직전에 사용자와 의논해 결정**한다. 자세한 미정 사항은 §7 참조.
 
-#### 3.3.4 문장 확정 판단 알고리즘 (구체는 §7에서 결정)
+#### 3.3.3 문장 확정 판단 알고리즘 (구체는 §7에서 결정)
 - 기존 `whisperlive`의 임시방편(같은 문장 N회 반복 시 확정, 타임스탬프 변화량 임계치 등)은 **그대로 이식하지 않는다**.
 - 활용 가능 후보: Whisper segment 경계 + `no_speech_prob`, VAD 무음 구간, 구두점, 토큰 안정화(Local Agreement) 등.
 - 후보 비교 후 본격 개발 시점에 사용자와 합의해 확정 — §7 1번 항목 참조.
@@ -110,17 +110,13 @@
 - 인터페이스·구현은 기존 `whisperlive` 구조 그대로 — [whisperlive_code/manager.py](whisperlive_code/manager.py) 기준 코드/로직 그대로 이식.
 - 사전 갱신은 **즉시 반영** — 다음 전사/번역부터 새 사전 적용.
 
-### 3.7 시스템 운영
+### 3.7 React UI 재사용 정책
 - **React UI는 기본적으로 그대로 재사용을 우선한다.** 추가 기능은 가능한 한 **백엔드 측에서 구현**하되, 메시지 스키마 최적화 등을 위해 React 측 변경이 필요한 경우는 §7에서 의논해 결정한다.
 
 ## 4. 구현 우선순위
 
-1. 번역 제외, 한·영 실시간 STT 전사가 터미널 레벨에서 동작 (whisper-large-v3-turbo, 일반 whisper 백엔드, 로컬 모델 경로 `whisperlivekit/model/whisper-large-v3-turbo/` 사용)
-2. 문장 단위 비확정→확정 플래그 송출 + 언어 전환 처리
-3. 환각 제거 + 단어 대치 필터링 — [whisperlive_code/filtering____init__.py](whisperlive_code/filtering____init__.py), [whisperlive_code/manager.py](whisperlive_code/manager.py) **그대로 이식**
-4. 기존 React UI 연결 + 번역(llama) 파이프라인 통합 — [whisperlive_code/](whisperlive_code/)의 관련 코드(`translator.py`, `prompt_manager.py`, `server.py`, `app.py` 등)와 React UI 연결부 **그대로 사용**
-5. Glossary 동적 관리 + 즉시 반영 — [whisperlive_code/manager.py](whisperlive_code/manager.py) 기반 그대로 이식
-6. 폐쇄망 오프라인 검증
+세부 Phase 정의·태스크·완료 기준은 [ROADMAP.md](ROADMAP.md) 참조.
+본 문서는 변하지 않는 설계 제약·운영 규칙만 다룬다.
 
 ## 5. 코드 스타일 / 운영 규칙
 
@@ -170,8 +166,5 @@
 - **React에 보내는 메시지 스키마의 최종 형태 + React UI 변경 범위**
   - 후보 A: 기존 `whisperlive`의 세그먼트 스키마(`{text, start, end, completed, lang, …}`)를 가져가고 백엔드에서 `whisperlivekit` 출력을 그에 맞춰 변환
   - 후보 B: `whisperlivekit` 출력에 맞춰 새 스키마를 정의하고 React UI를 그에 맞게 변경
-  - STT 핵심 기능(§4의 1~3단계) 구현 완료 후, React UI 연결 단계(§4의 4단계) 진입 직전에 의논해 결정
+  - STT 핵심 기능(ROADMAP Phase 1~3) 구현 완료 후, React UI 연결 단계(ROADMAP Phase 4) 진입 직전에 의논해 결정
 - 폐쇄망용 모델 디렉터리 레이아웃과 배포 패키징 형태
-- **내장 웹 UI 시각 검증 수단 — 보류**
-  - `test_client.py`는 헤드리스라 [whisperlivekit/web/live_transcription.html](whisperlivekit/web/live_transcription.html)의 확정/비확정 색상·언어 전환을 눈으로 확인할 수 없음.
-  - 필요해지는 시점(ROADMAP Phase 2 시각 검증이 실제로 막힐 때)에, 내장 웹 UI에 파일 업로드 페이지를 별도 모듈로 추가하는 방안을 의논해 결정.
