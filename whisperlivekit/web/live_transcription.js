@@ -552,15 +552,15 @@ async function startRecording() {
       } catch (tabError) {
         console.log('Tab capture not available, falling back to microphone', tabError);
         const audioConstraints = selectedMicrophoneId
-          ? { audio: { deviceId: { exact: selectedMicrophoneId } } }
-          : { audio: true };
+          ? { audio: { deviceId: { exact: selectedMicrophoneId }, autoGainControl: false, noiseSuppression: false, echoCancellation: false } }
+          : { audio: { autoGainControl: false, noiseSuppression: false, echoCancellation: false } };
         stream = await navigator.mediaDevices.getUserMedia(audioConstraints);
         statusText.textContent = "Using microphone audio.";
       }
     } else if (isWebContext) {
-      const audioConstraints = selectedMicrophoneId 
-        ? { audio: { deviceId: { exact: selectedMicrophoneId } } }
-        : { audio: true };
+      const audioConstraints = selectedMicrophoneId
+        ? { audio: { deviceId: { exact: selectedMicrophoneId }, autoGainControl: false, noiseSuppression: false, echoCancellation: false } }
+        : { audio: { autoGainControl: false, noiseSuppression: false, echoCancellation: false } };
       stream = await navigator.mediaDevices.getUserMedia(audioConstraints);
     }
 
