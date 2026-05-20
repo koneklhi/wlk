@@ -27,8 +27,10 @@ Phase 2 — 문장 단위 확정 로직 구현
 태스크
 
  2-1. 문장 단위 확정 알고리즘 선택 및 구현 [설계 세션]
-→ 후보: Whisper segment 경계 + no_speech_prob, VAD 무음 구간, 구두점, 토큰 안정화(Local Agreement) 등
-→ Whisper segment 경계 + VAD 무음 + 구두점 조합을 첫 시도로 적용
+→ 비교 대상 (예시이며 이 목록에 한정하지 않음):
+  - 스트리밍 정책: SimulStreaming (AlignAtt + CIF 기반, WLK 기본값), LocalAgreement (가설 비교 기반)
+  - 확정 신호: Whisper segment 경계, no_speech_prob, VAD 무음 구간, 구두점, 언어 전환 등
+→ 구체적인 정책·신호 조합은 설계 세션에서 후보를 비교한 후 사용자와 합의해 결정한다
 → 기존 whisperlive의 임시방편(N회 반복 확정, 타임스탬프 변화량 임계치)은 이식하지 않음
  2-2. 비확정 / 확정 플래그를 전사 텍스트와 함께 출력 (`test_client.py --live` 출력의 `lines[]` / `buffer_transcription`으로 확인)
  2-3. 경로 B (마이크 직접 녹음) 정성 평가 — 내장 웹 UI에서 시각 + 실시간 품질 확인

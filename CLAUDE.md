@@ -27,7 +27,8 @@
   - 의존성: 시스템 `ffmpeg` 설치 필수 (파일을 PCM s16le 16kHz mono로 변환).
   - 서버는 `--pcm-input` 플래그로 기동 → 클라이언트가 PCM 청크를 직접 송신.
   - 실행 예:
-    - 서버 기동: `whisperlivekit-server --model_dir whisperlivekit/model/whisper-large-v3-turbo --backend whisper --backend-policy localagreement --lan auto --pcm-input --warmup-file test_data/sbs1_10s.mp3`
+    - 서버 기동: `whisperlivekit-server --model_dir whisperlivekit/model/whisper-large-v3-turbo --backend whisper --lan auto --pcm-input --warmup-file test_data/sbs1_10s.mp3`
+      (스트리밍 정책 `--backend-policy`는 Phase 2 설계 세션에서 결정. 선택지: `simulstreaming`(WLK 기본값) / `localagreement`)
     - 파일 송신: `python -m whisperlivekit.test_client test_data/sbs1.mp3 --live`
     - Windows PowerShell에서 한국어 출력 깨짐 방지: `$env:PYTHONIOENCODING = "utf-8"` 선행 실행 필요
   - 옵션: `--speed 1.0`(실시간) / `--speed 0`(가능한 한 빠르게), `--language ko`/`--language en` 강제, `--live`로 비확정/확정 진행 출력, `--json`으로 원본 응답 로깅.
@@ -36,7 +37,8 @@
   - 서버를 `--pcm-input` 플래그 없이 기동 → 브라우저가 `MediaRecorder` 방식으로 마이크 음성을 실시간 캡처
   - 브라우저에서 `http://localhost:8000/` 접속 → 내장 웹 UI ([whisperlivekit/web/live_transcription.html](whisperlivekit/web/live_transcription.html))에서 마이크 직접 녹음
   - 마이크에 직접 말하면서 전사 결과를 실시간 확인 (정성적 평가)
-  - 서버 기동 예: `whisperlivekit-server --model_dir whisperlivekit/model/whisper-large-v3-turbo --backend whisper --backend-policy localagreement --lan auto --warmup-file test_data/sbs1_10s.mp3`
+  - 서버 기동 예: `whisperlivekit-server --model_dir whisperlivekit/model/whisper-large-v3-turbo --backend whisper --lan auto --warmup-file test_data/sbs1_10s.mp3`
+    (스트리밍 정책 플래그는 Phase 2 설계 세션 이후 확정)
   - 목적: 파일 기반 정량 평가와 함께, 실제 마이크 입력에 대한 정성적 평가 병행
 
 **test_data 디렉토리 구조**
@@ -93,7 +95,10 @@
 
 #### 3.3.3 문장 확정 판단 알고리즘 (구체는 §7에서 결정)
 - 기존 `whisperlive`의 임시방편(같은 문장 N회 반복 시 확정, 타임스탬프 변화량 임계치 등)은 **그대로 이식하지 않는다**.
-- 활용 가능 후보: Whisper segment 경계 + `no_speech_prob`, VAD 무음 구간, 구두점, 토큰 안정화(Local Agreement) 등.
+- 활용 가능 신호 및 정책 예시 (아래는 참고 예시이며, 이 목록에 한정하지 않는다):
+  - 스트리밍 정책: SimulStreaming(AlignAtt + CIF 기반 단어 끝 감지, WLK 기본값), LocalAgreement(가설 비교 기반 토큰 안정화)
+  - 확정 신호: Whisper segment 경계, `no_speech_prob`, VAD 무음 구간, 구두점, 언어 전환 경계 등
+  - 정책과 신호의 조합 방식은 설계 세션에서 비교 후 결정한다.
 - 후보 비교 후 본격 개발 시점에 사용자와 합의해 확정 — §7 1번 항목 참조.
 
 ### 3.4 번역 트리거
