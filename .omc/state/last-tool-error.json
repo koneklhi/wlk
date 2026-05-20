@@ -1,7 +1,0 @@
-{
-  "tool_name": "Bash",
-  "tool_input_preview": "{\"command\":\"cd /d c:\\\\Users\\\\A040-000-0001\\\\Desktop\\\\260407_stt_WLK\\\\WLK && git init && git status\",\"description\":\"Git 저장소 초기화 및 상태 확인\"}",
-  "error": "Exit code 1\n/usr/bin/bash: line 1: cd: too many arguments",
-  "timestamp": "2026-05-14T01:25:30.606Z",
-  "retry_count": 1
-}

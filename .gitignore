@@ -128,3 +128,9 @@ launch.json
 !tests/
 nllb-200-distilled-600M-ctranslate2/*
 *.mp3
+
+# OMC 런타임 상태 — 세션·체크포인트·메모리 등 매 실행마다 변하는 파일들
+.omc/state/
+.omc/sessions/
+.omc/project-memory.json
+.omc/benchmarks/*.log
