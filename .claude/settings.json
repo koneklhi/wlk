@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": ["PowerShell"]
+  },
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo '[리마인더] 계획에서 벗어난 변경이 있었는지 확인하고, 있다면 사용자에게 보고하세요.'"
+          }
+        ]
+      }
+    ]
+  }
+}
