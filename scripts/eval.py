@@ -65,7 +65,7 @@ class EvalResult:
 
 def start_server(model_dir: str, pcm_input: bool, port: int, warmup: str) -> subprocess.Popen:
     cmd = [
-        sys.executable, "-m", "whisperlivekit.server",
+        sys.executable, "-m", "whisperlivekit.basic_server",
         "--model_dir", model_dir,
         "--backend", "whisper",
         "--lan", "ko",
