@@ -79,7 +79,7 @@ def find_reference(audio_path: Path) -> Optional[str]:
     return None
 
 
-def format_result(result: TestResult, as_json: bool) -> str:
+def format_result(result: TestResult, as_json: bool = False) -> str:
     """테스트 결과를 표준 또는 JSON 형식으로 반환."""
     if as_json:
         data: dict = {
