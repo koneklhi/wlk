@@ -170,3 +170,72 @@ async def run_browser_test(
             await browser.close()
 
     return (transcription or "").strip()
+
+
+async def test_file(
+    audio_path: Path,
+    url: str,
+    wait_sec: int,
+    output_device: Optional[str],
+    as_json: bool,
+) -> TestResult:
+    """오디오 파일 1개에 대해 VBCable 경로 전사 테스트 실행."""
+    print(f"\n[vbcable_test] {audio_path.name} 테스트 시작")
+    check_server_health(url)
+    reference = find_reference(audio_path)
+
+    transcription = await run_browser_test(audio_path, url, wait_sec, output_device)
+
+    wer = None
+    if reference:
+        wer = compute_wer_score(transcription, reference)
+
+    result = TestResult(
+        audio_file=str(audio_path),
+        transcription=transcription,
+        reference=reference,
+        wer=wer,
+    )
+    print(format_result(result, as_json))
+    return result
+
+
+def main() -> None:
+    import argparse
+    import asyncio
+    import sys
+
+    parser = argparse.ArgumentParser(
+        description="VBCable 브라우저 자동화 전사 테스트. "
+                    "서버가 이미 실행 중이어야 하며 VBCable이 Windows 기본 입출력으로 설정되어 있어야 합니다.",
+    )
+    parser.add_argument("audio_files", nargs="+", type=Path, help="테스트할 오디오 파일 경로")
+    parser.add_argument("--url", default="http://localhost:8000", help="서버 URL (기본: http://localhost:8000)")
+    parser.add_argument("--wait", type=int, default=15, metavar="SEC", help="재생 완료 후 전사 대기 시간(초, 기본: 15)")
+    parser.add_argument(
+        "--output-device", default=None, metavar="DEVICE",
+        help="sounddevice 출력 장치 이름 또는 인덱스 (기본: 시스템 기본값)",
+    )
+    parser.add_argument("--json", action="store_true", help="결과를 JSON 형식으로 출력")
+    args = parser.parse_args()
+
+    for audio_file in args.audio_files:
+        if not audio_file.exists():
+            print(f"[오류] 파일 없음: {audio_file}", file=sys.stderr)
+            sys.exit(1)
+
+    results = []
+    for audio_file in args.audio_files:
+        result = asyncio.run(
+            test_file(audio_file, args.url, args.wait, args.output_device, args.json)
+        )
+        results.append(result)
+
+    wer_values = [r.wer for r in results if r.wer is not None]
+    if len(results) > 1 and wer_values:
+        avg_wer = sum(wer_values) / len(wer_values)
+        print(f"\n총 {len(results)}개 파일 완료 | 평균 WER: {avg_wer * 100:.1f}%")
+
+
+if __name__ == "__main__":
+    main()
