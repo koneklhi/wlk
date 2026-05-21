@@ -39,7 +39,7 @@ Bash(git commit*)
 
 ## 규칙
 
-- 커밋 메시지는 **한국어** (CLAUDE.md §5.1)
+- 커밋 메시지는 **한국어** (CLAUDE.md §4)
 - subject는 명령형, 72자 미만
 - Co-Authored-By 서명 추가 안 함
 - `git add -A` 또는 `git add .` 사용 금지 — 파일명을 명시적으로 지정
