@@ -12,8 +12,9 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 # --- check_server_health ---
 
 def test_check_server_health_connection_error():
+    import urllib.error
     from vbcable_test import check_server_health
-    with patch("urllib.request.urlopen", side_effect=Exception("연결 실패")):
+    with patch("urllib.request.urlopen", side_effect=urllib.error.URLError("연결 실패")):
         with pytest.raises(RuntimeError, match="연결할 수 없습니다"):
             check_server_health("http://localhost:8000")
 
@@ -88,3 +89,13 @@ def test_format_result_json():
     data = json.loads(output)
     assert data["wer"] == 0.085
     assert data["transcription"] == "안녕하세요"
+
+
+# --- compute_wer_score ---
+
+def test_compute_wer_score_arg_order():
+    from vbcable_test import compute_wer_score
+    with patch("whisperlivekit.metrics.compute_wer", return_value={"wer": 0.1}) as mock_wer:
+        result = compute_wer_score("가나다", "나다라")
+        mock_wer.assert_called_once_with("나다라", "가나다")
+        assert result == 0.1

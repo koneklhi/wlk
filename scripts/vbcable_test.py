@@ -15,6 +15,7 @@
 
 import json
 import subprocess
+import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
@@ -40,7 +41,7 @@ def check_server_health(url: str) -> None:
             raise RuntimeError("서버가 준비되지 않았습니다 (ready=false). 잠시 후 다시 시도하세요.")
     except RuntimeError:
         raise
-    except Exception as e:
+    except (urllib.error.URLError, OSError, TimeoutError) as e:
         raise RuntimeError(f"서버에 연결할 수 없습니다: {url}\n서버가 실행 중인지 확인하세요. ({e})")
 
 
