@@ -118,49 +118,55 @@ async def run_browser_test(
     pcm_array = decode_audio_to_pcm(audio_path)
     duration = len(pcm_array) / SAMPLE_RATE
 
+    processing_timeout_sec = 10
+    poll_interval = 0.5
+
+    transcription = ""
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=False)
-        context = await browser.new_context(permissions=["microphone"])
-        page = await context.new_page()
+        try:
+            context = await browser.new_context(permissions=["microphone"])
+            page = await context.new_page()
 
-        print("[vbcable_test] 페이지 로드 중...")
-        await page.goto(f"{url}/")
-        await page.wait_for_selector("#recordButton")
+            print("[vbcable_test] 페이지 로드 중...")
+            await page.goto(f"{url}/")
+            await page.wait_for_selector("#recordButton")
 
-        print("[vbcable_test] 녹음 시작...")
-        await page.click("#recordButton")
-        await asyncio.sleep(0.5)
+            print("[vbcable_test] 녹음 시작...")
+            await page.click("#recordButton")
+            await asyncio.sleep(poll_interval)
 
-        print(f"[vbcable_test] 오디오 재생 중 ({duration:.1f}초)...")
-        loop = asyncio.get_running_loop()
-        with ThreadPoolExecutor(max_workers=1) as executor:
+            print(f"[vbcable_test] 오디오 재생 중 ({duration:.1f}초)...")
+            loop = asyncio.get_running_loop()
+            with ThreadPoolExecutor(max_workers=1) as executor:
 
-            def _play():
-                sd.play(pcm_array, samplerate=SAMPLE_RATE, device=output_device)
-                sd.wait()
+                def _play():
+                    sd.play(pcm_array, samplerate=SAMPLE_RATE, device=output_device)
+                    sd.wait()
 
-            await loop.run_in_executor(executor, _play)
+                await loop.run_in_executor(executor, _play)
 
-        print(f"[vbcable_test] 재생 완료. 파이프라인 대기 중 (최대 {wait_sec}초)...")
-        for _ in range(wait_sec * 2):
-            count = await page.locator(".buffer_transcription").count()
-            if count == 0:
-                break
-            await asyncio.sleep(0.5)
+            print(f"[vbcable_test] 재생 완료. 파이프라인 대기 중 (최대 {wait_sec}초)...")
+            for _ in range(int(wait_sec / poll_interval)):
+                count = await page.locator(".buffer_transcription").count()
+                if count == 0:
+                    break
+                await asyncio.sleep(poll_interval)
 
-        print("[vbcable_test] 녹음 중지...")
-        await page.click("#recordButton")
+            print("[vbcable_test] 녹음 중지...")
+            await page.click("#recordButton")
 
-        print("[vbcable_test] 서버 처리 완료 대기 중...")
-        for _ in range(20):
-            status = await page.text_content("#status") or ""
-            if "Finished processing" in status:
-                break
-            await asyncio.sleep(0.5)
+            print("[vbcable_test] 서버 처리 완료 대기 중...")
+            for _ in range(int(processing_timeout_sec / poll_interval)):
+                status = await page.text_content("#status") or ""
+                if "Finished processing" in status:
+                    break
+                await asyncio.sleep(poll_interval)
+            else:
+                print("[vbcable_test] 경고: 서버 처리 완료 신호를 받지 못했습니다.")
 
-        transcription = await page.evaluate(
-            "() => document.querySelector('#linesTranscript').innerText"
-        )
-        await browser.close()
+            transcription = await page.locator("#linesTranscript").inner_text()
+        finally:
+            await browser.close()
 
     return (transcription or "").strip()
