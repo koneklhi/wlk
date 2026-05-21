@@ -100,3 +100,67 @@ def format_result(result: TestResult, as_json: bool = False) -> str:
     if result.wer is not None:
         lines.append(f"WER:  {result.wer * 100:.1f}%")
     return "\n".join(lines)
+
+
+async def run_browser_test(
+    audio_path: Path,
+    url: str,
+    wait_sec: int,
+    output_device: str | None,
+) -> str:
+    """Playwright 헤드풀 브라우저로 VBCable 경로 전사 테스트. 전사 텍스트 반환."""
+    import asyncio
+    from concurrent.futures import ThreadPoolExecutor
+
+    import sounddevice as sd
+    from playwright.async_api import async_playwright
+
+    pcm_array = decode_audio_to_pcm(audio_path)
+    duration = len(pcm_array) / SAMPLE_RATE
+
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(headless=False)
+        context = await browser.new_context(permissions=["microphone"])
+        page = await context.new_page()
+
+        print("[vbcable_test] 페이지 로드 중...")
+        await page.goto(f"{url}/")
+        await page.wait_for_selector("#recordButton")
+
+        print("[vbcable_test] 녹음 시작...")
+        await page.click("#recordButton")
+        await asyncio.sleep(0.5)
+
+        print(f"[vbcable_test] 오디오 재생 중 ({duration:.1f}초)...")
+        loop = asyncio.get_event_loop()
+        with ThreadPoolExecutor(max_workers=1) as executor:
+
+            def _play():
+                sd.play(pcm_array, samplerate=SAMPLE_RATE, device=output_device)
+                sd.wait()
+
+            await loop.run_in_executor(executor, _play)
+
+        print(f"[vbcable_test] 재생 완료. 파이프라인 대기 중 (최대 {wait_sec}초)...")
+        for _ in range(wait_sec * 2):
+            count = await page.locator(".buffer_transcription").count()
+            if count == 0:
+                break
+            await asyncio.sleep(0.5)
+
+        print("[vbcable_test] 녹음 중지...")
+        await page.click("#recordButton")
+
+        print("[vbcable_test] 서버 처리 완료 대기 중...")
+        for _ in range(20):
+            status = await page.text_content("#status") or ""
+            if "Finished processing" in status:
+                break
+            await asyncio.sleep(0.5)
+
+        transcription = await page.evaluate(
+            "() => document.querySelector('#linesTranscript').innerText"
+        )
+        await browser.close()
+
+    return (transcription or "").strip()
