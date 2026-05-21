@@ -212,11 +212,17 @@ def main() -> None:
     parser.add_argument("audio_files", nargs="+", type=Path, help="테스트할 오디오 파일 경로")
     parser.add_argument("--url", default="http://localhost:8000", help="서버 URL (기본: http://localhost:8000)")
     parser.add_argument("--wait", type=int, default=15, metavar="SEC", help="재생 완료 후 전사 대기 시간(초, 기본: 15)")
+    def _device(v: str):
+        try:
+            return int(v)
+        except ValueError:
+            return v
+
     parser.add_argument(
-        "--output-device", default=None, metavar="DEVICE",
+        "--output-device", default=None, metavar="DEVICE", type=_device,
         help="sounddevice 출력 장치 이름 또는 인덱스 (기본: 시스템 기본값)",
     )
-    parser.add_argument("--json", action="store_true", help="결과를 JSON 형식으로 출력")
+    parser.add_argument("--json", dest="as_json", action="store_true", help="결과를 JSON 형식으로 출력")
     args = parser.parse_args()
 
     for audio_file in args.audio_files:
@@ -226,9 +232,13 @@ def main() -> None:
 
     results = []
     for audio_file in args.audio_files:
-        result = asyncio.run(
-            test_file(audio_file, args.url, args.wait, args.output_device, args.json)
-        )
+        try:
+            result = asyncio.run(
+                test_file(audio_file, args.url, args.wait, args.output_device, args.as_json)
+            )
+        except RuntimeError as e:
+            print(f"[오류] {audio_file.name}: {e}", file=sys.stderr)
+            sys.exit(1)
         results.append(result)
 
     wer_values = [r.wer for r in results if r.wer is not None]
