@@ -37,8 +37,8 @@
   - 서버를 `--pcm-input` 플래그 없이 기동 → 브라우저가 `MediaRecorder` 방식으로 마이크 음성을 실시간 캡처
   - 브라우저에서 `http://localhost:8000/` 접속 → 내장 웹 UI ([whisperlivekit/web/live_transcription.html](whisperlivekit/web/live_transcription.html))에서 마이크 직접 녹음
   - 마이크에 직접 말하면서 전사 결과를 실시간 확인 (정성적 평가)
-  - 서버 기동 예: `whisperlivekit-server --model_dir whisperlivekit/model/whisper-large-v3-turbo --backend whisper --lan auto --warmup-file test_data/sbs1_10s.mp3`
-    (스트리밍 정책 플래그는 Phase 2 설계 세션 이후 확정)
+  - 서버 기동 예: `whisperlivekit-server --model_dir whisperlivekit/model/whisper-large-v3-turbo --backend whisper --lan ko --warmup-file test_data/sbs1_10s.mp3`
+    (Phase 1 단계에서는 `--lan ko` 로 한국어 강제 — `--lan auto` 는 LocalAgreement 백엔드가 청크마다 언어를 재추정해 한·일 진동/hallucination 을 유발. 한·영 Code-Switching 대응은 Phase 2 §7 에서 의논. 스트리밍 정책 플래그도 Phase 2 설계 세션 이후 확정)
   - 목적: 파일 기반 정량 평가와 함께, 실제 마이크 입력에 대한 정성적 평가 병행
 
 **test_data 디렉토리 구조**
