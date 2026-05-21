@@ -132,7 +132,7 @@ async def run_browser_test(
         await asyncio.sleep(0.5)
 
         print(f"[vbcable_test] 오디오 재생 중 ({duration:.1f}초)...")
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         with ThreadPoolExecutor(max_workers=1) as executor:
 
             def _play():
