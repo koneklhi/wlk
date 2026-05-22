@@ -73,7 +73,10 @@ diarization-diart = [
 ]
 
 [dependency-groups]
-dev = ["rich>=14.3.3"]
+dev = [
+    "pytest>=9.0.2",
+    "rich>=14.3.3",
+]
 
 [tool.uv]
 conflicts = [
