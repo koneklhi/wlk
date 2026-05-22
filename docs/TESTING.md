@@ -26,6 +26,8 @@
 - 옵션: `--speed 1.0`(실시간) / `--speed 0`(가능한 한 빠르게), `--language ko`/`--language en` 강제,
   `--live`로 비확정/확정 진행 출력, `--json`으로 원본 응답 로깅.
 - 스트리밍 정책은 SimulStreaming 채택 (ROADMAP Phase 2-1, [PHASE2_EXPERIMENTS.md](../PHASE2_EXPERIMENTS.md) Exp-000/001 참조).
+- **자동 평가**: `/eval`(또는 `scripts/eval.py`)이 경로 A를 자동 실행해 **WER + 문장 분리 F1**을 산출한다.
+  문장 분리 F1은 정답의 빈 줄 블록(= 문장 1개)과 STT 확정 문장(`lines[]`)의 경계 위치를 비교한다.
 
 ### 경로 B — 마이크 직접 녹음 (정성적)
 
@@ -44,6 +46,8 @@
 - VBCable로 테스트 파일을 PC에서 재생해 가상 마이크 경유 전사
 - 마이크 입력 경로(경로 B)를 유지하면서 동일 음성으로 반복 측정 가능 → 재현성 있는 정성/반정량 평가
 - 헬퍼: [scripts/vbcable_test.py](../scripts/vbcable_test.py)
+- `/eval`이 경로 C도 자동 실행해 경로 A와 동일하게 **WER + 문장 분리 F1**을 산출한다.
+  브라우저 `#linesTranscript`의 `.textcontent`(확정 문장)만 추출하므로 타임스탬프 행이 섞이지 않는다.
 - 상세 배경은 [ROADMAP.md](../ROADMAP.md) Phase 2 참조.
 
 ### test_data 디렉토리 구조
@@ -51,8 +55,10 @@
 - `test_data/` 디렉토리: 음성 파일(mp3/wav) + 선택적 정답 스크립트(txt)
 - 파일명 규칙: 음성파일과 정답 스크립트 파일명 동일, 확장자만 다름 (예: `sbs1.mp3` ↔ `sbs1.txt`)
 - 정답 스크립트가 없는 음성파일도 존재 가능
-- 현재: `sbs1.mp3` (음성), `sbs1.txt` (정답 스크립트)
-- 용도: 향후 음성파일 기반 STT 성능 분석 시 활용
+- **정답 스크립트 형식**: 빈 줄(`\n\n`)로 구분된 블록 = 문장 1개. 문장 분리 F1 평가의 기준이 된다.
+  (마침표 기준 분리는 하지 않음 — `U.S.` 등 약어 오분할 회피)
+- 현재: `sbs1.mp3`/`sbs1.txt` (뉴스 리포트, 한·영 인용구), `ytn1.mp3`/`ytn1.txt` (SCM 회의 통역, 한·영 코드 스위칭 풍부)
+- 용도: STT 전사 정확도(WER) + 문장 확정 정확도(F1) 정량 분석
 
 ### STT 동작 확인용 UI 선택지
 

@@ -1,7 +1,8 @@
 # /eval — 경로 A + C 통합 성능 평가
 
 기능 수정 후 경로 A(파일 기반 WebSocket)와 경로 C(VBCable 루프백) 테스트를 자동으로 실행하고
-WER 결과를 출력한다. 서버 기동/종료와 VBCable 장치 설정/복원은 스크립트가 자동으로 처리한다.
+**WER(전사 정확도) + 문장 분리 F1(문장 확정 정확도)**를 출력한다. 서버 기동/종료와 VBCable 장치
+설정/복원은 스크립트가 자동으로 처리한다. 기본 평가 대상은 `sbs1.mp3` + `ytn1.mp3` 2개 파일이다.
 
 ## 기본 사용법
 
@@ -27,7 +28,7 @@ $ts = Get-Date -Format "yyyyMMdd_HHmm"
 
 1. `$env:PYTHONIOENCODING = "utf-8"` 설정 후 eval.py 실행
 2. VBCable 자동 설정 여부 로그 확인 (성공/실패/건너뜀)
-3. 결과 JSON에서 `avg_wer_a`, `avg_wer_c` 추출
+3. 결과 JSON에서 `avg_wer_a`, `avg_wer_c`, `avg_seg_f1_a`, `avg_seg_f1_c` 추출
 4. `.omc/benchmarks/`의 가장 최근 JSON과 비교:
    ```powershell
    Get-ChildItem .omc/benchmarks/eval_*.json | Sort-Object Name | Select-Object -Last 1
@@ -37,11 +38,26 @@ $ts = Get-Date -Format "yyyyMMdd_HHmm"
 
 ## 결과 해석 기준
 
+### WER (전사 정확도)
+
 | WER 변화 | 판정 |
 |----------|------|
 | -5%p 이상 감소 | 유의미한 개선 |
 | ±5%p 이내 | 유의미한 변화 없음 |
 | +5%p 이상 증가 | 성능 저하 — 원인 조사 필요 |
+
+### 문장 분리 F1 (문장 확정 정확도)
+
+정답의 빈 줄 블록(= 문장 1개)과 STT 확정 문장(`lines[]`)의 경계 위치를 단어 정렬로 비교한다.
+
+| F1 | 판정 |
+|----|------|
+| 0.8 이상 | 문장 경계 매우 정확 |
+| 0.5 ~ 0.8 | 보통 — 일부 과분할/미분할 |
+| 0.5 미만 | 문장 구분 부정확 — Precision↓=과분할, Recall↓=미분할로 진단 |
+
+> 참고: Phase 2 문장 확정 로직 구현 전에는 STT가 전체 전사를 1개 라인으로 묶어 출력하므로
+> F1≈0이 정상 베이스라인이다. 문장 확정 로직이 도입될수록 F1이 상승해야 한다.
 
 ## VBCable 자동 설정
 
