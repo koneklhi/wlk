@@ -107,8 +107,8 @@ async def run_browser_test(
     url: str,
     wait_sec: int,
     output_device: str | None,
-) -> str:
-    """Playwright 헤드풀 브라우저로 VBCable 경로 전사 테스트. 전사 텍스트 반환."""
+) -> list[str]:
+    """Playwright 헤드풀 브라우저로 VBCable 경로 전사 테스트. 확정 문장 리스트 반환."""
     import asyncio
     from concurrent.futures import ThreadPoolExecutor
 
@@ -121,7 +121,7 @@ async def run_browser_test(
     processing_timeout_sec = 10
     poll_interval = 0.5
 
-    transcription = ""
+    sentences: list[str] = []
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=False)
         try:
@@ -165,11 +165,12 @@ async def run_browser_test(
             else:
                 print("[vbcable_test] 경고: 서버 처리 완료 신호를 받지 못했습니다.")
 
-            transcription = await page.locator("#linesTranscript").inner_text()
+            texts = await page.locator("#linesTranscript .textcontent").all_inner_texts()
+            sentences = [t.strip() for t in texts if t.strip()]
         finally:
             await browser.close()
 
-    return (transcription or "").strip()
+    return sentences
 
 
 async def test_file(
@@ -184,7 +185,8 @@ async def test_file(
     check_server_health(url)
     reference = find_reference(audio_path)
 
-    transcription = await run_browser_test(audio_path, url, wait_sec, output_device)
+    sentences = await run_browser_test(audio_path, url, wait_sec, output_device)
+    transcription = " ".join(sentences)
 
     wer = None
     if reference:
