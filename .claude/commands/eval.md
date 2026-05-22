@@ -1,18 +1,22 @@
-# /eval — 경로 A + C 통합 성능 평가
+# /eval — 경로 C 성능 평가 (실제 파이프라인 기준)
 
-기능 수정 후 경로 A(파일 기반 WebSocket)와 경로 C(VBCable 루프백) 테스트를 자동으로 실행하고
-**WER(전사 정확도) + 문장 분리 F1(문장 확정 정확도)**를 출력한다. 서버 기동/종료와 VBCable 장치
-설정/복원은 스크립트가 자동으로 처리한다. 기본 평가 대상은 `sbs1.mp3` + `ytn1.mp3` 2개 파일이다.
+기능 수정 후 경로 C(VBCable 루프백)로 실제 오디오 파이프라인 전체를 통과한 성능을 측정한다.
+**WER(전사 정확도) + 문장 분리 F1(문장 확정 정확도)**를 출력한다.
+서버 기동/종료와 VBCable 장치 설정/복원은 스크립트가 자동으로 처리한다.
+기본 평가 대상은 `sbs1.mp3` + `ytn1.mp3` 2개 파일이다.
+
+경로 A(`--paths A`)는 코드 변경이 무언가 망가뜨렸는지 빠르게 확인하는 **개발 체크용**으로만 사용한다.
+성능 수치는 경로 C 결과를 기준으로 한다 (경로 A는 브라우저 오디오 파이프라인을 우회함).
 
 ## 기본 사용법
 
 ```powershell
-# 경로 A + C 모두 실행 (기본)
+# 경로 C 실행 (기본 — 성능 평가)
 $env:PYTHONIOENCODING = "utf-8"
 .venv\Scripts\python.exe scripts/eval.py `
   --model-dir whisperlivekit/model/whisper-large-v3-turbo
 
-# 경로 A만 실행 (빠름, VBCable 불필요)
+# 경로 A만 실행 (빠른 개발 체크 — VBCable 불필요, 성능 수치 기준으로 사용하지 않음)
 .venv\Scripts\python.exe scripts/eval.py `
   --model-dir whisperlivekit/model/whisper-large-v3-turbo `
   --paths A
@@ -28,23 +32,31 @@ $ts = Get-Date -Format "yyyyMMdd_HHmm"
 
 1. `$env:PYTHONIOENCODING = "utf-8"` 설정 후 eval.py 실행
 2. VBCable 자동 설정 여부 로그 확인 (성공/실패/건너뜀)
-3. 결과 JSON에서 `avg_wer_a`, `avg_wer_c`, `avg_seg_f1_a`, `avg_seg_f1_c` 추출
+3. 결과 JSON에서 `avg_wer_c`, `avg_seg_f1_c` 추출 (경로 C = 성능 기준 지표)
 4. `.omc/benchmarks/`의 가장 최근 JSON과 비교:
    ```powershell
    Get-ChildItem .omc/benchmarks/eval_*.json | Sort-Object Name | Select-Object -Last 1
    ```
-5. 개선 여부를 "이전 WER → 현재 WER (변화량%p)" 형식으로 표시
+5. 개선 여부를 "이전 F1 → 현재 F1" 및 "이전 WER → 현재 WER (변화량%p)" 형식으로 표시
 6. 결과를 `/log-experiment`로 기록할지 사용자에게 확인
 
 ## 결과 해석 기준
 
+WER과 문장 분리 F1 모두 주요 지표다. 두 지표를 함께 보아야 전체 품질을 판단할 수 있다.
+
 ### WER (전사 정확도)
+
+환각 단어 생성(삽입)·단어 누락(삭제)을 포함한 전반적인 전사 정확도를 측정한다.
 
 | WER 변화 | 판정 |
 |----------|------|
 | -5%p 이상 감소 | 유의미한 개선 |
 | ±5%p 이내 | 유의미한 변화 없음 |
 | +5%p 이상 증가 | 성능 저하 — 원인 조사 필요 |
+
+**WER 원인 구분:** WER이 높거나 개선되지 않을 때, 전사 출력(JSON)을 확인해 원인을 구분한다.
+- **치환 오류** ("육군"→"6군", "공군력"→"공군역"): 모델 자체 한계 — Phase 2에서 직접 추적하지 않음
+- **환각 삽입·단어 누락**: 스트리밍 단계 문제 — Phase 2 개선 대상
 
 ### 문장 분리 F1 (문장 확정 정확도)
 
@@ -74,6 +86,6 @@ $ts = Get-Date -Format "yyyyMMdd_HHmm"
 
 - 서버 포트 8001 사용 (개발 서버 8000과 충돌 방지)
 - 서버 ready까지 최대 120초 대기 (모델 로딩 시간)
-- 경로 A는 `--speed 0`으로 가능한 빠르게 실행
-- 경로 C는 오디오 길이 + `--wait` 시간만큼 소요 (기본 sbs1.mp3: 약 2분)
+- 경로 C는 오디오 길이 + `--wait` 시간만큼 소요 (기본 2파일: 약 4분)
+- 경로 A(`--speed 0`)는 빠르지만 브라우저 파이프라인을 우회하므로 성능 수치로 신뢰하지 않음
 - 결과 JSON은 `.omc/benchmarks/` 디렉토리에 저장 권장 (`.gitignore` 적용됨)

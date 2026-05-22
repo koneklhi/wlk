@@ -203,11 +203,11 @@ def print_summary(result: EvalResult) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="경로 A + C 통합 평가 실행기")
+    parser = argparse.ArgumentParser(description="경로 C (VBCable 루프백) 성능 평가 실행기. 경로 A는 빠른 개발 체크용 옵션.")
     parser.add_argument("--model-dir", required=True, help="Whisper 모델 디렉토리 경로")
     parser.add_argument(
-        "--paths", default="A,C",
-        help="실행할 경로 (쉼표 구분, 기본: A,C). 예: A 또는 A,C",
+        "--paths", default="C",
+        help="실행할 경로 (쉼표 구분, 기본: C). A는 빠른 개발 체크용. 예: C 또는 A,C",
     )
     parser.add_argument(
         "--files", nargs="+", type=Path,
