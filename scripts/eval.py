@@ -15,6 +15,7 @@
 import argparse
 import asyncio
 import json
+import re
 import subprocess
 import sys
 import time
@@ -43,6 +44,11 @@ class FileResult:
     reference: Optional[str]
     wer: Optional[float]
     path: str
+    seg_f1: Optional[float] = None
+    seg_precision: Optional[float] = None
+    seg_recall: Optional[float] = None
+    ref_sentences: Optional[int] = None
+    hyp_sentences: Optional[int] = None
 
 
 @dataclass
@@ -52,15 +58,30 @@ class EvalResult:
     model_dir: str
     files: list = field(default_factory=list)
 
-    @property
-    def avg_wer_a(self) -> Optional[float]:
-        vals = [f.wer for f in self.files if f.path == "A" and f.wer is not None]
+    def _avg(self, attr: str, path: str) -> Optional[float]:
+        vals = [getattr(f, attr) for f in self.files if f.path == path and getattr(f, attr) is not None]
         return sum(vals) / len(vals) if vals else None
 
     @property
+    def avg_wer_a(self) -> Optional[float]:
+        return self._avg("wer", "A")
+
+    @property
     def avg_wer_c(self) -> Optional[float]:
-        vals = [f.wer for f in self.files if f.path == "C" and f.wer is not None]
-        return sum(vals) / len(vals) if vals else None
+        return self._avg("wer", "C")
+
+    @property
+    def avg_seg_f1_a(self) -> Optional[float]:
+        return self._avg("seg_f1", "A")
+
+    @property
+    def avg_seg_f1_c(self) -> Optional[float]:
+        return self._avg("seg_f1", "C")
+
+
+def parse_reference_sentences(ref_text: str) -> list:
+    """빈 줄(\\n\\n)로 구분된 블록 = 문장 1개."""
+    return [b.strip() for b in re.split(r"\n\s*\n", ref_text) if b.strip()]
 
 
 def start_server(model_dir: str, pcm_input: bool, port: int, warmup: str) -> subprocess.Popen:
@@ -103,9 +124,35 @@ def stop_server(proc: subprocess.Popen) -> None:
         proc.kill()
 
 
+def _build_result(audio_path: Path, transcription: str, hyp_sentences: list, path: str) -> FileResult:
+    """전사 결과로부터 WER + 문장 분리 F1을 산출해 FileResult를 만든다."""
+    from whisperlivekit.metrics import compute_segmentation, compute_wer
+
+    reference = None
+    wer = None
+    seg = None
+    ref_path = audio_path.with_suffix(".txt")
+    if ref_path.exists():
+        reference = ref_path.read_text(encoding="utf-8").strip()
+        wer = compute_wer(reference, transcription.strip())["wer"]
+        seg = compute_segmentation(parse_reference_sentences(reference), hyp_sentences)
+
+    return FileResult(
+        audio_file=str(audio_path),
+        transcription=transcription,
+        reference=reference,
+        wer=wer,
+        path=path,
+        seg_f1=seg["f1"] if seg else None,
+        seg_precision=seg["precision"] if seg else None,
+        seg_recall=seg["recall"] if seg else None,
+        ref_sentences=seg["ref_sentences"] if seg else None,
+        hyp_sentences=seg["hyp_sentences"] if seg else None,
+    )
+
+
 async def eval_path_a(audio_files: list, base_url: str) -> list:
     from whisperlivekit.test_client import transcribe_audio
-    from whisperlivekit.metrics import compute_wer
 
     results = []
     ws_url = base_url.replace("http://", "ws://") + "/asr"
@@ -117,41 +164,21 @@ async def eval_path_a(audio_files: list, base_url: str) -> list:
             speed=0,
             timeout=120.0,
         )
+        hyp_sentences = [line["text"] for line in result.lines if line.get("text")]
         transcription = result.committed_text or result.text
-
-        reference = None
-        wer = None
-        ref_path = audio_path.with_suffix(".txt")
-        if ref_path.exists():
-            reference = ref_path.read_text(encoding="utf-8").strip()
-            wer = compute_wer(reference, transcription.strip())["wer"]
-
-        results.append(FileResult(
-            audio_file=str(audio_path),
-            transcription=transcription,
-            reference=reference,
-            wer=wer,
-            path="A",
-        ))
+        results.append(_build_result(audio_path, transcription, hyp_sentences, "A"))
     return results
 
 
 async def eval_path_c(audio_files: list, base_url: str, wait_sec: int = 15) -> list:
-    from vbcable_test import run_browser_test, find_reference, compute_wer_score
+    from vbcable_test import run_browser_test
 
     results = []
     for audio_path in audio_files:
         print(f"  [C] {audio_path.name} ...", flush=True)
-        transcription = await run_browser_test(audio_path, base_url, wait_sec, None)
-        reference = find_reference(audio_path)
-        wer = compute_wer_score(transcription, reference) if reference else None
-        results.append(FileResult(
-            audio_file=str(audio_path),
-            transcription=transcription,
-            reference=reference,
-            wer=wer,
-            path="C",
-        ))
+        hyp_sentences = await run_browser_test(audio_path, base_url, wait_sec, None)
+        transcription = " ".join(hyp_sentences)
+        results.append(_build_result(audio_path, transcription, hyp_sentences, "C"))
     return results
 
 
@@ -162,13 +189,16 @@ def print_summary(result: EvalResult) -> None:
     print("=" * 60)
     for f in result.files:
         wer_str = f"{f.wer * 100:.1f}%" if f.wer is not None else "N/A"
+        f1_str = f"{f.seg_f1 * 100:.1f}%" if f.seg_f1 is not None else "N/A"
         name = Path(f.audio_file).name
-        print(f"  [{f.path}] {name:20s}  WER: {wer_str}")
+        print(f"  [{f.path}] {name:20s}  WER: {wer_str:>7s}  F1: {f1_str:>7s}")
     print("-" * 60)
     if result.avg_wer_a is not None:
-        print(f"  경로 A 평균 WER: {result.avg_wer_a * 100:.1f}%")
+        f1a = f"{result.avg_seg_f1_a * 100:.1f}%" if result.avg_seg_f1_a is not None else "N/A"
+        print(f"  경로 A 평균  WER: {result.avg_wer_a * 100:.1f}%  |  문장분리 F1: {f1a}")
     if result.avg_wer_c is not None:
-        print(f"  경로 C 평균 WER: {result.avg_wer_c * 100:.1f}%")
+        f1c = f"{result.avg_seg_f1_c * 100:.1f}%" if result.avg_seg_f1_c is not None else "N/A"
+        print(f"  경로 C 평균  WER: {result.avg_wer_c * 100:.1f}%  |  문장분리 F1: {f1c}")
     print("=" * 60)
 
 
@@ -181,8 +211,8 @@ def main() -> None:
     )
     parser.add_argument(
         "--files", nargs="+", type=Path,
-        default=[Path("test_data/sbs1.mp3")],
-        help="테스트할 오디오 파일 (기본: test_data/sbs1.mp3)",
+        default=[Path("test_data/sbs1.mp3"), Path("test_data/ytn1.mp3")],
+        help="테스트할 오디오 파일 (기본: test_data/sbs1.mp3 + test_data/ytn1.mp3)",
     )
     parser.add_argument("--wait", type=int, default=15, help="경로 C 재생 완료 후 대기 시간(초)")
     parser.add_argument("--output", type=Path, default=None, help="결과 JSON 저장 경로")
@@ -246,6 +276,8 @@ def main() -> None:
         "paths_run": result.paths_run,
         "avg_wer_a": result.avg_wer_a,
         "avg_wer_c": result.avg_wer_c,
+        "avg_seg_f1_a": result.avg_seg_f1_a,
+        "avg_seg_f1_c": result.avg_seg_f1_c,
         "files": [asdict(f) for f in result.files],
     }
 
