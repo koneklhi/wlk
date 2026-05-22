@@ -82,6 +82,128 @@ def compute_wer(reference: str, hypothesis: str) -> Dict:
     }
 
 
+def _align_words(ref_words: List[str], hyp_words: List[str]) -> List[int]:
+    """Levenshtein 정렬 backtrace로 각 가설 경계 위치를 정답 단어 공간에 투영한다.
+
+    Args:
+        ref_words: 정답 단어 리스트.
+        hyp_words: 가설 단어 리스트.
+
+    Returns:
+        길이 ``len(hyp_words)+1`` 배열. 각 가설 경계 위치 j(0..m)를 정답 위치 i(0..n)로 투영.
+    """
+    n = len(ref_words)
+    m = len(hyp_words)
+
+    dp = [[0] * (m + 1) for _ in range(n + 1)]
+    for i in range(1, n + 1):
+        dp[i][0] = i
+    for j in range(1, m + 1):
+        dp[0][j] = j
+    for i in range(1, n + 1):
+        for j in range(1, m + 1):
+            if ref_words[i - 1] == hyp_words[j - 1]:
+                dp[i][j] = dp[i - 1][j - 1]
+            else:
+                dp[i][j] = 1 + min(dp[i - 1][j - 1], dp[i - 1][j], dp[i][j - 1])
+
+    # Backtrace (n,m)→(0,0). 동점 우선순위 고정: diagonal > up(del) > left(ins).
+    ops: List[str] = []
+    i, j = n, m
+    while i > 0 or j > 0:
+        if i > 0 and j > 0 and ref_words[i - 1] == hyp_words[j - 1] and dp[i][j] == dp[i - 1][j - 1]:
+            ops.append("match")
+            i -= 1
+            j -= 1
+        elif i > 0 and j > 0 and dp[i][j] == dp[i - 1][j - 1] + 1:
+            ops.append("sub")
+            i -= 1
+            j -= 1
+        elif i > 0 and dp[i][j] == dp[i - 1][j] + 1:
+            ops.append("del")
+            i -= 1
+        else:
+            ops.append("ins")
+            j -= 1
+    ops.reverse()
+
+    # 정방향 순회로 hyp_to_ref 구성.
+    hyp_to_ref = [0] * (m + 1)
+    ci = cj = 0
+    for op in ops:
+        if op in ("match", "sub"):
+            ci += 1
+            cj += 1
+        elif op == "del":
+            ci += 1
+        else:  # ins
+            cj += 1
+        hyp_to_ref[cj] = ci
+    return hyp_to_ref
+
+
+def compute_segmentation(
+    ref_sentences: List[str],
+    hyp_sentences: List[str],
+    tolerance: int = 1,
+) -> Dict:
+    """문장 경계 분리 정확도를 단어 정렬 기반 F1로 측정한다.
+
+    정답·가설 문장을 단어 스트림으로 펼치고 문장 끝 위치를 경계로 표시한 뒤,
+    Levenshtein 정렬로 가설 경계를 정답 단어 공간에 투영해 ±tolerance 단어 이내면 매칭한다.
+
+    Args:
+        ref_sentences: 정답 문장 리스트 (각 원소가 한 문장).
+        hyp_sentences: 가설 문장 리스트 (각 원소가 확정된 한 문장).
+        tolerance: 경계 매칭 허용 오차(단어 수).
+
+    Returns:
+        Dict with keys: f1, precision, recall, ref_sentences, hyp_sentences, matched_boundaries.
+    """
+    def _flatten(sentences: List[str]):
+        words: List[str] = []
+        bounds: List[int] = []
+        for s in sentences:
+            w = normalize_text(s).split()
+            if not w:
+                continue
+            words.extend(w)
+            bounds.append(len(words))
+        bounds = bounds[:-1]  # 텍스트 끝은 경계가 아님
+        return words, bounds
+
+    ref_words, ref_bounds = _flatten(ref_sentences)
+    hyp_words, hyp_bounds = _flatten(hyp_sentences)
+
+    hyp_to_ref = _align_words(ref_words, hyp_words)
+    projected = [hyp_to_ref[b] for b in hyp_bounds]
+
+    used = [False] * len(ref_bounds)
+    matched = 0
+    for p in projected:
+        for k, rb in enumerate(ref_bounds):
+            if not used[k] and abs(rb - p) <= tolerance:
+                used[k] = True
+                matched += 1
+                break
+
+    if not ref_bounds and not hyp_bounds:
+        precision = recall = f1 = 1.0
+    else:
+        precision = matched / len(hyp_bounds) if hyp_bounds else 0.0
+        recall = matched / len(ref_bounds) if ref_bounds else 0.0
+        f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0.0
+
+    return {
+        "f1": f1,
+        "precision": precision,
+        "recall": recall,
+        "ref_sentences": len([s for s in ref_sentences if normalize_text(s).split()]),
+        "hyp_sentences": len([s for s in hyp_sentences if normalize_text(s).split()]),
+        "matched_boundaries": matched,
+    }
+
+
 def compute_timestamp_accuracy(
     predicted: List[Dict],
     reference: List[Dict],
