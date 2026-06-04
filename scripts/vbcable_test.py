@@ -118,7 +118,7 @@ async def run_browser_test(
     pcm_array = decode_audio_to_pcm(audio_path)
     duration = len(pcm_array) / SAMPLE_RATE
 
-    processing_timeout_sec = 60
+    processing_timeout_sec = max(wait_sec, 30)
     poll_interval = 0.5
 
     sentences: list[str] = []
@@ -138,21 +138,39 @@ async def run_browser_test(
 
             print(f"[vbcable_test] 오디오 재생 중 ({duration:.1f}초)...")
             loop = asyncio.get_running_loop()
+
+            # output_device가 이름 문자열이면 WASAPI 인덱스로 해석 시도
+            _device = output_device
+            if isinstance(_device, str):
+                devices = sd.query_devices()
+                wasapi_idx = next(
+                    (i for i, d in enumerate(devices)
+                     if _device.lower() in d["name"].lower()
+                     and "wasapi" in sd.query_devices(i, "output").get("hostapi", -1).__class__.__name__.lower()
+                     and d["max_output_channels"] > 0),
+                    None,
+                )
+                if wasapi_idx is None:
+                    # 폴백: 이름이 포함된 출력 가능 첫 번째 장치
+                    wasapi_idx = next(
+                        (i for i, d in enumerate(devices)
+                         if _device.lower() in d["name"].lower()
+                         and d["max_output_channels"] > 0),
+                        None,
+                    )
+                if wasapi_idx is not None:
+                    _device = wasapi_idx
+
             with ThreadPoolExecutor(max_workers=1) as executor:
 
                 def _play():
-                    sd.play(pcm_array, samplerate=SAMPLE_RATE, device=output_device)
+                    sd.play(pcm_array, samplerate=SAMPLE_RATE, device=_device)
                     sd.wait()
 
                 await loop.run_in_executor(executor, _play)
 
-            print(f"[vbcable_test] 재생 완료. 파이프라인 대기 중 (최대 {wait_sec}초)...")
-            for _ in range(int(wait_sec / poll_interval)):
-                count = await page.locator(".buffer_transcription").count()
-                if count == 0:
-                    break
-                await asyncio.sleep(poll_interval)
-
+            # 재생 완료 직후 바로 녹음 중지 — buffer_transcription 대기 제거
+            # (문장 확정 로직 없으면 buffer가 영원히 안 비워짐)
             print("[vbcable_test] 녹음 중지...")
             await page.click("#recordButton")
 
