@@ -84,12 +84,12 @@ def parse_reference_sentences(ref_text: str) -> list:
     return [b.strip() for b in re.split(r"\n\s*\n", ref_text) if b.strip()]
 
 
-def start_server(model_dir: str, pcm_input: bool, port: int, warmup: str) -> subprocess.Popen:
+def start_server(model_dir: str, pcm_input: bool, port: int, warmup: str, lan: str = "auto") -> subprocess.Popen:
     cmd = [
         sys.executable, "-m", "whisperlivekit.basic_server",
         "--model_dir", model_dir,
         "--backend", "whisper",
-        "--lan", "ko",
+        "--lan", lan,
         "--host", "localhost",
         "--port", str(port),
         "--warmup-file", warmup,
@@ -218,6 +218,11 @@ def main() -> None:
     )
     parser.add_argument("--wait", type=int, default=15, help="경로 C 재생 완료 후 대기 시간(초)")
     parser.add_argument("--output", type=Path, default=None, help="결과 JSON 저장 경로")
+    parser.add_argument(
+        "--lan",
+        default="auto",
+        help="STT 언어 코드 (기본: auto). 예: ko, en, auto",
+    )
     args = parser.parse_args()
 
     paths = [p.strip().upper() for p in args.paths.split(",")]
@@ -240,7 +245,7 @@ def main() -> None:
         print(f"\n[eval] 경로 A 테스트 시작 (파일별 서버 재시작)...")
         for audio_path in args.files:
             print(f"[eval] 경로 A 서버 기동 중 (포트 {SERVER_PORT})...")
-            proc = start_server(args.model_dir, pcm_input=True, port=SERVER_PORT, warmup=warmup)
+            proc = start_server(args.model_dir, pcm_input=True, port=SERVER_PORT, warmup=warmup, lan=args.lan)
             try:
                 if not wait_for_ready(base_url, proc):
                     print("[오류] 서버 ready 대기 시간 초과", file=sys.stderr)
@@ -263,7 +268,7 @@ def main() -> None:
                 print(f"\n[eval] 경로 C 테스트 시작 (파일별 서버 재시작)...")
                 for audio_path in args.files:
                     print(f"[eval] 경로 C 서버 기동 중 (포트 {SERVER_PORT})...")
-                    proc = start_server(args.model_dir, pcm_input=False, port=SERVER_PORT, warmup=warmup)
+                    proc = start_server(args.model_dir, pcm_input=False, port=SERVER_PORT, warmup=warmup, lan=args.lan)
                     try:
                         if not wait_for_ready(base_url, proc):
                             print("[오류] 서버 ready 대기 시간 초과", file=sys.stderr)
