@@ -58,6 +58,7 @@
 - **React 측에 이미 구현·완성된 부분**(백엔드가 손대지 않음): 확정/비확정 색상 변경, 문장 종료 시 줄바꿈, 레이아웃·렌더링.
 - 문장 확정 알고리즘·메시지 스키마의 구체 설계는 미정 — [docs/OPEN_QUESTIONS.md](docs/OPEN_QUESTIONS.md) 참조 후 사용자와 합의해 확정.
 - 문장 확정 품질은 `/eval`의 **문장 분리 F1**(정답 빈 줄 블록 기준, STT `lines[]` 경계와 단어 정렬 비교)로 정량 평가한다.
+  **1차 정량 기준은 경로 C**(VBCable 루프백)다. 경로 A는 빠른 개발 스모크용이며 성능 판정 기준이 아니다.
 
 ### 3.4 번역 트리거 (그대로 이식)
 - 문장이 **확정된 시점**에 번역 수행 → UI 출력. 번역 파이프라인(LLM, 프롬프트, 번역기 모듈)은
@@ -84,8 +85,8 @@
 
 ## 5. 환경 요약 + 참조 문서
 
-- **개발/테스트 환경**: Windows + RTX 3080, 인터넷 가능. 입력은 경로 A(파일 기반 정량) / B(마이크 직접 정성) /
-  C(VBCable 루프백 반정량) 병렬 운영. **배포 환경**: 폐쇄망 Windows + RTX 5090, 오프라인. **STT 모델**: `whisper-large-v3-turbo`(로컬).
+- **개발/테스트 환경**: Windows + RTX 3080, 인터넷 가능. 입력 경로 역할 — 경로 C(VBCable 루프백) = **1차 정량 성능 기준**,
+  경로 A(파일 기반, `test_client.py`) = **빠른 개발 스모크/회귀 확인**, 경로 B(마이크 직접) = **정성** 평가. **배포 환경**: 폐쇄망 Windows + RTX 5090, 오프라인. **STT 모델**: `whisper-large-v3-turbo`(로컬).
 - 실행 명령어·검증 순서·test_data 구조·모델 경로 상세 → [docs/TESTING.md](docs/TESTING.md)
 - 작업 시 우선 참조 파일 색인 → [docs/FILE_INDEX.md](docs/FILE_INDEX.md)
 - 미정 설계 사항(문장 확정 알고리즘, 메시지 스키마, Code-Switching, 폐쇄망 패키징) → [docs/OPEN_QUESTIONS.md](docs/OPEN_QUESTIONS.md)

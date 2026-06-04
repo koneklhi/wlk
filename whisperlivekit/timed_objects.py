@@ -26,7 +26,8 @@ class TimedText(Timed):
     detected_language: Optional[str] = None
 
     def has_punctuation(self) -> bool:
-        return any(char in PUNCTUATION_MARKS for char in self.text.strip())
+        t = self.text.strip()
+        return bool(t) and t[-1] in PUNCTUATION_MARKS
 
     def is_within(self, other: 'TimedText') -> bool:
         return other.contains_timespan(self)
@@ -123,6 +124,7 @@ class Segment(TimedText):
     speaker: Optional[str]
     tokens: Optional[ASRToken] = None
     translation: Optional[Translation] = None
+    finalized: bool = False
 
     @classmethod
     def from_tokens(
@@ -163,6 +165,7 @@ class Segment(TimedText):
             'text': self.text,
             'start': format_time(self.start),
             'end': format_time(self.end),
+            'finalized': self.finalized,
         }
         if self.translation:
             _dict['translation'] = self.translation

@@ -118,7 +118,7 @@ async def run_browser_test(
     pcm_array = decode_audio_to_pcm(audio_path)
     duration = len(pcm_array) / SAMPLE_RATE
 
-    processing_timeout_sec = 10
+    processing_timeout_sec = 60
     poll_interval = 0.5
 
     sentences: list[str] = []

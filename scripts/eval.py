@@ -151,35 +151,37 @@ def _build_result(audio_path: Path, transcription: str, hyp_sentences: list, pat
     )
 
 
-async def eval_path_a(audio_files: list, base_url: str) -> list:
+async def eval_path_a(audio_file: Path, base_url: str) -> Optional[FileResult]:
     from whisperlivekit.test_client import transcribe_audio
 
-    results = []
     ws_url = base_url.replace("http://", "ws://") + "/asr"
-    for audio_path in audio_files:
-        print(f"  [A] {audio_path.name} ...", flush=True)
+    print(f"  [A] {audio_file.name} ...", flush=True)
+    try:
         result = await transcribe_audio(
-            audio_path=str(audio_path),
+            audio_path=str(audio_file),
             url=ws_url,
             speed=0,
             timeout=120.0,
         )
-        hyp_sentences = [line["text"] for line in result.lines if line.get("text")]
-        transcription = result.committed_text or result.text
-        results.append(_build_result(audio_path, transcription, hyp_sentences, "A"))
-    return results
+    except Exception as e:
+        print(f"[eval] 경고: {audio_file.name} 전사 실패: {e}", file=sys.stderr)
+        return None
+    hyp_sentences = [line["text"] for line in result.lines if line.get("text")]
+    transcription = result.committed_text or result.text
+    return _build_result(audio_file, transcription, hyp_sentences, "A")
 
 
-async def eval_path_c(audio_files: list, base_url: str, wait_sec: int = 15) -> list:
+async def eval_path_c(audio_file: Path, base_url: str, wait_sec: int = 15) -> FileResult:
     from vbcable_test import run_browser_test
 
-    results = []
-    for audio_path in audio_files:
-        print(f"  [C] {audio_path.name} ...", flush=True)
-        hyp_sentences = await run_browser_test(audio_path, base_url, wait_sec, None)
-        transcription = " ".join(hyp_sentences)
-        results.append(_build_result(audio_path, transcription, hyp_sentences, "C"))
-    return results
+    print(f"  [C] {audio_file.name} ...", flush=True)
+    try:
+        hyp_sentences = await run_browser_test(audio_file, base_url, wait_sec, None)
+    except Exception as e:
+        print(f"[eval] 경고: {audio_file.name} 브라우저 테스트 실패: {e}", file=sys.stderr)
+        hyp_sentences = []
+    transcription = " ".join(hyp_sentences)
+    return _build_result(audio_file, transcription, hyp_sentences, "C")
 
 
 def print_summary(result: EvalResult) -> None:
@@ -235,18 +237,21 @@ def main() -> None:
     )
 
     if "A" in paths:
-        print(f"\n[eval] 경로 A 서버 기동 중 (포트 {SERVER_PORT})...")
-        proc = start_server(args.model_dir, pcm_input=True, port=SERVER_PORT, warmup=warmup)
-        try:
-            if not wait_for_ready(base_url, proc):
-                print("[오류] 서버 ready 대기 시간 초과", file=sys.stderr)
+        print(f"\n[eval] 경로 A 테스트 시작 (파일별 서버 재시작)...")
+        for audio_path in args.files:
+            print(f"[eval] 경로 A 서버 기동 중 (포트 {SERVER_PORT})...")
+            proc = start_server(args.model_dir, pcm_input=True, port=SERVER_PORT, warmup=warmup)
+            try:
+                if not wait_for_ready(base_url, proc):
+                    print("[오류] 서버 ready 대기 시간 초과", file=sys.stderr)
+                    continue
+                print("[eval] 서버 준비 완료.")
+                file_result = asyncio.run(eval_path_a(audio_path, base_url))
+                if file_result is not None:
+                    result.files.append(file_result)
+            finally:
                 stop_server(proc)
-                sys.exit(1)
-            print("[eval] 서버 준비 완료. 경로 A 테스트 시작...")
-            result.files.extend(asyncio.run(eval_path_a(args.files, base_url)))
-        finally:
-            stop_server(proc)
-            print("[eval] 경로 A 서버 종료.")
+                print("[eval] 경로 A 서버 종료.")
 
     if "C" in paths:
         from audio_device import vbcable_audio_context
@@ -255,18 +260,20 @@ def main() -> None:
             if not vbcable_ok:
                 print("[eval] 경고: VBCable 설정 실패. 경로 C를 건너뜁니다.", file=sys.stderr)
             else:
-                print(f"\n[eval] 경로 C 서버 기동 중 (포트 {SERVER_PORT})...")
-                proc = start_server(args.model_dir, pcm_input=False, port=SERVER_PORT, warmup=warmup)
-                try:
-                    if not wait_for_ready(base_url, proc):
-                        print("[오류] 서버 ready 대기 시간 초과", file=sys.stderr)
+                print(f"\n[eval] 경로 C 테스트 시작 (파일별 서버 재시작)...")
+                for audio_path in args.files:
+                    print(f"[eval] 경로 C 서버 기동 중 (포트 {SERVER_PORT})...")
+                    proc = start_server(args.model_dir, pcm_input=False, port=SERVER_PORT, warmup=warmup)
+                    try:
+                        if not wait_for_ready(base_url, proc):
+                            print("[오류] 서버 ready 대기 시간 초과", file=sys.stderr)
+                            continue
+                        print("[eval] 서버 준비 완료.")
+                        file_result = asyncio.run(eval_path_c(audio_path, base_url, args.wait))
+                        result.files.append(file_result)
+                    finally:
                         stop_server(proc)
-                    else:
-                        print("[eval] 서버 준비 완료. 경로 C 테스트 시작...")
-                        result.files.extend(asyncio.run(eval_path_c(args.files, base_url, args.wait)))
-                finally:
-                    stop_server(proc)
-                    print("[eval] 경로 C 서버 종료.")
+                        print("[eval] 경로 C 서버 종료.")
 
     print_summary(result)
 

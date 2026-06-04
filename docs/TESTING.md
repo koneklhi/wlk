@@ -11,7 +11,7 @@
 - VS Code IDE에서 Claude Code를 통해 개발/테스트
 - 테스트 입력 경로 — 세 가지 방식 병렬 운영 (경로 C는 Phase 2에서 도입)
 
-### 경로 A — 파일 기반 (정량적, 기존 방식)
+### 경로 A — 파일 기반 (빠른 개발 스모크/회귀 확인)
 
 - WhisperLiveKit 내장 헤드리스 클라이언트 [whisperlivekit/test_client.py](../whisperlivekit/test_client.py)로
   **`test_data/` 내 로컬 mp3/wav 파일을 WebSocket `/asr`에 직접 송신**한다.
@@ -26,7 +26,8 @@
 - 옵션: `--speed 1.0`(실시간) / `--speed 0`(가능한 한 빠르게), `--language ko`/`--language en` 강제,
   `--live`로 비확정/확정 진행 출력, `--json`으로 원본 응답 로깅.
 - 스트리밍 정책은 SimulStreaming 채택 (ROADMAP Phase 2-1, [PHASE2_EXPERIMENTS.md](../PHASE2_EXPERIMENTS.md) Exp-000/001 참조).
-- **자동 평가**: `/eval`(또는 `scripts/eval.py`)이 경로 A를 자동 실행해 **WER + 문장 분리 F1**을 산출한다.
+- **자동 평가**: `scripts/eval.py`는 기본적으로 경로 C(1차 정량)를 실행한다. 경로 A는 `--paths A`로
+  빠른 개발 스모크(코드 회귀 확인)용으로 돌린다. 두 경로 모두 **WER + 문장 분리 F1**을 산출한다.
   문장 분리 F1은 정답의 빈 줄 블록(= 문장 1개)과 STT 확정 문장(`lines[]`)의 경계 위치를 비교한다.
 
 ### 경로 B — 마이크 직접 녹음 (정성적)
@@ -39,14 +40,15 @@
   `whisperlivekit-server --model_dir whisperlivekit/model/whisper-large-v3-turbo --backend whisper --lan ko --warmup-file test_data/sbs1_10s.mp3`
   - Phase 1 단계에서는 `--lan ko`로 한국어 강제 — `--lan auto`는 LocalAgreement 백엔드가 청크마다 언어를
     재추정해 한·일 진동/hallucination을 유발. 한·영 Code-Switching 대응은 [OPEN_QUESTIONS.md](OPEN_QUESTIONS.md) 참조.
-- 목적: 파일 기반 정량 평가와 함께, 실제 마이크 입력에 대한 정성적 평가 병행
+- 목적: 실제 마이크 입력에 대한 정성적 평가 (경로 C 정량 평가와 병행)
 
-### 경로 C — 오디오 루프백 (반정량, Phase 2 도입)
+### 경로 C — 오디오 루프백 (1차 정량 성능 기준, Phase 2 도입)
 
 - VBCable로 테스트 파일을 PC에서 재생해 가상 마이크 경유 전사
-- 마이크 입력 경로(경로 B)를 유지하면서 동일 음성으로 반복 측정 가능 → 재현성 있는 정성/반정량 평가
+- 마이크 입력 경로(경로 B)를 유지하면서 동일 음성으로 반복 측정 가능 → 재현성 있는 정량 평가.
+  실제 오디오 파이프라인을 거치므로 Phase 2 채택/기각의 **1차 정량 신호**다.
 - 헬퍼: [scripts/vbcable_test.py](../scripts/vbcable_test.py)
-- `/eval`이 경로 C도 자동 실행해 경로 A와 동일하게 **WER + 문장 분리 F1**을 산출한다.
+- `scripts/eval.py`는 기본으로 경로 C를 실행해 **WER + 문장 분리 F1**을 산출한다.
   브라우저 `#linesTranscript`의 `.textcontent`(확정 문장)만 추출하므로 타임스탬프 행이 섞이지 않는다.
 - 상세 배경은 [ROADMAP.md](../ROADMAP.md) Phase 2 참조.
 
@@ -72,7 +74,7 @@
 
 ### 권장 검증 순서
 
-1. `test_client.py`로 mp3/wav 송신 (경로 A) → 터미널에서 번역 제외, 실시간 STT 전사 동작 확인 (정량 평가)
+1. `test_client.py`로 mp3/wav 송신 (경로 A) → 터미널에서 번역 제외, 실시간 STT 전사 동작 확인 (개발 스모크)
 2. 서버 기동 후 브라우저 + 마이크 직접 녹음 (경로 B) → 내장 웹 UI에서 실시간 전사 결과 시각 확인 (정성 평가)
 3. `test_client.py --live` 터미널 출력으로 확정/비확정 플래그 + 언어 전환 동작 확인
 4. 기존 React 웹 UI 연결 후 번역 + 최종 UI 표출까지 확인
