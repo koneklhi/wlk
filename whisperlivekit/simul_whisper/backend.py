@@ -103,6 +103,12 @@ class SimulStreamingOnlineProcessor:
         concat_buffer = Transcript.from_tokens(tokens= self.buffer, sep='')
         return concat_buffer
 
+    @staticmethod
+    def _normalize(text: str) -> str:
+        """비교용 정규화: 공백 제거 + NFC 유니코드 정규화."""
+        import unicodedata
+        return unicodedata.normalize("NFC", text.strip())
+
     def _filter_cross_batch_repetitions(self, tokens: List[ASRToken]) -> List[ASRToken]:
         """배치 경계를 넘나드는 연속 반복 토큰 제거.
 
@@ -112,7 +118,7 @@ class SimulStreamingOnlineProcessor:
         result = []
         prev = self._last_emitted_word
         for token in tokens:
-            word = token.text.strip()
+            word = self._normalize(token.text)
             if not word:
                 result.append(token)
                 continue
@@ -122,7 +128,7 @@ class SimulStreamingOnlineProcessor:
             result.append(token)
             prev = word
         if result:
-            self._last_emitted_word = result[-1].text.strip()
+            self._last_emitted_word = self._normalize(result[-1].text)
         return result
 
     def process_iter(self, is_last=False) -> Tuple[List[ASRToken], float]:
