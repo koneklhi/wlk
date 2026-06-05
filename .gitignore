@@ -114,10 +114,12 @@ dmypy.json
 
 *.wav
 run_*.sh
+*.log
+*.bak
 
 # Downloaded models
 *.pt
-*.safetensors 
+*.safetensors
 
 # Debug & testing
 /test_*.py
@@ -128,6 +130,7 @@ launch.json
 !tests/
 nllb-200-distilled-600M-ctranslate2/*
 *.mp3
+!test_data/*.mp3
 
 # OMC 런타임 상태 — 세션·체크포인트·메모리 등 매 실행마다 변하는 파일들
 .omc/state/
