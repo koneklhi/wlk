@@ -1,0 +1,37 @@
+{
+  "timestamp": "2026-06-05 15:20",
+  "model_dir": "whisperlivekit/model/whisper-large-v3-turbo",
+  "paths_run": [
+    "C"
+  ],
+  "avg_wer_a": null,
+  "avg_wer_c": 0.4636283961437335,
+  "avg_seg_f1_a": null,
+  "avg_seg_f1_c": 0.0,
+  "files": [
+    {
+      "audio_file": "test_data\\sbs1.mp3",
+      "transcription": "편지 시간 5일 미국 6군 전쟁 대학 강연에 나선 J.B. 어 브 브런스는 주한한한미군 사령관. 자신의 소셜 미 미 미어어어 강연 사진과 함께 한 한 한는 동쪽이 위를 향하게 뒤집어 놓은 지 지도를 올 올 올렸습니다. 브런스는 사 사령관은 관점이 바 바뀌 바뀌면 지 지 지적적 의 의 완전히 달라진다고 강조했습니다. 지 지 지를를를 돌려보면 태평양은 통빈 바다가 아니라 동맹국들이 연 거 거한한 방어선이라는 겁니다. 이렇게 한국을 콕 집어 인 인도 태평양에 미국의 힘을 고정하는 연구적인 지상 플 플 플 폼이라고 정리했습니다. 지난해해해 브런스는 사령관은 한 한 한도도의도의 지정학적 가치를 항공모함에 비유한 바 있습니다. - From a satellite image, the Republic of Korea looks like an island. - We're like a fixed aircraft carrier floating in the water between Japan and mainland China. - 이번 강연의 핵심은 공군역과 대 대비 대비되는 지상군의 존 존재가치었습니다. 브 브런스는 사 사 사관은 공군은 먼거리의 표적을 초토할 수 있지만 영토를 잡는거나 동맹을 유지할 수는 없다고 선을 거었습니다. 그러 그러면서 지상군은 항상 그곳에 남는다다며 부함이군의 국건한 역할을 역설했습니다. 그는 한 한 한미 동맹은 단순한 전 전력 투사 통로가 아니라 동맹 자체가 미국의 힘이라는는 국가의 공격을 받은 국가와 국가의 국가의 조사와 공격을 통해 국가의 역할을 받는 것입니다. 북한 옥지라는 기존 인물을 넘어 대중국 현재까지 전력적 유연성을 강조하는 부함이군의 역할을 더욱 확정하겠다는 의지가 담긴 것으로 보입니다. SBS 김수형입니다",
+      "reference": "현지 시간 5일 미국 육군 전쟁 대학 강연에 나선 제이비어 브런슨 주한미군 사령관 자신의 소셜 미디어 X의 강연 사진과 함께 한반도 동쪽이 위를 향하게 뒤집어 놓은 지도를 올렸습니다.\n\n브런슨 사령관은 관점이 바뀌면 지리적 의미도 완전히 달라진다고 강조했습니다.\n\n지도를 돌려보면 태평양은 텅 빈 바다가 아니라 동맹국들이 연결된 거대한 방어선이라는 겁니다.\n\n특히 한국을 콕 집어 인도 태평양에 미국의 힘을 고정하는 영구적인 지상 플랫폼이라고 정의했습니다.\n\n지난해에도 브론슨 사령관은 한반도의 지정학적 가치를 항공모함에 비유한 바 있습니다.\n\nFrom a satellite image, the Republic of Korea looks like an island, or like a fixed aircraft carrier floating in the water between Japan and mainland China.\n\n이번 강연의 핵심은 공군력과 대비되는 지상군의 존재 가치였습니다.\n\n프런슨 사령관은 공군은 먼 거리의 표적을 초토할 수 있지만 영토를 점령하거나 동맹을 유지할 수는 없다고 선을 걷었습니다.\n\n그러면서 지상군은 항상 그곳에 남는다며 주한미군의 굳건한 역할을 역설했습니다.\n\n그는 한미동맹은 단순한 전력 투사 통로가 아니라 동맹 자체가 곧 미국의 힘이라는 점도 분명히 했습니다.\n\n북한 억지라는 기존 임무를 넘어 대중국 견제까지 전략적 유연성을 강조하는 주한미군의 역할을 더욱 확장하겠다는 의지가 담긴 것으로 보입니다. \n\nSBS 김수영입니다.",
+      "wer": 0.5714285714285714,
+      "path": "C",
+      "seg_f1": 0.0,
+      "seg_precision": 0.0,
+      "seg_recall": 0.0,
+      "ref_sentences": 12,
+      "hyp_sentences": 1
+    },
+    {
+      "audio_file": "test_data\\ytn1.mp3",
+      "transcription": "예, 안녕하십니까? 어... 진한 세 달 만에 두 번째로 대한한민국에 다시 방문할 수 있게 돼요. 어, 깊으게 생각합니다. -I want to first thank you. Thank you minister junk for hosting today's security consultant meeting. -우선 오늘 안 안 안보협의 SCM/A를 주관해주신 정경도 국방 장관님께 감사사사. -This was our 51st SCM and we appreciate the role it has played in strengthening our alliance over the past half century. -어, 이번 안 안 안보협의의는 제 51차 안 안보협이의로서 지난 거의 반색이 동안 우리 동맹을 계속 강화시키는 데에서 큰 역할을 한 것에 대해 감사합니다. -Unit States remains fully committed to the defense of the Republic of Korea. -미국은 대한한민국 방위에 여전히 확고한 위지를 갖고 있습니다. -The US rock alliance is ironclad and I'm confident that our countries will continue to stand shoulder to shoulder to enhance security, stability, and prosperity on the Korean peninsula and in the broader Indo-Pacific region. -한미 동맹은통통가통가도 같습니다. 그리고 저는, 한 한 한도 뿐만 아니라 더 넓게는 인 인 인도 태평양 지역에서 안보, 안정, 번영, 증진을 위해 계속해서 양국이 어깨를 나 나라 나라리에 해 나갈 것이라는 확신을 갖고 있습니다",
+      "reference": "안녕하십니까. 지난 세 달 만에 두 번째로 대한민국에 다시 방문할 수 있게 되어 기쁘게 생각합니다.\n\nI want to first thank Minister Jung for hosting today's security consultative meeting.\n\n우선 오늘 안보협의회 SCM 회의를 주관해주신 정경두 국방장관님께 감사드립니다.\n\nThis was our 51st SCM, and we appreciate the role it has played in strengthening our alliance over the past half century.\n\n이번 안보협의회는 제51차 안보협의회로서 지난 거의 반세기 동안 우리 동맹을 계속 강화시키는 대해서 큰 역할을 한 것에 대해 감사합니다.\n\nThe United States remains fully committed to the defense of the Republic of korea.\n\n미국은 대한민국 방위에 여전히 확고한 의지를 갖고 있습니다.\n\nThe U.S. ROK Alliance is ironclad and I am confident that our countries will continue to stand shoulder to shoulder to enhance security, stability, and prosperity on the Korean Peninsula and in the broader Indo-Pacific region.\n\n한미동맹은 철통과도 같습니다. 그리고 저는 한반도뿐만 아니라 더 넓게는 인도태평양 지역에서 안보, 안정, 번영, 증진을 위해 계속해서 양국이 어깨를 나란히 해 나갈 것이란 확신을 갖고 있습니다.",
+      "wer": 0.3558282208588957,
+      "path": "C",
+      "seg_f1": 0.0,
+      "seg_precision": 0.0,
+      "seg_recall": 0.0,
+      "ref_sentences": 9,
+      "hyp_sentences": 1
+    }
+  ]
+}

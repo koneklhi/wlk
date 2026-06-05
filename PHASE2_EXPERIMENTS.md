@@ -44,8 +44,9 @@ STT 성능 개선 과정에서 수행한 실험을 기록한다.
 
 ## 빠른 참조 (최신순)
 
-| Exp | 날짜 | 제목 | 핵심 변경 | WER | Latency | 결론 |
+| Exp | 날짜 | 제목 | 핵심 변경 | WER (중앙값) | Latency | 결론 |
 |---|---|---|---|---|---|---|
+| [Exp-002](#exp-002-cross-batch-stateful-반복-필터) | 2026-06-05 | Cross-batch 반복 필터 | `process_iter()` 반환 토큰에서 연속 반복 제거 | sbs1: 87.5% / ytn1: 38.7% / avg: 63.1% | — | **채택** |
 | [Exp-001](#exp-001-vbcable-마이크-정성-평가--정책-최종-확정) | 2026-05-21 | VBCable 마이크 정성 평가 | 브라우저 마이크 입력으로 실사용 품질 비교 | — | — | **SimulStreaming 채택** |
 | [Exp-000](#exp-000-정책-선택-기준-벤치마크-베이스라인) | 2026-05-20 | 정책 선택 기준 벤치마크 | SimulStreaming vs LocalAgreement 비교 | SS: 0.321 / LA: 0.434 | SS: 114ms / LA: 2511ms | → Exp-001에서 확정 |
 
@@ -129,6 +130,65 @@ STT 성능 개선 과정에서 수행한 실험을 기록한다.
 **결론**: **SimulStreaming 채택** (Phase 2 개발 기반 정책 확정)
 **이유**: LocalAgreement의 영어 누락과 커버리지 손실은 LCS 합의 알고리즘의 구조적 문제로 Phase 2에서 패치 불가. SimulStreaming의 반복 아티팩트는 문장 확정 로직(직전 commit과 중복 비교)으로 보완 가능.
 **다음 가설**: SimulStreaming의 반복 토큰 (`바 바 바`, `지 지 지`) 및 노이즈 접두어 (`-그`) 를 문장 확정 단계에서 후처리로 제거 → Phase 2 알고리즘 설계 시작 → Exp-002
+
+---
+
+## Exp-002: Cross-batch Stateful 반복 필터
+
+**날짜**: 2026-06-05
+**정책**: simulstreaming
+**가설**: SimulStreaming은 배치 경계에서 직전 단어를 반복 생성하는 아티팩트("바 바 바", "-그 -그 -그", "도도도도")가 있다.
+기존 `_apply_dry_penalty()`는 로짓 공간 패널티로 배치 내부 반복을 억제하지만, 배치 경계를 넘는 연속 반복은 잡지 못한다.
+`process_iter()` 반환 직후 직전 방출 단어를 기억하고 연속 동일 단어를 제거하는 stateful 필터를 추가하면
+삽입 오류(insertion)가 크게 줄어 WER이 개선될 것이다. sbs1의 WER 100% 초과 원인이 이 삽입 아티팩트이므로
+큰 개선 효과가 예상된다.
+
+**변경 내용**
+- `whisperlivekit/simul_whisper/backend.py:46` — `__init__`에 `self._last_emitted_word: str = None` 추가
+- `whisperlivekit/simul_whisper/backend.py:83` — `end_silence()` long_silence 시 `_last_emitted_word = None` 리셋
+- `whisperlivekit/simul_whisper/backend.py:100` — `new_speaker()` 시 `_last_emitted_word = None` 리셋
+- `whisperlivekit/simul_whisper/backend.py:106-125` — `_filter_cross_batch_repetitions()` 메서드 추가
+- `whisperlivekit/simul_whisper/backend.py:144` — `process_iter()` 내 필터 호출 추가
+- `tests/test_cross_batch_filter.py` — 유닛 테스트 10개 신규 추가
+
+**알고리즘 요약**
+- `prev = _last_emitted_word` (이전 배치 마지막 단어, 또는 None)
+- 각 토큰 text.strip()이 `prev`와 같으면 제거 (연속 반복만 제거, 비연속 중복은 보존)
+- 배치 내 연속 반복도 동일하게 제거
+- long silence(≥5s) 및 화자 교체 시 상태 리셋
+
+**테스트**
+- 유닛 테스트: `uv run pytest tests/test_cross_batch_filter.py tests/test_metrics_segmentation.py -v` → 16/16 통과
+- 결과 파일:
+  - `.omc/benchmarks/eval_20260605_1_exp002.json`
+  - `.omc/benchmarks/eval_20260605_2_exp002.json`
+  - `.omc/benchmarks/eval_20260605_3_exp002.json`
+
+**정량 결과 (경로 C, 3회 반복)**
+
+| 측정 | sbs1 WER | ytn1 WER | 평균 WER |
+|------|----------|----------|----------|
+| 1회차 | 87.5% | 93.9% | 90.7% |
+| 2회차 | 57.1% | 35.6% | 46.4% |
+| 3회차 | 87.5% | 38.7% | 63.1% |
+| **중앙값** | **87.5%** | **38.7%** | **63.1%** |
+
+| 항목 | 베이스라인 (master) | Exp-002 (중앙값) | 변화 |
+|------|-------------------|-----------------|------|
+| sbs1 WER | 108.3% | 87.5% | **-20.8%p** |
+| ytn1 WER | 47.9% | 38.7% | **-9.2%p** |
+| 평균 WER | 78.1% | 63.1% | **-15.0%p** |
+| 문장분리 F1 | 0.0% | 0.0% | 변화 없음 |
+
+**정성 관찰**
+- sbs1: 반복 아티팩트가 상당히 줄었으나 완전히 제거되지 않음. "미 미 미어어어" → 필터가 "미"를 한 번 남기고 "미어어어"는 다른 단어라 통과. 서브워드 수준의 반복("어어어")은 여전히 남음.
+- ytn1: 한·영 코드스위칭 구간이 잘 보존됨. "-그 -그 -그" 패턴 대부분 제거됨.
+- 2회차에서 sbs1 57.1%로 대폭 개선됐으나 1·3회차에서 87.5%로 회귀. 실행마다 반복 아티팩트 발생량이 크게 다름(모델 비결정성).
+- 목표 수치(sbs1 < 60%, 평균 < 50%)에 도달하지 못함 — 연속 단어 반복 외에도 서브워드 반복이 주요 원인.
+
+**결론**: **채택**
+**이유**: 모든 채택 조건 충족(중앙값 WER 감소, WER 회귀 없음, pytest 통과, 두 파일 모두 개선). 단, 1차 목표에는 미달이므로 추가 개선 필요.
+**다음 가설**: 서브워드/음절 수준 반복("어어어", "를를를")도 제거하는 방향으로 필터 확장, 또는 A-2(Silence 기반 조기 확정)으로 반복이 쌓이기 전에 세그먼트를 확정
 
 ---
 

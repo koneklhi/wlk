@@ -43,6 +43,7 @@ class SimulStreamingOnlineProcessor:
         self.end = 0.0
         self.buffer = []
         self.model = self._create_alignatt()
+        self._last_emitted_word: str = None
 
         if asr.tokenizer:
             self.model.tokenizer = asr.tokenizer
@@ -79,6 +80,7 @@ class SimulStreamingOnlineProcessor:
         if long_silence:
             self.model.refresh_segment(complete=True)
             self.model.global_time_offset = silence_duration + offset
+            self._last_emitted_word = None
 
     def insert_audio_chunk(self, audio: np.ndarray, audio_stream_end_time):
         """Append an audio chunk to be processed by SimulStreaming."""
@@ -95,10 +97,33 @@ class SimulStreamingOnlineProcessor:
         self.model.refresh_segment(complete=True)
         self.model.speaker = change_speaker.speaker
         self.model.global_time_offset = change_speaker.start
+        self._last_emitted_word = None
 
     def get_buffer(self):
         concat_buffer = Transcript.from_tokens(tokens= self.buffer, sep='')
         return concat_buffer
+
+    def _filter_cross_batch_repetitions(self, tokens: List[ASRToken]) -> List[ASRToken]:
+        """배치 경계를 넘나드는 연속 반복 토큰 제거.
+
+        Whisper SimulStreaming은 배치 경계에서 직전 단어를 반복 생성하는 아티팩트가 있다.
+        ("바 바 바", "-그 -그", "도도도도" 등) 직전 방출 단어와 동일한 연속 토큰을 제거한다.
+        """
+        result = []
+        prev = self._last_emitted_word
+        for token in tokens:
+            word = token.text.strip()
+            if not word:
+                result.append(token)
+                continue
+            if prev is not None and word == prev:
+                logger.debug(f"[CrossBatchFilter] 반복 제거: {repr(word)}")
+                continue
+            result.append(token)
+            prev = word
+        if result:
+            self._last_emitted_word = result[-1].text.strip()
+        return result
 
     def process_iter(self, is_last=False) -> Tuple[List[ASRToken], float]:
         """
@@ -116,6 +141,7 @@ class SimulStreamingOnlineProcessor:
                 self.buffer.extend(timestamped_words)
                 return [], self.end
 
+            timestamped_words = self._filter_cross_batch_repetitions(timestamped_words)
             self.buffer = []
             return timestamped_words, self.end
         except Exception as e:
