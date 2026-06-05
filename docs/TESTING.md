@@ -25,7 +25,6 @@
   - Windows PowerShell에서 한국어 출력 깨짐 방지: `$env:PYTHONIOENCODING = "utf-8"` 선행 실행 필요
 - 옵션: `--speed 1.0`(실시간) / `--speed 0`(가능한 한 빠르게), `--language ko`/`--language en` 강제,
   `--live`로 비확정/확정 진행 출력, `--json`으로 원본 응답 로깅.
-- 스트리밍 정책은 SimulStreaming 채택 (ROADMAP Phase 2-1, [PHASE2_EXPERIMENTS.md](../PHASE2_EXPERIMENTS.md) Exp-000/001 참조).
 - **자동 평가**: `scripts/eval.py`는 기본적으로 경로 C(1차 정량)를 실행한다. 경로 A는 `--paths A`로
   빠른 개발 스모크(코드 회귀 확인)용으로 돌린다. 두 경로 모두 **WER + 문장 분리 F1**을 산출한다.
   문장 분리 F1은 정답의 빈 줄 블록(= 문장 1개)과 STT 확정 문장(`lines[]`)의 경계 위치를 비교한다.
@@ -50,6 +49,23 @@
 - 헬퍼: [scripts/vbcable_test.py](../scripts/vbcable_test.py)
 - `scripts/eval.py`는 기본으로 경로 C를 실행해 **WER + 문장 분리 F1**을 산출한다.
   브라우저 `#linesTranscript`의 `.textcontent`(확정 문장)만 추출하므로 타임스탬프 행이 섞이지 않는다.
+
+**수동 서버 기동 명령 (eval.py 자동 기동 옵션과 동일하게 맞출 것):**
+```
+python -m whisperlivekit.basic_server \
+  --model_dir whisperlivekit/model/whisper-large-v3-turbo \
+  --backend whisper \
+  --lan auto \
+  --host localhost --port 8001 \
+  --warmup-file test_data/sbs1_10s.mp3
+```
+`--pcm-input` 없음(브라우저 마이크 모드), VAC 기본 켜짐(`--no-vac` 없음), `--lan auto` 기본.
+`eval.py --lan` 기본값과 반드시 일치시킬 것 — 옵션이 다르면 수동/자동 결과를 비교할 수 없다.
+
+> ⚠️ **반복 측정 필수**: 실시간 STT는 동일 조건에서도 매 실행마다 성능 편차가 발생한다.
+> 채택/기각 판단에 사용하는 경로 C 수치는 **동일 파일·설정으로 최소 3회 실행** 후
+> 중앙값(또는 평균)을 기준으로 한다. 1회 결과만으로 결론 내리지 말 것.
+
 - 상세 배경은 [ROADMAP.md](../ROADMAP.md) Phase 2 참조.
 
 ### test_data 디렉토리 구조
