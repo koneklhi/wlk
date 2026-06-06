@@ -2,6 +2,7 @@ import gc
 import logging
 import platform
 import sys
+from collections import Counter, deque
 from typing import List, Tuple
 
 import numpy as np
@@ -41,6 +42,10 @@ class SimulStreamingOnlineProcessor:
     """Online processor for SimulStreaming ASR."""
     SAMPLING_RATE = 16000
 
+    # 반복 루프 감지 파라미터: 최근 N 토큰 중 동일 단어가 K회 이상이면 refresh_segment() 리셋
+    _LOOP_WINDOW = 20
+    _LOOP_THRESHOLD = 5
+
     def __init__(self, asr, logfile=sys.stderr):
         self.asr = asr
         self.logfile = logfile
@@ -49,6 +54,7 @@ class SimulStreamingOnlineProcessor:
         self.model = self._create_alignatt()
         self._last_emitted_word: str = None
         self._last_emit_end: float = 0.0  # 마지막으로 토큰을 방출한 시점의 audio end (stall 복구 baseline)
+        self._recent_tokens: deque = deque(maxlen=self._LOOP_WINDOW)
 
         if asr.tokenizer:
             self.model.tokenizer = asr.tokenizer
@@ -87,6 +93,7 @@ class SimulStreamingOnlineProcessor:
             self.model.global_time_offset = silence_duration + offset
             self._last_emitted_word = None
             self._last_emit_end = self.end
+            self._recent_tokens.clear()
 
     def insert_audio_chunk(self, audio: np.ndarray, audio_stream_end_time):
         """Append an audio chunk to be processed by SimulStreaming."""
@@ -105,6 +112,7 @@ class SimulStreamingOnlineProcessor:
         self.model.global_time_offset = change_speaker.start
         self._last_emitted_word = None
         self._last_emit_end = self.end
+        self._recent_tokens.clear()
 
     def get_buffer(self):
         concat_buffer = Transcript.from_tokens(tokens= self.buffer, sep='')
@@ -138,6 +146,16 @@ class SimulStreamingOnlineProcessor:
             self._last_emitted_word = self._normalize(result[-1].text)
         return result
 
+    def _detect_repetition_loop(self) -> bool:
+        """최근 _LOOP_WINDOW 토큰 중 동일 단어가 _LOOP_THRESHOLD 이상이면 반복 루프로 판정."""
+        if len(self._recent_tokens) < self._LOOP_WINDOW // 2:
+            return False
+        counts = Counter(self._recent_tokens)
+        if not counts:
+            return False
+        _, most_count = counts.most_common(1)[0]
+        return most_count >= self._LOOP_THRESHOLD
+
     def process_iter(self, is_last=False) -> Tuple[List[ASRToken], float]:
         """
         Process accumulated audio chunks using SimulStreaming.
@@ -167,6 +185,20 @@ class SimulStreamingOnlineProcessor:
                 return [], self.end
 
             timestamped_words = self._filter_cross_batch_repetitions(timestamped_words)
+            for token in timestamped_words:
+                word = self._normalize(token.text)
+                if word:
+                    self._recent_tokens.append(word)
+            if self._detect_repetition_loop():
+                logger.warning(
+                    "반복 루프 감지 (window=%d, threshold=%d) → refresh_segment() 리셋.",
+                    self._LOOP_WINDOW, self._LOOP_THRESHOLD,
+                )
+                self.model.refresh_segment(complete=True)
+                self._last_emitted_word = None
+                self._last_emit_end = self.end
+                self._recent_tokens.clear()
+                return [], self.end
             self.buffer = []
             self._last_emit_end = self.end
             return timestamped_words, self.end

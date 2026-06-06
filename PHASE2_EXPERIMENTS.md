@@ -46,6 +46,8 @@ STT 성능 개선 과정에서 수행한 실험을 기록한다.
 
 | Exp | 날짜 | 제목 | 핵심 변경 | WER (중앙값) | Latency | 결론 |
 |---|---|---|---|---|---|---|
+| [Exp-009](#exp-009-반복-루프-감지--refresh_segment-리셋) | 2026-06-06 | 반복 루프 감지 + 디코더 리셋 | `backend.py` `_detect_repetition_loop()` + `refresh_segment()` | — | — | **진행 중** |
+| [Exp-008](#exp-008-vad-end_threshold-비대칭-설정-노이즈-차단) | 2026-06-06 | VAD end_threshold=0.35 비대칭 설정 | `silero_vad_iterator.py` end_threshold 파라미터, `audio_processor.py` end_threshold=0.35 | sbs1: 113.7%→149.4% | — | **기각** (발화 중 가짜 silence 과다 → WER 폭발) |
 | [Exp-007](#exp-007-eval-파이프-블로킹-수정--vad-threshold-03-재측정) | 2026-06-06 | eval.py 서버 stdout 파이프 블로킹 수정 | `scripts/eval.py` `stdout=PIPE` → `DEVNULL` | sbs1: 79.2% / ytn1: 25.8% / avg: 52.5% | — | **채택** (목표 미달, 다음 실험 진행) |
 | [Exp-006](#exp-006-vad-threshold-03--min_duration_real_silence-05) | 2026-06-06 | VAD threshold 낮춤 + Silence 문장확정 임계 낮춤 | `audio_processor.py` threshold 0.5→0.3, MIN_SILENCE 5→0.5 | sbs1: 97.0% / ytn1: 99.4% / avg: 98.5% | — | **기각** (측정 무효 — eval 파이프 블로킹) |
 | [Exp-005](#exp-005-워치독-is_lasttrue-flush) | 2026-06-06 | 워치독 is_last=True flush | `backend.py` process_iter() 워치독에 infer(is_last=True) 추가 | sbs1: 97.6% / ytn1: 99.4% / avg: 98.5% | — | **기각** |
@@ -443,6 +445,48 @@ Exp-004 수동 테스트(서버 직접 실행, stdout 터미널 표시)에서 WE
 **결론**: **채택** (목표 미달이나 Exp-002 대비 전 항목 개선, 합당한 진전)
 **이유**: eval.py 파이프 수정으로 측정 하니스가 안정화됐고 VAD/Silence 임계치 변경으로 WER 10.6%p, F1 +44.9%p 개선. 목표는 미달이나 지금까지 가장 큰 단일 개선. 하니스 수정은 모든 후속 실험에 필수이므로 단독으로도 채택.
 **다음 가설**: ① sbs1 반복 아티팩트 분산이 크다 → 2회차 95.2%의 원인 진단(반복 토큰 급등?) → Exp-008에서 반복 필터 강화 or ② F1 44.9%→60%+ 개선 — MIN_SILENCE=0.5가 문장 시작 직후(짧은 절 경계)에 오발동하는지 확인 후 최소 토큰 수 조건 추가 고려
+
+---
+
+## Exp-008: VAD end_threshold 비대칭 설정 — 노이즈 차단 (기각)
+
+**날짜**: 2026-06-06 / **결론**: **기각**
+
+Exp-007 sbs1 `-그러니까` 환각 원인을 VBCable 노이즈(speech_prob≈0.2)가 end_threshold=0.15를 넘어 디코더에 유입되는 것으로 가정. end_threshold=0.35 설정 시 실발화 speech_prob≈0.4와 너무 가까워 발화 중 단어 경계에서 가짜 silence 이벤트 과다 발생 → 디코더 반복 리셋 → WER 폭발(113.7%, 149.4%). Exp-009에서 VAD 파라미터가 아닌 반복 루프 감지로 접근.
+
+---
+
+## Exp-009: 반복 루프 감지 + refresh_segment() 리셋
+
+**날짜**: 2026-06-06
+**정책**: simulstreaming
+**가설**: Exp-007 sbs1의 `-그러니까` 환각은 VAD 문제가 아닌 **모델 반복 루프** 문제다.
+영어 코드스위칭 구간에서 모델이 한국어 환각을 생성하다 같은 단어를 반복 생성하는 루프에 빠진다.
+최근 방출된 20개 토큰 중 동일 단어가 5회 이상 등장하면 반복 루프로 판정,
+`refresh_segment()`로 디코더를 리셋해 루프를 차단하면 sbs1 WER이 개선되고
+F1도 함께 개선될 것이다 (환각에 의한 가짜 문장 경계 감소).
+
+**변경 내용**
+- `whisperlivekit/simul_whisper/backend.py`
+  - `__init__`: `_LOOP_WINDOW=20`, `_LOOP_THRESHOLD=5`, `_recent_tokens: deque(maxlen=20)` 추가
+  - `end_silence()` long_silence 시 `_recent_tokens.clear()` 추가
+  - `new_speaker()` 시 `_recent_tokens.clear()` 추가
+  - `_detect_repetition_loop()` 메서드 추가 (Counter 기반 밀도 감지)
+  - `process_iter()`: 토큰을 `_recent_tokens`에 추가 후 루프 감지; True면 `refresh_segment()` + 빈 결과 반환
+
+**테스트**
+- 결과 파일: (측정 후 기입)
+
+**정량 결과 (경로 C, 3회 반복)**
+
+| 측정 | sbs1 WER | ytn1 WER | 평균 WER | F1 |
+|------|----------|----------|----------|----|
+| 1회차 | — | — | — | — |
+| 2회차 | — | — | — | — |
+| 3회차 | — | — | — | — |
+| **중앙값** | — | — | — | — |
+
+**결론**: (측정 후 기입)
 
 ---
 
