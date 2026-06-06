@@ -650,8 +650,7 @@ async function stopRecording() {
   waitingForStop = true;
 
   if (websocket && websocket.readyState === WebSocket.OPEN) {
-    const emptyBlob = new Blob([], { type: "audio/webm" });
-    websocket.send(emptyBlob);
+    websocket.send(new ArrayBuffer(0));
     statusText.textContent = "Recording stopped. Processing final audio...";
   }
 

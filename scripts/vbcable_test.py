@@ -177,11 +177,13 @@ async def run_browser_test(
             print("[vbcable_test] 서버 처리 완료 대기 중...")
             for _ in range(int(processing_timeout_sec / poll_interval)):
                 status = await page.text_content("#status") or ""
-                if "Finished processing" in status:
+                if "Finished processing" in status or "Processing finalized" in status:
                     break
                 await asyncio.sleep(poll_interval)
             else:
-                print("[vbcable_test] 경고: 서버 처리 완료 신호를 받지 못했습니다.")
+                print("[vbcable_test] 경고: 서버 처리 완료 신호를 받지 못했습니다. WebSocket 강제 닫기 시도.")
+                await page.evaluate("if (typeof websocket !== 'undefined' && websocket) { websocket.close(); }")
+                await asyncio.sleep(2.0)
 
             texts = await page.locator("#linesTranscript .textcontent").all_inner_texts()
             sentences = [t.strip() for t in texts if t.strip()]

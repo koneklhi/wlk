@@ -171,7 +171,7 @@ async def eval_path_a(audio_file: Path, base_url: str) -> Optional[FileResult]:
     return _build_result(audio_file, transcription, hyp_sentences, "A")
 
 
-async def eval_path_c(audio_file: Path, base_url: str, wait_sec: int = 15) -> FileResult:
+async def eval_path_c(audio_file: Path, base_url: str, wait_sec: int = 120) -> FileResult:
     from vbcable_test import run_browser_test
 
     print(f"  [C] {audio_file.name} ...", flush=True)

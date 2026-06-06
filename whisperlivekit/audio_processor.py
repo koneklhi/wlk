@@ -560,6 +560,9 @@ class AudioProcessor:
             except Exception:
                 logger.warning(f"Exception in results_formatter. Traceback: {traceback.format_exc()}")
                 await asyncio.sleep(0.5)
+                if self.is_stopping and self._processing_tasks_done():
+                    logger.info("Results formatter: stopping after exception — all tasks done.")
+                    return
 
     async def create_tasks(self) -> AsyncGenerator[FrontData, None]:
         """Create and start processing tasks."""

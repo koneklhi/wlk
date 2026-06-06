@@ -251,6 +251,20 @@ class TokensAlignment:
                         ))
                 else:
                     self.current_line_tokens.append(token)
+                    # 문장 종결 감지: 구두점(.!?) 또는 한국어 종결어미 → 즉시 확정.
+                    # 최소 3개 토큰 이상일 때만 확정 — "." 단독 등 매우 짧은 세그먼트 방지.
+                    # Whisper NFD 출력을 NFC로 정규화 후 regex 비교 (O(1), join 미사용).
+                    # try-except: text=None 등 예외 방어 — exception으로 results_formatter 루프 방지.
+                    try:
+                        if len(self.current_line_tokens) >= 3:
+                            _nfc = unicodedata.normalize("NFC", (token.text or "").strip())
+                            if token.has_punctuation() or _KO_SENTENCE_END.search(_nfc):
+                                seg = Segment.from_tokens(self.current_line_tokens)
+                                if seg:
+                                    self.validated_segments.append(seg)
+                                    self.current_line_tokens = []
+                    except Exception:
+                        pass
 
             segments = list(self.validated_segments)
             if self.current_line_tokens:
