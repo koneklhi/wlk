@@ -46,6 +46,7 @@ STT 성능 개선 과정에서 수행한 실험을 기록한다.
 
 | Exp | 날짜 | 제목 | 핵심 변경 | WER (중앙값) | Latency | 결론 |
 |---|---|---|---|---|---|---|
+| [Exp-031](#exp-031-master-char-run-단일음절-필터) | 2026-06-06 | master+char-run 필터 | `backend.py` char-run 억제 + context 리셋, threshold=5 | 중앙값 avg WER 67.2%, F1 37.7% (R1 43.5%, R2 67.2%, R3 98.0%) | — | **기각** |
 | [Exp-030](#exp-030-슬라이딩-윈도우-한국어-전용-빈도-필터) | 2026-06-06 | 슬라이딩 윈도우 한국어 전용 빈도 필터 | `backend.py` `_KO_CHAR` + `threshold=5, window=25` | avg WER 87.3% (베이스라인 대비 +12.8%p) | — | **기각** |
 | [Exp-029](#exp-029-슬라이딩-윈도우-단어-빈도-필터) | 2026-06-06 | 슬라이딩 윈도우 단어 빈도 필터 | `backend.py` `_WORD_WINDOW_SIZE=20`, `_WORD_FREQ_THRESHOLD=4`, `_recent_words` 빈도 체크 | avg WER 79.5% (ytn1 99.4% catastrophic) | — | **기각** |
 | [Exp-028](#exp-028-단일음절-연속-반복-억제--context-리셋) | 2026-06-06 | 단일음절 연속 반복 억제 + context 리셋 | `backend.py` `_max_char_run` + `_CHAR_RUN_THRESHOLD=4` + 억제 카운터≥5 시 context 리셋 | avg WER **61.8%**, F1 **45.1%** | — | **채택** |
@@ -639,6 +640,43 @@ Exp-010에서 연속(consecutive) 감지 방식으로 전환: 마지막 K개 토
 **결론**: **기각**
 **이유**: eval 코드 실행 환경 오류로 인해 exp-028/029/030 모두 master 코드(exp-009 포함) 대비 열등한 코드 베이스. 올바른 접근은 master 브랜치 위에 char-run 필터 추가
 **다음 가설**: master 베이스에서 Exp-031 — char-run 단일음절 필터만 추가 (KO 빈도 필터 제외, exp-009 반복 루프 감지와 시너지)
+
+---
+
+## Exp-031: master char-run 단일음절 필터
+
+**날짜**: 2026-06-06
+**정책**: SimulStreaming
+**상태**: 기각
+
+**가설**: master 베이스(exp-009 반복 루프 감지 포함) 위에 단일음절 char-run 환각 억제 필터를 추가하면 exp-009의 word-level 반복 감지와 시너지로 WER 개선.
+
+**변경 파일**: `whisperlivekit/simul_whisper/backend.py`
+- `_CHAR_RUN_THRESHOLD=4`, `_HALLUCINATION_RESET_THRESHOLD=5` 클래스 변수 추가
+- `self._consecutive_char_repeat: int = 0` 상태 변수 추가
+- `_max_char_run(text)` 정적 메서드 추가
+- `_filter_cross_batch_repetitions()`: char-run 토큰 억제 + 5회 연속 시 context 리셋
+
+**베이스**: master 브랜치 (exp-009 반복 루프 감지 코드 포함)
+
+**정량 결과 (경로 C, 3회 반복)**
+
+| 측정 | sbs1 WER | ytn1 WER | 평균 WER | F1 |
+|------|----------|----------|----------|----|
+| 1회차 | 61.3% | 25.8% | 43.5% | 52.1% |
+| 2회차 | 58.9% | 75.5% | 67.2% | 29.2% |
+| 3회차 | 50.6% | 145.4% | 98.0% | 37.7% |
+| **중앙값** | **58.9%** | **75.5%** | **67.2%** | **37.7%** |
+
+**실패 분석 (R3 ytn1 145.4%)**:
+- "I am a member of a member... I'm a member who is... I am a member who is an international member..." 패턴의 점진적 반복 환각
+- char-run 필터는 단일문자 반복(스스스스)에만 반응
+- `_LOOP_THRESHOLD=5` (20토큰 창에서 동일 단어 5회)는 "member"가 3-4회 등장하는 점진적 반복은 못 잡음
+- ytn1의 한영 혼용 콘텐츠에서 language confusion → hallucination cascade
+
+**결론**: **기각**
+**이유**: 중앙값 WER 67.2%, F1 37.7%. 목표(WER < 30%, F1 ≥ 60%) 미달. char-run 필터 효과는 있으나(R1: 43.5%) 점진적 phrase-level 반복에 취약.
+**다음 가설**: Exp-032 — `_LOOP_THRESHOLD` 5→3으로 낮춰 점진적 반복 루프를 더 빨리 감지
 
 ---
 
