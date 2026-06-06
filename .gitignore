@@ -138,3 +138,4 @@ nllb-200-distilled-600M-ctranslate2/*
 .omc/project-memory.json
 .omc/benchmarks/*.log
 .omc/session-logs/
+.worktrees/
