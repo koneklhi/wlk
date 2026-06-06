@@ -46,7 +46,7 @@ STT 성능 개선 과정에서 수행한 실험을 기록한다.
 
 | Exp | 날짜 | 제목 | 핵심 변경 | WER (중앙값) | Latency | 결론 |
 |---|---|---|---|---|---|---|
-| [Exp-006](#exp-006-vad-threshold-03--min_duration_real_silence-05) | 2026-06-06 | VAD threshold 낮춤 + Silence 문장확정 임계 낮춤 | `audio_processor.py` threshold 0.5→0.3, MIN_SILENCE 5→0.5 | — | — | **진행 중** |
+| [Exp-006](#exp-006-vad-threshold-03--min_duration_real_silence-05) | 2026-06-06 | VAD threshold 낮춤 + Silence 문장확정 임계 낮춤 | `audio_processor.py` threshold 0.5→0.3, MIN_SILENCE 5→0.5 | sbs1: 97.0% / ytn1: 99.4% / avg: 98.5% | — | **기각** (측정 무효 — eval 파이프 블로킹) |
 | [Exp-005](#exp-005-워치독-is_lasttrue-flush) | 2026-06-06 | 워치독 is_last=True flush | `backend.py` process_iter() 워치독에 infer(is_last=True) 추가 | sbs1: 97.6% / ytn1: 99.4% / avg: 98.5% | — | **기각** |
 | [Exp-004](#exp-004-디코더-멈춤-복구-워치독--경로-c-vbcable-하니스-결함-수정) | 2026-06-06 | 디코더 멈춤 워치독 + 경로 C 하니스 수정 | `backend.py` stall 워치독 + `audio_device.py`/`vbcable_test.py` 하니스 | 단일 run 60~68% (3회 미완) | — | 하니스 **채택** / 워치독 **보류** |
 | [Exp-003](#exp-003-한국어-종결어미-기반-문장-확정--nfc-정규화) | 2026-06-05 | 한국어 종결어미 문장 확정 | `tokens_alignment.py` 종결어미 감지 + NFC 정규화 | sbs1: 95.8% / ytn1: 99.4% / avg: 97.6% | — | **기각** |
@@ -365,16 +365,32 @@ threshold=0.3으로 낮추면 VBCable speech_prob=0.4 오디오가 통과. MIN_D
 **테스트**
 - 결과 파일: (측정 후 기입)
 
+**테스트**
+- 결과 파일: 3회 모두 "처리 완료 신호 미수신" — 아래 참조
+
 **정량 결과 (경로 C, 3회 반복)**
 
-| 측정 | sbs1 WER | ytn1 WER | 평균 WER | F1 |
-|------|----------|----------|----------|----|
-| 1회차 | — | — | — | — |
-| 2회차 | — | — | — | — |
-| 3회차 | — | — | — | — |
-| **중앙값** | — | — | — | — |
+| 측정 | sbs1 WER | ytn1 WER | 평균 WER | F1 | 비고 |
+|------|----------|----------|----------|----|------|
+| 1회차 | ~97.0% | ~99.4% | ~98.5% | 0.0% | 신호 미수신, 6~8단어만 전사 |
+| 2회차 | ~97.0% | ~99.4% | ~98.5% | 0.0% | 동일 |
+| 3회차 | ~97.0% | ~99.4% | ~98.5% | 0.0% | 동일 |
+| **중앙값** | **97.0%** | **99.4%** | **98.5%** | **0.0%** | **측정 무효** |
 
-**결론**: (측정 후 기입)
+**⚠️ 측정 무효 판정**: 모든 3회 실행이 "처리 완료 신호 미수신(30초 타임아웃)" 패턴으로 실패. VAD threshold 변경과 무관하게 `eval.py`의 구조적 결함이 원인으로 확인됨.
+
+**근본 원인 분석** (Exp-007에서 수정):
+- `eval.py` `start_server()`가 `stdout=subprocess.PIPE, stderr=subprocess.STDOUT`으로 서버를 기동
+- eval.py는 `proc.stdout` 파이프를 절대 읽지 않음
+- 108초 분량 오디오 처리 중 서버 로그가 64KB 파이프 버퍼를 채움
+- 버퍼 가득 → 서버의 `logging.info()` 호출이 블로킹 → asyncio 이벤트 루프 동결
+- 이벤트 루프 동결 → WebSocket 수신 불가 → "ready_to_stop" 전송 불가 → 타임아웃
+
+Exp-004 수동 테스트(서버 직접 실행, stdout 터미널 표시)에서 WER 60~68%로 동작했던 것과 자동 eval에서 항상 실패하는 것이 이 원인으로 설명됨.
+
+**결론**: **기각** (측정 무효 — eval 파이프 블로킹으로 인한 서버 동결)
+**이유**: VAD threshold 변경 자체의 효과를 측정할 수 없었음. 수정이 유효한지 불명확.
+**다음 가설**: eval.py `start_server()` `stdout=subprocess.PIPE` → `subprocess.DEVNULL`로 변경하면 서버가 동결되지 않아 정상 측정 가능 → Exp-007에서 검증. Exp-007은 이 실험(threshold=0.3, MIN_SILENCE=0.5)을 그대로 유지하며 eval 하니스만 수정.
 
 ---
 
