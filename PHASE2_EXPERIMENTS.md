@@ -46,6 +46,7 @@ STT 성능 개선 과정에서 수행한 실험을 기록한다.
 
 | Exp | 날짜 | 제목 | 핵심 변경 | WER (중앙값) | Latency | 결론 |
 |---|---|---|---|---|---|---|
+| [Exp-029](#exp-029-슬라이딩-윈도우-단어-빈도-필터) | 2026-06-06 | 슬라이딩 윈도우 단어 빈도 필터 | `backend.py` `_WORD_WINDOW_SIZE=20`, `_WORD_FREQ_THRESHOLD=4`, `_recent_words` 빈도 체크 | avg WER 79.5% (ytn1 99.4% catastrophic) | — | **기각** |
 | [Exp-028](#exp-028-단일음절-연속-반복-억제--context-리셋) | 2026-06-06 | 단일음절 연속 반복 억제 + context 리셋 | `backend.py` `_max_char_run` + `_CHAR_RUN_THRESHOLD=4` + 억제 카운터≥5 시 context 리셋 | avg WER **61.8%**, F1 **45.1%** | — | **채택** |
 | [Exp-027](#exp-027-하이픈-프리픽스-단어-반복-억제) | 2026-06-06 | 하이픈 프리픽스 단어 반복 억제 | `backend.py` `_consecutive_short_hyphen` 카운터 + `_HALLUCINATION_HYPHEN_THRESHOLD=4` | avg WER 72.1% | — | **기각** |
 | [Exp-009](#exp-009-반복-루프-감지--refresh_segment-리셋) | 2026-06-06 | 반복 루프 감지 + 디코더 리셋 | `backend.py` `_detect_repetition_loop()` + `refresh_segment()` | — | — | **진행 중** |
@@ -566,6 +567,48 @@ Exp-010에서 연속(consecutive) 감지 방식으로 전환: 마지막 K개 토
 **결론**: **채택**
 **이유**: 베이스라인 대비 WER -12.7%p 개선. 단일음절 필터 효과 확인. 구절 반복은 별도 실험으로 해결.
 **다음 가설**: 슬라이딩 윈도우 단어 빈도 필터로 구절 수준 반복 억제
+
+---
+
+## Exp-029: 슬라이딩 윈도우 단어 빈도 필터
+
+**날짜**: 2026-06-06
+**정책**: SimulStreaming
+**상태**: 기각
+
+**가설**: Exp-028의 단일음절 필터에 슬라이딩 윈도우 단어 빈도 필터를 추가해 구절 수준 반복("시원한 시원한 시원한", "사이의 사이의 사이의")을 억제한다. 파라미터: `_WORD_WINDOW_SIZE=20`, `_WORD_FREQ_THRESHOLD=4`, 최소 단어 길이 2자.
+
+**변경 내용**
+- `whisperlivekit/simul_whisper/backend.py`
+  - 클래스 상수 `_WORD_WINDOW_SIZE = 20`, `_WORD_FREQ_THRESHOLD = 4` 추가
+  - `self._recent_words: list = []` 추가
+  - `end_silence`/`new_speaker`/stall recovery/context 리셋 시 `_recent_words.clear()` 추가
+  - `_filter_cross_batch_repetitions`에 단어 빈도 체크 추가
+
+**테스트**
+- 결과 파일: `.omc/benchmarks/eval_exp029_r1.json`
+
+**정량 결과 (경로 C)**
+
+| 측정 | sbs1 WER | ytn1 WER | 평균 WER | F1 |
+|------|----------|----------|----------|----|
+| 1회차 | 59.5% | 99.4% | 79.5% | 35.8% |
+
+(fail-fast 중단 — ytn1 99.4% catastrophic)
+
+| 항목 | 채택 베이스라인 (Exp-028) | Exp-029 | 변화 |
+|------|--------------------------|---------|------|
+| 평균 WER | 61.8% | 79.5% | +17.7%p ↑ (회귀) |
+| F1 | 45.1% | 35.8% | -9.3%p |
+
+**정성 관찰**
+- ytn1 R1 전사가 완전히 영어로 전사됨 (언어 감지 실패 + 필터가 영어 단어도 억제)
+- "in", "foreign", "language" 등 영어 전치사가 `len(stripped) >= 2` 조건에 포함되어 반복 억제됨
+- 파라미터 threshold=4, window=20이 지나치게 공격적
+
+**결론**: **기각**
+**이유**: 단어 빈도 필터가 영어 단어도 억제 + 파라미터 과공격적 → ytn1 99.4% catastrophic
+**다음 가설**: 한국어 단어에만 빈도 필터 적용 (U+AC00-U+D7A3 범위 감지) + 완화된 파라미터(threshold=5, window=25)
 
 ---
 
