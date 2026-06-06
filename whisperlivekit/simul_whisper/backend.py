@@ -33,6 +33,10 @@ else:
 
 MIN_DURATION_REAL_SILENCE = 5
 
+# 디코더 멈춤 복구: 오디오가 이 시간(초) 이상 전진했는데 토큰이 전혀 안 나오면
+# SimulStreaming 디코더가 비-fire 상태에 빠진 것으로 보고 강제 refresh로 복구한다.
+STALL_RECOVER_SEC = 10.0
+
 class SimulStreamingOnlineProcessor:
     """Online processor for SimulStreaming ASR."""
     SAMPLING_RATE = 16000
@@ -44,6 +48,7 @@ class SimulStreamingOnlineProcessor:
         self.buffer = []
         self.model = self._create_alignatt()
         self._last_emitted_word: str = None
+        self._last_emit_end: float = 0.0  # 마지막으로 토큰을 방출한 시점의 audio end (stall 복구 baseline)
 
         if asr.tokenizer:
             self.model.tokenizer = asr.tokenizer
@@ -81,6 +86,7 @@ class SimulStreamingOnlineProcessor:
             self.model.refresh_segment(complete=True)
             self.model.global_time_offset = silence_duration + offset
             self._last_emitted_word = None
+            self._last_emit_end = self.end
 
     def insert_audio_chunk(self, audio: np.ndarray, audio_stream_end_time):
         """Append an audio chunk to be processed by SimulStreaming."""
@@ -98,6 +104,7 @@ class SimulStreamingOnlineProcessor:
         self.model.speaker = change_speaker.speaker
         self.model.global_time_offset = change_speaker.start
         self._last_emitted_word = None
+        self._last_emit_end = self.end
 
     def get_buffer(self):
         concat_buffer = Transcript.from_tokens(tokens= self.buffer, sep='')
@@ -141,6 +148,18 @@ class SimulStreamingOnlineProcessor:
             timestamped_words = self.model.infer(is_last=is_last)
 
             if not timestamped_words:
+                # 디코더 멈춤 복구 워치독: 오디오가 STALL_RECOVER_SEC 이상 전진했는데
+                # 토큰이 전혀 안 나오면 디코더가 비-fire 상태(연속 발화 30s+, 침묵 없음)에
+                # 빠진 것 → 강제 refresh로 세그먼트/상태를 리셋해 복구한다.
+                if not is_last and self.end - self._last_emit_end > STALL_RECOVER_SEC:
+                    logger.warning(
+                        "SimulStreaming stall recovery: %.1fs without output "
+                        "(end=%.1fs) — forcing segment refresh.",
+                        self.end - self._last_emit_end, self.end,
+                    )
+                    self.model.refresh_segment(complete=True)
+                    self._last_emitted_word = None
+                    self._last_emit_end = self.end
                 return [], self.end
 
             if self.model.cfg.language == "auto" and timestamped_words[0].detected_language is None:
@@ -149,6 +168,7 @@ class SimulStreamingOnlineProcessor:
 
             timestamped_words = self._filter_cross_batch_repetitions(timestamped_words)
             self.buffer = []
+            self._last_emit_end = self.end
             return timestamped_words, self.end
         except Exception as e:
             logger.exception(f"SimulStreaming processing error: {e}")
