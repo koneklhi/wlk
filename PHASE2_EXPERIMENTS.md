@@ -46,6 +46,7 @@ STT 성능 개선 과정에서 수행한 실험을 기록한다.
 
 | Exp | 날짜 | 제목 | 핵심 변경 | WER (중앙값) | Latency | 결론 |
 |---|---|---|---|---|---|---|
+| [Exp-032](#exp-032-_loop_threshold-53-과공격-기각) | 2026-06-06 | LOOP_THRESHOLD=3 | `backend.py` `_LOOP_THRESHOLD=3` (5→3) | R1 55.3%/R2 66.3% WER, F1 12-29% | — | **기각** |
 | [Exp-031](#exp-031-master-char-run-단일음절-필터) | 2026-06-06 | master+char-run 필터 | `backend.py` char-run 억제 + context 리셋, threshold=5 | 중앙값 avg WER 67.2%, F1 37.7% (R1 43.5%, R2 67.2%, R3 98.0%) | — | **기각** |
 | [Exp-030](#exp-030-슬라이딩-윈도우-한국어-전용-빈도-필터) | 2026-06-06 | 슬라이딩 윈도우 한국어 전용 빈도 필터 | `backend.py` `_KO_CHAR` + `threshold=5, window=25` | avg WER 87.3% (베이스라인 대비 +12.8%p) | — | **기각** |
 | [Exp-029](#exp-029-슬라이딩-윈도우-단어-빈도-필터) | 2026-06-06 | 슬라이딩 윈도우 단어 빈도 필터 | `backend.py` `_WORD_WINDOW_SIZE=20`, `_WORD_FREQ_THRESHOLD=4`, `_recent_words` 빈도 체크 | avg WER 79.5% (ytn1 99.4% catastrophic) | — | **기각** |
@@ -677,6 +678,38 @@ Exp-010에서 연속(consecutive) 감지 방식으로 전환: 마지막 K개 토
 **결론**: **기각**
 **이유**: 중앙값 WER 67.2%, F1 37.7%. 목표(WER < 30%, F1 ≥ 60%) 미달. char-run 필터 효과는 있으나(R1: 43.5%) 점진적 phrase-level 반복에 취약.
 **다음 가설**: Exp-032 — `_LOOP_THRESHOLD` 5→3으로 낮춰 점진적 반복 루프를 더 빨리 감지
+
+---
+
+## Exp-032: _LOOP_THRESHOLD 5→3 (과공격 기각)
+
+**날짜**: 2026-06-06
+**정책**: SimulStreaming
+**상태**: 기각
+
+**가설**: exp-031(char-run 필터 + LOOP_THRESHOLD=5)에서 점진적 반복("member" 패턴)이 threshold=5를 채우기 전에 다수 방출됨. threshold=3으로 낮춰 조기 감지.
+
+**변경 파일**: `whisperlivekit/simul_whisper/backend.py`
+- `_LOOP_THRESHOLD=3` (exp-031의 5에서 변경)
+
+**정량 결과 (경로 C)**
+
+| 측정 | sbs1 WER | ytn1 WER | 평균 WER | F1 |
+|------|----------|----------|----------|----|
+| 1회차 | 53.0% | 57.7% | 55.3% | 29.2% |
+| 2회차 | 57.1% | 75.5% | 66.3% | 12.5% |
+| 3회차 | 미실행 | 미실행 | 미실행 | 미실행 |
+
+(R1+R2 패턴에서 기각 결론 — R3 미실행)
+
+**실패 분석**:
+- threshold=3은 과공격적: 일반 영어 텍스트에서 "a", "the", "of", "I" 등이 3회 나오는 경우도 리셋 트리거
+- F1 급락(12.5%): 빈번한 context 리셋으로 문장이 중단되어 완성된 라인 수 감소
+- exp-031 R1 최고 성능(43.5%, F1 52.1%)보다 나빠짐: threshold=3이 good case를 방해
+
+**결론**: **기각**
+**이유**: F1 12-29%(exp-031 중앙값 37.7% 대비 악화). threshold=3은 과공격적
+**다음 가설**: Exp-033 — threshold=4 (중간값 탐색)
 
 ---
 
