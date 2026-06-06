@@ -46,6 +46,7 @@ STT 성능 개선 과정에서 수행한 실험을 기록한다.
 
 | Exp | 날짜 | 제목 | 핵심 변경 | WER (중앙값) | Latency | 결론 |
 |---|---|---|---|---|---|---|
+| [Exp-034](#exp-034-max_context_tokens100-hallucination-cascade-차단) | 2026-06-06 | max_context_tokens=100 | `backend.py` `max_context_tokens=100` (None→100) | 중앙값 WER 49.8%, F1 36.8% (R1 49.8%/R2 42.1%/R3 53.1%) | — | **잠정 채택** |
 | [Exp-033](#exp-033-_loop_threshold-54-중간값-기각) | 2026-06-06 | LOOP_THRESHOLD=4 | `backend.py` `_LOOP_THRESHOLD=4` (5→4) | 중앙값 WER 67.7%, F1 44.9% (R1 69.3%/R2 48.1%/R3 67.7%) | — | **기각** |
 | [Exp-032](#exp-032-_loop_threshold-53-과공격-기각) | 2026-06-06 | LOOP_THRESHOLD=3 | `backend.py` `_LOOP_THRESHOLD=3` (5→3) | R1 55.3%/R2 66.3% WER, F1 12-29% | — | **기각** |
 | [Exp-031](#exp-031-master-char-run-단일음절-필터) | 2026-06-06 | master+char-run 필터 | `backend.py` char-run 억제 + context 리셋, threshold=5 | 중앙값 avg WER 67.2%, F1 37.7% (R1 43.5%, R2 67.2%, R3 98.0%) | — | **기각** |
@@ -679,6 +680,46 @@ Exp-010에서 연속(consecutive) 감지 방식으로 전환: 마지막 K개 토
 **결론**: **기각**
 **이유**: 중앙값 WER 67.2%, F1 37.7%. 목표(WER < 30%, F1 ≥ 60%) 미달. char-run 필터 효과는 있으나(R1: 43.5%) 점진적 phrase-level 반복에 취약.
 **다음 가설**: Exp-032 — `_LOOP_THRESHOLD` 5→3으로 낮춰 점진적 반복 루프를 더 빨리 감지
+
+---
+
+## Exp-034: max_context_tokens=100 hallucination cascade 차단
+
+**날짜**: 2026-06-06
+**정책**: SimulStreaming
+**상태**: 잠정 채택 (목표 미달이나 현재 최고 성능, 후속 실험 기반)
+
+**가설**: max_context_tokens 기본값 None(448토큰) → 100토큰으로 제한. hallucination cascade에서 길이가 길어질수록 이전 context가 다음 반복을 강화하는 피드백 루프를 끊음.
+
+**변경 파일**: `whisperlivekit/simul_whisper/backend.py`
+- `SimulStreamingASR.__init__` 내부: `if getattr(self, 'max_context_tokens', None) is None: self.max_context_tokens = 100`
+
+**베이스**: phase2/exp-031 (char-run 필터 + LOOP_THRESHOLD=5)
+
+**정량 결과 (경로 C, 3회 반복)**
+
+| 측정 | sbs1 WER | ytn1 WER | 평균 WER | F1 |
+|------|----------|----------|----------|----|
+| 1회차 | 71.4% | 28.2% | 49.8% | 45.1% |
+| 2회차 | 57.7% | 26.4% | 42.1% | 36.8% |
+| 3회차 | 54.8% | 51.5% | 53.1% | 34.1% |
+| **중앙값** | **57.7%** | **28.2%** | **49.8%** | **36.8%** |
+
+| 항목 | 이전 최고 Exp-031 (중앙값) | Exp-034 (중앙값) | 변화 |
+|------|--------------------------|-----------------|------|
+| 평균 WER | 67.2% | 49.8% | **-17.4%p** |
+| 최대 WER | 98.0% | 53.1% | catastrophic cascade 완전 제거 |
+| ytn1 WER | 75.5% | 28.2% | **-47.3%p** (2회 연속 목표 달성) |
+| F1 | 37.7% | 36.8% | 거의 동일 |
+
+**잔존 문제**
+- sbs1 WER 54~71% — 한국어 단일 언어인데도 높음. language=auto에서 언어 혼동 가능성
+- 중앙값 WER 49.8%로 목표 30% 대비 19.8%p 격차
+- F1 중앙값 36.8%로 목표 60% 대비 23.2%p 격차
+
+**결론**: **잠정 채택** (현재 최고 성능)
+**이유**: 이전 최고(Exp-031) 대비 WER -17.4%p 개선. catastrophic cascade 완전 제거. 목표는 미달이나 지금까지의 최고 성능.
+**다음 가설**: Exp-035 — language=ko 강제로 sbs1 한국어 인식률 개선 (eval.py --lan ko 파라미터)
 
 ---
 
