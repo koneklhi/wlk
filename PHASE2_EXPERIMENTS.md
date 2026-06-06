@@ -46,6 +46,7 @@ STT 성능 개선 과정에서 수행한 실험을 기록한다.
 
 | Exp | 날짜 | 제목 | 핵심 변경 | WER (중앙값) | Latency | 결론 |
 |---|---|---|---|---|---|---|
+| [Exp-030](#exp-030-슬라이딩-윈도우-한국어-전용-빈도-필터) | 2026-06-06 | 슬라이딩 윈도우 한국어 전용 빈도 필터 | `backend.py` `_KO_CHAR` + `threshold=5, window=25` | avg WER 87.3% (베이스라인 대비 +12.8%p) | — | **기각** |
 | [Exp-029](#exp-029-슬라이딩-윈도우-단어-빈도-필터) | 2026-06-06 | 슬라이딩 윈도우 단어 빈도 필터 | `backend.py` `_WORD_WINDOW_SIZE=20`, `_WORD_FREQ_THRESHOLD=4`, `_recent_words` 빈도 체크 | avg WER 79.5% (ytn1 99.4% catastrophic) | — | **기각** |
 | [Exp-028](#exp-028-단일음절-연속-반복-억제--context-리셋) | 2026-06-06 | 단일음절 연속 반복 억제 + context 리셋 | `backend.py` `_max_char_run` + `_CHAR_RUN_THRESHOLD=4` + 억제 카운터≥5 시 context 리셋 | avg WER **61.8%**, F1 **45.1%** | — | **채택** |
 | [Exp-027](#exp-027-하이픈-프리픽스-단어-반복-억제) | 2026-06-06 | 하이픈 프리픽스 단어 반복 억제 | `backend.py` `_consecutive_short_hyphen` 카운터 + `_HALLUCINATION_HYPHEN_THRESHOLD=4` | avg WER 72.1% | — | **기각** |
@@ -609,6 +610,35 @@ Exp-010에서 연속(consecutive) 감지 방식으로 전환: 마지막 K개 토
 **결론**: **기각**
 **이유**: 단어 빈도 필터가 영어 단어도 억제 + 파라미터 과공격적 → ytn1 99.4% catastrophic
 **다음 가설**: 한국어 단어에만 빈도 필터 적용 (U+AC00-U+D7A3 범위 감지) + 완화된 파라미터(threshold=5, window=25)
+
+---
+
+## Exp-030: 슬라이딩 윈도우 한국어 전용 빈도 필터
+
+**날짜**: 2026-06-06
+**정책**: SimulStreaming
+**상태**: 기각
+
+**가설**: Exp-029(단어 빈도 필터 과공격적)의 수정 버전. 한국어 단어에만 빈도 필터 적용(`_KO_CHAR = re.compile(r'[가-힣]')`). 파라미터 완화: `threshold=5, window=25`.
+
+**변경 파일**: `whisperlivekit/simul_whisper/backend.py`
+- `import re` 추가
+- `_WORD_WINDOW_SIZE=25`, `_WORD_FREQ_THRESHOLD=5`, `_KO_CHAR=re.compile(r'[가-힣]')` 추가
+- 빈도 필터 조건: `_KO_CHAR.search(stripped) and count >= 5`
+
+**정량 결과**:
+- eval을 올바른 방법(exp-030 cwd + main venv Python)으로 실행 → R1: sbs1 89.3%, ytn1 85.3%, avg WER **87.3%**, F1 35.4%
+- 베이스라인(74.5%)보다 12.8%p 악화 → catastrophic
+
+**근본 원인 분석**:
+- exp-028/030은 phase2/exp-016을 베이스로 함
+- phase2/exp-016의 backend.py에는 master에 있는 Exp-009 반복 루프 감지 코드(`_LOOP_WINDOW`, `_LOOP_THRESHOLD`, `deque`)가 없음
+- 따라서 exp-030 베이스 자체가 master(Exp-009 포함)보다 성능이 낮음
+- 이전 eval이 main cwd(master 코드)로 실행되어 베이스라인 수치가 실제 exp-016 코드와 다름
+
+**결론**: **기각**
+**이유**: eval 코드 실행 환경 오류로 인해 exp-028/029/030 모두 master 코드(exp-009 포함) 대비 열등한 코드 베이스. 올바른 접근은 master 브랜치 위에 char-run 필터 추가
+**다음 가설**: master 베이스에서 Exp-031 — char-run 단일음절 필터만 추가 (KO 빈도 필터 제외, exp-009 반복 루프 감지와 시너지)
 
 ---
 
