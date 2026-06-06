@@ -46,6 +46,8 @@ STT 성능 개선 과정에서 수행한 실험을 기록한다.
 
 | Exp | 날짜 | 제목 | 핵심 변경 | WER (중앙값) | Latency | 결론 |
 |---|---|---|---|---|---|---|
+| [Exp-006](#exp-006-vad-threshold-03--min_duration_real_silence-05) | 2026-06-06 | VAD threshold 낮춤 + Silence 문장확정 임계 낮춤 | `audio_processor.py` threshold 0.5→0.3, MIN_SILENCE 5→0.5 | — | — | **진행 중** |
+| [Exp-005](#exp-005-워치독-is_lasttrue-flush) | 2026-06-06 | 워치독 is_last=True flush | `backend.py` process_iter() 워치독에 infer(is_last=True) 추가 | sbs1: 97.6% / ytn1: 99.4% / avg: 98.5% | — | **기각** |
 | [Exp-004](#exp-004-디코더-멈춤-복구-워치독--경로-c-vbcable-하니스-결함-수정) | 2026-06-06 | 디코더 멈춤 워치독 + 경로 C 하니스 수정 | `backend.py` stall 워치독 + `audio_device.py`/`vbcable_test.py` 하니스 | 단일 run 60~68% (3회 미완) | — | 하니스 **채택** / 워치독 **보류** |
 | [Exp-003](#exp-003-한국어-종결어미-기반-문장-확정--nfc-정규화) | 2026-06-05 | 한국어 종결어미 문장 확정 | `tokens_alignment.py` 종결어미 감지 + NFC 정규화 | sbs1: 95.8% / ytn1: 99.4% / avg: 97.6% | — | **기각** |
 | [Exp-002](#exp-002-cross-batch-stateful-반복-필터) | 2026-06-05 | Cross-batch 반복 필터 | `process_iter()` 반환 토큰에서 연속 반복 제거 | sbs1: 87.5% / ytn1: 38.7% / avg: 63.1% | — | **채택** |
@@ -302,6 +304,79 @@ STT 성능 개선 과정에서 수행한 실험을 기록한다.
 2. 후반부 반복 환각(WER 주범) 근본 원인 → A-3(확정 후 중복 억제) 또는 디코더 반복 억제 강화.
 3. master에 남은 wip-exp-004 종결어미 코드(`tokens_alignment.py`의 `unicodedata`/`_KO_SENTENCE_END` 미정의 → NameError로 no-op) 제거.
 
+
+## Exp-005: 워치독 is_last=True flush
+
+**날짜**: 2026-06-06
+**정책**: simulstreaming
+**가설**: `process_iter()` 워치독이 `refresh_segment(complete=True)`만 하고 디코더가 hold-back한 토큰을 버린다. `infer(is_last=True)`를 워치독 내에서 먼저 호출하면 held-back 토큰이 flush되어 WER이 개선될 것이다.
+
+**변경 내용**
+- `whisperlivekit/simul_whisper/backend.py` — `process_iter()` 워치독 분기에 `flushed = self.model.infer(is_last=True)` 호출 후 토큰 반환 로직 추가
+- `tests/test_stall_watchdog.py` — `side_effect` 기반 mock으로 변경 + `test_stall_flush_returns_pending_tokens` 테스트 추가 (4개 → 4개)
+
+**진단 (사후 — 왜 실패했나)**
+- AlignAtt `align_att_base.py`에서 "attention reaches end" 기준: `content_mel_len - most_attended_frame <= (4 if is_last else frame_threshold)`. 그런데 `frame_threshold = 4`이므로 is_last=True/False 모두 임계가 4로 동일.
+- 결과: `infer(is_last=True)` 재호출이 `infer(is_last=False)`와 동일하게 동작 → held-back 토큰 없음 → 가설 오류.
+- 진짜 경로 C WER 97% 원인: **Silero VAD가 VBCable 루프백 오디오를 침묵으로 분류** → 첫 2~3초 이후 오디오가 transcription_queue에 진입 안 됨.
+
+**테스트**
+- 유닛 테스트: `uv run pytest tests/test_stall_watchdog.py -v` → 4/4 통과
+- 결과 파일:
+  - `.omc/benchmarks/eval_exp005_r1.json`
+  - `.omc/benchmarks/eval_exp005_r2.json`
+  - `.omc/benchmarks/eval_exp005_r3.json`
+
+**정량 결과 (경로 C, 3회 반복)**
+
+| 측정 | sbs1 WER | ytn1 WER | 평균 WER |
+|------|----------|----------|----------|
+| 1회차 | 97.6% | 99.4% | 98.5% |
+| 2회차 | 97.0% | 99.4% | 98.2% |
+| 3회차 | 98.2% | 99.4% | 98.8% |
+| **중앙값** | **97.6%** | **99.4%** | **98.5%** |
+
+| 항목 | Exp-004 유효 베이스라인 | Exp-005 | 변화 |
+|------|----------------------|---------|------|
+| sbs1 WER | ~97% | 97.6% | 변화 없음 |
+| ytn1 WER | ~99% | 99.4% | 변화 없음 |
+| F1 | 0.0% | 0.0% | 변화 없음 |
+
+**결론**: **기각**
+**이유**: 가설이 잘못됨. is_last 차이가 없어 flush 효과 없음. WER 99%→97% 수준 그대로.
+**다음 가설**: VBCable 오디오가 Silero VAD threshold(0.5)를 통과 못 함 → threshold 낮춤(→ Exp-006)
+
+---
+
+## Exp-006: VAD threshold 0.3 + MIN_DURATION_REAL_SILENCE 0.5
+
+**날짜**: 2026-06-06
+**정책**: simulstreaming
+**가설**: 경로 C WER 97% + F1 0% 원인 두 가지:
+① **Silero VAD threshold=0.5**: VBCable 루프백 오디오는 speech_prob ≈ 0.4 → 첫 문장 일시정지 후 triggered=False 상태에서 0.4 < 0.5로 "start" 신호 없음 → current_silence 영구 유지 → 오디오 큐 진입 불가 → WER 97%.
+② **MIN_DURATION_REAL_SILENCE=5**: 뉴스 문장간 0.5~1초 휴지는 Silence 토큰 생성 기준(5초) 미달 → 문장 확정 없음 → F1 0%.
+
+threshold=0.3으로 낮추면 VBCable speech_prob=0.4 오디오가 통과. MIN_DURATION_REAL_SILENCE=0.5로 낮추면 0.5초+ 휴지에서 Silence 토큰 생성 → 문장 확정.
+
+**변경 내용**
+- `whisperlivekit/audio_processor.py:26` — `MIN_DURATION_REAL_SILENCE = 5` → `0.5` (주석도 정정)
+- `whisperlivekit/audio_processor.py:99,101` — `FixedVADIterator(...)` 두 곳 모두 `threshold=0.3` 추가
+
+**테스트**
+- 결과 파일: (측정 후 기입)
+
+**정량 결과 (경로 C, 3회 반복)**
+
+| 측정 | sbs1 WER | ytn1 WER | 평균 WER | F1 |
+|------|----------|----------|----------|----|
+| 1회차 | — | — | — | — |
+| 2회차 | — | — | — | — |
+| 3회차 | — | — | — | — |
+| **중앙값** | — | — | — | — |
+
+**결론**: (측정 후 기입)
+
+---
 
 ## 실험 템플릿 (신규 항목 작성 시 복사)
 
