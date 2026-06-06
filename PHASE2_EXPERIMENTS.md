@@ -46,6 +46,7 @@ STT 성능 개선 과정에서 수행한 실험을 기록한다.
 
 | Exp | 날짜 | 제목 | 핵심 변경 | WER (중앙값) | Latency | 결론 |
 |---|---|---|---|---|---|---|
+| [Exp-004](#exp-004-디코더-멈춤-복구-워치독--경로-c-vbcable-하니스-결함-수정) | 2026-06-06 | 디코더 멈춤 워치독 + 경로 C 하니스 수정 | `backend.py` stall 워치독 + `audio_device.py`/`vbcable_test.py` 하니스 | 단일 run 60~68% (3회 미완) | — | 하니스 **채택** / 워치독 **보류** |
 | [Exp-003](#exp-003-한국어-종결어미-기반-문장-확정--nfc-정규화) | 2026-06-05 | 한국어 종결어미 문장 확정 | `tokens_alignment.py` 종결어미 감지 + NFC 정규화 | sbs1: 95.8% / ytn1: 99.4% / avg: 97.6% | — | **기각** |
 | [Exp-002](#exp-002-cross-batch-stateful-반복-필터) | 2026-06-05 | Cross-batch 반복 필터 | `process_iter()` 반환 토큰에서 연속 반복 제거 | sbs1: 87.5% / ytn1: 38.7% / avg: 63.1% | — | **채택** |
 | [Exp-001](#exp-001-vbcable-마이크-정성-평가--정책-최종-확정) | 2026-05-21 | VBCable 마이크 정성 평가 | 브라우저 마이크 입력으로 실사용 품질 비교 | — | — | **SimulStreaming 채택** |
@@ -255,6 +256,52 @@ STT 성능 개선 과정에서 수행한 실험을 기록한다.
 3. WER을 더 개선하기 위해 A-2(Silence 기반 조기 확정) 재검토
 
 ---
+
+## Exp-004: 디코더 멈춤 복구 워치독 + 경로 C VBCable 하니스 결함 수정
+
+**날짜**: 2026-06-06
+**정책**: simulstreaming
+**가설**: Exp-003이 남긴 두 미해결 문제 — ① 경로 C "서버 처리 완료 신호 미수신" 타임아웃, ② 후반부 "반복 아티팩트 폭발(원인 미확정)" 및 사용자 관찰 "첫 몇 단어만/전혀 전사 안 됨" — 은 서로 다른 두 결함에서 비롯된다고 보고 근본 원인을 규명한다.
+
+**진단 (근본 원인)**
+- GPU 정상: torch 2.8.0+cu128, `cuda.is_available()=True`, RTX 3080. 모델 기본 cuda 로드. "GPU 미사용"은 전사 멈춤의 *결과*였음(원인 아님).
+- **디코더 멈춤(stall)**: 경로 C bad-run을 계측 로그로 포착(crun_1.log). 연속 발화가 ~30초 롤링 윈도우를 채우면 SimulStreaming 디코더가 영구히 0토큰 상태(`break=loop_end`, `most_attended=None`, `tok=0`)에 빠짐. `refresh_segment`는 ≥5초 침묵(`MIN_DURATION_REAL_SILENCE`)에서만 발동해 연속 발화에선 복구 불가 → 끝부분 유실. context는 정상 트림(~445)이라 오버플로 아님. 간헐적(경로 A 13/13 정상, 경로 C에서 발생).
+- **"전혀 안됨" = 테스트 하니스 VBCable 결함**: `scripts/audio_device.py vbcable_audio_context`가 `is_vbcable_default()`(재생 장치만 검사)에 의존 → 재생이 이미 CABLE Input이면 녹음(CABLE Output) 설정을 건너뜀 → 브라우저 getUserMedia가 실제 마이크(무음) 캡처 → 전사 0. `run_browser_test`의 0.5초 레이스로 앞부분도 유실. (Exp-003의 "완료 신호 미수신" 타임아웃 정황도 이 무음/멈춤에서 비롯.)
+
+**변경 내용** (브랜치 `phase2/fix-transcription-stall`)
+- `whisperlivekit/simul_whisper/backend.py` — 디코더 멈춤 복구 워치독: 모듈 상수 `STALL_RECOVER_SEC=10.0`, `__init__`에 `_last_emit_end`, `process_iter()` 빈 결과 분기에 "오디오 전진 > 임계 & 0토큰 → `refresh_segment(complete=True)` 강제 복구", 토큰 방출/`end_silence`(long)/`new_speaker`에 baseline 갱신. (커밋 `79265dc`)
+- `tests/test_stall_watchdog.py` — 워치독 단위 테스트 3개 신규.
+- `scripts/audio_device.py:vbcable_audio_context` — 재생·녹음 각각 독립 검사·설정 + 둘 다 CABLE인지 재검증해 yield. (커밋 `476c026`)
+- `scripts/vbcable_test.py:run_browser_test` — 0.5초 sleep → WebSocket OPEN 대기 루프로 레이스 제거. (커밋 `476c026`)
+
+**검증**
+- 워치독 단위테스트 3/3, `pytest tests/` 비-네트워크 전부 통과.
+- 워치독 경로 A 스모크: 2회 발동·복구, 전사 끝까지(회귀 없음).
+- 하니스 결정적 검증(브라우저 없이): 녹음을 비-CABLE(Jabra)로 강제해도 컨텍스트가 CABLE Output으로 교정 → "전혀 안됨" 수정 증명.
+- 하니스 경로 C end-to-end 1회: 앞부분 유실 없음, 끝까지 도달(708자) → 무음 캡처 해소 확인.
+
+**정량 결과 (단일 run 참고 — 경로 C 3회 중앙값 미완료)**
+
+| run | 조건 | WER | 비고 |
+|---|---|---|---|
+| 워치독 경로 A 스모크 | fix | 55.95% | 워치독 2회 발동·복구 |
+| fix 경로 C (하니스 전) | fix | 60.1% | 끝까지 전사 |
+| fix 경로 C (하니스 후) | fix | 68.5% | 끝까지, 뒷부분 반복 환각 잔존 |
+
+(주의: 채택 1차 기준인 경로 C 3회 중앙값 + baseline A/B는 fail-fast 중단으로 미완료.)
+
+**정성 관찰**
+- "전혀 안됨/첫 몇 단어"는 하니스 결함이었고 수정 후 재현 안 됨.
+- 워치독: 경로 A에서 복구 목격, 경로 C에선 이번 run에 stall 미발생으로 복구 직접 목격은 다음 과제.
+- **반복 환각("공급한 공급...")이 후반부 잔존 → WER 60~68%**. 남은 핵심 WER 동인.
+
+**결론**: 하니스 수정 **채택**(결함·수정 증명, 양 PC 경로 C 측정 신뢰성 회복). 워치독 **조건부 보류**(경로 A 복구·무회귀 확인했으나 경로 C 3회 중앙값 미측정).
+**이유**: 하니스 결함은 측정 신뢰성의 전제인 명백한 버그. 워치독은 무해한 안전망이나 정식 채택엔 경로 C 중앙값 필요.
+**다음 가설**:
+1. 경로 C 3회(fail-fast)로 하니스+워치독 상태의 진짜 baseline WER/F1 확보 → 워치독 정식 채택 판정.
+2. 후반부 반복 환각(WER 주범) 근본 원인 → A-3(확정 후 중복 억제) 또는 디코더 반복 억제 강화.
+3. master에 남은 wip-exp-004 종결어미 코드(`tokens_alignment.py`의 `unicodedata`/`_KO_SENTENCE_END` 미정의 → NameError로 no-op) 제거.
+
 
 ## 실험 템플릿 (신규 항목 작성 시 복사)
 
