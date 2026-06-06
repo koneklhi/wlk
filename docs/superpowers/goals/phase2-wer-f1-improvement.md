@@ -1,0 +1,176 @@
+# Phase 2 자율 개선 루프 — WER 감소 우선 → 문장 분리 F1 60%+
+
+## 현재 상태 (2026-06-05 기준)
+
+- 브랜치: `master`
+- 기준 베이스라인 (경로 C, 1회 측정):
+  - sbs1.mp3: WER **108.3%**, F1 **0.0%**
+  - ytn1.mp3: WER **47.9%**, F1 **0.0%**
+  - 평균: WER **78.1%**, F1 **0.0%**
+- WER 100% 초과 원인: SimulStreaming의 cross-batch 반복 토큰("바 바 바", "도도도도") — 현재 `_filter_repetitions()`는 단일 배치 내에서만 동작해 배치 경계의 반복이 그대로 축적됨
+- F1 0.0% 원인: 문장 확정 로직 없음 → 전체가 단일 미확정 블록
+
+---
+
+## 목표 수치 (경로 C 중앙값 기준, 3회 반복 측정)
+
+| 지표 | 1차 목표 | 상용화 목표 |
+|---|---|---|
+| 평균 WER | < 50% (단기) | **< 30%** (상용 STT 수준) |
+| sbs1 WER | < 60% | < 35% |
+| ytn1 WER | < 30% | < 20% |
+| 문장 분리 F1 (avg) | **≥ 60%** | ≥ 70% |
+
+> WER < 30% 근거: 한국어 실시간 STT 상용 서비스(Naver Clova, Kakao i) 기준
+> 코드스위칭(한·영 혼용) 및 실시간 조건에서 25-35%가 실용 하한.
+> 현 WER 고점의 핵심 원인은 반복 아티팩트(모델 한계 아님)이므로 알고리즘으로 개선 가능.
+
+---
+
+## 핵심 제약 (반드시 준수)
+
+1. **폐쇄망 오프라인**: 런타임 네트워크 호출 절대 금지 (HF Hub, PyPI, GitHub 등)
+2. **외과적 변경**: `whisperlivekit/` 본체 수정 최소화. 가능하면 새 모듈로 분리.
+3. **한국어/영어 양쪽 커버**: 어느 한 언어만 개선되는 변경은 채택 금지
+4. **측정 일관성**: eval.py 기본값(`--lan auto`, VAC 켜짐, `--pcm-input` 없음)으로만 측정
+
+---
+
+## 작업 순서: WER 먼저, F1 다음
+
+### Phase A — WER 개선 (F1보다 먼저)
+
+WER이 높으면 F1 평가 자체가 의미 없다. 반복 토큰이 삽입되면 단어 경계가 무너져 F1 계산도 오염됨.
+
+#### A-1. Cross-batch stateful 반복 필터 (최우선)
+
+**문제**: `whisperlivekit/simul_whisper/simul_whisper.py`의 `_filter_repetitions()`은 단일 `update()` 호출 내부에서만 중복을 제거함. 실시간에서 토큰은 1개씩 도착하므로 배치 경계("바"/다음배치/"바")는 통과됨.
+
+**접근 방향**:
+- `whisperlivekit/tokens_alignment.py`의 `TokensAlignment` 클래스 또는 `SimulStreamingOnlineProcessor`에 **상태를 유지하는** 반복 필터를 추가
+- 직전 N개 토큰의 텍스트를 메모리에 보유, 새 토큰이 직전 동일 단어의 연속이면 제거
+- 한국어는 음절 단위 반복("바 바 바"), 단어 단위 반복("-그 -그 -그") 두 가지를 모두 처리해야 함
+- 삭제는 `new_tokens`에서 조용히 수행 — `all_tokens`에 누적되기 전에 필터링
+
+**목표**: sbs1 WER 108% → 60% 이하 (반복 토큰 삽입이 주 원인이므로 50%+ 개선 가능)
+
+#### A-2. Silence 기반 조기 확정 + 반복 억제 (A-1 이후)
+
+**문제**: VAD silence 감지 후에도 이전 음절 반복이 계속 생성됨. silence 확인 즉시 현재 세그먼트를 확정하면 반복 토큰이 쌓일 여지가 줄어듦.
+
+**접근 방향**:
+- `whisperlivekit/tokens_alignment.py`의 `get_lines()` 내 `Silence` 토큰 처리 로직 참조
+- 긴 silence(≥ 0.5초) 감지 시 `current_line_tokens`를 즉시 `validated_segments`로 이동
+- 이를 통해 F1 향상도 함께 달성 가능
+
+#### A-3. 확정 후 중복 억제 (A-2 이후)
+
+- 확정된 `validated_segments`의 마지막 단어와 새로 들어오는 토큰의 첫 단어가 동일하면 제거
+- Whisper의 context bleeding 현상 억제
+
+---
+
+### Phase B — 문장 분리 F1 개선 (WER < 50% 달성 후)
+
+#### B-1. Silence 기반 문장 확정 (기본)
+
+**현재 코드**: `tokens_alignment.py get_lines()`는 `Silence` 토큰을 받으면 `current_line_tokens`를 `validated_segments`로 이동함. 문제는 `Silence` 토큰이 얼마나 자주, 어느 조건에서 생성되는지.
+
+**접근 방향**:
+- `whisperlivekit/silero_vad_iterator.py`에서 VAD silence 판단 임계값 확인
+- silence 지속 시간 임계치 조정 (너무 짧으면 과분할, 너무 길면 미분할)
+- `--lan auto` 언어 감지가 VAD와 상호작용하는 방식 확인
+
+#### B-2. 한국어 종결어미 기반 확정 (B-1 이후)
+
+- 한국어 문장 끝 패턴 감지: `-ㅂ니다`, `-습니다`, `-요`, `-거든요`, `-거죠`, `-네요` 등
+- 특정 단어 하드코딩 금지 — 규칙 기반(정규표현식) 또는 어미 패턴 리스트
+- silence 없이도 문장 종결이 명확하면 확정 가능
+
+#### B-3. 언어 전환 경계 확정 (B-2 이후)
+
+- 한국어 → 영어 또는 영어 → 한국어 전환 시 문장 경계로 처리
+- `ASRToken`의 `language` 또는 `detected_language` 속성 활용 (있을 경우)
+
+---
+
+## 측정 프로토콜 (반드시 준수)
+
+### 실행 명령
+
+```powershell
+# 경로 C 측정 (기본)
+uv run python scripts/eval.py \
+  --model-dir whisperlivekit/model/whisper-large-v3-turbo \
+  --output .omc/benchmarks/eval_YYYYMMDD_HHMM_expN.json
+
+# 경로 A 회귀 확인 (코드 변경 후 빠른 스모크용)
+uv run python scripts/eval.py \
+  --model-dir whisperlivekit/model/whisper-large-v3-turbo \
+  --paths A
+```
+
+### 반복 측정 규칙 (필수)
+
+- 경로 C 채택/기각 판단에 쓰는 수치는 **sbs1·ytn1 각각 3회 측정 후 중앙값**
+- 1회 결과만으로 채택/기각 결론 내리지 말 것
+- 측정 간격: 서버 완전 종료 후 재시작 (eval.py가 파일별 서버 재시작을 자동 처리함)
+
+---
+
+## 채택/기각 규칙
+
+**채택 조건** (모두 충족):
+1. 경로 C 3회 중앙값 WER이 이전 베이스라인 대비 감소 (Phase A) 또는 F1이 상승 (Phase B)
+2. WER 회귀 ≤ +5%p (F1 개선 중 WER이 악화되지 않아야 함)
+3. `pytest tests/` 전부 통과
+4. sbs1·ytn1 중 한 파일만 개선되고 다른 파일이 ≥ 5%p 악화 → 기각 (과적합)
+
+**기각 즉시**:
+- 어느 한 언어(한국어 or 영어)의 커버리지가 의미 있게 하락
+- 반복 아티팩트가 sbs1보다 악화
+
+---
+
+## 실험 기록 규칙
+
+1. 각 실험 완료 후 `PHASE2_EXPERIMENTS.md`에 Exp-N 항목 추가
+   - 형식: 가설 → 변경 내용(파일:라인) → 측정 결과(3회 수치 + 중앙값) → 결론
+2. 채택 실험은 커밋 후 다음 실험의 베이스라인으로 사용
+3. 기각 실험도 기록 (같은 실수 반복 방지)
+4. 실험 결과 JSON은 `.omc/benchmarks/eval_YYYYMMDD_HHMM_expN.json`으로 저장
+
+---
+
+## 주요 파일 색인
+
+| 역할 | 경로 |
+|---|---|
+| 문장 확정 + 토큰 정렬 | `whisperlivekit/tokens_alignment.py` |
+| SimulStreaming 핵심 디코더 | `whisperlivekit/simul_whisper/simul_whisper.py` |
+| SimulStreaming 온라인 프로세서 | `whisperlivekit/simul_whisper/backend.py` |
+| VAD silence 감지 | `whisperlivekit/silero_vad_iterator.py` |
+| 타이밍 객체 (ASRToken, Silence) | `whisperlivekit/timed_objects.py` |
+| 평가 스크립트 | `scripts/eval.py` |
+| VBCable 브라우저 자동화 | `scripts/vbcable_test.py` |
+| 실험 로그 | `PHASE2_EXPERIMENTS.md` |
+| 설계 제약 | `CLAUDE.md` |
+
+---
+
+## 루프 진행 방식
+
+```
+while avg_WER > 30% or avg_F1 < 60%:
+    1. PHASE2_EXPERIMENTS.md 직전 실험 결과 확인
+    2. 가설 수립 (위 접근 방향 중 우선순위 순)
+    3. 외과적 코드 변경 (최소 범위)
+    4. pytest 통과 확인
+    5. 경로 C eval.py 3회 실행 → 중앙값 계산
+    6. 채택/기각 판단
+    7. PHASE2_EXPERIMENTS.md 기록 + 채택이면 git commit
+    8. 다음 루프
+```
+
+현재 WER이 목표에 매우 멀리 있으므로, **먼저 A-1(cross-batch 반복 필터)부터 시작**한다.
+A-1만으로 sbs1 WER이 60% 이하로 떨어지면 Phase B로 전환 가능.
