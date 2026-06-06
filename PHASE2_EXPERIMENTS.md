@@ -46,6 +46,7 @@ STT 성능 개선 과정에서 수행한 실험을 기록한다.
 
 | Exp | 날짜 | 제목 | 핵심 변경 | WER (중앙값) | Latency | 결론 |
 |---|---|---|---|---|---|---|
+| [Exp-007](#exp-007-eval-파이프-블로킹-수정--vad-threshold-03-재측정) | 2026-06-06 | eval.py 서버 stdout 파이프 블로킹 수정 | `scripts/eval.py` `stdout=PIPE` → `DEVNULL` | — | — | **진행 중** |
 | [Exp-006](#exp-006-vad-threshold-03--min_duration_real_silence-05) | 2026-06-06 | VAD threshold 낮춤 + Silence 문장확정 임계 낮춤 | `audio_processor.py` threshold 0.5→0.3, MIN_SILENCE 5→0.5 | sbs1: 97.0% / ytn1: 99.4% / avg: 98.5% | — | **기각** (측정 무효 — eval 파이프 블로킹) |
 | [Exp-005](#exp-005-워치독-is_lasttrue-flush) | 2026-06-06 | 워치독 is_last=True flush | `backend.py` process_iter() 워치독에 infer(is_last=True) 추가 | sbs1: 97.6% / ytn1: 99.4% / avg: 98.5% | — | **기각** |
 | [Exp-004](#exp-004-디코더-멈춤-복구-워치독--경로-c-vbcable-하니스-결함-수정) | 2026-06-06 | 디코더 멈춤 워치독 + 경로 C 하니스 수정 | `backend.py` stall 워치독 + `audio_device.py`/`vbcable_test.py` 하니스 | 단일 run 60~68% (3회 미완) | — | 하니스 **채택** / 워치독 **보류** |
@@ -391,6 +392,36 @@ Exp-004 수동 테스트(서버 직접 실행, stdout 터미널 표시)에서 WE
 **결론**: **기각** (측정 무효 — eval 파이프 블로킹으로 인한 서버 동결)
 **이유**: VAD threshold 변경 자체의 효과를 측정할 수 없었음. 수정이 유효한지 불명확.
 **다음 가설**: eval.py `start_server()` `stdout=subprocess.PIPE` → `subprocess.DEVNULL`로 변경하면 서버가 동결되지 않아 정상 측정 가능 → Exp-007에서 검증. Exp-007은 이 실험(threshold=0.3, MIN_SILENCE=0.5)을 그대로 유지하며 eval 하니스만 수정.
+
+---
+
+## Exp-007: eval 파이프 블로킹 수정 + VAD threshold 0.3 재측정
+
+**날짜**: 2026-06-06
+**정책**: simulstreaming
+**가설**: Exp-005/006에서 "처리 완료 신호 미수신" 패턴이 반복된 원인은 VAD threshold 문제가 아니라
+`eval.py` `start_server()`의 `stdout=subprocess.PIPE`다. eval.py는 `proc.stdout`을 읽지 않아
+파이프 버퍼가 꽉 차면 서버의 asyncio 이벤트 루프가 동결됨.
+`subprocess.DEVNULL`로 변경하면 서버가 정상 동작하고, Exp-006의 VAD threshold=0.3 변경 효과를
+처음으로 올바르게 측정할 수 있을 것.
+
+**변경 내용**
+- `scripts/eval.py:99` — `stdout=subprocess.PIPE, stderr=subprocess.STDOUT` → `stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL`
+- (Exp-006 변경 그대로 유지: `audio_processor.py` threshold=0.3, MIN_DURATION_REAL_SILENCE=0.5)
+
+**테스트**
+- 결과 파일: (측정 후 기입)
+
+**정량 결과 (경로 C, 3회 반복)**
+
+| 측정 | sbs1 WER | ytn1 WER | 평균 WER | F1 |
+|------|----------|----------|----------|----|
+| 1회차 | — | — | — | — |
+| 2회차 | — | — | — | — |
+| 3회차 | — | — | — | — |
+| **중앙값** | — | — | — | — |
+
+**결론**: (측정 후 기입)
 
 ---
 
