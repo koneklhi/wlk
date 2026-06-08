@@ -5,21 +5,25 @@
 서버 기동/종료와 VBCable 장치 설정/복원은 스크립트가 자동으로 처리한다.
 기본 평가 대상은 `sbs1.mp3` + `ytn1.mp3` 2개 파일이다.
 
-경로 A(`--paths A`)는 코드 변경이 무언가 망가뜨렸는지 빠르게 확인하는 **개발 체크용**으로만 사용한다.
-성능 수치는 경로 C 결과를 기준으로 한다 (경로 A는 브라우저 오디오 파이프라인을 우회함).
+**성능 판정 기준은 경로 C만** 사용한다. 경로 A(PCM 파일 주입)는 브라우저 오디오 파이프라인을 우회하므로 폐기.
+
+**채택 판단 우선순위**: **1순위 = 최악 케이스(max) 미회귀**, 2순위 = median 개선.
+최악 케이스가 발생하면 median 개선보다 원인 파악과 해결이 먼저다.
+채택/기각 측정 시 `--repeat 3`으로 돌려 median + 분산(min/max/stdev)으로 판단. **fail-fast 금지.**
+단 VBCable 미설정·무음 캡처 등 *하니스 버그*는 즉시 중단·수정.
 
 ## 기본 사용법
 
 ```powershell
-# 경로 C 실행 (기본 — 성능 평가)
+# 경로 C 실행 (빠른 현황 확인 — repeat 없음)
 $env:PYTHONIOENCODING = "utf-8"
 .venv\Scripts\python.exe scripts/eval.py `
   --model-dir whisperlivekit/model/whisper-large-v3-turbo
 
-# 경로 A만 실행 (빠른 개발 체크 — VBCable 불필요, 성능 수치 기준으로 사용하지 않음)
+# 채택/기각 결정용 (N≥3회 반복 — Claude가 실험 비교 시 사용)
 .venv\Scripts\python.exe scripts/eval.py `
   --model-dir whisperlivekit/model/whisper-large-v3-turbo `
-  --paths A
+  --repeat 3
 
 # 결과를 파일로 저장 (베이스라인 또는 비교용)
 $ts = Get-Date -Format "yyyyMMdd_HHmm"
@@ -32,7 +36,8 @@ $ts = Get-Date -Format "yyyyMMdd_HHmm"
 
 1. `$env:PYTHONIOENCODING = "utf-8"` 설정 후 eval.py 실행
 2. VBCable 자동 설정 여부 로그 확인 (성공/실패/건너뜀)
-3. 결과 JSON에서 `avg_wer_c`, `avg_seg_f1_c` 추출 (경로 C = 성능 기준 지표)
+3. 결과 JSON에서 파일별 `summary`(wer_median/min/max/stdev, f1_*)와 `avg_wer_c_median`/`avg_seg_f1_c_median` 추출.
+   **median + 최악 케이스(max)를 함께** 본다 (경로 C = 성능 기준 지표)
 4. `.omc/benchmarks/`의 가장 최근 JSON과 비교:
    ```powershell
    Get-ChildItem .omc/benchmarks/eval_*.json | Sort-Object Name | Select-Object -Last 1
@@ -86,6 +91,5 @@ WER과 문장 분리 F1 모두 주요 지표다. 두 지표를 함께 보아야 
 
 - 서버 포트 8001 사용 (개발 서버 8000과 충돌 방지)
 - 서버 ready까지 최대 120초 대기 (모델 로딩 시간)
-- 경로 C는 오디오 길이 + `--wait` 시간만큼 소요 (기본 2파일: 약 4분)
-- 경로 A(`--speed 0`)는 빠르지만 브라우저 파이프라인을 우회하므로 성능 수치로 신뢰하지 않음
+- 경로 C `--repeat 3` 실행 시 (오디오 길이 + `--wait`) × 3 소요 (2파일: 약 12분). 백그라운드 실행 권장
 - 결과 JSON은 `.omc/benchmarks/` 디렉토리에 저장 권장 (`.gitignore` 적용됨)
