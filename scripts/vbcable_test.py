@@ -134,7 +134,18 @@ async def run_browser_test(
 
             print("[vbcable_test] 녹음 시작...")
             await page.click("#recordButton")
-            await asyncio.sleep(poll_interval)
+            # WebSocket이 OPEN 될 때까지 대기 — 캡처 준비 전 재생 시작(레이스)으로 앞부분 유실 방지
+            for _ in range(50):  # 최대 ~5초
+                try:
+                    ready = await page.evaluate(
+                        "typeof websocket !== 'undefined' && websocket && websocket.readyState === 1"
+                    )
+                except Exception:
+                    ready = False
+                if ready:
+                    break
+                await asyncio.sleep(0.1)
+            await asyncio.sleep(0.5)  # 캡처 파이프라인 안정화 여유
 
             print(f"[vbcable_test] 오디오 재생 중 ({duration:.1f}초)...")
             loop = asyncio.get_running_loop()

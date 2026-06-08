@@ -228,30 +228,40 @@ def is_vbcable_default() -> bool:
 
 @contextmanager
 def vbcable_audio_context():
-    """VBCable이 기본 장치가 아니면 임시로 설정하고 종료 시 원래 장치로 복원한다.
+    """VBCable 재생·녹음을 모두 기본 장치로 설정(필요 시)하고 종료 시 복원한다.
 
     Yields:
-        bool: VBCable 사용 가능 여부 (설정 성공 또는 이미 설정됨)
+        bool: 재생·녹음 둘 다 CABLE로 사용 가능한지 여부.
     """
     original_render  = get_default_device_name(EDataFlow_eRender)
     original_capture = get_default_device_name(EDataFlow_eCapture)
+    render_ok  = "CABLE" in original_render
+    capture_ok = "CABLE" in original_capture
     changed = False
 
-    if not is_vbcable_default():
-        ok_render  = set_default_device("CABLE Input",  EDataFlow_eRender)
-        ok_capture = set_default_device("CABLE Output", EDataFlow_eCapture)
-        changed = ok_render and ok_capture
-        if changed:
-            print(f"[audio_device] VBCable 설정 완료 (이전 재생: {original_render})")
-        else:
-            print("[audio_device] VBCable 자동 설정 실패 — Windows 소리 설정을 수동으로 변경하세요.")
-    else:
+    if not render_ok:
+        set_default_device("CABLE Input", EDataFlow_eRender)
+        changed = True
+    if not capture_ok:
+        set_default_device("CABLE Output", EDataFlow_eCapture)
         changed = True
 
+    # 설정 후 실제로 둘 다 CABLE인지 검증 (재생만 보고 넘어가던 버그 방지)
+    render_ok  = "CABLE" in get_default_device_name(EDataFlow_eRender)
+    capture_ok = "CABLE" in get_default_device_name(EDataFlow_eCapture)
+    usable = render_ok and capture_ok
+    if usable:
+        print(f"[audio_device] VBCable 준비됨 (재생/녹음 모두 CABLE)")
+    else:
+        print(f"[audio_device] VBCable 설정 실패 — 재생ok={render_ok} 녹음ok={capture_ok}. "
+              f"Windows 소리 설정에서 CABLE Input(재생)·CABLE Output(녹음)을 기본으로 지정하세요.")
+
     try:
-        yield changed
+        yield usable
     finally:
-        if changed and original_render and "CABLE" not in original_render:
-            set_default_device(original_render,  EDataFlow_eRender)
-            set_default_device(original_capture, EDataFlow_eCapture)
-            print(f"[audio_device] 오디오 장치 복원: {original_render}")
+        if changed:
+            if original_render and "CABLE" not in original_render:
+                set_default_device(original_render, EDataFlow_eRender)
+            if original_capture and "CABLE" not in original_capture:
+                set_default_device(original_capture, EDataFlow_eCapture)
+            print(f"[audio_device] 오디오 장치 복원 시도 완료")

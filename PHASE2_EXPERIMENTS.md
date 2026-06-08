@@ -46,6 +46,22 @@ STT 성능 개선 과정에서 수행한 실험을 기록한다.
 
 | Exp | 날짜 | 제목 | 핵심 변경 | WER (중앙값) | Latency | 결론 |
 |---|---|---|---|---|---|---|
+| [Exp-036](#exp-036-frame_threshold-2550-배치-컨텍스트-확장-기각) | 2026-06-06 | frame_threshold=50 | `parse_args.py` `--frame-threshold` default 25→50 | 중앙값 WER 45.0%, F1 30.9% (R1 40.8%/R2 58.5%/R3 45.0%) | — | **기각** |
+| [Exp-035](#exp-035-language-ko-강제-한영혼합-역효과-기각) | 2026-06-06 | --lan ko 강제 | eval.py `--lan ko` 파라미터 (코드 변경 없음) | R1 54.8%/R2 64.2% WER, F1 56.9%/35.8% | — | **기각** |
+| [Exp-034](#exp-034-max_context_tokens100-hallucination-cascade-차단) | 2026-06-06 | max_context_tokens=100 | `backend.py` `max_context_tokens=100` (None→100) | 중앙값 WER 49.8%, F1 36.8% (R1 49.8%/R2 42.1%/R3 53.1%) | — | **잠정 채택** |
+| [Exp-033](#exp-033-_loop_threshold-54-중간값-기각) | 2026-06-06 | LOOP_THRESHOLD=4 | `backend.py` `_LOOP_THRESHOLD=4` (5→4) | 중앙값 WER 67.7%, F1 44.9% (R1 69.3%/R2 48.1%/R3 67.7%) | — | **기각** |
+| [Exp-032](#exp-032-_loop_threshold-53-과공격-기각) | 2026-06-06 | LOOP_THRESHOLD=3 | `backend.py` `_LOOP_THRESHOLD=3` (5→3) | R1 55.3%/R2 66.3% WER, F1 12-29% | — | **기각** |
+| [Exp-031](#exp-031-master-char-run-단일음절-필터) | 2026-06-06 | master+char-run 필터 | `backend.py` char-run 억제 + context 리셋, threshold=5 | 중앙값 avg WER 67.2%, F1 37.7% (R1 43.5%, R2 67.2%, R3 98.0%) | — | **기각** |
+| [Exp-030](#exp-030-슬라이딩-윈도우-한국어-전용-빈도-필터) | 2026-06-06 | 슬라이딩 윈도우 한국어 전용 빈도 필터 | `backend.py` `_KO_CHAR` + `threshold=5, window=25` | avg WER 87.3% (베이스라인 대비 +12.8%p) | — | **기각** |
+| [Exp-029](#exp-029-슬라이딩-윈도우-단어-빈도-필터) | 2026-06-06 | 슬라이딩 윈도우 단어 빈도 필터 | `backend.py` `_WORD_WINDOW_SIZE=20`, `_WORD_FREQ_THRESHOLD=4`, `_recent_words` 빈도 체크 | avg WER 79.5% (ytn1 99.4% catastrophic) | — | **기각** |
+| [Exp-028](#exp-028-단일음절-연속-반복-억제--context-리셋) | 2026-06-06 | 단일음절 연속 반복 억제 + context 리셋 | `backend.py` `_max_char_run` + `_CHAR_RUN_THRESHOLD=4` + 억제 카운터≥5 시 context 리셋 | avg WER **61.8%**, F1 **45.1%** | — | **채택** |
+| [Exp-027](#exp-027-하이픈-프리픽스-단어-반복-억제) | 2026-06-06 | 하이픈 프리픽스 단어 반복 억제 | `backend.py` `_consecutive_short_hyphen` 카운터 + `_HALLUCINATION_HYPHEN_THRESHOLD=4` | avg WER 72.1% | — | **기각** |
+| [Exp-009](#exp-009-반복-루프-감지--refresh_segment-리셋) | 2026-06-06 | 반복 루프 감지 + 디코더 리셋 | `backend.py` `_detect_repetition_loop()` + `refresh_segment()` | — | — | **진행 중** |
+| [Exp-008](#exp-008-vad-end_threshold-비대칭-설정-노이즈-차단) | 2026-06-06 | VAD end_threshold=0.35 비대칭 설정 | `silero_vad_iterator.py` end_threshold 파라미터, `audio_processor.py` end_threshold=0.35 | sbs1: 113.7%→149.4% | — | **기각** (발화 중 가짜 silence 과다 → WER 폭발) |
+| [Exp-007](#exp-007-eval-파이프-블로킹-수정--vad-threshold-03-재측정) | 2026-06-06 | eval.py 서버 stdout 파이프 블로킹 수정 | `scripts/eval.py` `stdout=PIPE` → `DEVNULL` | sbs1: 79.2% / ytn1: 25.8% / avg: 52.5% | — | **채택** (목표 미달, 다음 실험 진행) |
+| [Exp-006](#exp-006-vad-threshold-03--min_duration_real_silence-05) | 2026-06-06 | VAD threshold 낮춤 + Silence 문장확정 임계 낮춤 | `audio_processor.py` threshold 0.5→0.3, MIN_SILENCE 5→0.5 | sbs1: 97.0% / ytn1: 99.4% / avg: 98.5% | — | **기각** (측정 무효 — eval 파이프 블로킹) |
+| [Exp-005](#exp-005-워치독-is_lasttrue-flush) | 2026-06-06 | 워치독 is_last=True flush | `backend.py` process_iter() 워치독에 infer(is_last=True) 추가 | sbs1: 97.6% / ytn1: 99.4% / avg: 98.5% | — | **기각** |
+| [Exp-004](#exp-004-디코더-멈춤-복구-워치독--경로-c-vbcable-하니스-결함-수정) | 2026-06-06 | 디코더 멈춤 워치독 + 경로 C 하니스 수정 | `backend.py` stall 워치독 + `audio_device.py`/`vbcable_test.py` 하니스 | 단일 run 60~68% (3회 미완) | — | 하니스 **채택** / 워치독 **보류** |
 | [Exp-003](#exp-003-한국어-종결어미-기반-문장-확정--nfc-정규화) | 2026-06-05 | 한국어 종결어미 문장 확정 | `tokens_alignment.py` 종결어미 감지 + NFC 정규화 | sbs1: 95.8% / ytn1: 99.4% / avg: 97.6% | — | **기각** |
 | [Exp-002](#exp-002-cross-batch-stateful-반복-필터) | 2026-06-05 | Cross-batch 반복 필터 | `process_iter()` 반환 토큰에서 연속 반복 제거 | sbs1: 87.5% / ytn1: 38.7% / avg: 63.1% | — | **채택** |
 | [Exp-001](#exp-001-vbcable-마이크-정성-평가--정책-최종-확정) | 2026-05-21 | VBCable 마이크 정성 평가 | 브라우저 마이크 입력으로 실사용 품질 비교 | — | — | **SimulStreaming 채택** |
@@ -253,6 +269,603 @@ STT 성능 개선 과정에서 수행한 실험을 기록한다.
 1. 경로 C 타임아웃 문제 근본 원인 파악 (서버가 30초 내 완료 신호를 못 보내는 이유)
 2. 경로 C F1 측정 개선 (타임아웃 연장 또는 다른 측정 방법)
 3. WER을 더 개선하기 위해 A-2(Silence 기반 조기 확정) 재검토
+
+---
+
+## Exp-004: 디코더 멈춤 복구 워치독 + 경로 C VBCable 하니스 결함 수정
+
+**날짜**: 2026-06-06
+**정책**: simulstreaming
+**가설**: Exp-003이 남긴 두 미해결 문제 — ① 경로 C "서버 처리 완료 신호 미수신" 타임아웃, ② 후반부 "반복 아티팩트 폭발(원인 미확정)" 및 사용자 관찰 "첫 몇 단어만/전혀 전사 안 됨" — 은 서로 다른 두 결함에서 비롯된다고 보고 근본 원인을 규명한다.
+
+**진단 (근본 원인)**
+- GPU 정상: torch 2.8.0+cu128, `cuda.is_available()=True`, RTX 3080. 모델 기본 cuda 로드. "GPU 미사용"은 전사 멈춤의 *결과*였음(원인 아님).
+- **디코더 멈춤(stall)**: 경로 C bad-run을 계측 로그로 포착(crun_1.log). 연속 발화가 ~30초 롤링 윈도우를 채우면 SimulStreaming 디코더가 영구히 0토큰 상태(`break=loop_end`, `most_attended=None`, `tok=0`)에 빠짐. `refresh_segment`는 ≥5초 침묵(`MIN_DURATION_REAL_SILENCE`)에서만 발동해 연속 발화에선 복구 불가 → 끝부분 유실. context는 정상 트림(~445)이라 오버플로 아님. 간헐적(경로 A 13/13 정상, 경로 C에서 발생).
+- **"전혀 안됨" = 테스트 하니스 VBCable 결함**: `scripts/audio_device.py vbcable_audio_context`가 `is_vbcable_default()`(재생 장치만 검사)에 의존 → 재생이 이미 CABLE Input이면 녹음(CABLE Output) 설정을 건너뜀 → 브라우저 getUserMedia가 실제 마이크(무음) 캡처 → 전사 0. `run_browser_test`의 0.5초 레이스로 앞부분도 유실. (Exp-003의 "완료 신호 미수신" 타임아웃 정황도 이 무음/멈춤에서 비롯.)
+
+**변경 내용** (브랜치 `phase2/fix-transcription-stall`)
+- `whisperlivekit/simul_whisper/backend.py` — 디코더 멈춤 복구 워치독: 모듈 상수 `STALL_RECOVER_SEC=10.0`, `__init__`에 `_last_emit_end`, `process_iter()` 빈 결과 분기에 "오디오 전진 > 임계 & 0토큰 → `refresh_segment(complete=True)` 강제 복구", 토큰 방출/`end_silence`(long)/`new_speaker`에 baseline 갱신. (커밋 `79265dc`)
+- `tests/test_stall_watchdog.py` — 워치독 단위 테스트 3개 신규.
+- `scripts/audio_device.py:vbcable_audio_context` — 재생·녹음 각각 독립 검사·설정 + 둘 다 CABLE인지 재검증해 yield. (커밋 `476c026`)
+- `scripts/vbcable_test.py:run_browser_test` — 0.5초 sleep → WebSocket OPEN 대기 루프로 레이스 제거. (커밋 `476c026`)
+
+**검증**
+- 워치독 단위테스트 3/3, `pytest tests/` 비-네트워크 전부 통과.
+- 워치독 경로 A 스모크: 2회 발동·복구, 전사 끝까지(회귀 없음).
+- 하니스 결정적 검증(브라우저 없이): 녹음을 비-CABLE(Jabra)로 강제해도 컨텍스트가 CABLE Output으로 교정 → "전혀 안됨" 수정 증명.
+- 하니스 경로 C end-to-end 1회: 앞부분 유실 없음, 끝까지 도달(708자) → 무음 캡처 해소 확인.
+
+**정량 결과 (단일 run 참고 — 경로 C 3회 중앙값 미완료)**
+
+| run | 조건 | WER | 비고 |
+|---|---|---|---|
+| 워치독 경로 A 스모크 | fix | 55.95% | 워치독 2회 발동·복구 |
+| fix 경로 C (하니스 전) | fix | 60.1% | 끝까지 전사 |
+| fix 경로 C (하니스 후) | fix | 68.5% | 끝까지, 뒷부분 반복 환각 잔존 |
+
+(주의: 채택 1차 기준인 경로 C 3회 중앙값 + baseline A/B는 fail-fast 중단으로 미완료.)
+
+**정성 관찰**
+- "전혀 안됨/첫 몇 단어"는 하니스 결함이었고 수정 후 재현 안 됨.
+- 워치독: 경로 A에서 복구 목격, 경로 C에선 이번 run에 stall 미발생으로 복구 직접 목격은 다음 과제.
+- **반복 환각("공급한 공급...")이 후반부 잔존 → WER 60~68%**. 남은 핵심 WER 동인.
+
+**결론**: 하니스 수정 **채택**(결함·수정 증명, 양 PC 경로 C 측정 신뢰성 회복). 워치독 **조건부 보류**(경로 A 복구·무회귀 확인했으나 경로 C 3회 중앙값 미측정).
+**이유**: 하니스 결함은 측정 신뢰성의 전제인 명백한 버그. 워치독은 무해한 안전망이나 정식 채택엔 경로 C 중앙값 필요.
+**다음 가설**:
+1. 경로 C 3회(fail-fast)로 하니스+워치독 상태의 진짜 baseline WER/F1 확보 → 워치독 정식 채택 판정.
+2. 후반부 반복 환각(WER 주범) 근본 원인 → A-3(확정 후 중복 억제) 또는 디코더 반복 억제 강화.
+3. master에 남은 wip-exp-004 종결어미 코드(`tokens_alignment.py`의 `unicodedata`/`_KO_SENTENCE_END` 미정의 → NameError로 no-op) 제거.
+
+
+## Exp-005: 워치독 is_last=True flush
+
+**날짜**: 2026-06-06
+**정책**: simulstreaming
+**가설**: `process_iter()` 워치독이 `refresh_segment(complete=True)`만 하고 디코더가 hold-back한 토큰을 버린다. `infer(is_last=True)`를 워치독 내에서 먼저 호출하면 held-back 토큰이 flush되어 WER이 개선될 것이다.
+
+**변경 내용**
+- `whisperlivekit/simul_whisper/backend.py` — `process_iter()` 워치독 분기에 `flushed = self.model.infer(is_last=True)` 호출 후 토큰 반환 로직 추가
+- `tests/test_stall_watchdog.py` — `side_effect` 기반 mock으로 변경 + `test_stall_flush_returns_pending_tokens` 테스트 추가 (4개 → 4개)
+
+**진단 (사후 — 왜 실패했나)**
+- AlignAtt `align_att_base.py`에서 "attention reaches end" 기준: `content_mel_len - most_attended_frame <= (4 if is_last else frame_threshold)`. 그런데 `frame_threshold = 4`이므로 is_last=True/False 모두 임계가 4로 동일.
+- 결과: `infer(is_last=True)` 재호출이 `infer(is_last=False)`와 동일하게 동작 → held-back 토큰 없음 → 가설 오류.
+- 진짜 경로 C WER 97% 원인: **Silero VAD가 VBCable 루프백 오디오를 침묵으로 분류** → 첫 2~3초 이후 오디오가 transcription_queue에 진입 안 됨.
+
+**테스트**
+- 유닛 테스트: `uv run pytest tests/test_stall_watchdog.py -v` → 4/4 통과
+- 결과 파일:
+  - `.omc/benchmarks/eval_exp005_r1.json`
+  - `.omc/benchmarks/eval_exp005_r2.json`
+  - `.omc/benchmarks/eval_exp005_r3.json`
+
+**정량 결과 (경로 C, 3회 반복)**
+
+| 측정 | sbs1 WER | ytn1 WER | 평균 WER |
+|------|----------|----------|----------|
+| 1회차 | 97.6% | 99.4% | 98.5% |
+| 2회차 | 97.0% | 99.4% | 98.2% |
+| 3회차 | 98.2% | 99.4% | 98.8% |
+| **중앙값** | **97.6%** | **99.4%** | **98.5%** |
+
+| 항목 | Exp-004 유효 베이스라인 | Exp-005 | 변화 |
+|------|----------------------|---------|------|
+| sbs1 WER | ~97% | 97.6% | 변화 없음 |
+| ytn1 WER | ~99% | 99.4% | 변화 없음 |
+| F1 | 0.0% | 0.0% | 변화 없음 |
+
+**결론**: **기각**
+**이유**: 가설이 잘못됨. is_last 차이가 없어 flush 효과 없음. WER 99%→97% 수준 그대로.
+**다음 가설**: VBCable 오디오가 Silero VAD threshold(0.5)를 통과 못 함 → threshold 낮춤(→ Exp-006)
+
+---
+
+## Exp-006: VAD threshold 0.3 + MIN_DURATION_REAL_SILENCE 0.5
+
+**날짜**: 2026-06-06
+**정책**: simulstreaming
+**가설**: 경로 C WER 97% + F1 0% 원인 두 가지:
+① **Silero VAD threshold=0.5**: VBCable 루프백 오디오는 speech_prob ≈ 0.4 → 첫 문장 일시정지 후 triggered=False 상태에서 0.4 < 0.5로 "start" 신호 없음 → current_silence 영구 유지 → 오디오 큐 진입 불가 → WER 97%.
+② **MIN_DURATION_REAL_SILENCE=5**: 뉴스 문장간 0.5~1초 휴지는 Silence 토큰 생성 기준(5초) 미달 → 문장 확정 없음 → F1 0%.
+
+threshold=0.3으로 낮추면 VBCable speech_prob=0.4 오디오가 통과. MIN_DURATION_REAL_SILENCE=0.5로 낮추면 0.5초+ 휴지에서 Silence 토큰 생성 → 문장 확정.
+
+**변경 내용**
+- `whisperlivekit/audio_processor.py:26` — `MIN_DURATION_REAL_SILENCE = 5` → `0.5` (주석도 정정)
+- `whisperlivekit/audio_processor.py:99,101` — `FixedVADIterator(...)` 두 곳 모두 `threshold=0.3` 추가
+
+**테스트**
+- 결과 파일: (측정 후 기입)
+
+**테스트**
+- 결과 파일: 3회 모두 "처리 완료 신호 미수신" — 아래 참조
+
+**정량 결과 (경로 C, 3회 반복)**
+
+| 측정 | sbs1 WER | ytn1 WER | 평균 WER | F1 | 비고 |
+|------|----------|----------|----------|----|------|
+| 1회차 | ~97.0% | ~99.4% | ~98.5% | 0.0% | 신호 미수신, 6~8단어만 전사 |
+| 2회차 | ~97.0% | ~99.4% | ~98.5% | 0.0% | 동일 |
+| 3회차 | ~97.0% | ~99.4% | ~98.5% | 0.0% | 동일 |
+| **중앙값** | **97.0%** | **99.4%** | **98.5%** | **0.0%** | **측정 무효** |
+
+**⚠️ 측정 무효 판정**: 모든 3회 실행이 "처리 완료 신호 미수신(30초 타임아웃)" 패턴으로 실패. VAD threshold 변경과 무관하게 `eval.py`의 구조적 결함이 원인으로 확인됨.
+
+**근본 원인 분석** (Exp-007에서 수정):
+- `eval.py` `start_server()`가 `stdout=subprocess.PIPE, stderr=subprocess.STDOUT`으로 서버를 기동
+- eval.py는 `proc.stdout` 파이프를 절대 읽지 않음
+- 108초 분량 오디오 처리 중 서버 로그가 64KB 파이프 버퍼를 채움
+- 버퍼 가득 → 서버의 `logging.info()` 호출이 블로킹 → asyncio 이벤트 루프 동결
+- 이벤트 루프 동결 → WebSocket 수신 불가 → "ready_to_stop" 전송 불가 → 타임아웃
+
+Exp-004 수동 테스트(서버 직접 실행, stdout 터미널 표시)에서 WER 60~68%로 동작했던 것과 자동 eval에서 항상 실패하는 것이 이 원인으로 설명됨.
+
+**결론**: **기각** (측정 무효 — eval 파이프 블로킹으로 인한 서버 동결)
+**이유**: VAD threshold 변경 자체의 효과를 측정할 수 없었음. 수정이 유효한지 불명확.
+**다음 가설**: eval.py `start_server()` `stdout=subprocess.PIPE` → `subprocess.DEVNULL`로 변경하면 서버가 동결되지 않아 정상 측정 가능 → Exp-007에서 검증. Exp-007은 이 실험(threshold=0.3, MIN_SILENCE=0.5)을 그대로 유지하며 eval 하니스만 수정.
+
+---
+
+## Exp-007: eval 파이프 블로킹 수정 + VAD threshold 0.3 재측정
+
+**날짜**: 2026-06-06
+**정책**: simulstreaming
+**가설**: Exp-005/006에서 "처리 완료 신호 미수신" 패턴이 반복된 원인은 VAD threshold 문제가 아니라
+`eval.py` `start_server()`의 `stdout=subprocess.PIPE`다. eval.py는 `proc.stdout`을 읽지 않아
+파이프 버퍼가 꽉 차면 서버의 asyncio 이벤트 루프가 동결됨.
+`subprocess.DEVNULL`로 변경하면 서버가 정상 동작하고, Exp-006의 VAD threshold=0.3 변경 효과를
+처음으로 올바르게 측정할 수 있을 것.
+
+**변경 내용**
+- `scripts/eval.py:99` — `stdout=subprocess.PIPE, stderr=subprocess.STDOUT` → `stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL`
+- (Exp-006 변경 그대로 유지: `audio_processor.py` threshold=0.3, MIN_DURATION_REAL_SILENCE=0.5)
+
+**테스트**
+- 결과 파일: (측정 후 기입)
+
+**테스트**
+- 결과 파일:
+  - `.omc/benchmarks/eval_exp007_r1.json`
+  - `.omc/benchmarks/eval_exp007_r2.json`
+  - `.omc/benchmarks/eval_exp007_r3.json`
+
+**정량 결과 (경로 C, 3회 반복)**
+
+| 측정 | sbs1 WER | ytn1 WER | 평균 WER | F1 |
+|------|----------|----------|----------|----|
+| 1회차 | 64.3% | 25.8% | 45.0% | 51.0% |
+| 2회차 | 95.2% | 27.6% | 61.4% | 39.6% |
+| 3회차 | 79.2% | 25.8% | 52.5% | 44.9% |
+| **중앙값** | **79.2%** | **25.8%** | **52.5%** | **44.9%** |
+
+| 항목 | Exp-002 채택 베이스라인 | Exp-007 (중앙값) | 변화 |
+|------|----------------------|-----------------|------|
+| sbs1 WER | 87.5% | 79.2% | **-8.3%p** |
+| ytn1 WER | 38.7% | 25.8% | **-12.9%p** |
+| 평균 WER | 63.1% | 52.5% | **-10.6%p** |
+| 문장분리 F1 | 0.0% | 44.9% | **+44.9%p** |
+
+**정성 관찰**
+- sbs1 편차 큼: 1회차 64.3%에서 2회차 95.2%로 급등. 서버 동결은 아님(완료 신호 정상 수신) — 반복 아티팩트 비결정성 때문.
+- ytn1은 안정적: 3회 모두 25.8~27.6% WER. VAD threshold=0.3으로 이전(38.7%)보다 일관 개선.
+- F1이 처음으로 44.9%로 진입. MIN_SILENCE=0.5가 뉴스 문장 간 0.5~1초 휴지를 확정 신호로 포착한 결과.
+- 목표(avg WER < 50%, F1 ≥ 60%) 미달. WER은 0.5%p 차이로 아쉽게 초과. F1은 15.1%p 추가 개선 필요.
+
+**결론**: **채택** (목표 미달이나 Exp-002 대비 전 항목 개선, 합당한 진전)
+**이유**: eval.py 파이프 수정으로 측정 하니스가 안정화됐고 VAD/Silence 임계치 변경으로 WER 10.6%p, F1 +44.9%p 개선. 목표는 미달이나 지금까지 가장 큰 단일 개선. 하니스 수정은 모든 후속 실험에 필수이므로 단독으로도 채택.
+**다음 가설**: ① sbs1 반복 아티팩트 분산이 크다 → 2회차 95.2%의 원인 진단(반복 토큰 급등?) → Exp-008에서 반복 필터 강화 or ② F1 44.9%→60%+ 개선 — MIN_SILENCE=0.5가 문장 시작 직후(짧은 절 경계)에 오발동하는지 확인 후 최소 토큰 수 조건 추가 고려
+
+---
+
+## Exp-008: VAD end_threshold 비대칭 설정 — 노이즈 차단 (기각)
+
+**날짜**: 2026-06-06 / **결론**: **기각**
+
+Exp-007 sbs1 `-그러니까` 환각 원인을 VBCable 노이즈(speech_prob≈0.2)가 end_threshold=0.15를 넘어 디코더에 유입되는 것으로 가정. end_threshold=0.35 설정 시 실발화 speech_prob≈0.4와 너무 가까워 발화 중 단어 경계에서 가짜 silence 이벤트 과다 발생 → 디코더 반복 리셋 → WER 폭발(113.7%, 149.4%). Exp-009에서 VAD 파라미터가 아닌 반복 루프 감지로 접근.
+
+---
+
+## Exp-009: 반복 루프 감지 + refresh_segment() 리셋
+
+**날짜**: 2026-06-06
+**정책**: simulstreaming
+**가설**: Exp-007 sbs1의 `-그러니까` 환각은 VAD 문제가 아닌 **모델 반복 루프** 문제다.
+영어 코드스위칭 구간에서 모델이 한국어 환각을 생성하다 같은 단어를 반복 생성하는 루프에 빠진다.
+최근 방출된 20개 토큰 중 동일 단어가 5회 이상 등장하면 반복 루프로 판정,
+`refresh_segment()`로 디코더를 리셋해 루프를 차단하면 sbs1 WER이 개선되고
+F1도 함께 개선될 것이다 (환각에 의한 가짜 문장 경계 감소).
+
+**변경 내용**
+- `whisperlivekit/simul_whisper/backend.py`
+  - `__init__`: `_LOOP_WINDOW=20`, `_LOOP_THRESHOLD=5`, `_recent_tokens: deque(maxlen=20)` 추가
+  - `end_silence()` long_silence 시 `_recent_tokens.clear()` 추가
+  - `new_speaker()` 시 `_recent_tokens.clear()` 추가
+  - `_detect_repetition_loop()` 메서드 추가 (Counter 기반 밀도 감지)
+  - `process_iter()`: 토큰을 `_recent_tokens`에 추가 후 루프 감지; True면 `refresh_segment()` + 빈 결과 반환
+
+**테스트**
+- 결과 파일: `.omc/benchmarks/eval_exp009_r1.json`
+
+**정량 결과 (경로 C)**
+
+| 측정 | sbs1 WER | ytn1 WER | 평균 WER | F1 |
+|------|----------|----------|----------|----|
+| 1회차 | 65.5% | 95.7% | 80.6% | 27.1% |
+
+**결론**: **기각** (fail-fast 적용). ytn1 WER 95.7% — 기준선(25.8%) 대비 극심한 퇴행.
+밀도 기반 감지(20-window 중 5회 = 25%)가 정상 뉴스 발화에서 false positive 다수 발생.
+뉴스에서 "시간" 같은 단어가 non-consecutive하게 5회 이상 등장 → 정상 발화를 루프로 오판.
+Exp-010에서 연속(consecutive) 감지 방식으로 전환: 마지막 K개 토큰이 연속으로 동일한 단어면 루프 판정.
+
+---
+
+## Exp-027: 하이픈 프리픽스 단어 반복 억제
+
+**날짜**: 2026-06-06
+**정책**: SimulStreaming
+**상태**: 기각
+
+**가설**: 하이픈-프리픽스 단어(`-그러`, `-그러로` 등) 반복 루프가 WER의 원인. 짧은 하이픈 접두 단어 ≥4회 연속 시 억제.
+
+**변경 내용**
+- `whisperlivekit/simul_whisper/backend.py` — `_filter_cross_batch_repetitions`에 `_consecutive_short_hyphen` 카운터 + 억제 로직 추가; `_HALLUCINATION_HYPHEN_THRESHOLD = 4`
+
+**정량 결과 (경로 C)**
+
+| 측정 | sbs1 WER | ytn1 WER | 평균 WER | F1 |
+|------|----------|----------|----------|----|
+| 1회차 | 78.6% | 65.6% | 72.1% | 35.4% |
+| **중앙값** | **78.6%** | **65.6%** | **72.1%** | **35.4%** |
+
+(fail-fast 적용 — 1회차 결과로 기각 판정)
+
+| 항목 | 채택 베이스라인 | Exp-027 | 변화 |
+|------|----------------|---------|------|
+| 평균 WER | 74.5% | 72.1% | -2.4%p (자연 분산 내) |
+| F1 | 39.8% | 35.4% | -4.4%p |
+
+**정성 관찰**: 실제 실행에서 타깃 패턴("-그러 -그러로")이 아닌 "스스스스스...", "브브브브브..." 단일음절 반복이 발생 → 하이픈 필터 무력화
+
+**결론**: **기각**
+**이유**: 설계 당시 가정한 환각 패턴(-그러)이 실제 실행에서 나타나지 않고 다른 단일음절 반복 패턴이 발생. 필터 작동 안 함.
+**다음 가설**: 단일음절 반복 토큰 자체를 `_max_char_run` 기반으로 억제
+
+---
+
+## Exp-028: 단일음절 연속 반복 억제 + context 리셋
+
+**날짜**: 2026-06-06
+**정책**: SimulStreaming
+**상태**: 채택
+
+**가설**: 단일음절 연속 반복 토큰("스스스스스", "브브브브브", "감사스스스스스스스스스스스스스스")을 `_max_char_run >= 4` 기준으로 억제하고, 억제 카운터 ≥5이면 context 리셋으로 환각 피드백 루프를 끊는다.
+
+**변경 내용**
+- `whisperlivekit/simul_whisper/backend.py`
+  - 클래스 상수: `_CHAR_RUN_THRESHOLD = 4`, `_HALLUCINATION_RESET_THRESHOLD = 5`
+  - `__init__`: `self._consecutive_char_repeat: int = 0`
+  - `end_silence`/`new_speaker`/stall recovery: `_consecutive_char_repeat` 리셋
+  - `_max_char_run` 정적 메서드 추가
+  - `_filter_cross_batch_repetitions` 교체: char-run 감지 + context 리셋 로직 포함
+
+**테스트**
+- 유닛 테스트: `uv run pytest` → 27/27 통과
+
+**정량 결과 (경로 C, 3회 반복)**
+
+| 측정 | sbs1 WER | ytn1 WER | 평균 WER | F1 |
+|------|----------|----------|----------|----|
+| 1회차 | 54.8% | 29.4% | 42.1% | 50.0% |
+| 2회차 | 66.7% | 84.7% | 75.7% | 26.7% |
+| 3회차 | 93.5% | 30.1% | 61.8% | 45.1% |
+| **중앙값** | **66.7%** | **30.1%** | **61.8%** | **45.1%** |
+
+| 항목 | 채택 베이스라인 | Exp-028 (중앙값) | 변화 |
+|------|----------------|-----------------|------|
+| 평균 WER | 74.5% | 61.8% | **-12.7%p** |
+| F1 | 39.8% | 45.1% | **+5.3%p** |
+
+**정성 관찰**
+- 단일음절 반복 제거 효과 확인 (일부 run에서 ytn1 WER 30% 근처 달성)
+- 잔존 문제: "시원한 시원한 시원한", "사이의 사이의 사이의", "통해 통해 통해" 등 구절 수준 반복 미제거
+- sbs1 분산 큼 (R1 54.8% → R3 93.5%): 구절 반복이 sbs1에서 더 심하게 발생
+
+**결론**: **채택**
+**이유**: 베이스라인 대비 WER -12.7%p 개선. 단일음절 필터 효과 확인. 구절 반복은 별도 실험으로 해결.
+**다음 가설**: 슬라이딩 윈도우 단어 빈도 필터로 구절 수준 반복 억제
+
+---
+
+## Exp-029: 슬라이딩 윈도우 단어 빈도 필터
+
+**날짜**: 2026-06-06
+**정책**: SimulStreaming
+**상태**: 기각
+
+**가설**: Exp-028의 단일음절 필터에 슬라이딩 윈도우 단어 빈도 필터를 추가해 구절 수준 반복("시원한 시원한 시원한", "사이의 사이의 사이의")을 억제한다. 파라미터: `_WORD_WINDOW_SIZE=20`, `_WORD_FREQ_THRESHOLD=4`, 최소 단어 길이 2자.
+
+**변경 내용**
+- `whisperlivekit/simul_whisper/backend.py`
+  - 클래스 상수 `_WORD_WINDOW_SIZE = 20`, `_WORD_FREQ_THRESHOLD = 4` 추가
+  - `self._recent_words: list = []` 추가
+  - `end_silence`/`new_speaker`/stall recovery/context 리셋 시 `_recent_words.clear()` 추가
+  - `_filter_cross_batch_repetitions`에 단어 빈도 체크 추가
+
+**테스트**
+- 결과 파일: `.omc/benchmarks/eval_exp029_r1.json`
+
+**정량 결과 (경로 C)**
+
+| 측정 | sbs1 WER | ytn1 WER | 평균 WER | F1 |
+|------|----------|----------|----------|----|
+| 1회차 | 59.5% | 99.4% | 79.5% | 35.8% |
+
+(fail-fast 중단 — ytn1 99.4% catastrophic)
+
+| 항목 | 채택 베이스라인 (Exp-028) | Exp-029 | 변화 |
+|------|--------------------------|---------|------|
+| 평균 WER | 61.8% | 79.5% | +17.7%p ↑ (회귀) |
+| F1 | 45.1% | 35.8% | -9.3%p |
+
+**정성 관찰**
+- ytn1 R1 전사가 완전히 영어로 전사됨 (언어 감지 실패 + 필터가 영어 단어도 억제)
+- "in", "foreign", "language" 등 영어 전치사가 `len(stripped) >= 2` 조건에 포함되어 반복 억제됨
+- 파라미터 threshold=4, window=20이 지나치게 공격적
+
+**결론**: **기각**
+**이유**: 단어 빈도 필터가 영어 단어도 억제 + 파라미터 과공격적 → ytn1 99.4% catastrophic
+**다음 가설**: 한국어 단어에만 빈도 필터 적용 (U+AC00-U+D7A3 범위 감지) + 완화된 파라미터(threshold=5, window=25)
+
+---
+
+## Exp-030: 슬라이딩 윈도우 한국어 전용 빈도 필터
+
+**날짜**: 2026-06-06
+**정책**: SimulStreaming
+**상태**: 기각
+
+**가설**: Exp-029(단어 빈도 필터 과공격적)의 수정 버전. 한국어 단어에만 빈도 필터 적용(`_KO_CHAR = re.compile(r'[가-힣]')`). 파라미터 완화: `threshold=5, window=25`.
+
+**변경 파일**: `whisperlivekit/simul_whisper/backend.py`
+- `import re` 추가
+- `_WORD_WINDOW_SIZE=25`, `_WORD_FREQ_THRESHOLD=5`, `_KO_CHAR=re.compile(r'[가-힣]')` 추가
+- 빈도 필터 조건: `_KO_CHAR.search(stripped) and count >= 5`
+
+**정량 결과**:
+- eval을 올바른 방법(exp-030 cwd + main venv Python)으로 실행 → R1: sbs1 89.3%, ytn1 85.3%, avg WER **87.3%**, F1 35.4%
+- 베이스라인(74.5%)보다 12.8%p 악화 → catastrophic
+
+**근본 원인 분석**:
+- exp-028/030은 phase2/exp-016을 베이스로 함
+- phase2/exp-016의 backend.py에는 master에 있는 Exp-009 반복 루프 감지 코드(`_LOOP_WINDOW`, `_LOOP_THRESHOLD`, `deque`)가 없음
+- 따라서 exp-030 베이스 자체가 master(Exp-009 포함)보다 성능이 낮음
+- 이전 eval이 main cwd(master 코드)로 실행되어 베이스라인 수치가 실제 exp-016 코드와 다름
+
+**결론**: **기각**
+**이유**: eval 코드 실행 환경 오류로 인해 exp-028/029/030 모두 master 코드(exp-009 포함) 대비 열등한 코드 베이스. 올바른 접근은 master 브랜치 위에 char-run 필터 추가
+**다음 가설**: master 베이스에서 Exp-031 — char-run 단일음절 필터만 추가 (KO 빈도 필터 제외, exp-009 반복 루프 감지와 시너지)
+
+---
+
+## Exp-031: master char-run 단일음절 필터
+
+**날짜**: 2026-06-06
+**정책**: SimulStreaming
+**상태**: 기각
+
+**가설**: master 베이스(exp-009 반복 루프 감지 포함) 위에 단일음절 char-run 환각 억제 필터를 추가하면 exp-009의 word-level 반복 감지와 시너지로 WER 개선.
+
+**변경 파일**: `whisperlivekit/simul_whisper/backend.py`
+- `_CHAR_RUN_THRESHOLD=4`, `_HALLUCINATION_RESET_THRESHOLD=5` 클래스 변수 추가
+- `self._consecutive_char_repeat: int = 0` 상태 변수 추가
+- `_max_char_run(text)` 정적 메서드 추가
+- `_filter_cross_batch_repetitions()`: char-run 토큰 억제 + 5회 연속 시 context 리셋
+
+**베이스**: master 브랜치 (exp-009 반복 루프 감지 코드 포함)
+
+**정량 결과 (경로 C, 3회 반복)**
+
+| 측정 | sbs1 WER | ytn1 WER | 평균 WER | F1 |
+|------|----------|----------|----------|----|
+| 1회차 | 61.3% | 25.8% | 43.5% | 52.1% |
+| 2회차 | 58.9% | 75.5% | 67.2% | 29.2% |
+| 3회차 | 50.6% | 145.4% | 98.0% | 37.7% |
+| **중앙값** | **58.9%** | **75.5%** | **67.2%** | **37.7%** |
+
+**실패 분석 (R3 ytn1 145.4%)**:
+- "I am a member of a member... I'm a member who is... I am a member who is an international member..." 패턴의 점진적 반복 환각
+- char-run 필터는 단일문자 반복(스스스스)에만 반응
+- `_LOOP_THRESHOLD=5` (20토큰 창에서 동일 단어 5회)는 "member"가 3-4회 등장하는 점진적 반복은 못 잡음
+- ytn1의 한영 혼용 콘텐츠에서 language confusion → hallucination cascade
+
+**결론**: **기각**
+**이유**: 중앙값 WER 67.2%, F1 37.7%. 목표(WER < 30%, F1 ≥ 60%) 미달. char-run 필터 효과는 있으나(R1: 43.5%) 점진적 phrase-level 반복에 취약.
+**다음 가설**: Exp-032 — `_LOOP_THRESHOLD` 5→3으로 낮춰 점진적 반복 루프를 더 빨리 감지
+
+---
+
+## Exp-034: max_context_tokens=100 hallucination cascade 차단
+
+**날짜**: 2026-06-06
+**정책**: SimulStreaming
+**상태**: 잠정 채택 (목표 미달이나 현재 최고 성능, 후속 실험 기반)
+
+**가설**: max_context_tokens 기본값 None(448토큰) → 100토큰으로 제한. hallucination cascade에서 길이가 길어질수록 이전 context가 다음 반복을 강화하는 피드백 루프를 끊음.
+
+**변경 파일**: `whisperlivekit/simul_whisper/backend.py`
+- `SimulStreamingASR.__init__` 내부: `if getattr(self, 'max_context_tokens', None) is None: self.max_context_tokens = 100`
+
+**베이스**: phase2/exp-031 (char-run 필터 + LOOP_THRESHOLD=5)
+
+**정량 결과 (경로 C, 3회 반복)**
+
+| 측정 | sbs1 WER | ytn1 WER | 평균 WER | F1 |
+|------|----------|----------|----------|----|
+| 1회차 | 71.4% | 28.2% | 49.8% | 45.1% |
+| 2회차 | 57.7% | 26.4% | 42.1% | 36.8% |
+| 3회차 | 54.8% | 51.5% | 53.1% | 34.1% |
+| **중앙값** | **57.7%** | **28.2%** | **49.8%** | **36.8%** |
+
+| 항목 | 이전 최고 Exp-031 (중앙값) | Exp-034 (중앙값) | 변화 |
+|------|--------------------------|-----------------|------|
+| 평균 WER | 67.2% | 49.8% | **-17.4%p** |
+| 최대 WER | 98.0% | 53.1% | catastrophic cascade 완전 제거 |
+| ytn1 WER | 75.5% | 28.2% | **-47.3%p** (2회 연속 목표 달성) |
+| F1 | 37.7% | 36.8% | 거의 동일 |
+
+**잔존 문제**
+- sbs1 WER 54~71% — 한국어 단일 언어인데도 높음. language=auto에서 언어 혼동 가능성
+- 중앙값 WER 49.8%로 목표 30% 대비 19.8%p 격차
+- F1 중앙값 36.8%로 목표 60% 대비 23.2%p 격차
+
+**결론**: **잠정 채택** (현재 최고 성능)
+**이유**: 이전 최고(Exp-031) 대비 WER -17.4%p 개선. catastrophic cascade 완전 제거. 목표는 미달이나 지금까지의 최고 성능.
+**다음 가설**: Exp-035 — language=ko 강제로 sbs1 한국어 인식률 개선 (eval.py --lan ko 파라미터)
+
+---
+
+## Exp-035: language=ko 강제 — 한영혼합 역효과 (기각)
+
+**날짜**: 2026-06-06
+**정책**: SimulStreaming
+**상태**: 기각
+
+**가설**: language=auto에서 sbs1(한국어) 전사 시 언어 혼동 발생 가능성. `--lan ko` 강제 설정으로 한국어 인식률 개선.
+
+**변경 내용**
+- eval.py 실행 파라미터 `--lan ko` 추가 (코드 변경 없음, exp-034 워크트리에서 실행)
+
+**정량 결과 (경로 C)**
+
+| 측정 | sbs1 WER | ytn1 WER | 평균 WER | F1 |
+|------|----------|----------|----------|----|
+| 1회차 | 67.3% | 42.3% | 54.8% | 56.9% |
+| 2회차 | 56.5% | 71.8% | 64.2% | 35.8% |
+| 3회차 | 미실행 | 미실행 | 미실행 | 미실행 |
+
+(R1+R2 패턴에서 기각 결론 — R3 미실행)
+
+| 항목 | Exp-034 (잠정 채택) | Exp-035 |
+|------|---------------------|---------|
+| sbs1 WER (R2) | 57.7% | 56.5% (미미한 개선) |
+| ytn1 WER (R2) | 26.4% | 71.8% **(+45.4%p 급등)** |
+
+**실패 분석**:
+- language=ko에서 ytn1(한영 혼합) WER 크게 악화: R2 71.8% (Exp-034 R2 26.4% 대비 +45.4%p)
+- ytn1 영어 발화를 Korean phonetics로 강제 전사 → 심각한 WER 증가
+- sbs1은 개선 미미 (67.3%→56.5% 범위 vs Exp-034 54.8%~71.4%)
+- 단일 언어 강제가 혼합 언어 콘텐츠에 역효과
+
+**결론**: **기각**
+**이유**: 한영 혼합 ytn1에서 WER 급등. language=auto가 혼합 언어 콘텐츠에 더 적합.
+**다음 가설**: Exp-036 — frame_threshold 25→50 (0.5초→1초 버퍼): 더 많은 컨텍스트로 배치 경계 오류 감소
+
+---
+
+## Exp-036: frame_threshold 25→50 배치 컨텍스트 확장 (기각)
+
+**날짜**: 2026-06-06
+**정책**: SimulStreaming
+**상태**: 기각
+
+**가설**: frame_threshold 기본값 25→50(1초 버퍼)으로 배치당 더 긴 컨텍스트 확보. 배치 경계 단어 잘림 오류 감소 → sbs1 WER 개선.
+
+**변경 내용**
+- `whisperlivekit/parse_args.py` — `--frame-threshold` default 25→50
+
+**베이스**: phase2/exp-034 (max_context_tokens=100 + char-run filter + LOOP_THRESHOLD=5)
+
+**정량 결과 (경로 C, 3회 반복)**
+
+| 측정 | sbs1 WER | ytn1 WER | 평균 WER | F1 |
+|------|----------|----------|----------|----|
+| 1회차 | 57.7% | 23.9% | 40.8% | 24.4% |
+| 2회차 | 63.1% | 54.0% | 58.5% | 43.8% |
+| 3회차 | 67.3% | 22.7% | 45.0% | 30.9% |
+| **중앙값** | **63.1%** | **23.9%** | **45.0%** | **30.9%** |
+
+| 항목 | Exp-034 (잠정 채택) | Exp-036 (중앙값) | 변화 |
+|------|---------------------|-----------------|------|
+| 평균 WER | 49.8% | 45.0% | **-4.8%p** |
+| F1 | 36.8% | 30.9% | **-5.9%p** |
+
+**실패 분석**:
+- frame_threshold=50: WER 약간 개선 ↔ F1 악화 트레이드오프
+- 더 많은 컨텍스트를 다음 배치로 미루면서 라인 경계가 덜 생성됨 → F1 감소
+- ytn1은 좋은 경우 23-24% WER 달성하지만 R2(54.0%)에서 분산 재발
+
+**결론**: **기각**
+**이유**: WER 소폭 개선(-4.8%p)이나 F1 동일 폭 악화(-5.9%p). 목표(WER 30%, F1 60%) 동시 달성 불가.
+**다음 가설**: Exp-037 — never_fire=True (CIF 모델 없을 때 기본값은 마지막 단어 항상 잘림 → True로 마지막 단어 보존)
+
+---
+
+## Exp-033: _LOOP_THRESHOLD 5→4 (중간값 기각)
+
+**날짜**: 2026-06-06
+**정책**: SimulStreaming
+**상태**: 기각
+
+**가설**: `_LOOP_THRESHOLD` 5→4로 조정해 점진적 반복을 잡으면서도 false positive를 줄임. exp-032(threshold=3)은 과공격적이었고 exp-031(threshold=5)은 점진적 반복을 못 잡았으므로 중간값 4가 최적점일 가능성.
+
+**변경 내용**
+- `whisperlivekit/simul_whisper/backend.py` — `_LOOP_THRESHOLD=4` (exp-031의 5에서 변경)
+
+**정량 결과 (경로 C, 3회 반복)**
+
+| 측정 | sbs1 WER | ytn1 WER | 평균 WER | F1 |
+|------|----------|----------|----------|----|
+| 1회차 | 62.5% | 76.1% | 69.3% | 54.3% |
+| 2회차 | 64.9% | 31.3% | 48.1% | 44.9% |
+| 3회차 | 69.0% | 66.3% | 67.7% | 29.2% |
+| **중앙값** | **64.9%** | **66.3%** | **67.7%** | **44.9%** |
+
+| 항목 | exp-031 (threshold=5) | exp-032 (threshold=3) | Exp-033 (threshold=4) |
+|------|----------------------|----------------------|----------------------|
+| 평균 WER (중앙값) | 67.2% | 66.3% (R2) | **67.7%** |
+| F1 (중앙값) | 37.7% | 12~29% | **44.9%** |
+| max WER | 98.0% | 66.3%+ | **69.3%** |
+| WER range | 54.5%p | — | **21.2%p** |
+
+**장점**: 최대 WER 69.3% (exp-031 98.0% 대비 개선), 분산 감소 (range 21.2%p vs 54.5%p)
+**단점**: 중앙값 WER 67.7%는 여전히 목표(30%) 대비 37.7%p 격차
+
+**결론**: **기각**
+**이유**: 중앙값 WER 67.7%로 목표 미달. threshold 튜닝(3→4→5) 접근의 한계 도달. 분산 감소 외에 실질적 WER 개선 없음. 근본적으로 다른 접근 필요.
+**다음 가설**: Exp-034 — `max_context_tokens` 제한으로 hallucination cascade 방지 (모델이 긴 컨텍스트에서 반복 루프에 빠지는 구조적 원인 차단)
+
+---
+
+## Exp-032: _LOOP_THRESHOLD 5→3 (과공격 기각)
+
+**날짜**: 2026-06-06
+**정책**: SimulStreaming
+**상태**: 기각
+
+**가설**: exp-031(char-run 필터 + LOOP_THRESHOLD=5)에서 점진적 반복("member" 패턴)이 threshold=5를 채우기 전에 다수 방출됨. threshold=3으로 낮춰 조기 감지.
+
+**변경 파일**: `whisperlivekit/simul_whisper/backend.py`
+- `_LOOP_THRESHOLD=3` (exp-031의 5에서 변경)
+
+**정량 결과 (경로 C)**
+
+| 측정 | sbs1 WER | ytn1 WER | 평균 WER | F1 |
+|------|----------|----------|----------|----|
+| 1회차 | 53.0% | 57.7% | 55.3% | 29.2% |
+| 2회차 | 57.1% | 75.5% | 66.3% | 12.5% |
+| 3회차 | 미실행 | 미실행 | 미실행 | 미실행 |
+
+(R1+R2 패턴에서 기각 결론 — R3 미실행)
+
+**실패 분석**:
+- threshold=3은 과공격적: 일반 영어 텍스트에서 "a", "the", "of", "I" 등이 3회 나오는 경우도 리셋 트리거
+- F1 급락(12.5%): 빈번한 context 리셋으로 문장이 중단되어 완성된 라인 수 감소
+- exp-031 R1 최고 성능(43.5%, F1 52.1%)보다 나빠짐: threshold=3이 good case를 방해
+
+**결론**: **기각**
+**이유**: F1 12-29%(exp-031 중앙값 37.7% 대비 악화). threshold=3은 과공격적
+**다음 가설**: Exp-033 — threshold=4 (중간값 탐색)
 
 ---
 

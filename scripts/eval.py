@@ -96,7 +96,7 @@ def start_server(model_dir: str, pcm_input: bool, port: int, warmup: str, lan: s
     ]
     if pcm_input:
         cmd.append("--pcm-input")
-    return subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    return subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
 def wait_for_ready(url: str, proc: subprocess.Popen, timeout: int = SERVER_READY_TIMEOUT) -> bool:
