@@ -242,7 +242,7 @@ def parse_args():
         "--beams",
         "-b",
         type=int,
-        default=1,
+        default=2,
         help="Number of beams for beam search decoding. If 1, GreedyDecoder is used.",
     )
 

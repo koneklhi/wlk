@@ -24,22 +24,29 @@ STT 성능 개선 과정에서 수행한 실험을 기록한다.
 
 ---
 
-## 현재 채택 베이스라인 (Exp-075 — 2026-06-08)
+## 현재 채택 베이스라인 (Exp-075 — 공식 N≥3 수치 2026-06-08)
 
 **vac=0.2 + max_context=0 + VAD 0.3 + MIN_SILENCE=0.4 (greedy, --lan auto)**
 
-| 지표 | 수치 | 비고 |
-|---|---|---|
-| WER (median) | **~31%** | 경로 C, 2회 측정 |
-| F1 (median) | **~71%** | 경로 C, 2회 측정 |
-| 실마이크 일치 | ✅ 확인 | 2026-06-08 정성 확인 |
+| 파일 | R1 WER | R2 WER | R3 WER | median WER | F1 (median) | max WER |
+|---|---|---|---|---|---|---|
+| sbs1 | 73.2% | 35.1% | 39.3% | **39.3%** | **76.2%** | **73.2% ⚠️** |
+| ytn1 | 27.6% | 27.0% | 26.4% | **27.0%** | **80.0%** | 27.6% |
+| **평균** | | | | **33.2%** | **78.1%** | |
+
+- sbs1 stdev 20.9% — R1 catastrophic run 존재. 최악 케이스 원인 파악 필요.
+- ytn1 stdev 0.6% — 매우 안정적.
+- F1 목표(≥70%) 달성. WER 목표(<30%) 미달 — 3.2%p 추가 개선 필요.
+- JSON: `.omc/benchmarks/eval_phase4_baseline_master.json`
+- 실마이크 일치 ✅ 확인 (2026-06-08)
+- sbs1.txt 변경: 첫 문장을 2문단으로 분리 (2026-06-08) — 이 수치부터 새 기준 적용
 
 주요 변경 파일:
 - `whisperlivekit/simul_whisper/backend.py`: `max_context_tokens=0`, 반복/환각 필터 스택
 - `whisperlivekit/audio_processor.py`: `MIN_DURATION_REAL_SILENCE=0.4`, VAD `threshold=0.3`
 - `whisperlivekit/parse_args.py`: `--vac-chunk-size` default `0.2`
 
-브랜치: `phase2/candidate-075` (commit `8d21990`)
+브랜치: `phase2/candidate-075` (commit `8d21990`), master 통합: commit `2ca441f`
 
 ---
 
