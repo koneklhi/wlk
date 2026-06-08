@@ -144,3 +144,7 @@ nllb-200-distilled-600M-ctranslate2/*
 
 # 기계별 로컬 Claude 설정 — 절대경로·권한이 PC마다 다름 (공유 금지)
 .claude/settings.local.json
+
+# eval 스크래치 결과 — .omc/benchmarks/ 에 저장하는 것이 원칙
+eval_result.txt
+eval_pathc_result.txt
