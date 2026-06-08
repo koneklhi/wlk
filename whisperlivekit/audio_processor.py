@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 
 SENTINEL = object() # unique sentinel object for end of stream marker
-MIN_DURATION_REAL_SILENCE = 0.5  # 문장 확정용 Silence 토큰 생성 침묵 길이 기준(초)
+MIN_DURATION_REAL_SILENCE = 0.4  # 문장 확정용 Silence 토큰 생성 침묵 길이 기준(초)
 
 async def get_all_from_queue(queue: asyncio.Queue) -> Union[object, Silence, np.ndarray, List[Any]]:
     items: List[Any] = []
