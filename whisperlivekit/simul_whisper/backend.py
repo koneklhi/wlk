@@ -1,6 +1,7 @@
 import gc
 import logging
 import platform
+import re
 import sys
 from collections import Counter, deque
 from typing import List, Tuple
@@ -46,6 +47,11 @@ class SimulStreamingOnlineProcessor:
     _LOOP_WINDOW = 20
     _LOOP_THRESHOLD = 5
 
+    # 단일음절 반복 환각 억제: max_char_run >= _CHAR_RUN_THRESHOLD 인 토큰은 제거
+    # _HALLUCINATION_RESET_THRESHOLD 연속 발생 시 context 리셋
+    _CHAR_RUN_THRESHOLD = 4
+    _HALLUCINATION_RESET_THRESHOLD = 5
+
     def __init__(self, asr, logfile=sys.stderr):
         self.asr = asr
         self.logfile = logfile
@@ -55,6 +61,7 @@ class SimulStreamingOnlineProcessor:
         self._last_emitted_word: str = None
         self._last_emit_end: float = 0.0  # 마지막으로 토큰을 방출한 시점의 audio end (stall 복구 baseline)
         self._recent_tokens: deque = deque(maxlen=self._LOOP_WINDOW)
+        self._consecutive_char_repeat: int = 0
 
         if asr.tokenizer:
             self.model.tokenizer = asr.tokenizer
@@ -94,6 +101,7 @@ class SimulStreamingOnlineProcessor:
             self._last_emitted_word = None
             self._last_emit_end = self.end
             self._recent_tokens.clear()
+            self._consecutive_char_repeat = 0
 
     def insert_audio_chunk(self, audio: np.ndarray, audio_stream_end_time):
         """Append an audio chunk to be processed by SimulStreaming."""
@@ -113,6 +121,7 @@ class SimulStreamingOnlineProcessor:
         self._last_emitted_word = None
         self._last_emit_end = self.end
         self._recent_tokens.clear()
+        self._consecutive_char_repeat = 0
 
     def get_buffer(self):
         concat_buffer = Transcript.from_tokens(tokens= self.buffer, sep='')
@@ -124,12 +133,40 @@ class SimulStreamingOnlineProcessor:
         import unicodedata
         return unicodedata.normalize("NFC", text.strip())
 
-    def _filter_cross_batch_repetitions(self, tokens: List[ASRToken]) -> List[ASRToken]:
-        """배치 경계를 넘나드는 연속 반복 토큰 제거.
+    @staticmethod
+    def _max_char_run(text: str) -> int:
+        """문자열 내 최대 연속 동일 문자 수 반환. 단일음절 반복 환각 감지에 사용."""
+        if not text:
+            return 0
+        max_run = 1
+        cur_run = 1
+        for i in range(1, len(text)):
+            if text[i] == text[i - 1]:
+                cur_run += 1
+                if cur_run > max_run:
+                    max_run = cur_run
+            else:
+                cur_run = 1
+        return max_run
 
-        Whisper SimulStreaming은 배치 경계에서 직전 단어를 반복 생성하는 아티팩트가 있다.
-        ("바 바 바", "-그 -그", "도도도도" 등) 직전 방출 단어와 동일한 연속 토큰을 제거한다.
-        """
+    def _filter_cross_batch_repetitions(self, tokens: List[ASRToken]) -> List[ASRToken]:
+        """배치 경계를 넘나드는 연속 반복 토큰 제거 + 단일음절 반복 환각 억제."""
+        # 배치 내 한글 단어 4회+ 반복 → cascade 환각 선제 차단
+        batch_words = [self._normalize(t.text) for t in tokens if self._normalize(t.text)]
+        korean_batch_words = [w for w in batch_words if re.search(r'[가-힣]', w)]
+        if len(korean_batch_words) >= 4:
+            counts = Counter(korean_batch_words)
+            top_word, top_count = counts.most_common(1)[0]
+            if top_count >= 4:
+                logger.warning(
+                    "[BatchRepeatFilter] 배치 내 반복 %r ×%d — 배치 드롭+리셋", top_word, top_count
+                )
+                self.model.refresh_segment(complete=True)
+                self._last_emitted_word = None
+                self._last_emit_end = self.end
+                self._recent_tokens.clear()
+                self._consecutive_char_repeat = 0
+                return []
         result = []
         prev = self._last_emitted_word
         for token in tokens:
@@ -137,8 +174,24 @@ class SimulStreamingOnlineProcessor:
             if not word:
                 result.append(token)
                 continue
+            stripped = word.lstrip('-').strip()
+            if len(stripped) >= 4 and self._max_char_run(stripped) >= self._CHAR_RUN_THRESHOLD:
+                self._consecutive_char_repeat += 1
+                logger.debug("[HallucinationFilter] 단일음절반복 억제: %r (count=%d)", word, self._consecutive_char_repeat)
+                if self._consecutive_char_repeat >= self._HALLUCINATION_RESET_THRESHOLD:
+                    logger.warning(
+                        "[HallucinationFilter] 환각 루프 임계치 초과 — context 리셋 (count=%d)",
+                        self._consecutive_char_repeat,
+                    )
+                    self.model.refresh_segment(complete=True)
+                    self._consecutive_char_repeat = 0
+                    self._last_emitted_word = None
+                    self._recent_tokens.clear()
+                    prev = None
+                continue
+            self._consecutive_char_repeat = 0
             if prev is not None and word == prev:
-                logger.debug(f"[CrossBatchFilter] 반복 제거: {repr(word)}")
+                logger.debug("[CrossBatchFilter] 반복 제거: %r", word)
                 continue
             result.append(token)
             prev = word
@@ -178,6 +231,7 @@ class SimulStreamingOnlineProcessor:
                     self.model.refresh_segment(complete=True)
                     self._last_emitted_word = None
                     self._last_emit_end = self.end
+                    self._consecutive_char_repeat = 0
                 return [], self.end
 
             if self.model.cfg.language == "auto" and timestamped_words[0].detected_language is None:
@@ -198,6 +252,7 @@ class SimulStreamingOnlineProcessor:
                 self._last_emitted_word = None
                 self._last_emit_end = self.end
                 self._recent_tokens.clear()
+                self._consecutive_char_repeat = 0
                 return [], self.end
             self.buffer = []
             self._last_emit_end = self.end
@@ -239,6 +294,9 @@ class SimulStreamingASR:
 
         for key, value in kwargs.items():
             setattr(self, key, value)
+
+        if getattr(self, 'max_context_tokens', None) is None:
+            self.max_context_tokens = 0
 
         if self.decoder_type is None:
             self.decoder_type = 'greedy' if self.beams == 1 else 'beam'
