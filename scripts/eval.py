@@ -16,6 +16,7 @@ import argparse
 import asyncio
 import json
 import re
+import statistics
 import subprocess
 import sys
 import time
@@ -77,6 +78,26 @@ class EvalResult:
     @property
     def avg_seg_f1_c(self) -> Optional[float]:
         return self._avg("seg_f1", "C")
+
+
+def _aggregate_runs(runs: list) -> dict:
+    """runs(FileResult 리스트)에서 wer, seg_f1의 median/min/max/stdev를 계산한다."""
+
+    def _stats(vals):
+        v = [x for x in vals if x is not None]
+        if not v:
+            return {"median": None, "min": None, "max": None, "stdev": None}
+        return {
+            "median": statistics.median(v),
+            "min": min(v),
+            "max": max(v),
+            "stdev": statistics.stdev(v) if len(v) > 1 else 0.0,
+        }
+
+    return {
+        "wer": _stats([r.wer for r in runs]),
+        "seg_f1": _stats([r.seg_f1 for r in runs]),
+    }
 
 
 def parse_reference_sentences(ref_text: str) -> list:
@@ -184,16 +205,47 @@ async def eval_path_c(audio_file: Path, base_url: str, wait_sec: int = 120) -> F
     return _build_result(audio_file, transcription, hyp_sentences, "C")
 
 
-def print_summary(result: EvalResult) -> None:
+def print_summary(result: EvalResult, repeat: int = 1, file_summaries: Optional[list] = None) -> None:
     print("\n" + "=" * 60)
     print(f"평가 결과 | {result.timestamp}")
     print(f"모델: {result.model_dir}")
     print("=" * 60)
-    for f in result.files:
-        wer_str = f"{f.wer * 100:.1f}%" if f.wer is not None else "N/A"
-        f1_str = f"{f.seg_f1 * 100:.1f}%" if f.seg_f1 is not None else "N/A"
-        name = Path(f.audio_file).name
-        print(f"  [{f.path}] {name:20s}  WER: {wer_str:>7s}  F1: {f1_str:>7s}")
+
+    if repeat > 1 and file_summaries:
+        # 파일별 회차별 raw + median 출력
+        # file_summaries: [{"audio_file": ..., "runs": [...FileResult], "agg": {...}}]
+        for fs in file_summaries:
+            name = Path(fs["audio_file"]).name
+            runs = fs["runs"]
+            agg = fs["agg"]
+            for i, r in enumerate(runs):
+                wer_str = f"{r.wer * 100:.1f}%" if r.wer is not None else "N/A"
+                f1_str = f"{r.seg_f1 * 100:.1f}%" if r.seg_f1 is not None else "N/A"
+                prefix = f"  [C] {name:20s}" if i == 0 else " " * (6 + 20)
+                print(f"{prefix}  R{i+1}: WER {wer_str:>7s}  F1 {f1_str:>7s}")
+            # median 줄
+            wer_agg = agg["wer"]
+            f1_agg = agg["seg_f1"]
+
+            def _fmt(v):
+                return f"{v * 100:.1f}%" if v is not None else "N/A"
+
+            med_wer = _fmt(wer_agg["median"])
+            med_f1 = _fmt(f1_agg["median"])
+            min_wer = _fmt(wer_agg["min"])
+            max_wer = _fmt(wer_agg["max"])
+            std_wer = _fmt(wer_agg["stdev"])
+            print(
+                f"{'  ' + ' ' * 26}  median WER: {med_wer:>7s}  F1: {med_f1:>7s}"
+                f"  [min {min_wer} / max {max_wer} / stdev {std_wer}]"
+            )
+    else:
+        for f in result.files:
+            wer_str = f"{f.wer * 100:.1f}%" if f.wer is not None else "N/A"
+            f1_str = f"{f.seg_f1 * 100:.1f}%" if f.seg_f1 is not None else "N/A"
+            name = Path(f.audio_file).name
+            print(f"  [{f.path}] {name:20s}  WER: {wer_str:>7s}  F1: {f1_str:>7s}")
+
     print("-" * 60)
     if result.avg_wer_a is not None:
         f1a = f"{result.avg_seg_f1_a * 100:.1f}%" if result.avg_seg_f1_a is not None else "N/A"
@@ -222,6 +274,10 @@ def main() -> None:
         "--lan",
         default="auto",
         help="STT 언어 코드 (기본: auto). 예: ko, en, auto",
+    )
+    parser.add_argument(
+        "--repeat", type=int, default=1,
+        help="경로 C 반복 횟수 (기본: 1, 채택/기각 측정시: 3)",
     )
     args = parser.parse_args()
 
@@ -258,6 +314,9 @@ def main() -> None:
                 stop_server(proc)
                 print("[eval] 경로 A 서버 종료.")
 
+    # file_summaries: repeat > 1일 때 파일별 집계 결과 보관
+    file_summaries: list = []
+
     if "C" in paths:
         from audio_device import vbcable_audio_context
 
@@ -265,33 +324,73 @@ def main() -> None:
             if not vbcable_ok:
                 print("[eval] 경고: VBCable 설정 실패. 경로 C를 건너뜁니다.", file=sys.stderr)
             else:
-                print(f"\n[eval] 경로 C 테스트 시작 (파일별 서버 재시작)...")
+                print(f"\n[eval] 경로 C 테스트 시작 (파일별 서버 재시작, repeat={args.repeat})...")
                 for audio_path in args.files:
-                    print(f"[eval] 경로 C 서버 기동 중 (포트 {SERVER_PORT})...")
-                    proc = start_server(args.model_dir, pcm_input=False, port=SERVER_PORT, warmup=warmup, lan=args.lan)
-                    try:
-                        if not wait_for_ready(base_url, proc):
-                            print("[오류] 서버 ready 대기 시간 초과", file=sys.stderr)
-                            continue
-                        print("[eval] 서버 준비 완료.")
-                        file_result = asyncio.run(eval_path_c(audio_path, base_url, args.wait))
-                        result.files.append(file_result)
-                    finally:
-                        stop_server(proc)
-                        print("[eval] 경로 C 서버 종료.")
+                    runs: list = []
+                    for rep in range(args.repeat):
+                        rep_label = f"회차 {rep + 1}/{args.repeat}" if args.repeat > 1 else ""
+                        print(f"[eval] 경로 C 서버 기동 중 (포트 {SERVER_PORT}) {rep_label}...")
+                        proc = start_server(args.model_dir, pcm_input=False, port=SERVER_PORT, warmup=warmup, lan=args.lan)
+                        try:
+                            if not wait_for_ready(base_url, proc):
+                                print("[오류] 서버 ready 대기 시간 초과", file=sys.stderr)
+                                continue
+                            print("[eval] 서버 준비 완료.")
+                            if args.repeat > 1:
+                                print(f"  [C] {audio_path.name} 회차 {rep + 1}/{args.repeat}")
+                            file_result = asyncio.run(eval_path_c(audio_path, base_url, args.wait))
+                            result.files.append(file_result)
+                            runs.append(file_result)
+                        finally:
+                            stop_server(proc)
+                            print("[eval] 경로 C 서버 종료.")
 
-    print_summary(result)
+                    if args.repeat > 1 and runs:
+                        agg = _aggregate_runs(runs)
+                        file_summaries.append({
+                            "audio_file": str(audio_path),
+                            "runs": runs,
+                            "agg": agg,
+                        })
 
-    output_data = {
+    print_summary(result, repeat=args.repeat, file_summaries=file_summaries if args.repeat > 1 else None)
+
+    # repeat > 1일 때 파일별 집계를 JSON에 추가
+    json_file_summaries = []
+    if args.repeat > 1 and file_summaries:
+        for fs in file_summaries:
+            agg = fs["agg"]
+            json_file_summaries.append({
+                "audio_file": fs["audio_file"],
+                "repeat": args.repeat,
+                "wer": agg["wer"],
+                "seg_f1": agg["seg_f1"],
+            })
+
+    # median 기반 경로 C 평균 (repeat > 1일 때)
+    avg_wer_c_median = None
+    avg_seg_f1_c_median = None
+    if args.repeat > 1 and file_summaries:
+        wer_medians = [fs["agg"]["wer"]["median"] for fs in file_summaries if fs["agg"]["wer"]["median"] is not None]
+        f1_medians = [fs["agg"]["seg_f1"]["median"] for fs in file_summaries if fs["agg"]["seg_f1"]["median"] is not None]
+        avg_wer_c_median = sum(wer_medians) / len(wer_medians) if wer_medians else None
+        avg_seg_f1_c_median = sum(f1_medians) / len(f1_medians) if f1_medians else None
+
+    output_data: dict = {
         "timestamp": result.timestamp,
         "model_dir": result.model_dir,
         "paths_run": result.paths_run,
+        "repeat": args.repeat,
         "avg_wer_a": result.avg_wer_a,
         "avg_wer_c": result.avg_wer_c,
         "avg_seg_f1_a": result.avg_seg_f1_a,
         "avg_seg_f1_c": result.avg_seg_f1_c,
         "files": [asdict(f) for f in result.files],
     }
+    if args.repeat > 1:
+        output_data["file_summaries"] = json_file_summaries
+        output_data["avg_wer_c_median"] = avg_wer_c_median
+        output_data["avg_seg_f1_c_median"] = avg_seg_f1_c_median
 
     if args.output:
         args.output.parent.mkdir(parents=True, exist_ok=True)
