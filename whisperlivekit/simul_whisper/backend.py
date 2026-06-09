@@ -169,10 +169,19 @@ class SimulStreamingOnlineProcessor:
                 return []
         result = []
         prev = self._last_emitted_word
+
+        _LEADING_PUNCT = frozenset([".", "。", "!", "?", "！", "？"])
+        while tokens and self._normalize(tokens[0].text) in _LEADING_PUNCT:
+            logger.debug("[LeadingPunctFilter] 배치 선두 구두점 제거: %r", tokens[0].text)
+            tokens = tokens[1:]
+
         for token in tokens:
             word = self._normalize(token.text)
             if not word:
                 result.append(token)
+                continue
+            if word in ("-", "–", "—"):
+                logger.debug("[DashFilter] 순수 대시 토큰 스킵: %r", word)
                 continue
             stripped = word.lstrip('-').strip()
             if len(stripped) >= 4 and self._max_char_run(stripped) >= self._CHAR_RUN_THRESHOLD:
