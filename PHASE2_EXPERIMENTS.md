@@ -70,7 +70,7 @@ STT 성능 개선 과정에서 수행한 실험을 기록한다.
 
 | Exp | 날짜 | 제목 | 핵심 변경 | WER (중앙값) | F1 | 결론 |
 |---|---|---|---|---|---|---|
-| Exp-086 | 2026-06-09 | Fix-punct-dash (온점·대시 버그 수정) | `backend.py` `_filter_cross_batch_repetitions()` LeadingPunctFilter + DashFilter | 37.3% | 73.3% | **기각** (sbs1 max 54.2% — 우연 hallucination 겹침, 시각 품질 개선은 유효) |
+| Exp-086 | 2026-06-09 | Fix-punct-dash (온점·대시 버그 수정) | `backend.py` `_filter_cross_batch_repetitions()` LeadingPunctFilter + DashFilter | 37.3% | 73.3% | **시각 품질 채택** (WER 기각이나 원인 우연 hallucination — 온점·대시 개선 효과 확인, master 적용) |
 | Exp-085 | 2026-06-09 | ytn1 분산 분석 (코드 변경 없음) | N=5 반복 측정 | 27.6% (ytn1 전용) | 80.0% | **분석** (stdev 1.5% — 안정적; 과거 catastrophic은 실험 파라미터 원인) |
 | Exp-084 | 2026-06-09 | VAD threshold=0.4 | `audio_processor.py` threshold 0.3→0.4 | 32.0% | 82.1% | **기각** (ytn1 max 49.1% catastrophic — 한국어 발화 침묵 오감지) |
 | Exp-083 | 2026-06-09 | audio_max_len=15 | `AlignAttConfig.audio_max_len` 20→15 | 33.5% | 64.1% | **기각** (sbs1 max 54.2%, ytn1 max 52.8% catastrophic, F1 -14%p) |
@@ -533,7 +533,7 @@ Master 통합 예정 (Phase 3).
 
 ---
 
-## Exp-086: Fix-punct-dash (온점·대시 버그 수정) — 기각
+## Exp-086: Fix-punct-dash (온점·대시 버그 수정) — 시각 품질 수정 채택
 
 **날짜**: 2026-06-09 / **브랜치**: `phase4/fix-punct-dash`
 
@@ -579,13 +579,14 @@ if word in ("-", "–", "—"):
 - sbs1 R1은 오히려 WER 33.3%로 베이스라인 개선. N=3 중 2회 우연히 bad run 발생.
 - 시각 품질 관점에서 필터는 유효 — ytn1 대시 아티팩트 R1/R2 전사에서 제거 확인, 온점 위치도 개선 관찰.
 
-**결론**: **기각 (WER 판정 기준)**
-- 1순위(sbs1 max 미회귀) 실패 — 54.2%로 catastrophic (+15.5%p)
+**결론**: **WER 판정 기각 → 시각 품질 수정으로 별도 채택 (2026-06-09)**
+- WER 기준 1순위(sbs1 max 미회귀) 실패 — 54.2% catastrophic (+15.5%p)
 - **단, 원인은 필터 변경이 아닌 우연 hallucination 2회 겹침** (sbs1 stdev 1.2%→10.6%로 급등)
-- 시각 품질 효과(온점 위치, 대시 제거)는 N=3에서 R1에서 확인됨
-- **권고**: WER 기준으로는 기각이나 N=5 추가 측정 후 재검토 가능. 또는 STT 품질 실험과 별도로 "시각 품질 수정"으로 채택 여부 사용자 판단 필요.
+- 시각 품질 효과(온점 위치, 대시 제거)는 ytn1 전사 및 R1에서 확인됨
+- **사용자 판단**: STT WER 실험과 별도로 "시각 품질 수정"으로 채택 결정
+- **적용**: `master`에 cherry-pick (커밋 `24d7378`) — 온점 이월·대시 아티팩트 제거
 
-**다음 가설**: 베이스라인 Exp-080(31.4%) 유지. 온점·대시 시각 품질 수정은 사용자 결정 대기.
+**다음 가설**: 베이스라인 Exp-080(31.4%) 유지. WER 30% 목표까지 1.4%p 잔여.
 
 ---
 
