@@ -1,0 +1,15 @@
+It is a fab process.
+
+It's a factory process, or everybody has to invest in factories and these factories are purpose made, but they don't have the scale and they don't have the flexibility that a fabless company like SiTime, which uses semiconductors, can get.
+
+I mean, as a reminder, when we build our MEMS resonators, 10,000 wafers should give us about a billion units and these are 180 nanometer technology wafers so not really that difficult to get.
+
+It's fundamentally their supply chain is batch made and I think it has these issues with it.
+
+There were some reports of some stumbles in fabs in the Asian markets.
+
+And I think we saw a spike in demand coming that didn't impact Q3, by the way.
+
+I'm just talking that we saw spikes in people because people get nervous when that happens.
+
+And this is not the first time, 10 years ago there was a big problem with ceramic packaging.
