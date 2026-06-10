@@ -1,21 +1,15 @@
-Volume helps us our manufacturing overhead.
+It is a fab process.
 
-Even though we're fabulous, we have a certain amount of manufacturing overhead that's relatively fixed.
+It's a factory process, or everybody has to invest in factories and these factories are purpose made, but they don't have the scale and they don't have the flexibility that a fabless company like SiTime, which uses semiconductors, can get.
 
-So as the volume goes up, that manufacturing overhead is percent of sales decreases, that helps gross margins.
+I mean, as a reminder, when we build our MEMS resonators, 10,000 wafers should give us about a billion units and these are 180 nanometer technology wafers so not really that difficult to get.
 
-And so you know, we've been working on this now for a while.
+It's fundamentally their supply chain is batch made and I think it has these issues with it.
 
-And you know, we saw very significant gross margin expansion from Q2 to Q3.
+There were some reports of some stumbles in fabs in the Asian markets.
 
-As I mentioned, gross margins increased 530 basis points from Q2 to Q3, and I've guided for at least another point of improvement plus or minus going from Q3 to Q4.
+And I think we saw a spike in demand coming that didn't impact Q3, by the way.
 
-Great. Congrats again on the next results, guys.
+I'm just talking that we saw spikes in people because people get nervous when that happens.
 
-Thank you. Thank you.
-
-We have your next question, your line's open.
-
-Yes, thank you and congratulations on the record results.
-
-Rajesh, you called out some challenges in the quartz industry, you know, your competitors.
+And this is not the first time, 10 years ago there was a big problem with ceramic packaging.
