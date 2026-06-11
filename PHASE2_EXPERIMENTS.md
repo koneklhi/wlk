@@ -70,6 +70,7 @@ STT 성능 개선 과정에서 수행한 실험을 기록한다.
 
 | Exp | 날짜 | 제목 | 핵심 변경 | WER (중앙값) | F1 | 결론 |
 |---|---|---|---|---|---|---|
+| **Exp-087** | 2026-06-09 | **UTF-8 미완성 토큰 부분 emit 제거 (선두-음절 중복 해결)** | `align_att_base.py` `_build_timestamped_words` — 미완성(`�`) 단어 부분 emit skip | **20.6%** | **78.1%** | **채택** (선두-중복 6/6 run 완전 소멸 sbs1 26→0·ytn1 7→0, WER 43.0→20.6%, F1 미회귀, 테스트 회귀 0) |
 | Exp-086 | 2026-06-09 | Fix-punct-dash (온점·대시 버그 수정) | `backend.py` `_filter_cross_batch_repetitions()` LeadingPunctFilter + DashFilter | 37.3% | 73.3% | **시각 품질 채택** (WER 기각이나 원인 우연 hallucination — 온점·대시 개선 효과 확인, master 적용) |
 | Exp-085 | 2026-06-09 | ytn1 분산 분석 (코드 변경 없음) | N=5 반복 측정 | 27.6% (ytn1 전용) | 80.0% | **분석** (stdev 1.5% — 안정적; 과거 catastrophic은 실험 파라미터 원인) |
 | Exp-084 | 2026-06-09 | VAD threshold=0.4 | `audio_processor.py` threshold 0.3→0.4 | 32.0% | 82.1% | **기각** (ytn1 max 49.1% catastrophic — 한국어 발화 침묵 오감지) |
@@ -587,6 +588,60 @@ if word in ("-", "–", "—"):
 - **적용**: `master`에 cherry-pick (커밋 `24d7378`) — 온점 이월·대시 아티팩트 제거
 
 **다음 가설**: 베이스라인 Exp-080(31.4%) 유지. WER 30% 목표까지 1.4%p 잔여.
+
+---
+
+## Exp-087: UTF-8 미완성 토큰 부분 emit 제거 — 한국어 선두-음절 중복 해결 (채택)
+
+**날짜**: 2026-06-09 / **브랜치**: `phase4/fix-emit-commit-dedup` (커밋 `e57f8bc`, master 미머지) / **정책**: simulstreaming
+
+**배경**: 한국어 전사에 선두-음절 중복이 만연 — "미디어"→"미 미디어", "지리적"→"지 지리적", "주한미군"→"주한 주한미군", "플랫폼"→"플 플랫 플랫폼"(다단계). ROADMAP Phase 2 1순위(불필요한 단어/글자 삽입) 대상. (참고: 사용자가 든 "유지지할" 같은 예시는 illustrative였고 실측엔 미발생 — 실측 패턴으로 진단함.)
+
+**가설1 (기각)**: emit≠commit. `infer()`가 `split_words`(전체)를 emit하지만 `new_hypothesis`(마지막 단어 제외)만 context commit → trailing 단어가 다음 청크에 재emit되어 중복이라 가정. 수정: `_split_tokens`에 `emit_count` 추가해 `split_words[:emit_count]`만 emit.
+- 결과(경로 C N=3): **중복 그대로 남음**, sbs1 WER 35.7→34.5%(노이즈), sbs1 F1 76.2→66.7%(회귀). → **기각**.
+- 원인: 모든 중복이 `fire_detected=True` 경로(`emit_count=len`이라 slice가 no-op). 가정이 틀렸음.
+
+**재진단 (토큰 흐름 캡처)**: 서버 stderr에 `[EMIT-DEBUG] fire/last/commit/emit` 로그를 캡처(eval.py가 서버 stderr를 DEVNULL 처리 → 진단용 `logger.warning`으로 우회)해 sbs1 토큰 흐름 관찰. **389 infer 호출 중 44건**이 "완성음절 + 미완성바이트"(U+FFFD `�`) 부분 단어를 emit하고, **매번 다음 호출이 전체 단어를 재emit**:
+```
+emit=[' 지[불완전]'] → 다음 호출 emit=[' 지리적']   ⇒ "지 지리적"
+emit=[' 미[불완전]'] → 다음 호출 emit=[' 미디어']   ⇒ "미 미디어"
+```
+→ 진짜 원인 = **UTF-8 미완성 토큰의 부분 emit** (emit≠commit 아님).
+
+**변경 (채택)**: `whisperlivekit/simul_whisper/align_att_base.py` — `_build_timestamped_words` (1 블록, 8+/7-)
+- `replacement_char(�)` 포함 미완성 단어에서 cleaned 부분("미")을 emit하던 로직을 제거하고 단어 통째로 skip.
+- `_handle_pending_tokens`가 미완성 토큰을 보류 → 다음 청크가 전체 단어("미디어")를 **1회** emit하므로 중복 소멸.
+
+**테스트 설정**: 경로 C(VBCable 루프백), N=3. baseline = master를 **동일 세션에서 신선 측정**(문서상 Exp-080 수치 아님 — 분산 통제 위해 같은 세션 master N=3 사용).
+```
+# 워크트리에서 (cwd=worktree → 수정 코드 import 확인 FIX_PRESENT:True)
+python scripts/eval.py --paths C --repeat 3 \
+  --model-dir <abs>/whisperlivekit/model/whisper-large-v3-turbo \
+  --output .omc/benchmarks/eval_fix2_partialskip_3.json
+```
+
+**정량 결과 (경로 C, N=3)**
+
+| 측정 | sbs1 WER | ytn1 WER | 평균 WER | F1 (평균) |
+|------|----------|----------|----------|----|
+| baseline (master) median | 35.7% | 50.3% | 43.0% | 68.9% |
+| **fix median** | **17.9%** | **23.3%** | **20.6%** | **78.1%** |
+| baseline max | 36.9% | 58.3% | — | — |
+| **fix max** | **20.2%** | **44.8%** | — | — |
+
+- **선두-중복 프래그먼트 수** (정규식 `([가-힣]+)\s+\1`): sbs1 `[19,26,26]`→**`[0,0,0]`**, ytn1 `[7,6,8]`→**`[0,0,0]`**. **6/6 run 완전 소멸**.
+- F1: sbs1 76.2% 유지, ytn1 61.5→80.0%.
+- pytest: master와 동일(`1 failed, 26 passed, 13 errors`) — 실패/에러는 전부 기존 결함(`test_stall_watchdog` fixture가 `_recent_tokens` 미주입 + `test_pipeline[whisper]` 모델 로딩 RuntimeError)이며 **본 수정과 무관** → **회귀 0**.
+
+**정성 관찰**:
+- 전사가 깨끗해짐: "자신의 소셜 미디어", "지상 플랫폼", "주한미군 사령관" 등 중복 제거 확인.
+- 남은 sbs1 오류는 §3.8 모델 한계 치환(육군→6군, 방어선→방호선, 공군력→공군역 등) — 이번 대상 아님.
+- ytn1 max 44.8%는 코드스위치 영어 환각 변동성(별개 이슈) 잔존이나 베이스라인(58.3%)보다 개선.
+- 드문 "2회 재시도 후 포기" 케이스서 단어 1개 누락 가능하나 실측 순효과 큼(환각·삭제 증가 없음).
+
+**결론**: **채택** (사용자 승인 2026-06-09). 백엔드 레벨·언어 무관 수정(§3.8 부합, 하드코딩 없음).
+**이유**: 1순위 WER max 양쪽 미회귀(오히려 개선) + 2순위 median 대폭 개선 + F1 미회귀 + 목표 아티팩트(선두-중복) 완전 제거.
+**다음 가설**: ① 남은 ytn1 코드스위치 영어 환각 변동성(별개 이슈) 추적 ② 기존 pytest 결함 2종(`_recent_tokens` fixture, 모델 로딩) 정리 ③ master 머지 판단.
 
 ---
 
