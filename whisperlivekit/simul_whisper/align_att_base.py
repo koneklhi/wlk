@@ -327,13 +327,14 @@ class AlignAttBase(ABC):
 
         for word, word_tokens in zip(split_words, split_tokens):
             if replacement_char in word:
-                cleaned = word.replace(replacement_char, "")
-                if not cleaned.strip():
-                    logger.debug(f"[UTF-8 Filter] Skipping: {repr(word)}")
-                    timestamp_idx += len(word_tokens)
-                    continue
-                logger.debug(f"[UTF-8 Filter] Cleaned {repr(word)} -> {repr(cleaned)}")
-                word = cleaned
+                # Incomplete UTF-8 word (e.g. "미�": 미 complete, next syllable's bytes
+                # truncated at the chunk boundary). Do NOT emit the cleaned partial ("미"):
+                # _handle_pending_tokens holds the incomplete token for retry and the next
+                # chunk re-emits the FULL word ("미디어") exactly once. Emitting the partial
+                # here is what produced leading-fragment duplication ("미 미디어").
+                logger.debug(f"[UTF-8 Filter] Skipping incomplete (held for retry): {repr(word)}")
+                timestamp_idx += len(word_tokens)
+                continue
 
             try:
                 current_timestamp = l_absolute_timestamps[timestamp_idx]
