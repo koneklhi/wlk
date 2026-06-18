@@ -70,6 +70,9 @@ STT 성능 개선 과정에서 수행한 실험을 기록한다.
 
 | Exp | 날짜 | 제목 | 핵심 변경 | WER (중앙값) | F1 | 결론 |
 |---|---|---|---|---|---|---|
+| **Exp-090** | 2026-06-18 | **_detect_repetition_loop 제거 (Exp-009 잔재 청산)** | `backend.py` `_detect_repetition_loop()` + `_recent_tokens` 제거 (net −34줄) | sbs1 **17.3%** / ytn1 **23.9%** | sbs1 **76.2%** / ytn1 **80.0%** | **채택** (ytn1 WER max 44.8→25.2%↓, F1 worst 0.571→0.800↑, sbs1 미회귀) |
+| Exp-089 | 2026-06-18 | ScriptSwitchDetector.reset_run() 계획 폐기 | 코드 변경 없음 | — | — | **계획 폐기** (§3.8 후처리 heuristic 위반, Exp-088 실패 원인 1개만 해결) |
+| **Exp-088** | 2026-06-11 | **한·영 스크립트 전환 경계 소급 주입** | `script_switch.py` 신규 + `tokens_alignment.py` `get_lines()` 소급 분리 | **21.9%** (sbs1+ytn1) | sbs1 **72.7%** / ytn1 **84.2%** / eng1 **0.0%** | **기각** (sbs1 F1 76.2→72.7%↓, ytn1 WER max 44.8→79.8%↑, eng1 false split) |
 | **Exp-087** | 2026-06-09 | **UTF-8 미완성 토큰 부분 emit 제거 (선두-음절 중복 해결)** | `align_att_base.py` `_build_timestamped_words` — 미완성(`�`) 단어 부분 emit skip | **20.6%** | **78.1%** | **채택** (선두-중복 6/6 run 완전 소멸 sbs1 26→0·ytn1 7→0, WER 43.0→20.6%, F1 미회귀, 테스트 회귀 0) |
 | Exp-086 | 2026-06-09 | Fix-punct-dash (온점·대시 버그 수정) | `backend.py` `_filter_cross_batch_repetitions()` LeadingPunctFilter + DashFilter | 37.3% | 73.3% | **시각 품질 채택** (WER 기각이나 원인 우연 hallucination — 온점·대시 개선 효과 확인, master 적용) |
 | Exp-085 | 2026-06-09 | ytn1 분산 분석 (코드 변경 없음) | N=5 반복 측정 | 27.6% (ytn1 전용) | 80.0% | **분석** (stdev 1.5% — 안정적; 과거 catastrophic은 실험 파라미터 원인) |
@@ -642,6 +645,144 @@ python scripts/eval.py --paths C --repeat 3 \
 **결론**: **채택** (사용자 승인 2026-06-09). 백엔드 레벨·언어 무관 수정(§3.8 부합, 하드코딩 없음).
 **이유**: 1순위 WER max 양쪽 미회귀(오히려 개선) + 2순위 median 대폭 개선 + F1 미회귀 + 목표 아티팩트(선두-중복) 완전 제거.
 **다음 가설**: ① 남은 ytn1 코드스위치 영어 환각 변동성(별개 이슈) 추적 ② 기존 pytest 결함 2종(`_recent_tokens` fixture, 모델 로딩) 정리 ③ master 머지 판단.
+
+---
+
+## Exp-088: 한·영 스크립트 전환 경계 소급 주입 (기각)
+
+**날짜**: 2026-06-11 / **브랜치**: `phase2/exp-088-script-switch-boundary` / **정책**: simulstreaming
+
+**가설**: ytn1 정답 경계 8개가 전부 한↔영 스위칭 지점인데, 현재 경계 트리거는 무음(≥0.4s)뿐.
+실시간 토큰의 문자 체계(한글/라틴)를 분류해 지속적 전환(≥2 비중립 토큰 AND ≥4 글자) 감지 시
+`current_line_tokens`를 소급 분리해 `validated_segments`에 주입하면 코드스위칭 지점 F1이 향상될 것.
+
+**변경 내용** (워크트리: `worktrees/exp-088-script-switch-boundary`)
+- `whisperlivekit/script_switch.py` (신규): `classify_script()`, `ScriptSwitchDetector` — `SWITCH_MIN_TOKENS=2`, `SWITCH_MIN_CHARS=4`
+- `whisperlivekit/tokens_alignment.py:get_lines()` (+~15줄): `_script_detector` 초기화, Silence 분기 리셋, else 분기 소급 분리
+- `scripts/eval.py:FileResult` — `hyp_lines: Optional[list]` 진단 필드 추가
+- `whisperlivekit/metrics.py:compute_segmentation()` — `boundary_detail` 키 추가
+- `tests/test_script_switch_boundary.py` (신규, TDD 21 케이스 — 전부 RED 확인 후 구현)
+
+**테스트 설정**
+```
+# cwd=워크트리 필수 (editable install CWD 의존 — PYTHONPATH 우회 불가)
+python scripts/eval.py --repeat 3 \
+  test_data/sbs1.mp3 test_data/ytn1.mp3 test_data/eng1.mp3
+# 결과: .omc/benchmarks/eval_exp088_20260611_1612.json
+# pytest: 신규 21 케이스 전부 통과 (기존 14 결함 pre-existing, 회귀 0)
+```
+
+**정량 결과 (경로 C, N=3)**
+
+| 파일 | R1 WER | R2 WER | R3 WER | WER median | WER max | WER stdev | R1 F1 | R2 F1 | R3 F1 | F1 median | F1 worst |
+|------|--------|--------|--------|------------|---------|-----------|-------|-------|-------|-----------|---------|
+| sbs1 | 18.5% | 19.6% | 18.5% | **18.5%** | **19.6%** | 0.7% | 72.7% | 72.7% | 72.7% | **72.7%** | **72.7%** |
+| ytn1 | 79.8% | 20.9% | 25.2% | **25.2%** | **79.8% ⚠️** | 32.8% | 71.4% | 94.1% | 84.2% | **84.2%** | **71.4%** |
+| eng1 | 3.8% | 3.8% | 3.8% | **3.8%** | **3.8%** | 0.0% | 0.0% | 0.0% | 0.0% | **0.0%** | **0.0%** |
+
+**베이스라인 (Exp-087) 대비**
+
+| 지표 | Exp-087 | Exp-088 | 변화 | 채택 기준 |
+|------|---------|---------|------|----------|
+| sbs1 F1 | 0.762 | 0.727 | −3.5%p | ✗ 기각 (≥0.762 필요) |
+| ytn1 F1 median | 0.800 | 0.842 | +4.2%p | ✓ |
+| ytn1 F1 worst | 0.571 | 0.714 | +14.3%p | △ (목표 ≥0.75 미달) |
+| ytn1 WER max | 44.8% | 79.8% | **+35.0%p** | ✗ 기각 (≤+5%p 기준) |
+| eng1 false split | 0건 | 1건 (0.0% F1) | 발생 | ✗ 기각 |
+
+**정성 관찰**
+- **ytn1 R1 WER=79.8%**: whisper가 한국어 구간 전체를 영어 환각("Yeah, I know I see me...") + "(speaking in foreign language)" 태그로 오인식 — Exp-088 코드와 무관한 모델 random failure. 나쁜 회차에서도 F1=71.4%로 경계 일부 복구됨.
+- **ytn1 R2 F1=94.1%**: KO/EN 교차 8개 경계 recall=1.0 달성 — 스크립트 전환 감지 방향 자체는 유효.
+- **sbs1 EN false split**: 영어 구절("From a satellite image...island") 내 silence 후 EN 재개시, `confirmed_script`가 reset되어 EN→EN을 KO→EN으로 오인식 → false split 1건 추가 (10줄→11줄, Precision 0.889→0.800).
+- **eng1 false split**: "Chair Tishaq" 뒤 silence(≈0.5s) → 경계 삽입. script-switch 트리거가 아닌 silence 트리거일 가능성 높으나 baseline hyp_lines 미확보로 미확인.
+
+**결론**: **기각**
+**이유**: sbs1 F1 회귀(−3.5%p), ytn1 WER max catastrophic(+35%p), eng1 false split 3/3 runs 발생
+
+**다음 가설**
+1. **sbs1 EN false split 해결**: silence 후 `reset()` 시 `_confirmed_script` 를 보존해 EN→EN false switch 방지.
+2. **eng1 false split 원인 확인**: baseline(eval_fix2_partialskip_3.json) eng1 hyp_lines 확인 — silence 기반이라면 Exp-088 독립 문제 아님.
+3. **SWITCH_MIN_TOKENS 또는 SWITCH_MIN_CHARS 상향**: 짧은 영어 단어("or", "J.B.") 오트리거 억제 검토.
+
+---
+
+## Exp-089: ScriptSwitchDetector.reset_run() — 계획 폐기
+
+**날짜**: 2026-06-18 / **결론**: **계획 폐기 (미구현)**
+
+Exp-088 기각 후 `ScriptSwitchDetector.reset_run()` 메서드를 추가해 silence 후 `confirmed_script`를 보존하는 방안을 후속으로 계획(계획서: `docs/EXP_089_LOOP.md`). sbs1 EN false split의 직접 원인(EN→EN을 KO→EN으로 오인식)을 해결하는 것이 목표였다.
+
+**폐기 이유**:
+1. **§3.8 위반** — 언어 특화 스크립트 분류기(`script_switch.py`) 유지 = 후처리 heuristic + 한글/라틴 특화 하드코딩 지속.
+2. **Exp-088 실패 3원인 중 1개만 해결** — sbs1 EN false split만 해소. ytn1 WER max +35%p(Exp-009 잔재 false positive refresh)는 미해결.
+3. **ytn1 WER max를 "모델 random failure"로 단정** — Exp-085에서 ytn1 stdev 1.5%/max 28.8% 확인, catastrophic spike가 모델 고유 random이 아닌 결정적 원인(false positive refresh)이 있음을 반증.
+
+계획서 삭제 후 §3.8 부합 백엔드 접근(Exp-090)으로 전환.
+
+---
+
+## Exp-090: 기각된 _detect_repetition_loop 제거 (Exp-009 잔재 청산) (채택)
+
+**날짜**: 2026-06-18 / **브랜치**: `phase2/exp-090-remove-loop-detect` (커밋 `60cfe97`) / **정책**: simulstreaming
+
+**배경**: Exp-009(2026-06-06)에서 Counter 밀도 기반 false positive 문제로 기각된 `_detect_repetition_loop()` 로직이 master에 잔존. 최근 20 토큰 윈도우에서 동일 단어가 5회 이상 등장하면 `refresh_segment(complete=True)` 강제 리셋 → 뉴스·통역 텍스트의 빈출 단어(안보, 미국, 사령관 등)가 non-consecutive 5회+ 등장 시 false positive → ytn1 코드스위칭 구간 중복 재전사(WER max 44.8%)의 유력 원인.
+
+**사전 조건**: pytest suite 결함 2종 수정 → `27 passed, 1 skipped` 복구.
+- `tests/test_stall_watchdog.py`: `_make_processor`에 `_recent_tokens` 미주입 → 1 failed 수정
+- `tests/test_pipeline.py`: `pytest.importorskip("pytest_asyncio")` 추가 → 13 errors → 1 skipped 전환
+- 브랜치 `phase2/fix-pytest-defects`, 커밋 `7516817`, master 통합
+
+**가설**: `_detect_repetition_loop()` 제거 → false positive 리셋 소멸 → ytn1 worst-case(WER max 44.8%, F1 worst 0.571) 개선. §3.8 완전 부합 — 하드코딩 *추가*가 아닌 *제거*, 백엔드 레벨, 언어 무관.
+
+**변경 내용** (워크트리: `worktrees/exp-090-remove-loop-detect`)
+- `whisperlivekit/simul_whisper/backend.py` (net −34줄):
+  - `from collections import Counter, deque` → `from collections import Counter`
+  - 클래스 상수 `_LOOP_WINDOW = 20` / `_LOOP_THRESHOLD = 5` 제거
+  - `__init__` `self._recent_tokens: deque = deque(maxlen=self._LOOP_WINDOW)` 제거
+  - `end_silence()` / `new_speaker()` / `_filter_cross_batch_repetitions()`(2군데) 내 `self._recent_tokens.clear()` 제거 (4군데)
+  - `_detect_repetition_loop()` 메서드 전체 제거 (9줄)
+  - `process_iter()` 내 `_recent_tokens` 피딩 루프 + 루프감지 호출 블록 제거 (14줄)
+- `tests/test_stall_watchdog.py`: `from collections import deque` + `proc._recent_tokens = deque(...)` 주입 줄 제거 (Exp-090 연쇄 정리)
+
+**테스트 설정**
+```
+# cwd=워크트리 필수 (editable install CWD 의존)
+# 검증: python -c "import whisperlivekit; print(whisperlivekit.__file__)" → 워크트리 경로 확인
+python scripts/eval.py --repeat 3 \
+  --model-dir <abs>/whisperlivekit/model/whisper-large-v3-turbo \
+  --files test_data/sbs1.mp3 test_data/ytn1.mp3 test_data/eng1.mp3 \
+  --output exp090_n3.json
+# pytest: 27 passed, 1 skipped
+```
+
+**정량 결과 (경로 C, N=3)**
+
+| 파일 | R1 WER | R2 WER | R3 WER | WER median | WER max | WER stdev | R1 F1 | R2 F1 | R3 F1 | F1 median | F1 worst |
+|------|--------|--------|--------|------------|---------|-----------|-------|-------|-------|-----------|---------|
+| sbs1 | 17.3% | 19.0% | 16.7% | **17.3%** | **19.0%** | 1.2% | 70.0% | 76.2% | 76.2% | **76.2%** | **70.0%** |
+| ytn1 | 23.9% | 20.9% | 25.2% | **23.9%** | **25.2%** | 2.2% | 80.0% | 80.0% | 87.5% | **80.0%** | **80.0%** |
+| eng1 | 3.8% | 3.8% | 3.8% | **3.8%** | **3.8%** | 0.0% | 0.0% | 0.0% | 0.0% | **0.0%** | **0.0%** |
+| **평균** | | | | **15.0%** | | | | | | **52.1%** | |
+
+**베이스라인 (Exp-087) 대비**
+
+| 지표 | Exp-087 | Exp-090 | 변화 | 판정 |
+|------|---------|---------|------|------|
+| ytn1 WER **max** | 44.8% | **25.2%** | **−19.6%p** | ✅ 1순위 핵심 개선 |
+| ytn1 F1 **worst** | 0.571 | **0.800** | **+22.9%p** | ✅ catastrophic 소멸 |
+| sbs1 WER max | 20.2% | **19.0%** | −1.2%p | ✅ 미회귀 |
+| sbs1 F1 median | 0.762 | **0.762** | 0 | ✅ 미회귀 |
+| sbs1 F1 worst | 0.762 | **0.700** | −6.2%p (R1 1회) | ⚠️ stdev 3.6% 범위 내 |
+| ytn1 WER median | 23.3% | 23.9% | +0.6%p | → stdev 2.2% 범위 내 |
+
+**정성 관찰**
+- ytn1 worst-case 소멸: 최악 회차에서도 WER 25.2% / F1 0.800. false positive refresh 트리거 제거 효과 확인.
+- sbs1 F1 worst 70.0%(R1 1회): precision 0.875(8/9 정밀) / recall 0.583(7/12 재현) — 9문장 확정, 정답 13문장. R2/R3는 76.2% 복귀. 측정 분산(stdev 3.6%) 내 일반 변동으로 판단.
+- eng1 F1=0.0%: `MIN_DURATION_REAL_SILENCE=5초` 기준 미달(38초 연속 발화, 5초+ 침묵 없음) → 경계 미생성이 정상 동작. WER 3.8% = 텍스트 정확. 회귀 아님.
+
+**결론**: **채택**
+**이유**: 1순위 ytn1 WER max 44.8%→25.2%(−19.6%p) + ytn1 F1 worst 0.571→0.800(+22.9%p). sbs1 WER/F1 median 미회귀. 분산 내 변동이 모든 지표에서 정상 범위. §3.8 완전 부합(하드코딩 추가 없음, 백엔드 레벨, 언어 무관).
+**다음 가설**: Phase 2 완료 선언 또는 Phase 3(필터링·단어교정 이식) 이동. ytn1 F1 worst 0.800 — 당초 목표 ≥0.75 이미 달성.
 
 ---
 
