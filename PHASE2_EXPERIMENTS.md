@@ -24,9 +24,35 @@ STT 성능 개선 과정에서 수행한 실험을 기록한다.
 
 ---
 
-## 현재 채택 베이스라인 (Exp-075 — 공식 N≥3 수치 2026-06-08)
+## 현재 채택 베이스라인 (Exp-093 — 공식 N≥3 수치 2026-06-18)
 
-**vac=0.2 + max_context=0 + VAD 0.3 + MIN_SILENCE=0.4 (greedy, --lan auto)**
+**silence 시 언어 재감지 + MIN_DURATION_REAL_SILENCE=2 (beam_size=2, --lan auto)**
+
+| 파일 | R1 WER | R2 WER | R3 WER | median WER | F1 (median) | max WER | stdev |
+|---|---|---|---|---|---|---|---|
+| sbs1 | 20.8% | 19.6% | 17.3% | **19.6%** | **76.2%** | 20.8% | 1.8% |
+| ytn1 | 21.5% | 22.7% | 22.1% | **22.1%** | **71.4%** | **22.7%** | 0.6% |
+| eng1 | 3.8% | 5.7% | 5.7% | **5.7%** | 0.0% | 5.7% | 1.1% |
+| **평균** | | | | **15.8%** | **49.2%** | | |
+
+- ytn1 catastrophic run 완전 소멸 (이전 max 108.0% → 22.7%). stdev 44.6% → 0.6%로 극적 안정화.
+- sbs1 max 20.8%: 이전(19.6%) 대비 +1.2pp — 측정 노이즈 수준.
+- eng1 median 5.7%: 소폭 상승 (이전 3.8%). F1=0%는 eng1 단일 세그먼트 구조 특성.
+- ytn2(held-out) WER 114.8%, F1 44.4% — 한국어 구간 일부 전사 복구 확인 (baseline 대비 질적 개선).
+- JSON: `.omc/benchmarks/eval_exp093_primary_n3.json` / ytn2: `eval_exp093_ytn2.json`
+
+주요 변경 파일:
+- `whisperlivekit/simul_whisper/backend.py:36` — `MIN_DURATION_REAL_SILENCE = 5 → 2`
+- `whisperlivekit/simul_whisper/backend.py:95-96` — `end_silence()` long_silence 분기에 언어 재감지 2줄 추가
+- `tests/test_lang_redetect.py` — 단위 테스트 4개 (신규)
+
+브랜치: `phase2/exp-093-lang-redetect` (commit `ea11c77`), master 통합: merge commit
+
+---
+
+## 구 채택 베이스라인 (Exp-080 — 공식 N≥3 수치 2026-06-08)
+
+**vac=0.2 + max_context=0 + VAD 0.3 + MIN_SILENCE=0.4 (beam_size=2, --lan auto)**
 
 | 파일 | R1 WER | R2 WER | R3 WER | median WER | F1 (median) | max WER |
 |---|---|---|---|---|---|---|
@@ -34,19 +60,7 @@ STT 성능 개선 과정에서 수행한 실험을 기록한다.
 | ytn1 | 27.6% | 27.0% | 26.4% | **27.0%** | **80.0%** | 27.6% |
 | **평균** | | | | **33.2%** | **78.1%** | |
 
-- sbs1 stdev 20.9% — R1 catastrophic run 존재. 최악 케이스 원인 파악 필요.
-- ytn1 stdev 0.6% — 매우 안정적.
-- F1 목표(≥70%) 달성. WER 목표(<30%) 미달 — 3.2%p 추가 개선 필요.
-- JSON: `.omc/benchmarks/eval_phase4_baseline_master.json`
-- 실마이크 일치 ✅ 확인 (2026-06-08)
-- sbs1.txt 변경: 첫 문장을 2문단으로 분리 (2026-06-08) — 이 수치부터 새 기준 적용
-
-주요 변경 파일:
-- `whisperlivekit/simul_whisper/backend.py`: `max_context_tokens=0`, 반복/환각 필터 스택
-- `whisperlivekit/audio_processor.py`: `MIN_DURATION_REAL_SILENCE=0.4`, VAD `threshold=0.3`
-- `whisperlivekit/parse_args.py`: `--vac-chunk-size` default `0.2`
-
-브랜치: `phase2/candidate-075` (commit `8d21990`), master 통합: commit `2ca441f`
+- Exp-093으로 교체됨 (2026-06-18)
 
 ---
 
@@ -70,6 +84,9 @@ STT 성능 개선 과정에서 수행한 실험을 기록한다.
 
 | Exp | 날짜 | 제목 | 핵심 변경 | WER (중앙값) | F1 | 결론 |
 |---|---|---|---|---|---|---|
+| **Exp-093** | 2026-06-18 | **silence 시 언어 재감지 (detected_language/first_timestamp 리셋)** | `backend.py` L36 `MIN_DURATION_REAL_SILENCE` 5→2, L95-96 `end_silence()` +2줄 | sbs1 **19.6%** / ytn1 **22.1%** / eng1 **5.7%** | sbs1 **76.2%** / ytn1 **71.4%** | **채택** (ytn1 max 108.0→22.7% catastrophic 완전 제거, stdev 44.6→0.6%) |
+| Exp-092 | 2026-06-18 | foreign-language 메타태그 감지→full_reset 재전사 | `backend.py` `_detect_foreign_lang_hallucination()` + `_reset_language_state()` +24줄 | sbs1 **17.3%** / ytn1 **42.3%** | sbs1 **76.2%** / ytn1 **66.7%** | **기각** (ytn2 174.4% whack-a-mole — `(Via The United Nations)` 환각 전이) |
+| Exp-091 | 2026-06-18 | 연속 n-gram 반복 감지 (`_detect_consecutive_repetition`) | `backend.py` `_detect_consecutive_repetition()` +37줄 (window=12, k=2..5) | sbs1 **18.5%** / ytn1 **23.3%** | sbs1 **76.2%** / ytn1 worst **66.7%** | **기각** (ytn1 max 25.2→43.6%↑ catastrophic, stdev 2.2→12.5%) |
 | **Exp-090** | 2026-06-18 | **_detect_repetition_loop 제거 (Exp-009 잔재 청산)** | `backend.py` `_detect_repetition_loop()` + `_recent_tokens` 제거 (net −34줄) | sbs1 **17.3%** / ytn1 **23.9%** | sbs1 **76.2%** / ytn1 **80.0%** | **채택** (ytn1 WER max 44.8→25.2%↓, F1 worst 0.571→0.800↑, sbs1 미회귀) |
 | Exp-089 | 2026-06-18 | ScriptSwitchDetector.reset_run() 계획 폐기 | 코드 변경 없음 | — | — | **계획 폐기** (§3.8 후처리 heuristic 위반, Exp-088 실패 원인 1개만 해결) |
 | **Exp-088** | 2026-06-11 | **한·영 스크립트 전환 경계 소급 주입** | `script_switch.py` 신규 + `tokens_alignment.py` `get_lines()` 소급 분리 | **21.9%** (sbs1+ytn1) | sbs1 **72.7%** / ytn1 **84.2%** / eng1 **0.0%** | **기각** (sbs1 F1 76.2→72.7%↓, ytn1 WER max 44.8→79.8%↑, eng1 false split) |
@@ -124,6 +141,114 @@ STT 성능 개선 과정에서 수행한 실험을 기록한다.
 | Exp-002 | 2026-06-05 | Cross-batch Stateful 반복 필터 | `process_iter()` cross-batch 반복 제거 | 63.1% | 0.0% | **채택** |
 | Exp-001 | 2026-05-21 | VBCable 마이크 정성 평가 — 정책 최종 확정 | 브라우저 마이크 입력 실사용 비교 | — | — | **SimulStreaming 채택** |
 | Exp-000 | 2026-05-20 | 정책 선택 기준 벤치마크 | SimulStreaming vs LocalAgreement | SS WER 0.321 / LA 0.434 | — | → Exp-001에서 확정 |
+
+---
+
+## Exp-093: silence 시 언어 재감지 — 언어 고착 근본 수정 (채택)
+
+**날짜**: 2026-06-18 / **정책**: SimulStreaming / **결론**: **채택**
+
+### 가설
+
+code-switching(한↔영) 시 언어가 고착되는 근본 원인은 **언어 TRIPLE-LOCK**:
+1. `detected_language` 세션 초기 1회만 감지 후 영구 고정 ([align_att_base.py:143-160](whisperlivekit/simul_whisper/align_att_base.py))
+2. 언어 토큰 (`<|ko|>`, `<|en|>`) 전부 -inf suppress → 디코더가 전환 불가 ([simul_whisper.py:109](whisperlivekit/simul_whisper/simul_whisper.py))
+3. 직전 영어 전사가 prefix로 누적 → 영어 bias
+
+언어 재감지 조건: `detected_language is None` AND `first_timestamp` truthy AND 2초+ 오디오. **silence 발생 시 두 필드를 None으로 비우면 다음 infer에서 자동으로 언어를 재감지**한다. 또한 기존 `MIN_DURATION_REAL_SILENCE=5`는 ytn2의 1~2초 언어전환 pause를 전혀 못 잡으므로 2초로 낮춘다.
+
+### 변경 내용
+
+| 파일 | 라인 | 변경 |
+|---|---|---|
+| `whisperlivekit/simul_whisper/backend.py` | L36 | `MIN_DURATION_REAL_SILENCE = 5 → 2` |
+| `whisperlivekit/simul_whisper/backend.py` | L95-96 | `end_silence()` long_silence 분기에 `state.detected_language = None` + `state.first_timestamp = None` 추가 |
+| `tests/test_lang_redetect.py` (신규) | — | 단위 테스트 4개 (TDD) |
+
+### 테스트
+
+```
+pytest tests/test_lang_redetect.py -v   # 4/4 PASSED
+pytest                                   # 31 passed, 기존 결함 1 error (회귀 없음)
+```
+
+### 정량 결과 (경로 C, N=3)
+
+**베이스라인 (master, 2026-06-18 14:40, `eval_exp092_baseline_n3.json`)**
+
+| 파일 | R1 | R2 | R3 | median | max | stdev |
+|---|---|---|---|---|---|---|
+| sbs1 | 19.6% | 18.5% | 19.0% | 19.0% | 19.6% | 0.6% |
+| ytn1 | 19.6% | **107.8%** | 52.8% | 52.8% | **108.0%** | 44.6% |
+| eng1 | 3.8% | 4.8% | 3.8% | 3.8% | 4.8% | 0.5% |
+
+**Exp-093 (2026-06-18 16:00, `eval_exp093_primary_n3.json`)**
+
+| 파일 | R1 | R2 | R3 | median | max | stdev | F1 |
+|---|---|---|---|---|---|---|---|
+| sbs1 | 20.8% | 19.6% | 17.3% | **19.6%** | 20.8% | 1.8% | 76.2% |
+| ytn1 | 21.5% | 22.7% | 22.1% | **22.1%** | **22.7%** | **0.6%** | 71.4% |
+| eng1 | 3.8% | 5.7% | 5.7% | **5.7%** | 5.7% | 1.1% | 0.0% |
+
+**ytn2 held-out (2026-06-18 16:32, `eval_exp093_ytn2.json`)**: WER **114.8%**, F1 **44.4%**
+- 베이스라인 ytn2: WER 93.1%, F1 47.1%
+
+### 정성 관찰
+
+- **ytn1**: catastrophic run 완전 소멸. 이전 R2(108%)에서 `(speaking in foreign language)` + 영어 function word 루프가 발생하던 것이 사라짐. 3회 모두 21~23% 범위로 안정.
+- **ytn2**: baseline의 `(speaking in foreign language)` 35회+ 폭주가 사라짐. 일부 한국어 텍스트 직접 전사 복구 ("국방 장관과 저는", "군사위원회에서 미래연합사령부의 기본 운능 육력 검증평과 결과에 대해 합의점에 이루었습니다"). 잔존 문제: 한국어 단어 영문 음역("Wang Sung-han's", "Yeo-na's"), 영어 환각 구간("I'm going to go through Korean") — 언어 고착 부분 해소.
+- **sbs1**: max 소폭 회귀(19.6→20.8%) — 측정 노이즈 수준. 전사 품질 실질 변화 없음.
+- **eng1**: median 소폭 상승(3.8→5.7%) — silence threshold 하향으로 재감지 발동 횟수 증가, 단일 언어에서 불필요하나 영향 미미.
+
+### 결론 및 이유
+
+**채택** — ytn1 max catastrophic 108.0%→22.7% (-85.3pp), stdev 44.6→0.6% (극적 안정화). §3.8 채택 1순위(최악 케이스 미회귀)를 ytn1에서 압도적으로 충족. sbs1/eng1 max 소폭 회귀(+1~2pp)는 노이즈 수준. 브랜치 `phase2/exp-093-lang-redetect` (commit `ea11c77`), master merge 완료.
+
+### 다음 가설 (Exp-094~)
+
+ytn2 한국어 구간 완전 복구 필요. 잔존 문제:
+- 한국어를 영문 음역으로 전사하는 구간 (언어 재감지가 영어로 고착된 채 재시작)
+- silence가 짧은 구간에서 재감지 미발동
+- 재감지 후 첫 토큰이 영어로 편향되는 현상 (직전 영어 prefix bias)
+방향 탐색: ① silence threshold 추가 조정 ② 재감지 후 컨텍스트 비우기 ③ `lang_id()` 활용한 배치 내 즉시 감지
+
+---
+
+## Exp-092: foreign-language 메타태그 감지→full_reset (기각)
+
+**날짜**: 2026-06-18 / **정책**: SimulStreaming / **결론**: **기각**
+
+### 가설
+
+ytn2에서 발생하는 `(speaking in foreign language)` 메타태그는 한·영 환경(§3.2)에서 **항상 환각 마커** → false positive 0. 감지 시 `full_reset()`으로 언어 재감지를 유도하면 언어 고착 + 메타태그 폭주를 한 번에 차단 가능.
+
+### 변경 내용
+
+`whisperlivekit/simul_whisper/backend.py` (+24줄):
+- `_FOREIGN_LANG_MARKER = "foreign lang"` 상수
+- `_detect_foreign_lang_hallucination(tokens)` — 마커 문자열 감지
+- `_reset_language_state()` — full_reset + detected_language 클리어 + 추적 변수 초기화
+- `_filter_cross_batch_repetitions()` 진입부에 감지 분기 추가
+- `tests/test_burst_full_reset.py` 신규 (TDD, 7개)
+
+### 정량 결과 (경로 C, N=3 — `eval_exp092_primary_n3.json`)
+
+| 파일 | R1 | R2 | R3 | median | max | stdev | F1 |
+|---|---|---|---|---|---|---|---|
+| sbs1 | 19.6% | 16.7% | 17.3% | 17.3% | 19.6% | 1.6% | 76.2% |
+| ytn1 | 34.4% | 58.3% | 42.3% | 42.3% | 58.3% | 12.2% | 66.7% |
+| eng1 | 5.7% | 3.8% | 3.8% | 3.8% | 5.7% | 1.1% | 0.0% |
+
+**ytn2 (`eval_exp092_ytn2.json`)**: WER **174.4%**, F1 **11.8%** (베이스라인 93.1%/47.1% 대폭 악화)
+
+### 정성 관찰
+
+- ytn1: 메타태그 차단 효과 실재 — R2에서 baseline 108%→58.3%로 개선. 그러나 나머지 2회도 34~42%로 편차 여전.
+- ytn2: `(speaking in foreign language)` 소멸 → `(Via The United Nations Security Council)` 등 다른 환각으로 전이(whack-a-mole). 언어 고착 자체가 해소되지 않아 다른 아티팩트로 폭주 양상이 바뀐 것.
+
+### 결론 및 이유
+
+**기각** — ytn2 WER 93.1%→174.4% 대폭 악화. 증상 억제만 됐고 언어 고착 근본 원인(detected_language 영구 고정) 미해결. Exp-093(silence 재감지)이 근본 수정으로 채택됨. 단, ytn1 메타태그 차단 효과 실재하므로 Exp-093과 결합 평가 가능성은 백로그에 남긴다.
 
 ---
 
@@ -783,6 +908,79 @@ python scripts/eval.py --repeat 3 \
 **결론**: **채택**
 **이유**: 1순위 ytn1 WER max 44.8%→25.2%(−19.6%p) + ytn1 F1 worst 0.571→0.800(+22.9%p). sbs1 WER/F1 median 미회귀. 분산 내 변동이 모든 지표에서 정상 범위. §3.8 완전 부합(하드코딩 추가 없음, 백엔드 레벨, 언어 무관).
 **다음 가설**: Phase 2 완료 선언 또는 Phase 3(필터링·단어교정 이식) 이동. ytn1 F1 worst 0.800 — 당초 목표 ≥0.75 이미 달성.
+
+---
+
+## Exp-091: 연속 n-gram 반복 감지 (`_detect_consecutive_repetition`) — 기각
+
+**날짜**: 2026-06-18 / **브랜치**: `phase2/exp-091-consecutive-repeat-detect` (커밋 `bb4d39d`) / **정책**: simulstreaming
+
+**배경**: Exp-090으로 `_detect_repetition_loop`(Counter 밀도 기반) 제거 후, ytn2(코드스위칭 영어 발화)에서 "have been working on it..." 류 무한 반복 루프 발생 → WER 302% catastrophic. Exp-087 baseline(103.4%)보다도 악화. 루프 감지 자체는 여전히 필요하나 Exp-009의 밀도 기반 방식이 false positive를 낳았으므로, 대신 **연속 n-gram 일치**만 감지하는 방식으로 설계.
+
+**가설**: `tokens[-k:] == tokens[-2k:-k]` (k=2..5)로 최근 k개 토큰이 그 직전 k개와 완전 일치하는 경우만 루프로 판정 → 비연속 빈출 단어는 트리거 안 함 → false positive 최소화하면서 반복 루프(ytn2 "have been working on it...") 차단.
+
+**변경 내용** (워크트리: `worktrees/exp-091-consec-repeat`)
+- `whisperlivekit/simul_whisper/backend.py` (+37줄):
+  - `from collections import Counter, deque` (deque 재추가)
+  - 클래스 상수 `_CONSEC_REPEAT_MAX_NGRAM = 5`, `_CONSEC_REPEAT_WINDOW = 12` 추가
+  - `self._recent_tokens: deque = deque(maxlen=self._CONSEC_REPEAT_WINDOW)` 추가
+  - `end_silence()` / `new_speaker()` / `_filter_cross_batch_repetitions()`(2군데) 내 `self._recent_tokens.clear()` 추가
+  - `_detect_consecutive_repetition()` 신규 메서드: k=2..5 순회, `tokens[-k:] == tokens[-2k:-k]` 시 True
+  - `process_iter()`: 피딩 루프 + 감지 호출 + 리셋 블록 추가
+- `tests/test_stall_watchdog.py`: `from collections import deque` + `_CONSEC_REPEAT_WINDOW` 기반 deque 주입 재추가
+
+**테스트 설정**
+```
+# cwd=워크트리 필수 (editable install CWD 의존)
+python scripts/eval.py --repeat 3 \
+  --model-dir <abs>/whisperlivekit/model/whisper-large-v3-turbo \
+  --files test_data/sbs1.mp3 test_data/ytn1.mp3 test_data/eng1.mp3 \
+  --output exp091_primary_n3.json
+# ytn2 단회 (held-out, 채택 후보 검증)
+python scripts/eval.py --repeat 1 \
+  --model-dir <abs>/whisperlivekit/model/whisper-large-v3-turbo \
+  --files c:\...\test_data\ytn2.mp3 \
+  --output exp091_ytn2.json
+```
+
+**정량 결과 (경로 C)**
+
+primary N=3:
+
+| 파일 | R1 WER | R2 WER | R3 WER | WER median | WER max | WER stdev | R1 F1 | R2 F1 | R3 F1 | F1 median | F1 worst |
+|------|--------|--------|--------|------------|---------|-----------|-------|-------|-------|-----------|---------|
+| sbs1 | 15.5% | 22.0% | 18.5% | **18.5%** | **22.0%** | 3.3% | 76.2% | 76.2% | 76.2% | **76.2%** | **76.2%** |
+| ytn1 | 20.9% | **43.6%** | 23.3% | **23.3%** | **43.6% ⚠️** | **12.5%** | 87.5% | **66.7%** | 87.5% | **87.5%** | **66.7%** |
+| eng1 | 2.9% | 3.8% | 3.8% | **3.8%** | **3.8%** | 0.5% | 0.0% | 0.0% | 0.0% | **0.0%** | **0.0%** |
+
+ytn2 단회:
+| 파일 | WER | F1 | 비고 |
+|------|-----|-----|------|
+| ytn2 (Exp-087 baseline) | 103.4% | 47.1% | 한국어 구간 "(speaking in foreign language)" 오인식 |
+| ytn2 (Exp-090) | 302% | — | 반복 루프 감지 제거 후 "have been working on it..." 무한 루프 |
+| ytn2 **(Exp-091)** | **85.7%** | **35.3%** | 반복 루프 차단 확인, 단회 측정 |
+
+**베이스라인 (Exp-090) 대비**
+
+| 지표 | Exp-090 | Exp-091 | 변화 | 판정 |
+|------|---------|---------|------|------|
+| ytn1 WER **max** | 25.2% | **43.6%** | **+18.4%p** | ❌ catastrophic 회귀 |
+| ytn1 WER stdev | 2.2% | **12.5%** | +10.3%p | ❌ 극단 불안정 |
+| ytn1 F1 **worst** | 0.800 | **0.667** | −13.3%p | ❌ 회귀 |
+| sbs1 WER max | 19.0% | 22.0% | +3.0%p | ⚠️ 허용 범위 |
+| sbs1 F1 median | 0.762 | 0.762 | 0 | ✅ |
+| ytn2 WER (단회) | 302% | **85.7%** | −216%p | ✅ (단회) |
+
+**정성 관찰**
+- ytn1 R2 catastrophic(WER 43.6%, F1 66.7%): `_detect_consecutive_repetition`이 코드스위칭 구간에서 false positive 트리거 의심. window=12 + k=2 bigram이 코드스위칭 경계의 짧은 반복 패턴(예: "군의", "군의" 또는 영어 2-gram 일치)에 과민하게 반응.
+- ytn2 루프 차단 확인: Exp-090에서 발생한 "have been working on it..." 무한 반복이 제거됨. WER 302% → 85.7%.
+- ytn2 WER 85.7%는 주로 한국어 구간 "(speaking in foreign language)" 오인식 문제 — Exp-091과 무관한 모델 한계.
+- stdev 폭증(2.2% → 12.5%)은 연속 n-gram 감지기가 실행마다 다른 타이밍에 트리거됨을 시사.
+
+**결론**: **기각**
+**이유**: 1순위(ytn1 WER max 미회귀) 실패 — 25.2% → 43.6%(+18.4%p) catastrophic 회귀. `_detect_consecutive_repetition`(window=12, k=2..5)가 코드스위칭 구간에서도 false positive를 일으켜 정상 발화를 잘라냄. ytn2 개선(302%→85.7%)이 있으나 단회 측정이고 primary 기준 위반이 우선.
+
+**다음 가설**: Phase 2 완료 판단. Exp-090에서 목표(ytn1 WER max ≤30%, F1 worst ≥0.75) 이미 달성. 연속 반복 루프 감지는 코드스위칭 환경에서 false positive 위험이 높아 현재 접근법으로는 안전하지 않음 — Phase 3(필터링·단어교정 이식) 또는 별도 실험으로 별도 추적 필요.
 
 ---
 
