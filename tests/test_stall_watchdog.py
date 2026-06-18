@@ -7,7 +7,6 @@ __init__은 실제 디코더를 만들어 무거우므로 __new__로 인스턴�
 """
 
 import types
-from collections import deque
 from unittest.mock import MagicMock
 
 from whisperlivekit.simul_whisper.backend import (
@@ -25,7 +24,6 @@ def _make_processor(infer_return, end, language="ko"):
     proc._last_emitted_word = None
     proc._last_emit_end = 0.0
     proc.end = end
-    proc._recent_tokens = deque(maxlen=SimulStreamingOnlineProcessor._LOOP_WINDOW)
     proc._consecutive_char_repeat = 0
 
     model = MagicMock()
