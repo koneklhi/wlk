@@ -33,7 +33,7 @@ if HAS_FASTER_WHISPER:
 else:
     WhisperModel = None
 
-MIN_DURATION_REAL_SILENCE = 5
+MIN_DURATION_REAL_SILENCE = 2
 
 # 디코더 멈춤 복구: 오디오가 이 시간(초) 이상 전진했는데 토큰이 전혀 안 나오면
 # SimulStreaming 디코더가 비-fire 상태에 빠진 것으로 보고 강제 refresh로 복구한다.
@@ -92,6 +92,8 @@ class SimulStreamingOnlineProcessor:
                 self.model.insert_audio(gap_silence)
         if long_silence:
             self.model.refresh_segment(complete=True)
+            self.model.state.detected_language = None   # 재감지 허용
+            self.model.state.first_timestamp = None     # 재감지 조건 충족
             self.model.global_time_offset = silence_duration + offset
             self._last_emitted_word = None
             self._last_emit_end = self.end
