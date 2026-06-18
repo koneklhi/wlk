@@ -18,6 +18,13 @@ import logging
 
 import pytest
 
+# End-to-end pipeline tests are async (require pytest-asyncio) and pull real
+# models plus downloadable samples. They are not part of the unit-test signal
+# (transcription quality is measured via scripts/eval.py path C). Skip the whole
+# module cleanly when pytest-asyncio is unavailable so `pytest tests/` stays
+# green and trustworthy.
+pytest.importorskip("pytest_asyncio")
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
