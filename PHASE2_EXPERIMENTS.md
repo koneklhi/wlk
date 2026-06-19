@@ -84,6 +84,7 @@ STT 성능 개선 과정에서 수행한 실험을 기록한다.
 
 | Exp | 날짜 | 제목 | 핵심 변경 | WER (중앙값) | F1 | 결론 |
 |---|---|---|---|---|---|---|
+| **Exp-100** | 2026-06-19 | long_silence 후 보수적 즉시 재감지 (first_timestamp=-0.5, 1.5s 발동) | `backend.py:96` `first_timestamp = None → -0.5` | sbs1 **19.0%** / ytn1 **19.0%** / eng1 **5.7%** | sbs1 **76.2%** / ytn1 **71.4%** | **채택 후보** (sbs1 max 19.6%✓ ytn1 max 22.1%✓ — primary 통과, ytn2 단회 측정 중) |
 | **Exp-099** | 2026-06-19 | long_silence 후 즉시 재감지 (first_timestamp=-1.5 sentinel, 1.0s 발동) | `backend.py:96` `first_timestamp = None → -1.5` | sbs1 **19.0%** / ytn1 **19.6%** / eng1 **3.8%** | sbs1 **76.2%** / ytn1 **61.5%** | **기각** (ytn1 max 46.0% — R2 spike, 1.0s 오디오에서 발동해 신뢰도 저하·간헐적 오감지) |
 | **Exp-098** | 2026-06-19 | MIN_DURATION_REAL_SILENCE 2→1.5 (Exp-094 1.0s와 현행 2.0s 중간값) | `backend.py:36` `MIN_DURATION_REAL_SILENCE = 1.5` | sbs1 **19.0%** / ytn1 **22.1%** / eng1 **4.8%** | sbs1 **76.2%** / ytn1 **61.5%** | **기각** (ytn1 max 152.1% catastrophic — ytn1에 1.5-2.0s sentence-internal pause 존재 확인, 2.0s 임계값이 이미 최적점) |
 | **Exp-097** | 2026-06-19 | long_silence 후 tokenizer multilingual 즉시 리셋 (`create_tokenizer(None)`) | `backend.py` `end_silence()` long_silence 블록 앞에 `create_tokenizer(None)` 1줄 | sbs1 **19.0%** / ytn1 **20.9%** / eng1 **3.8%** | sbs1 **76.2%** / ytn1 **71.4%** | **기각** (sbs1 max 138.7% catastrophic — multilingual decoder가 KO 오디오에서 EN token 예측) |
@@ -217,6 +218,68 @@ ytn2 한국어 구간 완전 복구 필요. 잔존 문제:
 - silence가 짧은 구간에서 재감지 미발동
 - 재감지 후 첫 토큰이 영어로 편향되는 현상 (직전 영어 prefix bias)
 방향 탐색: ① silence threshold 추가 조정 ② 재감지 후 컨텍스트 비우기 ③ `lang_id()` 활용한 배치 내 즉시 감지
+
+---
+
+## Exp-100: long_silence 후 보수적 즉시 재감지 (first_timestamp = -0.5) (채택 후보)
+
+**날짜**: 2026-06-19 / **정책**: SimulStreaming / **결론**: **채택 후보** (ytn2 단회 측정 진행 중)
+
+### 가설
+
+Exp-099 (`first_timestamp=-1.5`, 1.0s 발동) 기각 이후: 발동 시점을 1.5s로 완화하면 신뢰도 향상(1.5s 오디오) + 窓 단축(2.5s → 1.0s) 동시 달성.
+
+`first_timestamp = -0.5` → `seconds_since_start = segments_len() + 0.5 ≥ 2.0`이 `segments_len() ≥ 1.5s` 시 충족. audio_min_len(0.5s or 1.0s) 2~3회 infer 후 발동 — Exp-099보다 느리지만 Whisper에게 충분한 음성 컨텍스트 제공.
+
+### 변경 내용
+
+**파일**: `worktrees/exp-100-fast-redetect-conservative/whisperlivekit/simul_whisper/backend.py:96`
+
+```python
+# 변경 전 (Exp-093)
+self.model.state.first_timestamp = None
+
+# 변경 후 (Exp-100)
+self.model.state.first_timestamp = -0.5    # 즉시 재감지: segments_len≥1.5s 두 번째 infer에서 seconds_since_start≥2.0 충족
+```
+
+`tests/test_lang_redetect.py:58` — `first_timestamp is None` → `first_timestamp == -0.5`
+
+브랜치: `phase2/exp-100-fast-redetect-conservative`, commit `8f7b041`
+
+### 테스트
+
+```
+pytest tests/test_lang_redetect.py -v   # 4/4 PASSED
+```
+
+### 정량 결과 (경로 C, N=3, 2026-06-19 11:07)
+
+| 파일 | R1 WER | R2 WER | R3 WER | median WER | F1 (median) | max WER | stdev |
+|---|---|---|---|---|---|---|---|
+| sbs1 | 19.6% | 17.3% | 19.0% | **19.0%** | **70.0%** | **19.6%** | 1.2% |
+| ytn1 | 19.0% | 17.8% | 22.1% | **19.0%** | **71.4%** | **22.1%** | 2.2% |
+| eng1 | 5.7% | 6.7% | 5.7% | **5.7%** | 0.0% | 6.7% | 0.5% |
+
+Exp-093 baseline 대비:
+- sbs1: median 19.0% vs 19.6% (−0.6pp ✓), max **19.6%** vs 20.8% (−1.2pp ✓) — 개선
+- ytn1: median 19.0% vs 22.1% (−3.1pp ✓), max **22.1%** vs 22.7% (−0.6pp ✓) — 개선
+- eng1: median 5.7% vs 5.7% (=), max 6.7% vs 5.7% (+1.0pp) — 소폭 회귀 (명시 기준 없음)
+
+채택 기준 판정:
+- sbs1 max 19.6% ≤ 20.8% ✓
+- ytn1 max 22.1% ≤ 22.7% ✓ (0.6pp 여유)
+- **Primary 통과**
+
+### 정성 관찰
+
+- **ytn1**: R1(19.0%), R2(17.8%), R3(22.1%) — 3회 모두 baseline(22.1%) 수준 이내. 분산 2.2%로 Exp-099(15.6%)보다 극적으로 안정화. R3(22.1%)이 기준(22.7%)에 근접하지만 통과.
+- **sbs1**: R1-R3 모두 안정적 (17.3~19.6%). Exp-099 대비 비슷한 개선.
+- **eng1**: median 동일하나 max가 5.7→6.7%로 소폭 회귀 — 무음 후 재감지가 단일 언어 환경에서도 추가 변동 유발.
+
+### ytn2 (held-out, 단회 측정)
+
+*(진행 중)*
 
 ---
 
