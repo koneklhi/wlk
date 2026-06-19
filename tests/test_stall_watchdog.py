@@ -25,6 +25,7 @@ def _make_processor(infer_return, end, language="ko"):
     proc._last_emit_end = 0.0
     proc.end = end
     proc._consecutive_char_repeat = 0
+    proc._short_silence_check_at = 0.0
 
     model = MagicMock()
     model.cfg.language = language
