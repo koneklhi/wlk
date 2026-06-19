@@ -84,6 +84,7 @@ STT 성능 개선 과정에서 수행한 실험을 기록한다.
 
 | Exp | 날짜 | 제목 | 핵심 변경 | WER (중앙값) | F1 | 결론 |
 |---|---|---|---|---|---|---|
+| **Exp-097** | 2026-06-19 | long_silence 후 tokenizer multilingual 즉시 리셋 (`create_tokenizer(None)`) | `backend.py` `end_silence()` long_silence 블록 앞에 `create_tokenizer(None)` 1줄 | sbs1 **19.0%** / ytn1 **20.9%** / eng1 **3.8%** | sbs1 **76.2%** / ytn1 **71.4%** | **기각** (sbs1 max 138.7% catastrophic — multilingual decoder가 KO 오디오에서 EN token 예측) |
 | **Exp-096** | 2026-06-19 | 무음 후 언어 체크 (post-silence lang check, 0.5s↑ silence 후 1.5s 수집+0.90 확신도) | `align_att_base.py` `detect_current_language()` 신규, `backend.py` `_check_post_silence_language()` + `_post_silence_check_at` | sbs1 **23.2%** / ytn1 **86.5%** / eng1 **3.8%** | sbs1 **66.7%** / ytn1 **62.5%** | **기각** (ytn1 max 101.2% catastrophic — ytn1/ytn2 모두 짧은 pause+EN↔KO 교대, 음향 수준에서 구별 불가) |
 | **Exp-095** | 2026-06-19 | 주기적 lang_id() 체크 (8초 간격 + 5초 창) | `align_att_base.py` `detect_current_language()`+`switch_language()` 신규, `backend.py` `_check_language_periodically()` | sbs1 **70.8%** / ytn1 **54.0%** | sbs1 **47.6%** / ytn1 **40.0%** | **기각** (sbs1/ytn1 catastrophic — 5초 창이 EN 인용구와 전환을 구별 불가, switch_language()의 버퍼 클리어가 catastrophic 유발) |
 | **Exp-094** | 2026-06-19 | MIN_DURATION_REAL_SILENCE 2→1 (silence threshold 단축) | `backend.py` L36 2→1 | sbs1 **19.0%** / ytn1 **90.8%** / eng1 **3.8%** | sbs1 **76.2%** / ytn1 **61.5%** | **기각** (ytn1 max 108.6% catastrophic 재발 — 1초 threshold가 ytn1 자연 pause 오인식) |
@@ -214,6 +215,78 @@ ytn2 한국어 구간 완전 복구 필요. 잔존 문제:
 - silence가 짧은 구간에서 재감지 미발동
 - 재감지 후 첫 토큰이 영어로 편향되는 현상 (직전 영어 prefix bias)
 방향 탐색: ① silence threshold 추가 조정 ② 재감지 후 컨텍스트 비우기 ③ `lang_id()` 활용한 배치 내 즉시 감지
+
+---
+
+## Exp-097: long_silence 후 Tokenizer Multilingual 즉시 리셋 (기각)
+
+**날짜**: 2026-06-19 / **정책**: SimulStreaming / **결론**: **기각**
+
+### 가설
+
+Exp-093 long_silence 발동 후 `_detect_language_if_needed` 실제 발동까지 ~2-4초 窓이 있다. 이 窓 동안 old EN tokenizer로 디코딩이 계속되어 KO 오디오가 영어 음역으로 전사된다 (근본 원인).
+
+`refresh_segment` 직전에 `create_tokenizer(None)` (multilingual 리셋)을 호출하면, `init_tokens()`가 언어 token 없는 SOT로 initial_tokens를 생성해 재감지 전 窓에서도 EN bias 없이 KO 오디오를 정상 전사한다.
+
+Exp-094/095/096과 달리 트리거 타이밍(2s)은 변경하지 않고 트리거 후 동작만 변경.
+
+### 변경 내용
+
+**파일**: `worktrees/exp-097-tokenizer-reset/whisperlivekit/simul_whisper/backend.py`
+- `end_silence()` long_silence 블록 맨 앞에 `create_tokenizer(None)` 1줄 추가
+
+```python
+if long_silence:
+    self.model.create_tokenizer(None)           # multilingual 리셋 — EN bias 즉시 제거
+    self.model.refresh_segment(complete=True)
+    ...
+```
+
+브랜치: `phase2/exp-097-tokenizer-reset`, commit `6ea7db0`
+
+### 정량 결과 (경로 C, N=3, 2026-06-19 10:05)
+
+| 파일 | R1 WER | R2 WER | R3 WER | median WER | F1 (median) | max WER | stdev |
+|---|---|---|---|---|---|---|---|
+| sbs1 | **138.7%** | 19.0% | 18.5% | **19.0%** | **76.2%** | **138.7%** | 69.2% |
+| ytn1 | 25.2% | 17.2% | 20.9% | **20.9%** | **71.4%** | 25.2% | 4.0% |
+| eng1 | 3.8% | 3.8% | 3.8% | **3.8%** | 0.0% | 3.8% | 0.0% |
+
+Exp-093 baseline 대비:
+- sbs1: max 138.7% vs 20.8% (+117.9pp) — **catastrophic R1**
+- ytn1: median 20.9% vs 22.1% (−1.2pp), max 25.2% vs 22.7% (+2.5pp)
+- eng1: median 3.8% vs 5.7% (−1.9pp)
+
+JSON: `worktrees/exp-097-tokenizer-reset/.omc/benchmarks/eval_exp097_primary_n3.json`
+
+### 정성 관찰
+
+sbs1 R1에서 138.7% catastrophic 발생. `create_tokenizer(None)` (multilingual) 후 디코더가 SOT sequence에서 language token을 자체 예측하는데, 순수 한국어 오디오(sbs1)에서 `<|en|>` 토큰을 예측해 영어로 전사. 비결정론적 failure: R2/R3는 정상(19.0%/18.5%)이지만 R1은 catastrophic.
+
+**실패 원인 분석**: multilingual tokenizer는 언어 강제가 없어 디코더가 오디오 첫 구간(음악, 노이즈, 짧은 음성)에서 잘못된 언어 token을 예측할 수 있다. 이는 Exp-093의 long_silence + 재감지 메커니즘에서 기존 언어 tokenizer를 유지하는 것(old EN tokenizer로 짧게 디코딩 후 재감지로 수정)보다 위험.
+
+### 결론
+
+**기각** — sbs1 max 138.7% catastrophic.
+
+**ytn2 개선 탐색 최종 종료**: Exp-094~097 총 4개 독립 방향이 모두 동일한 이유로 기각됨. 근본 한계:
+
+| 방향 | 실패 원인 |
+|------|-----------|
+| Exp-094 threshold 단축 | ytn1/ytn2 동일 short-pause 패턴 → ytn1 catastrophic |
+| Exp-095 주기적 체크 | EN 인용구와 전환 구별 불가 → catastrophic |
+| Exp-096 post-silence check | ytn1/ytn2 동일 패턴 → ytn1 catastrophic |
+| Exp-097 tokenizer reset | multilingual decoder가 KO 오디오를 EN으로 잘못 예측 → catastrophic |
+
+현재 아키텍처(SimulStreaming + VAD silence 기반 언어 재감지)에서는 ytn2 개선 불가. 개선을 위해서는 아키텍처 수준의 변화가 필요 (§ 다음 가설 참조).
+
+### 다음 가설
+
+아키텍처 수준 변화가 필요한 방향:
+1. **모델 수준**: whisper-large-v3(non-turbo) 또는 코드스위칭에 특화된 모델 사용
+2. **이중 디코더**: KO/EN 두 개의 language-specific tokenizer를 동시에 실행하고 더 높은 확신도 결과를 채택
+3. **파인튜닝**: ytn2 류의 코드스위칭 데이터로 whisper-large-v3-turbo 파인튜닝
+4. **세그먼트 재처리**: 영어 음역 패턴 감지 시 해당 세그먼트를 Korean tokenizer로 재디코딩
 
 ---
 
