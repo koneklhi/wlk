@@ -112,6 +112,8 @@ class SimulStreamingOnlineProcessor:
         """Handle speaker change event."""
         self.process_iter(is_last=True)
         self.model.refresh_segment(complete=True)
+        self.model.state.detected_language = None   # 화자전환=언어전환 → 언어 재감지
+        self.model.state.first_timestamp = None     # 재감지 조건 충족
         self.model.speaker = change_speaker.speaker
         self.model.global_time_offset = change_speaker.start
         self._last_emitted_word = None

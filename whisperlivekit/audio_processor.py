@@ -124,6 +124,7 @@ class AudioProcessor:
         self.watchdog_task: Optional[asyncio.Task] = None
         self.all_tasks_for_cleanup: List[asyncio.Task] = []
         self.metrics: SessionMetrics = SessionMetrics()
+        self._last_diar_speaker: Optional[int] = None  # 화자 변화 감지용
 
         self.transcription: Optional[Any] = None
         self.translation: Optional[Any] = None
@@ -426,6 +427,16 @@ class AudioProcessor:
         async with self.lock:
             self.state.new_diarization.extend(diarization_segments)
             self.state.end_attributed_speaker = max(self.state.end_attributed_speaker, diar_end)
+
+        # 화자 전환 감지 → transcription_queue에 ChangeSpeaker 신호 전달
+        if self.transcription_queue:
+            for seg in diarization_segments:
+                new_spk = getattr(seg, 'speaker', None)
+                if new_spk is not None and new_spk != self._last_diar_speaker:
+                    if self._last_diar_speaker is not None:
+                        start_time = getattr(seg, 'start', 0.0)
+                        await self.transcription_queue.put(ChangeSpeaker(speaker=new_spk, start=start_time))
+                    self._last_diar_speaker = new_spk
 
     async def _drain_diarization_buffer(self) -> None:
         """Process all remaining audio in the diarization buffer.
