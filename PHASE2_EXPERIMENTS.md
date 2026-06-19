@@ -84,6 +84,8 @@ STT 성능 개선 과정에서 수행한 실험을 기록한다.
 
 | Exp | 날짜 | 제목 | 핵심 변경 | WER (중앙값) | F1 | 결론 |
 |---|---|---|---|---|---|---|
+| **Exp-095** | 2026-06-19 | 주기적 lang_id() 체크 (8초 간격 + 5초 창) | `align_att_base.py` `detect_current_language()`+`switch_language()` 신규, `backend.py` `_check_language_periodically()` | sbs1 **70.8%** / ytn1 **54.0%** | sbs1 **47.6%** / ytn1 **40.0%** | **기각** (sbs1/ytn1 catastrophic — 5초 창이 EN 인용구와 전환을 구별 불가, switch_language()의 버퍼 클리어가 catastrophic 유발) |
+| **Exp-094** | 2026-06-19 | MIN_DURATION_REAL_SILENCE 2→1 (silence threshold 단축) | `backend.py` L36 2→1 | sbs1 **19.0%** / ytn1 **90.8%** / eng1 **3.8%** | sbs1 **76.2%** / ytn1 **61.5%** | **기각** (ytn1 max 108.6% catastrophic 재발 — 1초 threshold가 ytn1 자연 pause 오인식) |
 | **Exp-093** | 2026-06-18 | **silence 시 언어 재감지 (detected_language/first_timestamp 리셋)** | `backend.py` L36 `MIN_DURATION_REAL_SILENCE` 5→2, L95-96 `end_silence()` +2줄 | sbs1 **19.6%** / ytn1 **22.1%** / eng1 **5.7%** | sbs1 **76.2%** / ytn1 **71.4%** | **채택** (ytn1 max 108.0→22.7% catastrophic 완전 제거, stdev 44.6→0.6%) |
 | Exp-092 | 2026-06-18 | foreign-language 메타태그 감지→full_reset 재전사 | `backend.py` `_detect_foreign_lang_hallucination()` + `_reset_language_state()` +24줄 | sbs1 **17.3%** / ytn1 **42.3%** | sbs1 **76.2%** / ytn1 **66.7%** | **기각** (ytn2 174.4% whack-a-mole — `(Via The United Nations)` 환각 전이) |
 | Exp-091 | 2026-06-18 | 연속 n-gram 반복 감지 (`_detect_consecutive_repetition`) | `backend.py` `_detect_consecutive_repetition()` +37줄 (window=12, k=2..5) | sbs1 **18.5%** / ytn1 **23.3%** | sbs1 **76.2%** / ytn1 worst **66.7%** | **기각** (ytn1 max 25.2→43.6%↑ catastrophic, stdev 2.2→12.5%) |
@@ -211,6 +213,114 @@ ytn2 한국어 구간 완전 복구 필요. 잔존 문제:
 - silence가 짧은 구간에서 재감지 미발동
 - 재감지 후 첫 토큰이 영어로 편향되는 현상 (직전 영어 prefix bias)
 방향 탐색: ① silence threshold 추가 조정 ② 재감지 후 컨텍스트 비우기 ③ `lang_id()` 활용한 배치 내 즉시 감지
+
+---
+
+## Exp-095: 주기적 lang_id() 체크 (Direction C) (기각)
+
+**날짜**: 2026-06-19 / **정책**: SimulStreaming / **결론**: **기각**
+
+### 가설
+
+silence 없이 발화 도중 EN→KO 언어 전환이 발생해도 감지하도록, 8초마다 최근 5초 오디오의 언어를 재확인한다.
+현재 `detected_language`와 다른 언어가 감지되면 즉시 토크나이저를 교체(`switch_language()`).
+
+### 변경 내용
+
+| 파일 | 변경 |
+|---|---|
+| `align_att_base.py` | `detect_current_language(window_secs=5.0, min_prob=0.7)` 신규: 최근 5초 오디오 재인코딩 후 lang_id() |
+| `align_att_base.py` | `switch_language(new_lang)` 신규: `refresh_segment(complete=True)` + `create_tokenizer()` + state 갱신 |
+| `backend.py` | `_LANG_RECHECK_INTERVAL=8.0` 상수, `_last_lang_check_end` 필드, `_check_language_periodically()` |
+| `backend.py` | `process_iter()`: `infer()` 직후 `_check_language_periodically()` 호출, True 시 현 배치 드롭 |
+| `tests/test_lang_recheck.py` | 신규 10개 (TDD, 10/10 PASSED) |
+
+### 정량 결과 (경로 C, N=3 — `eval_exp095_primary_n3.json`)
+
+| 파일 | R1 | R2 | R3 | median | max | stdev | F1 |
+|---|---|---|---|---|---|---|---|
+| sbs1 | **76.8%** | 57.7% | 70.8% | **70.8%** | **76.8%** | 9.7% | 47.6% |
+| ytn1 | **81.0%** | 52.1% | 54.0% | **54.0%** | **81.0%** | 16.1% | 40.0% |
+| eng1 | — | — | — | — | — | — | — |
+
+*(eng1 누락: eval 스크립트가 sbs1+ytn1 후 종료 — 두 파일의 catastrophic으로 기각 결정에 충분)*
+
+### 정성 관찰
+
+- **sbs1**: baseline 19.6% → 70.8%. sbs1에는 ~10초 분량의 영어 인용구가 포함됨. 주기적 5초 창이 해당 구간에 걸리면 EN (confidence > 0.7)으로 올바르게 감지 → `switch_language("en")` 호출 → `refresh_segment(complete=True)`로 오디오 버퍼 전체 삭제 → 이후 KO 오디오가 EN 토크나이저로 디코딩됨.
+- **ytn1**: baseline 22.1% → 54.0%. 동일 패턴. ytn1의 영어 구간에서 false switch 발생.
+- **근본 문제**: 5초 감지 창으로 "KO 내 EN 인용구"(sbs1 스타일)와 "EN→KO 언어 전환"(ytn2 스타일)을 구분할 수 없음. `switch_language()`의 `refresh_segment(complete=True)` 버퍼 클리어가 catastrophic WER의 직접 원인.
+
+### 결론 및 이유
+
+**기각** — sbs1 max 20.8%→76.8%, ytn1 max 22.7%→81.0% catastrophic. §3.8 채택 1순위(최악 케이스 미회귀) 완전 실패. Direction C(주기적 lang_id 체크)는 EN 인용구 포함 콘텐츠에 false positive를 피할 수 없어 primary 데이터에 부적합. worktree `exp-095-lang-recheck-periodic` 폐기.
+
+### 실패 원인 분석 (미래 실험 참고)
+
+1. **5초 감지 창 = 구별 불가**: sbs1의 10초 EN 인용구와 ytn2의 EN→KO 전환 후 KO 구간이 창 크기 관점에서 동일. 창 크기/신뢰도 조정으로 해결 불가.
+2. **switch_language()의 버퍼 클리어**: `refresh_segment(complete=True)`가 오디오 전체를 삭제해 이후 디코딩이 컨텍스트 없이 시작 → catastrophic. 소프트 전환(버퍼 유지) 변형은 새 토크나이저로 기존 오디오를 재디코딩하는 문제 발생.
+3. **mid-stream 전환의 근본 한계**: 스트리밍 모드에서 이미 방출된 토큰은 재회수 불가. 언어 전환을 무음 경계 외에서 감지하려면 already-buffered 오디오 재처리가 필요하며 이는 현 아키텍처와 충돌.
+
+### 다음 가설
+
+ytn2 언어 전환 개선의 현실적 접근:
+- **Direction B**: long_silence 발동 시 컨텍스트 편향 제거 강화 (이미 `init_context()` 호출 중 — 추가 효과 불확실)
+- **현실적 인정**: EN→KO short-pause 전환은 현 아키텍처 제약 내에서 무음 기반 재감지(Exp-093) 이상의 개선이 어려울 수 있음. Exp-093 베이스라인이 primary에서 최적임을 확인.
+
+---
+
+## Exp-094: MIN_DURATION_REAL_SILENCE 2→1 (silence threshold 단축) (기각)
+
+**날짜**: 2026-06-19 / **정책**: SimulStreaming / **결론**: **기각**
+
+### 가설
+
+Exp-093 채택 후 ytn2에 잔존하는 "Wang Sung-han's" 같은 한국어 영문 음역 문제의 원인:
+EN→KO 전환 pause가 1~2초로 짧아 `MIN_DURATION_REAL_SILENCE=2` 임계값에 걸리지 않음 →
+`detected_language` "en" 유지 → 한국어가 영어 토크나이저로 디코딩 → 음역 emit.
+
+임계값을 1초로 낮추면 1~2초 pause도 long_silence로 인식, 언어 재감지가 트리거된다.
+
+### 변경 내용
+
+| 파일 | 라인 | 변경 |
+|---|---|---|
+| `whisperlivekit/simul_whisper/backend.py` | L36 | `MIN_DURATION_REAL_SILENCE = 2 → 1` |
+| `tests/test_lang_redetect.py` | L39, L67 | 단위테스트 상수값 및 short_silence 경계값 업데이트 (== 1, - 0.5) |
+
+### 테스트
+
+```
+pytest tests/test_lang_redetect.py -v   # 4/4 PASSED
+```
+
+### 정량 결과 (경로 C, N=3 — `eval_exp094_primary_n3.json`)
+
+**베이스라인 = Exp-093 채택값** (sbs1 max 20.8% / ytn1 max 22.7%)
+
+| 파일 | R1 | R2 | R3 | median | max | stdev | F1 |
+|---|---|---|---|---|---|---|---|
+| sbs1 | 23.8% | 18.5% | 19.0% | **19.0%** | **23.8%** | 2.9% | 76.2% |
+| ytn1 | 83.4% | 90.8% | **108.6%** | **90.8%** | **108.6%** | 12.9% | 61.5% |
+| eng1 | 3.8% | 3.8% | 4.8% | **3.8%** | 4.8% | 0.5% | 0.0% |
+
+### 정성 관찰
+
+- **ytn1**: R1부터 83.4% — `뭐야?뭐야...` 반복 폭주 재발. threshold 1초가 ytn1의 EN/KO 교차 통역 구간(1~2초 자연 pause)을 false redetection으로 처리 → 재감지 윈도우(2.2초) 내에 혼합 오디오 → 언어 오감지 → oscillation → catastrophic.
+- **딜레마 확인**: ytn1은 짧은 pause에서 **재감지 불필요**(동일 언어 패턴), ytn2는 짧은 pause에서 **재감지 필요**(언어 전환). 단일 threshold로 두 케이스 동시 해결 불가.
+- **sbs1/eng1**: max 소폭 변화(sbs1 +3pp, eng1 개선). 단, ytn1 catastrophic이 압도적.
+
+### 결론 및 이유
+
+**기각** — ytn1 max 22.7%→108.6% catastrophic 완전 재발(채택 기준 ≤22.7% 초과). §3.8 채택 1순위(최악 케이스 미회귀) 완전 실패. silence threshold 단일 값 조정으로는 ytn1/ytn2 동시 해결 불가. worktree `exp-094-silence-threshold-1s` 폐기, main 코드 변경 없음.
+
+### 다음 가설 (Exp-095~)
+
+**Direction C: 주기적 `lang_id()` 체크** — silence 없이 mid-stream에서 언어 전환 감지.
+- `align_att_base.py`에 `detect_current_language()` public method 추가 (현재 오디오 버퍼 → encoder → `lang_id()`)
+- `backend.py`에서 일정 주기(5~8초) 경과 시 언어 재확인 → 불일치 시 `detected_language` + `first_timestamp` 리셋으로 재감지 트리거
+- `MIN_DURATION_REAL_SILENCE=2` 유지 (Exp-093 베이스 보존)
+- 장점: ytn1 자연 pause를 건드리지 않음(주기가 길어 false redetection 없음), ytn2 긴 EN 구간 후 KO 복귀 캐치 가능
 
 ---
 
