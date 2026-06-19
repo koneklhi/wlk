@@ -84,6 +84,7 @@ STT 성능 개선 과정에서 수행한 실험을 기록한다.
 
 | Exp | 날짜 | 제목 | 핵심 변경 | WER (중앙값) | F1 | 결론 |
 |---|---|---|---|---|---|---|
+| **Exp-101** | 2026-06-19 | short pause 후 최근 창 언어 재감지 (오디오 버퍼 유지) | `align_att_base.py` `detect_current_language()` 신규, `backend.py` `MIN_DURATION_SHORT_LANG_RESET=0.5` + `_check_short_silence_language()` | sbs1 **17.3%** / ytn1 **20.2%** | sbs1 **76.2%** / ytn1 **61.5%** | **채택** (primary max 미회귀, ytn2 93.1→75.4% −17.7pp 개선) |
 | **Exp-100** | 2026-06-19 | long_silence 후 보수적 즉시 재감지 (first_timestamp=-0.5, 1.5s 발동) | `backend.py:96` `first_timestamp = None → -0.5` | sbs1 **19.0%** / ytn1 **19.0%** / eng1 **5.7%** | sbs1 **76.2%** / ytn1 **71.4%** | **기각** (primary 통과·개선 실질적, ytn2 WER 114.3% — 한국어 복구 없음. ytn2 long_silence 미발동 패턴이라 first_timestamp 변경 효과 없음) |
 | **Exp-099** | 2026-06-19 | long_silence 후 즉시 재감지 (first_timestamp=-1.5 sentinel, 1.0s 발동) | `backend.py:96` `first_timestamp = None → -1.5` | sbs1 **19.0%** / ytn1 **19.6%** / eng1 **3.8%** | sbs1 **76.2%** / ytn1 **61.5%** | **기각** (ytn1 max 46.0% — R2 spike, 1.0s 오디오에서 발동해 신뢰도 저하·간헐적 오감지) |
 | **Exp-098** | 2026-06-19 | MIN_DURATION_REAL_SILENCE 2→1.5 (Exp-094 1.0s와 현행 2.0s 중간값) | `backend.py:36` `MIN_DURATION_REAL_SILENCE = 1.5` | sbs1 **19.0%** / ytn1 **22.1%** / eng1 **4.8%** | sbs1 **76.2%** / ytn1 **61.5%** | **기각** (ytn1 max 152.1% catastrophic — ytn1에 1.5-2.0s sentence-internal pause 존재 확인, 2.0s 임계값이 이미 최적점) |
@@ -218,6 +219,88 @@ ytn2 한국어 구간 완전 복구 필요. 잔존 문제:
 - silence가 짧은 구간에서 재감지 미발동
 - 재감지 후 첫 토큰이 영어로 편향되는 현상 (직전 영어 prefix bias)
 방향 탐색: ① silence threshold 추가 조정 ② 재감지 후 컨텍스트 비우기 ③ `lang_id()` 활용한 배치 내 즉시 감지
+
+---
+
+## Exp-101: short pause 후 최근 창 언어 재감지 (오디오 버퍼 유지) (채택)
+
+**날짜**: 2026-06-19 / **정책**: SimulStreaming / **결론**: **채택**
+
+### 가설
+
+Exp-094~100 분석으로 확인된 근본 한계: ytn2의 EN→KO 전환 pause < 2s → `long_silence`(≥2s) 미발동 → Exp-093의 silence 기반 재감지가 ytn2 전환 지점에 도달 불가.
+
+새 접근: **`long_silence`(버퍼 클리어 + 시간 오프셋)와 언어 재감지를 분리**한다.
+- ≥0.5s의 짧은 pause 감지 → 오디오 버퍼 유지한 채 1.5s 대기 → 최근 1.5s 창으로 언어 감지
+- 언어 전환 확인 시 `create_tokenizer(new_lang)` + `init_context()` **경량 리셋** (refresh_segment / global_time_offset 변경 없음)
+
+Exp-096(post-silence lang check)과 본질 차이:
+- Exp-096은 `_detect_language_if_needed`(전체 버퍼) + full reset → ytn1 catastrophic
+- Exp-101은 `detect_current_language`(최근 1.5s 창) + 경량 리셋 → 오디오 손실 없음
+
+### 변경 내용
+
+| 파일 | 라인 | 변경 |
+|---|---|---|
+| `whisperlivekit/simul_whisper/align_att_base.py` | L162-180 | `detect_current_language(window_secs=1.5, min_prob=0.90)` 신규 — 최근 1.5s 세그먼트 추출 → `_encode()` → `lang_id()` → 확신도 미달 시 None |
+| `whisperlivekit/simul_whisper/backend.py` | L37 | `MIN_DURATION_SHORT_LANG_RESET = 0.5` 상수 추가 |
+| `whisperlivekit/simul_whisper/backend.py` | L61 | `__init__` `self._short_silence_check_at: float = 0.0` 추가 |
+| `whisperlivekit/simul_whisper/backend.py` | L95-109 | `end_silence()` long_silence 블록에 `_short_silence_check_at = 0.0` 추가, `elif` 분기로 short silence 스케줄 (`self.end + 1.5`) |
+| `whisperlivekit/simul_whisper/backend.py` | L111-121 | `_check_short_silence_language()` 신규 — `detect_current_language()` 호출 후 전환 시 `create_tokenizer(new_lang)` + `init_context()` |
+| `whisperlivekit/simul_whisper/backend.py` | L232-234 | `process_iter()` infer 전 `_short_silence_check_at` 도달 시 체크 발동 |
+| `tests/test_lang_redetect.py` | L36+ | 단위 테스트 7개 추가 (총 11개) |
+| `tests/test_stall_watchdog.py` | L27 | 헬퍼에 `_short_silence_check_at = 0.0` 초기화 추가 |
+
+브랜치: `phase2/exp-101-short-silence-lang-reset`, commit `a9d27d5`
+
+### 테스트
+
+```
+pytest tests/ -v   # 38 passed, 1 skipped
+```
+
+### 정량 결과 (경로 C, N=3, 2026-06-19 11:39)
+
+| 파일 | R1 WER | R2 WER | R3 WER | median WER | F1 (median) | max WER | stdev |
+|---|---|---|---|---|---|---|---|
+| sbs1 | 17.3% | 17.9% | 17.3% | **17.3%** | **76.2%** | **17.9%** | 0.3% |
+| ytn1 | 20.9% | 19.6% | 20.2% | **20.2%** | **61.5%** | **20.9%** | 0.6% |
+
+Exp-093 baseline 대비:
+- sbs1: median 17.3% vs 19.6% (−2.3pp ✓), max **17.9%** vs 20.8% (−2.9pp ✓) — 개선
+- ytn1: median 20.2% vs 22.1% (−1.9pp ✓), max **20.9%** vs 22.7% (−1.8pp ✓) — 개선
+
+채택 기준 판정:
+- sbs1 max 17.9% ≤ 20.8% ✓
+- ytn1 max 20.9% ≤ 22.7% ✓
+- **Primary 통과**
+
+### ytn2 (held-out, 단회 측정 — 2026-06-19 11:50, `results_v3_exp101_ytn2.json`)
+
+| 파일 | WER | F1 |
+|---|---|---|
+| ytn2 | **75.4%** | **47.1%** |
+
+Exp-093 baseline 대비: WER 93.1% → **75.4%** (−17.7pp 개선), F1 44.4% → 47.1% (+2.7pp)
+
+### 정성 관찰
+
+- **sbs1/ytn1**: 3회 모두 안정적. stdev sbs1 0.3%, ytn1 0.6%. catastrophic 없음.
+- **ytn2 전사 내용**: 한국어 구간이 여전히 일부 영문 음역("Nuneiansahan-jong-hye-sahan...", "Jong-un-dukbang Jang-gwang...") + 영어 환각 구간 삽입. Exp-093 이후 `(speaking in foreign language)` 폭주는 사라진 상태였고, 이번에도 없음. WER 개선은 영어 구간 전사 안정화 및 환각 구간 축소에서 비롯된 것으로 추정 — 한국어 구간 자체의 완전한 한국어 전사는 달성하지 못함.
+- **기술적 해석**: short pause(0.5~2s) 후 재감지가 동작하나, 한국어 구간 진입 직후 1.5s 창에 아직 EN 오디오가 혼재 → lang_id() 신뢰도 미달(< 0.90)로 전환 트리거 실패 가능. 혹은 KO 전환 후에도 EN tokenizer로 한 인퍼 이상 진행된 영문 음역이 context bias 형성.
+
+### 결론 및 이유
+
+**채택** — primary max 미회귀(sbs1 17.9%✓, ytn1 20.9%✓) + ytn2 93.1%→75.4% (−17.7pp). §3.8 채택 기준 모두 충족. 한국어 구간 완전 복구는 미달이나 WER 유의미 개선.
+
+브랜치 `phase2/exp-101-short-silence-lang-reset` (commit `a9d27d5`), master 통합 예정.
+
+### 다음 가설
+
+ytn2 75.4% → 추가 개선 여지 있음. 잔존 문제:
+- KO 진입 직후 1.5s 창에 EN/KO 혼재 → lang_id 신뢰도 미달로 전환 미발동
+- 전환 발동해도 직전 EN prefix가 context에 누적 → 첫 KO 토큰 EN 편향 잔존
+방향 탐색: ① min_prob 임계값 0.90 → 0.80 하향 (감지 감도 증가, false positive 위험) ② window_secs 1.5 → 1.0 단축 (더 빠른 KO 단독 창) ③ 전환 확인 후 init_tokens 추가 (context 비우기)
 
 ---
 
