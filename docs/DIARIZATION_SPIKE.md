@@ -86,12 +86,25 @@ whisperlivekit은 화자 분할 인프라를 **코드로 완비**했으나 4가�
 - **whisperlivekit 본체 버그 발견**: `core.py` diart 분기 키워드 불일치(`segmentation_model` vs `segmentation_model_name`).
   Diart 미채택이므로 본 스파이크에서는 **수정 미적용**(워크트리 변경 되돌림). Diart를 쓸 일이 생기면 그때 수정.
 
-## 8. 다음 세션 (디코더 연결 — 이번 스파이크 범위 밖)
+## 8. 디코더 연결 구현 (2026-06-19, phase4/diarization-spike 브랜치)
 
-1. **죽은 경로 활성화**: `diarization_processor`에서 화자 전환 감지 → `transcription_queue.put(ChangeSpeaker(speaker, start))`.
-2. **언어 재감지 시너지**: `new_speaker()`에 `detected_language=None` 추가 → 화자전환=언어전환으로 ytn2식 환각 차단(Exp-093 연장).
-3. **폐쇄망 적재**: `SortformerDiarization` `from_pretrained` → `restore_from(로컬 .nemo)` 옵션화(§3.1).
-4. **정량 측정**: eval 하니스에 `--diarization` 전달 + 문장 분리 F1 / WER 경로 C N=3.
+스파이크 직후 같은 세션에서 구현 완료.
+
+1. ✅ **죽은 경로 활성화**: `_update_diarization_state`에서 화자 변화 감지 → `transcription_queue.put(ChangeSpeaker)` (audio_processor.py:431-439). 첫 화자는 신호 미전송(불필요한 reset 방지).
+2. ✅ **언어 재감지 시너지**: `new_speaker()`에 `detected_language=None`, `first_timestamp=None` 추가 (simul_whisper/backend.py:115-116). Exp-093 long_silence 리셋과 동일 패턴.
+3. ✅ **폐쇄망 적재**: `_load_model()`에 `os.path.isfile()` 분기 추가 (sortformer_backend.py:60-63). `--sortformer-model` CLI 플래그 신규 추가 (parse_args.py / config.py / core.py).
+4. ✅ **eval 지원**: `scripts/eval.py`에 `--diarization`, `--sortformer-model` 플래그 추가 (start_server 연동).
+5. ✅ **smoke test**: 로컬 .nemo 경로로 서버 기동 성공, ytn1 화자 라벨 출력 확인 (Speaker 2=KO, Speaker 3=EN).
+
+**남은 작업 (다음 세션):**
+- **경로 C N=3 정량 측정**: VBCable 환경에서 직접 실행 필요.
+  ```
+  python scripts/eval.py --model-dir whisperlivekit/model/whisper-large-v3-turbo \
+    --diarization --sortformer-model whisperlivekit/model/sortformer-4spk-v2.nemo \
+    --repeat 3
+  ```
+- WER/F1이 개선되면 PHASE2_EXPERIMENTS.md에 채택 실험으로 기록.
+- LocalAgreement 백엔드(`OnlineASRProcessor.new_speaker()`)의 언어 재감지 리셋 여부 추가 검토.
 
 ## 9. 환경 잔존물 (정리는 선택)
 
