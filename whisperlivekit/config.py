@@ -64,6 +64,9 @@ class WhisperLiveKitConfig:
     static_init_prompt: Optional[str] = None
     max_context_tokens: Optional[int] = None
 
+    # Diarization — Sortformer
+    sortformer_model: str = "nvidia/diar_streaming_sortformer_4spk-v2"
+
     # Diarization (diart)
     segmentation_model: str = "pyannote/segmentation-3.0"
     embedding_model: str = "pyannote/embedding"

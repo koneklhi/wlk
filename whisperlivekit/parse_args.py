@@ -68,6 +68,13 @@ def parse_args():
     )
 
     parser.add_argument(
+        "--sortformer-model",
+        type=str,
+        default="nvidia/diar_streaming_sortformer_4spk-v2",
+        help="Sortformer model: HF model name or local .nemo file path (폐쇄망 적재 시 로컬 경로 지정).",
+    )
+
+    parser.add_argument(
         "--no-transcription",
         action="store_true",
         help="Disable transcription to only see live diarization results.",
