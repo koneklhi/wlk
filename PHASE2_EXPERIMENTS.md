@@ -84,6 +84,7 @@ STT 성능 개선 과정에서 수행한 실험을 기록한다.
 
 | Exp | 날짜 | 제목 | 핵심 변경 | WER (중앙값) | F1 | 결론 |
 |---|---|---|---|---|---|---|
+| **Exp-096** | 2026-06-19 | 무음 후 언어 체크 (post-silence lang check, 0.5s↑ silence 후 1.5s 수집+0.90 확신도) | `align_att_base.py` `detect_current_language()` 신규, `backend.py` `_check_post_silence_language()` + `_post_silence_check_at` | sbs1 **23.2%** / ytn1 **86.5%** / eng1 **3.8%** | sbs1 **66.7%** / ytn1 **62.5%** | **기각** (ytn1 max 101.2% catastrophic — ytn1/ytn2 모두 짧은 pause+EN↔KO 교대, 음향 수준에서 구별 불가) |
 | **Exp-095** | 2026-06-19 | 주기적 lang_id() 체크 (8초 간격 + 5초 창) | `align_att_base.py` `detect_current_language()`+`switch_language()` 신규, `backend.py` `_check_language_periodically()` | sbs1 **70.8%** / ytn1 **54.0%** | sbs1 **47.6%** / ytn1 **40.0%** | **기각** (sbs1/ytn1 catastrophic — 5초 창이 EN 인용구와 전환을 구별 불가, switch_language()의 버퍼 클리어가 catastrophic 유발) |
 | **Exp-094** | 2026-06-19 | MIN_DURATION_REAL_SILENCE 2→1 (silence threshold 단축) | `backend.py` L36 2→1 | sbs1 **19.0%** / ytn1 **90.8%** / eng1 **3.8%** | sbs1 **76.2%** / ytn1 **61.5%** | **기각** (ytn1 max 108.6% catastrophic 재발 — 1초 threshold가 ytn1 자연 pause 오인식) |
 | **Exp-093** | 2026-06-18 | **silence 시 언어 재감지 (detected_language/first_timestamp 리셋)** | `backend.py` L36 `MIN_DURATION_REAL_SILENCE` 5→2, L95-96 `end_silence()` +2줄 | sbs1 **19.6%** / ytn1 **22.1%** / eng1 **5.7%** | sbs1 **76.2%** / ytn1 **71.4%** | **채택** (ytn1 max 108.0→22.7% catastrophic 완전 제거, stdev 44.6→0.6%) |
@@ -213,6 +214,72 @@ ytn2 한국어 구간 완전 복구 필요. 잔존 문제:
 - silence가 짧은 구간에서 재감지 미발동
 - 재감지 후 첫 토큰이 영어로 편향되는 현상 (직전 영어 prefix bias)
 방향 탐색: ① silence threshold 추가 조정 ② 재감지 후 컨텍스트 비우기 ③ `lang_id()` 활용한 배치 내 즉시 감지
+
+---
+
+## Exp-096: 무음 후 언어 체크 (Post-Silence Lang Check) (기각)
+
+**날짜**: 2026-06-19 / **정책**: SimulStreaming / **결론**: **기각**
+
+### 가설
+
+Exp-094(long_silence 임계값 단축)·Exp-095(주기적 체크) 모두 EN 인용구와 진짜 EN→KO 전환을 구별하지 못해 기각됐다. 공통 실패 원인은 "지속 시간이 짧은 진짜 전환(0.5-1.9s pause)"을 잡으려다 EN 인용구 직후 pause에도 트리거되는 것이었다.
+
+새 접근: 짧은 silence(0.5s ≤ silence < 2s) 발생 시 즉시 리셋하지 않고 **1.5초 더 오디오를 수집한 뒤** lang_id()로 현재 언어를 확인, **확신도 0.90 이상 + 언어 변경**일 때만 Exp-093 full reset. EN 인용구 직후에는 EN 오디오가 계속 들어오므로 0.90 확신도가 KO를 반환하지 않을 것이라는 기대.
+
+### 변경 내용
+
+**파일**: `worktrees/exp-096-post-silence-lang-check/whisperlivekit/simul_whisper/align_att_base.py`
+- `detect_current_language(window_secs=1.5, min_prob=0.90)` 신규 추가 (L162–178)
+  - 최근 1.5초 오디오 추출 → `_encode()` → `lang_id()` → 확신도 미달 시 None 반환
+
+**파일**: `worktrees/exp-096-post-silence-lang-check/whisperlivekit/simul_whisper/backend.py`
+- 모듈 상수 3개 추가: `_POST_SILENCE_MIN_DURATION=0.5`, `_POST_SILENCE_COLLECT_SECS=1.5`, `_POST_SILENCE_MIN_PROB=0.90`
+- `__init__`: `_post_silence_check_at: float = 0.0` 필드 추가
+- `end_silence()`: long_silence 블록에 `_post_silence_check_at = 0.0` (long_silence가 처리하므로 취소) + `elif` 트리거 추가
+- `_check_post_silence_language()` 신규 메서드: 수집 완료 후 `detect_current_language()` 호출, 전환 감지 시 Exp-093과 동일한 full reset (`detected_language=None`, `first_timestamp=None`, `global_time_offset`, tracking 필드 클리어)
+- `process_iter()`: `infer()` 앞에 `_check_post_silence_language()` 조기 반환 삽입
+
+**파일**: `worktrees/exp-096-post-silence-lang-check/tests/test_post_silence_lang.py` (신규)
+- 14개 테스트 케이스, 전체 PASSED
+
+브랜치: `phase2/exp-096-post-silence-lang-check`, commit `ac633bb`
+
+### 테스트 설정
+
+```
+cd worktrees/exp-096-post-silence-lang-check
+uv sync --extra vbcable --extra listen
+python eval.py --model-dir ../../whisperlivekit/model/whisper-large-v3-turbo \
+  --files test_data/sbs1.mp3 test_data/ytn1.mp3 test_data/eng1.mp3 --repeat 3
+```
+
+### 정량 결과 (경로 C, N=3, 2026-06-19 09:39)
+
+| 파일 | R1 WER | R2 WER | R3 WER | median WER | F1 (median) | max WER | stdev |
+|---|---|---|---|---|---|---|---|
+| sbs1 | 23.2% | 22.0% | 25.0% | **23.2%** | **66.7%** | **25.0%** | 1.5% |
+| ytn1 | 86.5% | 101.2% | 76.7% | **86.5%** | **62.5%** | **101.2%** | 12.4% |
+| eng1 | 3.8% | 4.8% | 3.8% | **3.8%** | 0.0% | 4.8% | 0.5% |
+
+Exp-093 baseline 대비:
+- sbs1: median 23.2% vs 19.6% (+3.6pp), max 25.0% vs 20.8% (+4.2pp) — **회귀**
+- ytn1: median 86.5% vs 22.1% (+64.4pp), max 101.2% vs 22.7% (+78.5pp) — **catastrophic**
+- eng1: median 3.8% vs 5.7% (−1.9pp) — 소폭 개선
+
+JSON: `worktrees/exp-096-post-silence-lang-check/.omc/benchmarks/eval_exp096_primary_n3.json`
+
+### 정성 관찰
+
+ytn1이 전체적으로 무너졌다 (median 86.5%). ytn2.txt 구조 분석 결과 ytn2뿐 아니라 **ytn1도 EN/KO 교대 패턴** — "EN long block 후 KO"가 아니라 EN 문장·KO 번역·EN 문장·KO 번역이 반복된다. ytn1과 ytn2가 동일 오디오 패턴이므로 어떤 접근도 두 데이터셋을 동시에 처리할 수 없다.
+
+post-silence check가 ytn1의 EN↔KO 교대 구간 짧은 pause에서도 트리거되어 EN 인용구가 등장할 때마다 full reset → ytn1 catastrophic 유발.
+
+### 결론
+
+**기각** — ytn1 max 101.2%로 채택 기준(≤22.7%) 대폭 초과.
+
+**근본 한계 확정**: Exp-094·095·096 세 독립 접근이 동일 이유로 기각됨 — ytn1/ytn2 모두 EN/KO 교대 + 짧은 pause 패턴이므로 음향 수준에서 구별 불가. ytn2 개선 탐색 종료.
 
 ---
 
