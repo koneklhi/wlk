@@ -84,6 +84,7 @@ STT 성능 개선 과정에서 수행한 실험을 기록한다.
 
 | Exp | 날짜 | 제목 | 핵심 변경 | WER (중앙값) | F1 | 결론 |
 |---|---|---|---|---|---|---|
+| **Exp-099** | 2026-06-19 | long_silence 후 즉시 재감지 (first_timestamp=-1.5 sentinel, 1.0s 발동) | `backend.py:96` `first_timestamp = None → -1.5` | sbs1 **19.0%** / ytn1 **19.6%** / eng1 **3.8%** | sbs1 **76.2%** / ytn1 **61.5%** | **기각** (ytn1 max 46.0% — R2 spike, 1.0s 오디오에서 발동해 신뢰도 저하·간헐적 오감지) |
 | **Exp-098** | 2026-06-19 | MIN_DURATION_REAL_SILENCE 2→1.5 (Exp-094 1.0s와 현행 2.0s 중간값) | `backend.py:36` `MIN_DURATION_REAL_SILENCE = 1.5` | sbs1 **19.0%** / ytn1 **22.1%** / eng1 **4.8%** | sbs1 **76.2%** / ytn1 **61.5%** | **기각** (ytn1 max 152.1% catastrophic — ytn1에 1.5-2.0s sentence-internal pause 존재 확인, 2.0s 임계값이 이미 최적점) |
 | **Exp-097** | 2026-06-19 | long_silence 후 tokenizer multilingual 즉시 리셋 (`create_tokenizer(None)`) | `backend.py` `end_silence()` long_silence 블록 앞에 `create_tokenizer(None)` 1줄 | sbs1 **19.0%** / ytn1 **20.9%** / eng1 **3.8%** | sbs1 **76.2%** / ytn1 **71.4%** | **기각** (sbs1 max 138.7% catastrophic — multilingual decoder가 KO 오디오에서 EN token 예측) |
 | **Exp-096** | 2026-06-19 | 무음 후 언어 체크 (post-silence lang check, 0.5s↑ silence 후 1.5s 수집+0.90 확신도) | `align_att_base.py` `detect_current_language()` 신규, `backend.py` `_check_post_silence_language()` + `_post_silence_check_at` | sbs1 **23.2%** / ytn1 **86.5%** / eng1 **3.8%** | sbs1 **66.7%** / ytn1 **62.5%** | **기각** (ytn1 max 101.2% catastrophic — ytn1/ytn2 모두 짧은 pause+EN↔KO 교대, 음향 수준에서 구별 불가) |
@@ -216,6 +217,69 @@ ytn2 한국어 구간 완전 복구 필요. 잔존 문제:
 - silence가 짧은 구간에서 재감지 미발동
 - 재감지 후 첫 토큰이 영어로 편향되는 현상 (직전 영어 prefix bias)
 방향 탐색: ① silence threshold 추가 조정 ② 재감지 후 컨텍스트 비우기 ③ `lang_id()` 활용한 배치 내 즉시 감지
+
+---
+
+## Exp-099: long_silence 후 즉시 재감지 (first_timestamp = -1.5) (기각)
+
+**날짜**: 2026-06-19 / **정책**: SimulStreaming / **결론**: **기각**
+
+### 가설
+
+Exp-097(create_tokenizer(None)) 기각 이후 ytn2 "EN→KO 전환 직후 영문 음역" 근본 원인 재분석:
+- Exp-093 long_silence 발동 후 `_detect_language_if_needed` 실제 발동까지 ~2.5초 窓이 존재
+- 이 窓 동안 old EN tokenizer가 KO 오디오를 영어 음역으로 전사
+
+`first_timestamp = None` 대신 `-1.5`를 설정하면 `seconds_since_start = segments_len() + 1.5 ≥ 2.0` 조건이 `segments_len() ≥ 0.5`일 때 충족된다. audio_min_len=1.0s이므로 첫 infer에서 즉시 재감지 발동 → 재감지 窓 2.5s → 0s.
+
+### 변경 내용
+
+**파일**: `worktrees/exp-099-fast-redetect/whisperlivekit/simul_whisper/backend.py:96`
+
+```python
+# 변경 전 (Exp-093)
+self.model.state.first_timestamp = None
+
+# 변경 후 (Exp-099)
+self.model.state.first_timestamp = -1.5  # 즉시 재감지: audio_min_len≥1.0s 첫 infer에서 seconds_since_start≥2.0 충족
+```
+
+`tests/test_lang_redetect.py:55` — `first_timestamp is None` → `first_timestamp == -1.5` (상수 변경 검증)
+
+브랜치: `phase2/exp-099-fast-redetect`, commit `ca4ee26`
+
+### 테스트
+
+```
+pytest tests/test_lang_redetect.py -v   # 4/4 PASSED
+```
+
+### 정량 결과 (경로 C, N=3, 2026-06-19 10:46)
+
+| 파일 | R1 WER | R2 WER | R3 WER | median WER | F1 (median) | max WER | stdev |
+|---|---|---|---|---|---|---|---|
+| sbs1 | 17.9% | 19.0% | 19.6% | **19.0%** | **76.2%** | 19.6% | 0.9% |
+| ytn1 | 19.6% | **46.0%** | 18.4% | **19.6%** | **61.5%** | **46.0%** | 15.6% |
+| eng1 | 3.8% | 3.8% | 2.9% | **3.8%** | 0.0% | 3.8% | 0.5% |
+
+Exp-093 baseline 대비:
+- sbs1: median 19.0% vs 19.6% (−0.6pp ✓), max 19.6% vs 20.8% (−1.2pp ✓) — 개선
+- ytn1: median 19.6% vs 22.1% (−2.5pp ✓), max **46.0%** vs 22.7% (+23.3pp ✗) — 회귀
+- eng1: median 3.8% vs 5.7% (−1.9pp ✓) — 개선
+
+JSON: `worktrees/exp-099-fast-redetect/.omc/benchmarks/eval_exp099_primary_n3.json`
+
+### 정성 관찰
+
+- **sbs1/eng1**: median/max 모두 baseline 대비 소폭 향상.
+- **ytn1 R2 spike**: R1(19.6%)/R3(18.4%)는 baseline(22.1%) 대비 개선. R2(46.0%) spike — 비결정론적 오감지.
+- **원인 분석**: `first_timestamp=-1.5`로 audio_min_len=1.0s의 첫 infer에서 lang_id() 발동. 1.0s 오디오는 29s silence padding 대비 신호가 극히 짧아, 발화 시작 직후 불완전한 음소만 포함된 경우 언어 감지 신뢰도 저하 → 간헐적 잘못된 언어 예측.
+
+### 결론
+
+**기각** — ytn1 max 46.0% > 22.7% (채택 기준 초과).
+
+**Direction 확보**: sbs1/eng1/ytn1-median 모두 개선됐으나 재감지 발동 시점(1.0s 오디오)이 너무 공격적. `-0.5`(1.5s 발동)로 완화하면 신뢰도 향상(+50% 오디오)과 窓 단축(2.5s → 1.0s)을 동시에 달성 가능. Exp-100에서 검증.
 
 ---
 
