@@ -105,7 +105,15 @@ def parse_reference_sentences(ref_text: str) -> list:
     return [b.strip() for b in re.split(r"\n\s*\n", ref_text) if b.strip()]
 
 
-def start_server(model_dir: str, pcm_input: bool, port: int, warmup: str, lan: str = "auto") -> subprocess.Popen:
+def start_server(
+    model_dir: str,
+    pcm_input: bool,
+    port: int,
+    warmup: str,
+    lan: str = "auto",
+    diarization: bool = False,
+    sortformer_model: str = "",
+) -> subprocess.Popen:
     cmd = [
         sys.executable, "-m", "whisperlivekit.basic_server",
         "--model_dir", model_dir,
@@ -117,6 +125,10 @@ def start_server(model_dir: str, pcm_input: bool, port: int, warmup: str, lan: s
     ]
     if pcm_input:
         cmd.append("--pcm-input")
+    if diarization:
+        cmd.extend(["--diarization", "--diarization-backend", "sortformer"])
+        if sortformer_model:
+            cmd.extend(["--sortformer-model", sortformer_model])
     return subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
@@ -279,6 +291,18 @@ def main() -> None:
         "--repeat", type=int, default=1,
         help="경로 C 반복 횟수 (기본: 1, 채택/기각 측정시: 3)",
     )
+    parser.add_argument(
+        "--diarization",
+        action="store_true",
+        default=False,
+        help="화자 분할 활성화 (Sortformer 백엔드). 서버에 --diarization --diarization-backend sortformer 전달.",
+    )
+    parser.add_argument(
+        "--sortformer-model",
+        type=str,
+        default="",
+        help="Sortformer 모델 경로. 비어 있으면 HF 기본값 사용 (폐쇄망: 로컬 .nemo 경로 지정).",
+    )
     args = parser.parse_args()
 
     paths = [p.strip().upper() for p in args.paths.split(",")]
@@ -301,7 +325,7 @@ def main() -> None:
         print(f"\n[eval] 경로 A 테스트 시작 (파일별 서버 재시작)...")
         for audio_path in args.files:
             print(f"[eval] 경로 A 서버 기동 중 (포트 {SERVER_PORT})...")
-            proc = start_server(args.model_dir, pcm_input=True, port=SERVER_PORT, warmup=warmup, lan=args.lan)
+            proc = start_server(args.model_dir, pcm_input=True, port=SERVER_PORT, warmup=warmup, lan=args.lan, diarization=args.diarization, sortformer_model=args.sortformer_model)
             try:
                 if not wait_for_ready(base_url, proc):
                     print("[오류] 서버 ready 대기 시간 초과", file=sys.stderr)
@@ -330,7 +354,7 @@ def main() -> None:
                     for rep in range(args.repeat):
                         rep_label = f"회차 {rep + 1}/{args.repeat}" if args.repeat > 1 else ""
                         print(f"[eval] 경로 C 서버 기동 중 (포트 {SERVER_PORT}) {rep_label}...")
-                        proc = start_server(args.model_dir, pcm_input=False, port=SERVER_PORT, warmup=warmup, lan=args.lan)
+                        proc = start_server(args.model_dir, pcm_input=False, port=SERVER_PORT, warmup=warmup, lan=args.lan, diarization=args.diarization, sortformer_model=args.sortformer_model)
                         try:
                             if not wait_for_ready(base_url, proc):
                                 print("[오류] 서버 ready 대기 시간 초과", file=sys.stderr)
