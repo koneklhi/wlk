@@ -84,7 +84,7 @@ STT 성능 개선 과정에서 수행한 실험을 기록한다.
 
 | Exp | 날짜 | 제목 | 핵심 변경 | WER (중앙값) | F1 | 결론 |
 |---|---|---|---|---|---|---|
-| **Exp-100** | 2026-06-19 | long_silence 후 보수적 즉시 재감지 (first_timestamp=-0.5, 1.5s 발동) | `backend.py:96` `first_timestamp = None → -0.5` | sbs1 **19.0%** / ytn1 **19.0%** / eng1 **5.7%** | sbs1 **76.2%** / ytn1 **71.4%** | **채택 후보** (sbs1 max 19.6%✓ ytn1 max 22.1%✓ — primary 통과, ytn2 단회 측정 중) |
+| **Exp-100** | 2026-06-19 | long_silence 후 보수적 즉시 재감지 (first_timestamp=-0.5, 1.5s 발동) | `backend.py:96` `first_timestamp = None → -0.5` | sbs1 **19.0%** / ytn1 **19.0%** / eng1 **5.7%** | sbs1 **76.2%** / ytn1 **71.4%** | **기각** (primary 통과·개선 실질적, ytn2 WER 114.3% — 한국어 복구 없음. ytn2 long_silence 미발동 패턴이라 first_timestamp 변경 효과 없음) |
 | **Exp-099** | 2026-06-19 | long_silence 후 즉시 재감지 (first_timestamp=-1.5 sentinel, 1.0s 발동) | `backend.py:96` `first_timestamp = None → -1.5` | sbs1 **19.0%** / ytn1 **19.6%** / eng1 **3.8%** | sbs1 **76.2%** / ytn1 **61.5%** | **기각** (ytn1 max 46.0% — R2 spike, 1.0s 오디오에서 발동해 신뢰도 저하·간헐적 오감지) |
 | **Exp-098** | 2026-06-19 | MIN_DURATION_REAL_SILENCE 2→1.5 (Exp-094 1.0s와 현행 2.0s 중간값) | `backend.py:36` `MIN_DURATION_REAL_SILENCE = 1.5` | sbs1 **19.0%** / ytn1 **22.1%** / eng1 **4.8%** | sbs1 **76.2%** / ytn1 **61.5%** | **기각** (ytn1 max 152.1% catastrophic — ytn1에 1.5-2.0s sentence-internal pause 존재 확인, 2.0s 임계값이 이미 최적점) |
 | **Exp-097** | 2026-06-19 | long_silence 후 tokenizer multilingual 즉시 리셋 (`create_tokenizer(None)`) | `backend.py` `end_silence()` long_silence 블록 앞에 `create_tokenizer(None)` 1줄 | sbs1 **19.0%** / ytn1 **20.9%** / eng1 **3.8%** | sbs1 **76.2%** / ytn1 **71.4%** | **기각** (sbs1 max 138.7% catastrophic — multilingual decoder가 KO 오디오에서 EN token 예측) |
@@ -223,7 +223,7 @@ ytn2 한국어 구간 완전 복구 필요. 잔존 문제:
 
 ## Exp-100: long_silence 후 보수적 즉시 재감지 (first_timestamp = -0.5) (채택 후보)
 
-**날짜**: 2026-06-19 / **정책**: SimulStreaming / **결론**: **채택 후보** (ytn2 단회 측정 진행 중)
+**날짜**: 2026-06-19 / **정책**: SimulStreaming / **결론**: **기각** (ytn2 미개선)
 
 ### 가설
 
@@ -277,9 +277,23 @@ Exp-093 baseline 대비:
 - **sbs1**: R1-R3 모두 안정적 (17.3~19.6%). Exp-099 대비 비슷한 개선.
 - **eng1**: median 동일하나 max가 5.7→6.7%로 소폭 회귀 — 무음 후 재감지가 단일 언어 환경에서도 추가 변동 유발.
 
-### ytn2 (held-out, 단회 측정)
+### ytn2 (held-out, 단회 측정 — 2026-06-19 11:21)
 
-*(진행 중)*
+| 파일 | WER | F1 |
+|---|---|---|
+| ytn2 | **114.3%** | **42.1%** |
+
+Exp-093 baseline 대비: WER 114.8% → 114.3% (−0.5pp, 거의 동일), F1 44.4% → 42.1% (−2.3pp 소폭 악화)
+
+전사 내용: 한국어 텍스트 직접 전사 없음 — `(speaking in foreign language)` 메타태그 반복. Exp-093에서 일부 복구됐던 한국어 직접 전사가 다시 사라짐.
+
+### 결론
+
+**기각** — ytn2 WER 114.3% (목표 93.1% 이하 미충족), 한국어 구간 전사 복구 없음.
+
+**근본 한계 재확인**: first_timestamp 조정은 long_silence 발동 후의 재감지 타이밍만 조절한다. ytn2의 EN→KO 전환 pause는 2s 임계값에 미달해 long_silence 자체가 발동하지 않음 → first_timestamp 값(-1.5든 -0.5든)과 무관하게 ytn2에 효과 없음. Exp-099~100은 ytn2 문제를 해결할 수 없는 접근이었다.
+
+**primary 관점 분석**: primary(sbs1/ytn1/eng1) 성능은 채택 기준 통과 + 뚜렷한 개선. ytn2 개선이 목표였으나 ytn2 접근 자체가 불가능해 기각. first_timestamp=-0.5 변경이 primary에는 실질적 개선임에 주목 (Exp-100 단독으로는 의미 있으나 세션 목표인 ytn2 개선 달성 불가).
 
 ---
 
