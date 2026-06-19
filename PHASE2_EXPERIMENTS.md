@@ -84,6 +84,7 @@ STT 성능 개선 과정에서 수행한 실험을 기록한다.
 
 | Exp | 날짜 | 제목 | 핵심 변경 | WER (중앙값) | F1 | 결론 |
 |---|---|---|---|---|---|---|
+| **Exp-098** | 2026-06-19 | MIN_DURATION_REAL_SILENCE 2→1.5 (Exp-094 1.0s와 현행 2.0s 중간값) | `backend.py:36` `MIN_DURATION_REAL_SILENCE = 1.5` | sbs1 **19.0%** / ytn1 **22.1%** / eng1 **4.8%** | sbs1 **76.2%** / ytn1 **61.5%** | **기각** (ytn1 max 152.1% catastrophic — ytn1에 1.5-2.0s sentence-internal pause 존재 확인, 2.0s 임계값이 이미 최적점) |
 | **Exp-097** | 2026-06-19 | long_silence 후 tokenizer multilingual 즉시 리셋 (`create_tokenizer(None)`) | `backend.py` `end_silence()` long_silence 블록 앞에 `create_tokenizer(None)` 1줄 | sbs1 **19.0%** / ytn1 **20.9%** / eng1 **3.8%** | sbs1 **76.2%** / ytn1 **71.4%** | **기각** (sbs1 max 138.7% catastrophic — multilingual decoder가 KO 오디오에서 EN token 예측) |
 | **Exp-096** | 2026-06-19 | 무음 후 언어 체크 (post-silence lang check, 0.5s↑ silence 후 1.5s 수집+0.90 확신도) | `align_att_base.py` `detect_current_language()` 신규, `backend.py` `_check_post_silence_language()` + `_post_silence_check_at` | sbs1 **23.2%** / ytn1 **86.5%** / eng1 **3.8%** | sbs1 **66.7%** / ytn1 **62.5%** | **기각** (ytn1 max 101.2% catastrophic — ytn1/ytn2 모두 짧은 pause+EN↔KO 교대, 음향 수준에서 구별 불가) |
 | **Exp-095** | 2026-06-19 | 주기적 lang_id() 체크 (8초 간격 + 5초 창) | `align_att_base.py` `detect_current_language()`+`switch_language()` 신규, `backend.py` `_check_language_periodically()` | sbs1 **70.8%** / ytn1 **54.0%** | sbs1 **47.6%** / ytn1 **40.0%** | **기각** (sbs1/ytn1 catastrophic — 5초 창이 EN 인용구와 전환을 구별 불가, switch_language()의 버퍼 클리어가 catastrophic 유발) |
@@ -215,6 +216,43 @@ ytn2 한국어 구간 완전 복구 필요. 잔존 문제:
 - silence가 짧은 구간에서 재감지 미발동
 - 재감지 후 첫 토큰이 영어로 편향되는 현상 (직전 영어 prefix bias)
 방향 탐색: ① silence threshold 추가 조정 ② 재감지 후 컨텍스트 비우기 ③ `lang_id()` 활용한 배치 내 즉시 감지
+
+---
+
+## Exp-098: MIN_DURATION_REAL_SILENCE 1.5초 (기각)
+
+**날짜**: 2026-06-19 / **정책**: SimulStreaming / **결론**: **기각**
+
+### 가설
+
+Exp-094(1.0s) 기각 이후 1.0s~2.0s 사이 어느 값이 안전한지 확인되지 않았다. 1.5s는 두 극단의 중간값으로, ytn1의 sentence-internal pause가 1.0-1.5s 범위에 없다면 1.5s는 안전하고 ytn2의 EN→KO 짧은 전환(1.5-2.0s 범위)을 캐치할 수 있다.
+
+### 변경 내용
+
+**파일**: `worktrees/exp-098-silence-1p5s/whisperlivekit/simul_whisper/backend.py:36`
+```python
+MIN_DURATION_REAL_SILENCE = 1.5  # (기존 2)
+```
+
+브랜치: `phase2/exp-098-silence-1p5s`, commit `c2fbccd`
+
+### 정량 결과 (경로 C, N=3, 2026-06-19 10:26)
+
+| 파일 | R1 WER | R2 WER | R3 WER | median WER | F1 (median) | max WER | stdev |
+|---|---|---|---|---|---|---|---|
+| sbs1 | 20.2% | 19.0% | 16.7% | **19.0%** | **76.2%** | 20.2% | 1.8% |
+| ytn1 | 21.5% | **152.1%** | 22.1% | **22.1%** | **61.5%** | **152.1%** | 75.3% |
+| eng1 | 3.8% | 4.8% | 4.8% | **4.8%** | 0.0% | 4.8% | 0.5% |
+
+- sbs1: max 20.2% ≤ 20.8% ✓ (통과)
+- ytn1: max 152.1% >> 22.7% **catastrophic**
+- eng1: max 4.8% — 허용 범위
+
+### 결론
+
+**기각** — ytn1 max 152.1% catastrophic.
+
+**Direction A 완전 종료**: Exp-094(1.0s) + Exp-098(1.5s) 모두 ytn1 catastrophic. **ytn1에 1.5-2.0s 범위의 sentence-internal pause가 존재**하며, 2.0s 임계값은 이를 거우 피하는 최적점이다. 어떠한 임계값 하향도 ytn1 regression을 피할 수 없다.
 
 ---
 
