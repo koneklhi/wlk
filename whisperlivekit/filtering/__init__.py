@@ -71,3 +71,40 @@ def filter_hallucination(raw_transcript: list) -> list:
             seg[2] = pattern.sub(lambda m: replacements[m.group(0)], seg[2])
 
     return [tuple(seg) for seg in filtered]
+
+
+def filter_segments(segments: list) -> list:
+    """Segment 객체 리스트에 환각 제거 + 단어 교정을 적용한다.
+
+    results_formatter() 에서 get_lines() 직후 호출용.
+    침묵 세그먼트(is_silence())는 그대로 통과시킨다.
+    """
+    if not segments:
+        return segments
+
+    word_manager = get_word_manager()
+    replacements = word_manager.combined_replacements
+    pattern = re.compile("|".join(re.escape(k) for k in replacements.keys())) if replacements else None
+
+    result = []
+    for seg in segments:
+        if not seg.text or seg.is_silence():
+            result.append(seg)
+            continue
+
+        text = seg.text
+        for bad in _HALLUCINATIONS:
+            if bad in text:
+                text = text.replace(bad, "")
+        text = re.sub(r"\s+", " ", text).strip()
+
+        if not text or text in {".", "?"} or set(text) == {"."}:
+            continue  # 빈/구두점-only 세그먼트 제거
+
+        if pattern:
+            text = pattern.sub(lambda m: replacements[m.group(0)], text)
+
+        seg.text = text
+        result.append(seg)
+
+    return result

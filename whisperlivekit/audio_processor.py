@@ -13,6 +13,7 @@ from whisperlivekit.core import (
     online_translation_factory,
 )
 from whisperlivekit.ffmpeg_manager import FFmpegManager, FFmpegState
+from whisperlivekit.filtering import filter_segments
 from whisperlivekit.metrics_collector import SessionMetrics
 from whisperlivekit.silero_vad_iterator import FixedVADIterator, OnnxWrapper, load_jit_vad
 from whisperlivekit.timed_objects import ChangeSpeaker, FrontData, Silence, State
@@ -527,6 +528,7 @@ class AudioProcessor:
                     current_silence=self.current_silence,
                     audio_time=self.total_pcm_samples / self.sample_rate if self.sample_rate else None,
                 )
+                lines = filter_segments(lines)
                 state = await self.get_current_state()
 
                 buffer_transcription_text = state.buffer_transcription.text if state.buffer_transcription else ''
