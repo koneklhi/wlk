@@ -90,3 +90,20 @@ React는 `buffer_transcription`을 마지막 줄에 `"진행중"` 스타일로 �
 | PCM 모드 | — | `--pcm-input` 서버 플래그 활성 시 s16le 16kHz 원시 PCM |
 | WebM 모드 | — | PCM 미활성 시 WebM(Opus) MediaRecorder 청크 |
 | 종료 신호 | REST 호출 | 빈 `ArrayBuffer(0)` 프레임 전송 |
+
+---
+
+## 6. 알려진 제한 사항
+
+### 화자분리 활성 시 finalized/completed 동작
+
+`--diarization` 플래그를 사용할 때 `Segment.finalized`(및 React 호환 별칭 `completed`)는
+현재 항상 `false`로 반환된다. 화자분리 경로(`get_lines_diarization`)에서는 세그먼트 확정 신호가
+별도 구현돼 있지 않기 때문이다.
+
+**영향:**
+- `completed` 필드가 화자분리 모드에서 신뢰할 수 없음
+- LLM 인라인 번역이 화자분리 모드에서 동작하지 않음 (확정 세그먼트 없음)
+
+**해결:** 화자분리 모드와 LLM 번역을 함께 사용하려면 `get_lines_diarization()` 경로에도
+확정 신호 설정이 필요하다 (Phase 5 이후 개선 예정).
