@@ -177,6 +177,8 @@ class TranscriptionEngine:
                     "init_prompt": config.init_prompt,
                     "static_init_prompt": config.static_init_prompt,
                     "max_context_tokens": config.max_context_tokens,
+                    "logprob_threshold": config.logprob_threshold,
+                    "compression_ratio_threshold": config.compression_ratio_threshold,
                 }
 
                 self.tokenizer = None
