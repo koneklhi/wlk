@@ -7,12 +7,14 @@ class TranslatorBase:
         self.endpoint = endpoint
         self.client = httpx.AsyncClient(timeout=None)
 
-    async def connect(self):
-        await self.client.__aenter__()
+    async def connect(self) -> None:
+        """httpx 세션은 생성자에서 이미 준비됨 — 명시적 호출 불필요."""
+        pass
 
-    async def close(self):
-        if self.client and not self.client.is_closed:
-            await self.client.__aexit__(None, None, None)
+    async def close(self) -> None:
+        """httpx 클라이언트 세션 종료."""
+        if not self.client.is_closed:
+            await self.client.aclose()
 
     @staticmethod
     def get_to_lang(language: str) -> str:

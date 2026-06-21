@@ -82,3 +82,19 @@ def test_create_translator_invalid():
     """create_translator('bad', ...) → ValueError"""
     with pytest.raises(ValueError):
         create_translator("bad", "model", "http://localhost:9999")
+
+
+@pytest.mark.anyio
+async def test_connect_is_noop():
+    """connect()는 no-op — 호출해도 예외 없음."""
+    t = LlamaTranslator(model_name="test-model", endpoint="http://localhost:2010")
+    await t.connect()  # 예외 없어야 함
+    assert not t.client.is_closed
+
+
+@pytest.mark.anyio
+async def test_close_terminates_client():
+    """close() 후 client.is_closed == True."""
+    t = OllamaTranslator(model_name="qwen2.5:7b", endpoint="http://localhost:11434")
+    await t.close()
+    assert t.client.is_closed
