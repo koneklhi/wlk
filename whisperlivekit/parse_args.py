@@ -333,6 +333,37 @@ def parse_args():
         help="600M or 1.3B",
     )
 
+    # LLM 번역 인자
+    parser.add_argument(
+        "--llm-translation",
+        action="store_true",
+        default=False,
+        dest="llm_translation",
+        help="LLM 기반 번역 활성화 (llama.cpp 또는 Ollama)",
+    )
+    parser.add_argument(
+        "--translation-serve",
+        type=str,
+        default="ollama",
+        choices=["llama", "ollama"],
+        dest="translation_serve",
+        help="번역 서버 종류: llama(llama.cpp/vLLM) 또는 ollama",
+    )
+    parser.add_argument(
+        "--translation-endpoint",
+        type=str,
+        default="http://localhost:11434",
+        dest="translation_endpoint",
+        help="번역 서버 엔드포인트 URL. 기본값: http://localhost:11434 (Ollama dev)",
+    )
+    parser.add_argument(
+        "--translation-model",
+        type=str,
+        default="qwen2.5:7b",
+        dest="translation_model",
+        help="번역 모델명. 기본값: qwen2.5:7b (dev). prod: gpt-oss-20b",
+    )
+
     args = parser.parse_args()
     args.transcription = not args.no_transcription
     args.vad = not args.no_vad
