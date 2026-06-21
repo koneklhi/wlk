@@ -166,11 +166,13 @@ class Segment(TimedText):
             'start': format_time(self.start),
             'end': format_time(self.end),
             'finalized': self.finalized,
+            'completed': self.finalized,          # React 호환 별칭
         }
         if self.translation:
             _dict['translation'] = self.translation
         if self.detected_language:
             _dict['detected_language'] = self.detected_language
+            _dict['lang'] = self.detected_language    # React 호환 별칭
         return _dict
 
 
