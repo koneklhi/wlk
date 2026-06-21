@@ -669,6 +669,9 @@ class AudioProcessor:
         if self.diarization:
             self.diarization.close()
 
+        if self.llm_translation_manager is not None:
+            await self.llm_translation_manager.translator.close()
+
         # Finalize session metrics
         self.metrics.total_audio_duration_s = self.total_pcm_samples / self.sample_rate
         self.metrics.log_summary()
