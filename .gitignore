@@ -156,3 +156,6 @@ worktrees/
 # 대형 모델 파일 (로컬 저장, git 비추적)
 *.nemo
 whisperlivekit/model/whisper-large-v3/
+
+# Phase 3 필터링 사용자 DB (런타임 자동 생성)
+whisperlivekit/filtering/*.db

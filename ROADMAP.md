@@ -103,7 +103,7 @@ Phase 2 성능 개선 우선순위 (반자율 개선 루프 기준)
 6. 기록: `/log-experiment`로 PHASE2_EXPERIMENTS.md에 결과 기록 (실패 포함) 후 반복
 
 
-Phase 3 — 필터링 / 단어 교정 이식
+Phase 3 — 필터링 / 단어 교정 이식 🔄 진행 중 (2026-06-21)
 목표
 기존 whisperlive의 환각 제거·단어 대치 로직을 현재 whisperlivekit 환경에 맞게 구현해 전사 결과에 적용한다.
 
@@ -116,15 +116,20 @@ Phase 3 — 필터링 / 단어 교정 이식
 
 태스크
 
- 3-1. 환각 제거 로직 이식 [이식]
-→ whisperlive_code/filtering____init__.py 그대로
- 3-2. 단어 대치 로직 이식 [이식]
-→ whisperlive_code/manager.py 그대로
- 3-3. 전사 직후 필터링 → 확정 판단 순서로 파이프라인 연결
- 3-4. 사전 갱신 인터페이스 형태 결정 + 구현 (기존 whisperlive 인터페이스 그대로 이식)
- 3-5. 단어 교정 사전 동적 추가/삭제 기능
- 3-6. 번역 Glossary 이식 (이식만, 동작 검증은 Phase 5에서)
- 3-7. 사전 갱신 즉시 반영 확인 (다음 전사/번역부터 적용)
+ ✅ 3-1. 환각 제거 로직 이식 [이식]
+→ whisperlivekit/filtering/__init__.py (realtime_asr.* import → Path(__file__).parent 기준으로 교체, 로직 동일)
+ ✅ 3-2. 단어 대치 로직 이식 [이식]
+→ whisperlivekit/filtering/manager.py (WordCorrectionManager, 로직 동일)
+ ⏳ 3-3. 전사 직후 필터링 → 확정 판단 순서로 파이프라인 연결
+→ audio_processor.py 연결 미완 — Phase 2 측정 종료 후 진행 예정
+ ✅ 3-4. 사전 갱신 인터페이스 형태 결정 + 구현 (기존 whisperlive 인터페이스 그대로 이식)
+→ WordCorrectionManager.add_user_word / delete_user_word
+ ✅ 3-5. 단어 교정 사전 동적 추가/삭제 기능
+→ SQLite DB 기반 즉시 반영 확인 완료 (pytest 18케이스)
+ ⏳ 3-6. 번역 Glossary 이식 (이식만, 동작 검증은 Phase 5에서)
+→ prompt_manager.py 이식 예정 (Phase 5와 함께)
+ ✅ 3-7. 사전 갱신 즉시 반영 확인 (다음 전사/번역부터 적용)
+→ 단어 교정 측 확인 완료 / 번역 측은 3-6 완료 후
 
 완료 기준
 
