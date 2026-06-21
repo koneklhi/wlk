@@ -113,6 +113,7 @@ def start_server(
     lan: str = "auto",
     diarization: bool = False,
     sortformer_model: str = "",
+    extra_server_args: list = None,
 ) -> subprocess.Popen:
     cmd = [
         sys.executable, "-m", "whisperlivekit.basic_server",
@@ -129,6 +130,8 @@ def start_server(
         cmd.extend(["--diarization", "--diarization-backend", "sortformer"])
         if sortformer_model:
             cmd.extend(["--sortformer-model", sortformer_model])
+    if extra_server_args:
+        cmd.extend(extra_server_args)
     return subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
@@ -303,10 +306,30 @@ def main() -> None:
         default="",
         help="Sortformer 모델 경로. 비어 있으면 HF 기본값 사용 (폐쇄망: 로컬 .nemo 경로 지정).",
     )
+    parser.add_argument(
+        "--logprob-threshold",
+        type=float,
+        default=None,
+        dest="logprob_threshold",
+        help="avg-logprob 품질 게이트 임계값 (예: -1.0). None=비활성.",
+    )
+    parser.add_argument(
+        "--compression-ratio-threshold",
+        type=float,
+        default=None,
+        dest="compression_ratio_threshold",
+        help="compression-ratio 품질 게이트 임계값 (예: 2.4). None=비활성.",
+    )
     args = parser.parse_args()
 
     paths = [p.strip().upper() for p in args.paths.split(",")]
     base_url = f"http://localhost:{SERVER_PORT}"
+
+    extra_server_args = []
+    if args.logprob_threshold is not None:
+        extra_server_args.extend(["--logprob-threshold", str(args.logprob_threshold)])
+    if args.compression_ratio_threshold is not None:
+        extra_server_args.extend(["--compression-ratio-threshold", str(args.compression_ratio_threshold)])
 
     for f in args.files:
         if not f.exists():
@@ -325,7 +348,7 @@ def main() -> None:
         print(f"\n[eval] 경로 A 테스트 시작 (파일별 서버 재시작)...")
         for audio_path in args.files:
             print(f"[eval] 경로 A 서버 기동 중 (포트 {SERVER_PORT})...")
-            proc = start_server(args.model_dir, pcm_input=True, port=SERVER_PORT, warmup=warmup, lan=args.lan, diarization=args.diarization, sortformer_model=args.sortformer_model)
+            proc = start_server(args.model_dir, pcm_input=True, port=SERVER_PORT, warmup=warmup, lan=args.lan, diarization=args.diarization, sortformer_model=args.sortformer_model, extra_server_args=extra_server_args)
             try:
                 if not wait_for_ready(base_url, proc):
                     print("[오류] 서버 ready 대기 시간 초과", file=sys.stderr)
@@ -354,7 +377,7 @@ def main() -> None:
                     for rep in range(args.repeat):
                         rep_label = f"회차 {rep + 1}/{args.repeat}" if args.repeat > 1 else ""
                         print(f"[eval] 경로 C 서버 기동 중 (포트 {SERVER_PORT}) {rep_label}...")
-                        proc = start_server(args.model_dir, pcm_input=False, port=SERVER_PORT, warmup=warmup, lan=args.lan, diarization=args.diarization, sortformer_model=args.sortformer_model)
+                        proc = start_server(args.model_dir, pcm_input=False, port=SERVER_PORT, warmup=warmup, lan=args.lan, diarization=args.diarization, sortformer_model=args.sortformer_model, extra_server_args=extra_server_args)
                         try:
                             if not wait_for_ready(base_url, proc):
                                 print("[오류] 서버 ready 대기 시간 초과", file=sys.stderr)

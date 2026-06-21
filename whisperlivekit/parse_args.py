@@ -319,6 +319,22 @@ def parse_args():
     )
 
     simulstreaming_group.add_argument(
+        "--logprob-threshold",
+        type=float,
+        default=None,
+        dest="logprob_threshold",
+        help="avg-logprob 품질 게이트 임계값 (예: -1.0). 낮은 신뢰도 세그먼트 억제. None=비활성.",
+    )
+
+    simulstreaming_group.add_argument(
+        "--compression-ratio-threshold",
+        type=float,
+        default=None,
+        dest="compression_ratio_threshold",
+        help="compression-ratio 품질 게이트 임계값 (예: 2.4). 반복 세그먼트 억제. None=비활성.",
+    )
+
+    simulstreaming_group.add_argument(
         "--model-path",
         type=str,
         default=None,

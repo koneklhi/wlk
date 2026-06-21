@@ -112,8 +112,10 @@ class SimulStreamingOnlineProcessor:
         """Handle speaker change event."""
         self.process_iter(is_last=True)
         self.model.refresh_segment(complete=True)
-        self.model.state.detected_language = None   # 화자전환=언어전환 → 언어 재감지
-        self.model.state.first_timestamp = None     # 재감지 조건 충족
+        # silence detection 과 동일하게 언어 재감지 허용:
+        # first_timestamp=None → _detect_language_if_needed 에서 segments_len() 기준으로 2초 후 재감지
+        self.model.state.detected_language = None
+        self.model.state.first_timestamp = None
         self.model.speaker = change_speaker.speaker
         self.model.global_time_offset = change_speaker.start
         self._last_emitted_word = None
@@ -339,6 +341,8 @@ class SimulStreamingASR:
                 init_prompt=self.init_prompt,
                 max_context_tokens=self.max_context_tokens,
                 static_init_prompt=self.static_init_prompt,
+                logprob_threshold=self.logprob_threshold,
+                compression_ratio_threshold=self.compression_ratio_threshold,
         )
 
         # Set up tokenizer for translation if needed

@@ -144,9 +144,12 @@ class AlignAttBase(ABC):
         if (
             self.cfg.language == "auto"
             and self.state.detected_language is None
-            and self.state.first_timestamp
         ):
-            seconds_since_start = self.segments_len() - self.state.first_timestamp
+            if self.state.first_timestamp:
+                seconds_since_start = self.segments_len() - self.state.first_timestamp
+            else:
+                # first_timestamp가 없으면(ChangeSpeaker/silence 후 리셋) 오디오 누적량 자체를 기준으로
+                seconds_since_start = self.segments_len()
             if seconds_since_start >= 2.0:
                 language_tokens, language_probs = self.lang_id(encoder_feature)
                 top_lan, p = max(language_probs[0].items(), key=lambda x: x[1])
@@ -287,6 +290,12 @@ class AlignAttBase(ABC):
         new_hypothesis, split_words, split_tokens = self._split_tokens(
             tokens_to_split, fire_detected, is_last
         )
+
+        num_generated = max(0, current_tokens.shape[1] - token_len_before)
+        if not is_last and self._quality_gate(new_hypothesis, sum_logprobs, num_generated):
+            self._on_quality_suppressed()
+            return []
+        self.state.quality_suppress_streak = 0
 
         new_tokens_tensor = self._make_new_tokens_tensor(new_hypothesis)
         self.state.tokens.append(new_tokens_tensor)
@@ -439,6 +448,40 @@ class AlignAttBase(ABC):
 
         return logits
 
+    def _quality_gate(self, hypothesis, sum_logprobs, num_generated):
+        """avg-logprob 또는 compression-ratio 기준으로 저품질 세그먼트 억제."""
+        lp_thr = self.cfg.logprob_threshold
+        cr_thr = self.cfg.compression_ratio_threshold
+        if lp_thr is None and cr_thr is None:
+            return False
+        if not hypothesis:
+            return False
+        if lp_thr is not None and num_generated > 0:
+            avg_lp = self._sum_logprobs_value(sum_logprobs) / num_generated
+            if avg_lp < lp_thr:
+                logger.warning("[QualityGate] avg_logprob %.3f < %.3f — suppressing", avg_lp, lp_thr)
+                return True
+        if cr_thr is not None:
+            from whisperlivekit.whisper.utils import compression_ratio
+            text = self.tokenizer.decode(hypothesis).strip()
+            if text:
+                cr = compression_ratio(text)
+                if cr > cr_thr:
+                    logger.warning("[QualityGate] compression_ratio %.2f > %.2f — suppressing: %.60s", cr, cr_thr, text)
+                    return True
+        return False
+
+    def _on_quality_suppressed(self):
+        """품질 게이트 억제 처리 — 연속 N회 억제 시 context refresh."""
+        self._clean_cache()
+        streak = getattr(self.state, "quality_suppress_streak", 0) + 1
+        self.state.quality_suppress_streak = streak
+        reset_after = self.cfg.quality_gate_reset_after
+        if reset_after and streak >= reset_after:
+            logger.warning("[QualityGate] %d consecutive suppressions — refresh_segment", streak)
+            self.refresh_segment(complete=True)
+            self.state.quality_suppress_streak = 0
+
     # === Abstract methods — subclass must implement ===
 
     @abstractmethod
@@ -489,6 +532,11 @@ class AlignAttBase(ABC):
     @abstractmethod
     def _init_sum_logprobs(self):
         """Create zero sum_logprobs tensor for beam search."""
+        ...
+
+    @abstractmethod
+    def _sum_logprobs_value(self, sum_logprobs):
+        """Extract scalar float from sum_logprobs for avg-logprob quality gate."""
         ...
 
     @abstractmethod
