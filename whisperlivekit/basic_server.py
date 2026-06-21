@@ -6,8 +6,10 @@ from typing import List, Optional
 from fastapi import FastAPI, File, Form, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
+from pydantic import BaseModel
 
 from whisperlivekit import AudioProcessor, TranscriptionEngine, get_inline_ui_html, parse_args
+from whisperlivekit.filtering import get_word_manager
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logging.getLogger().setLevel(logging.WARNING)
@@ -17,6 +19,12 @@ logging.getLogger("whisperlivekit.qwen3_asr").setLevel(logging.DEBUG)
 
 config = parse_args()
 transcription_engine = None
+
+
+class CorrectionUpdate(BaseModel):
+    wrong_word: str
+    correct_word: str
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -331,6 +339,33 @@ async def list_models():
             "owned_by": "whisperlivekit",
         }],
     })
+
+
+# ---------------------------------------------------------------------------
+# Word Correction Management REST API  (/api/corrections)
+# ---------------------------------------------------------------------------
+
+@app.get("/api/corrections")
+async def get_corrections():
+    """사용자 단어 교정 사전 조회."""
+    word_manager = get_word_manager()
+    return word_manager.user_replacements
+
+
+@app.post("/api/corrections")
+async def add_correction(update: CorrectionUpdate):
+    """단어 교정 추가. 즉시 반영."""
+    word_manager = get_word_manager()
+    word_manager.add_user_word(update.wrong_word, update.correct_word)
+    return {"status": "success"}
+
+
+@app.delete("/api/corrections/{wrong_word}")
+async def delete_correction(wrong_word: str):
+    """단어 교정 삭제. 즉시 반영."""
+    word_manager = get_word_manager()
+    word_manager.delete_user_word(wrong_word)
+    return {"status": "success"}
 
 
 def main():
