@@ -14,6 +14,8 @@ from whisperlivekit.core import (
 )
 from whisperlivekit.ffmpeg_manager import FFmpegManager, FFmpegState
 from whisperlivekit.filtering import filter_segments
+from whisperlivekit.llm_translation.manager import TranslationManager
+from whisperlivekit.llm_translation.translator import create_translator
 from whisperlivekit.metrics_collector import SessionMetrics
 from whisperlivekit.silero_vad_iterator import FixedVADIterator, OnnxWrapper, load_jit_vad
 from whisperlivekit.timed_objects import ChangeSpeaker, FrontData, Silence, State
@@ -137,6 +139,15 @@ class AudioProcessor:
             self.diarization = online_diarization_factory(self.args, models.diarization_model)
         if models.translation_model:
             self.translation = online_translation_factory(self.args, models.translation_model)
+
+        self.llm_translation_manager: Optional[TranslationManager] = None
+        if getattr(self.args, "llm_translation", False):
+            _translator = create_translator(
+                serve=self.args.translation_serve,
+                model_name=self.args.translation_model,
+                endpoint=self.args.translation_endpoint,
+            )
+            self.llm_translation_manager = TranslationManager(_translator)
 
     async def _push_silence_event(self) -> None:
         if self.transcription_queue:
@@ -529,6 +540,8 @@ class AudioProcessor:
                     audio_time=self.total_pcm_samples / self.sample_rate if self.sample_rate else None,
                 )
                 lines = filter_segments(lines)
+                if self.llm_translation_manager is not None:
+                    self.llm_translation_manager.apply_translations(lines)
                 state = await self.get_current_state()
 
                 buffer_transcription_text = state.buffer_transcription.text if state.buffer_transcription else ''
