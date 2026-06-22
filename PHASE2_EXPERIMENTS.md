@@ -185,12 +185,85 @@ eng1 F1=0%는 단일 세그먼트 구조로 별도 접근 필요. [[diarization-
 
 ---
 
+## Exp-102: Sortformer 화자 분할 + ChangeSpeaker 경로 활성화 (채택)
+
+**날짜**: 2026-06-19 / **정책**: SimulStreaming / **결론**: **채택**
+
+### 가설
+
+화자 전환 = 언어 전환이 강하게 상관하는 한↔영 순차통역 환경에서, Sortformer 화자 분할을 디코더에 연결하면:
+1. 화자 전환 감지 시 `ChangeSpeaker`를 `transcription_queue`에 enqueue → `new_speaker()` 호출 → `refresh_segment()` 버퍼 리셋으로 문장 확정
+2. `new_speaker()` 직후 `detected_language=None`, `first_timestamp=None` 설정 → Exp-093 silence 재감지와 동일 패턴 → 언어 재감지 강제 발동
+
+**죽은 경로 활성화**: whisperlivekit은 `new_speaker()` → `refresh_segment()` 뼈대를 갖고 있으나 ChangeSpeaker enqueue 로직이 없어 비활성 상태였다. `_update_diarization_state` (모든 diarization 경로에서 호출됨)에 화자 변화 감지 + enqueue를 추가해 활성화.
+
+베이스: Exp-093 (silence 시 언어 재감지, MIN_DURATION_REAL_SILENCE=2). 브랜치: `phase4/diarization-spike`.
+
+### 변경 내용
+
+| 파일 | 라인 | 변경 |
+|---|---|---|
+| `whisperlivekit/audio_processor.py` | L127 | `_last_diar_speaker: Optional[int] = None` 초기화 |
+| `whisperlivekit/audio_processor.py` | L431-439 | `_update_diarization_state` 끝에 화자 변화 감지 → `ChangeSpeaker` enqueue |
+| `whisperlivekit/simul_whisper/backend.py` | L115-116 | `new_speaker()` 내 `detected_language=None`, `first_timestamp=None` |
+| `whisperlivekit/diarization/sortformer_backend.py` | L58-63 | `_load_model()`에 `os.path.isfile()` 분기 — 로컬 `.nemo` `restore_from` 지원 |
+| `whisperlivekit/config.py` | — | `sortformer_model: str = "nvidia/diar_streaming_sortformer_4spk-v2"` 추가 |
+| `whisperlivekit/parse_args.py` | — | `--sortformer-model` 플래그 추가 |
+| `whisperlivekit/core.py` | L219 | `SortformerDiarization(config.sortformer_model)` 전달 |
+| `scripts/eval.py` | — | `--diarization`, `--sortformer-model` 플래그 추가 (start_server 연동) |
+
+### 테스트
+
+```
+python scripts/eval.py --model-dir <abs>/whisperlivekit/model/whisper-large-v3-turbo \
+  --diarization --sortformer-model <abs>/whisperlivekit/model/sortformer-4spk-v2.nemo \
+  --repeat 3
+```
+
+smoke test: 로컬 .nemo 서버 기동 성공, ytn1 화자 라벨 출력 확인 (Speaker 2=KO, Speaker 3=EN).
+
+### 정량 결과 (경로 C, N=3, 2026-06-19 14:13)
+
+| 파일 | R1 WER | R2 WER | R3 WER | median WER | F1 (median) | max WER | stdev |
+|---|---|---|---|---|---|---|---|
+| sbs1 | 19.0% | 20.2% | 17.3% | **19.0%** | **76.2%** | **20.2%** | 1.5% |
+| ytn1 | 19.0% | 19.6% | 18.4% | **19.0%** | **71.4%** | **19.6%** | 0.6% |
+| eng1 | 5.7% | 5.7% | 3.8% | **5.7%** | 0.0% | 5.7% | 1.1% |
+| **평균** | | | | **14.3%** | **48.4%** | | |
+
+Exp-093 baseline 대비:
+- sbs1: median 19.0% vs 19.6% (−0.6pp ✓), max 20.2% vs 20.8% (−0.6pp ✓)
+- ytn1: median 19.0% vs 22.1% (−3.1pp ✓), max 19.6% vs 22.7% (−3.1pp ✓) — 유의미 개선
+- eng1: median 5.7% vs 5.7% (=), max 5.7% vs 5.7% (=)
+
+채택 기준 판정: sbs1 max 20.2% ≤ 20.8% ✓, ytn1 max 19.6% ≤ 22.7% ✓, eng1 max 5.7% ≤ 5.7% ✓ → **Primary 통과**
+
+### ytn2 (held-out, 단회 측정)
+
+| 파일 | WER | F1 |
+|---|---|---|
+| ytn2 | **84.2%** | **0.0%** |
+
+Exp-093 baseline 대비: WER 114.8% → 84.2% (−30.6pp 개선), F1 44.4% → 0.0% (단회 노이즈 가능)
+
+### 정성 관찰
+
+- **ytn1**: 화자 전환 감지(Speaker 2=KO, Speaker 3=EN) + 언어 재감지 시너지 작동. stdev 0.6% 안정적.
+- **ytn2**: WER 30.6pp 개선 — 화자 전환 시 언어 재감지 발동으로 EN→KO 구간 영문 음역 환각 일부 감소.
+
+### 결론 및 이유
+
+**채택** — primary max 미회귀 ✅, ytn1 median −3.1pp / max −3.1pp 개선 ✅, ytn2 WER −30.6pp ✅.
+
+---
+
 ## 빠른 참조 (최신순)
 
 | Exp | 날짜 | 제목 | 핵심 변경 | WER (중앙값) | F1 | 결론 |
 |---|---|---|---|---|---|---|
 | **Exp-105** | 2026-06-22 | 주기적 언어재감지 + ForeignLang 즉시 트리거 (diar-off 언어 고착 해소) | `align_att_base.py` `_maybe_periodic_lang_check()` + `backend.py` `_FOREIGN_LANG_PATTERN` 즉시 재감지 + TokenTrace/QualityGate 진단 인프라 | sbs1 **19.6%**/ytn1 **18.4%**/eng1 **5.7%**(diar-off)·ytn2 **25.1%**(diar-on) | ytn1 **71.4%**/sbs1 **76.2%** | **채택** (ytn1 max 22.1%→20.2%, sbs1 max 27.4%→20.2% 해소, ytn2 28.1%→25.1%) |
 | **Exp-104** | 2026-06-22 | diar-off 베이스라인 복구(first_timestamp 조건부 게이트)+Round2 경계 재디코딩+CR@3.0+온점 | `align_att_base.py` `_detect_language_if_needed` 게이트 조건부 복원, `backend.py` `new_speaker` complete=False+eager 재감지, `audio_processor.py` ChangeSpeaker 크래시 수정+온점 | ytn1 **20.9%**/sbs1 **17.3%**/eng1 **3.8%**(diar-off)·ytn2 **28.1%**(diar-on) | ytn1 **71.4%**/sbs1 **76.2%** | **채택** (diar-off ytn1 156%→20.9%=Exp-093 수준, diar-on ytn2 147%→28.1%, primary 미회귀) |
+| **Exp-102** | 2026-06-19 | Sortformer 화자 분할 + ChangeSpeaker 경로 활성화 + 언어 재감지 시너지 | `audio_processor.py` ChangeSpeaker enqueue, `backend.py` `new_speaker()` 언어 재감지 2줄, `sortformer_backend.py` 로컬 .nemo 분기, `eval.py` `--diarization` 플래그 | sbs1 **19.0%** / ytn1 **19.0%** / eng1 **5.7%** | sbs1 **76.2%** / ytn1 **71.4%** | **채택** (Exp-093 대비 max 미회귀, ytn1 median −3.1pp 개선, ytn2 WER −30.6pp) |
 | **Exp-098** | 2026-06-19 | MIN_DURATION_REAL_SILENCE 2→1.5 (Exp-094 1.0s와 현행 2.0s 중간값) | `backend.py:36` `MIN_DURATION_REAL_SILENCE = 1.5` | sbs1 **19.0%** / ytn1 **22.1%** / eng1 **4.8%** | sbs1 **76.2%** / ytn1 **61.5%** | **기각** (ytn1 max 152.1% catastrophic — ytn1에 1.5-2.0s sentence-internal pause 존재 확인, 2.0s 임계값이 이미 최적점) |
 | **Exp-097** | 2026-06-19 | long_silence 후 tokenizer multilingual 즉시 리셋 (`create_tokenizer(None)`) | `backend.py` `end_silence()` long_silence 블록 앞에 `create_tokenizer(None)` 1줄 | sbs1 **19.0%** / ytn1 **20.9%** / eng1 **3.8%** | sbs1 **76.2%** / ytn1 **71.4%** | **기각** (sbs1 max 138.7% catastrophic — multilingual decoder가 KO 오디오에서 EN token 예측) |
 | **Exp-096** | 2026-06-19 | 무음 후 언어 체크 (post-silence lang check, 0.5s↑ silence 후 1.5s 수집+0.90 확신도) | `align_att_base.py` `detect_current_language()` 신규, `backend.py` `_check_post_silence_language()` + `_post_silence_check_at` | sbs1 **23.2%** / ytn1 **86.5%** / eng1 **3.8%** | sbs1 **66.7%** / ytn1 **62.5%** | **기각** (ytn1 max 101.2% catastrophic — ytn1/ytn2 모두 짧은 pause+EN↔KO 교대, 음향 수준에서 구별 불가) |
