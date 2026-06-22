@@ -50,6 +50,43 @@ STT 성능 개선 과정에서 수행한 실험을 기록한다.
 
 ---
 
+## Exp-104 (phase4/diarization-spike 채택 — 2026-06-22)
+
+**diar-off 베이스라인 복구 + Round 2 경계 재디코딩 + CR@3.0 백스톱 + 문장 온점**
+
+정책: simulstreaming. 브랜치 `phase4/diarization-spike` (commit `7167493` + `7a05842`).
+
+**가설**: diarization-spike 브랜치가 eager 재감지를 위해 `_detect_language_if_needed`의 `first_timestamp`
+게이트를 제거했는데, 이것이 diar-off 경로에서 침묵(`end_silence`)마다 `_apply_detected_language`
+(`last_attend_frame` 리셋)를 너무 일찍 발동시켜 디코더가 옛 오디오를 재attend → 같은 구절 2~3회
+재방출(ytn1 156%, max 330%, stdev 117%). diar-on(ytn2)만 측정해와 미발견(2026-06-22 primary 회귀검사에서 발견).
+
+**변경**:
+- `align_att_base.py` `_detect_language_if_needed` — first_timestamp 게이트 조건부 복원:
+  `elif eager_lang_detect`(diar-on만 `segments_len()` 기준) / `else: return`(diar-off silence는 first_timestamp까지 보류).
+- `backend.py` `new_speaker` — `process_iter(is_last=True)` flush 생략 + `refresh_segment(complete=False)`(경계 오디오 유지) + `buffer=[]` + `detect_current_language(1.5,0.85)` 즉시 재감지 (Round 2).
+- `align_att_base.py` `detect_current_language` — `_concat_segments()`를 최근 window_secs로 슬라이싱(경계에서 옛 화자 오디오 배제).
+- `audio_processor.py` `get_all_from_queue` — ChangeSpeaker early-return/break(numpy concat 크래시 수정 → new_speaker 실제 호출).
+- `audio_processor.py` `results_formatter` + `backend.py` LeadingPunctFilter — Round 4 문장 온점(확정 세그먼트 폴백 + 진짜 온점 보존). WER 무영향(`normalize_text` 구두점 제거).
+- CR@3.0 백스톱: 런타임 `--compression-ratio-threshold 3.0`(언어무관 반복 게이트). avg-logprob 게이트는 **기각**(정상 한국어 삭제, ytn2 28→46% 악화).
+
+**테스트**: 경로 C N=3. ytn2 `--diarization --sortformer-model <sortformer-4spk-v2.nemo> --compression-ratio-threshold 3.0`, primary diar-off + CR@3.0.
+
+| 파일 | 설정 | WER median | max | stdev | F1 | vs Exp-093 |
+|---|---|---|---|---|---|---|
+| ytn1 | diar-off | **20.9%** | 22.1% | 1.2% | 71.4% | ≈22.1% (복구) |
+| sbs1 | diar-off | **17.3%** | 27.4% | 6.6% | 76.2% | 개선(19.6%) |
+| eng1 | diar-off | **3.8%** | 6.7% | 1.6% | 0.0% | ≈ |
+| ytn2 | diar-on | **28.1%** | 28.1% | 2.6% | 31.6% | 원본 147%→ |
+
+**정성**: diar-off ytn1 반복 폭주("I want to first thank..." ×3) 완전 제거. ytn2 경계 한국어 음역 cascade("(speaking in foreign language)") 제거. 환각 폭주는 ChangeSpeaker 크래시 수정으로 이미 해소. 확정 문장 끝 온점 표시.
+
+**결론**: **채택**. diar-off 베이스라인 복구(156%→20.9% = Exp-093 수준) + diar-on ytn2 개선(147%→28.1%) + primary 미회귀.
+
+**주의/다음 가설**: sbs1 max 27.4%(1회)는 측정 당시 오디오 환경 불안정(VBCable 루프백 간헐 사망) 추정 — watch item, 안정화 후 재측정 권장. ytn2 추가 하락(<20%)은 Round 3(언어확률 독립 감지) 또는 Sortformer 과분할 완화. [[diarization-spike-first-timestamp-regression]] [[vbcable-loopback-instability]]
+
+---
+
 ## 구 채택 베이스라인 (Exp-080 — 공식 N≥3 수치 2026-06-08)
 
 **vac=0.2 + max_context=0 + VAD 0.3 + MIN_SILENCE=0.4 (beam_size=2, --lan auto)**
@@ -84,6 +121,7 @@ STT 성능 개선 과정에서 수행한 실험을 기록한다.
 
 | Exp | 날짜 | 제목 | 핵심 변경 | WER (중앙값) | F1 | 결론 |
 |---|---|---|---|---|---|---|
+| **Exp-104** | 2026-06-22 | diar-off 베이스라인 복구(first_timestamp 조건부 게이트)+Round2 경계 재디코딩+CR@3.0+온점 | `align_att_base.py` `_detect_language_if_needed` 게이트 조건부 복원, `backend.py` `new_speaker` complete=False+eager 재감지, `audio_processor.py` ChangeSpeaker 크래시 수정+온점 | ytn1 **20.9%**/sbs1 **17.3%**/eng1 **3.8%**(diar-off)·ytn2 **28.1%**(diar-on) | ytn1 **71.4%**/sbs1 **76.2%** | **채택** (diar-off ytn1 156%→20.9%=Exp-093 수준, diar-on ytn2 147%→28.1%, primary 미회귀) |
 | **Exp-098** | 2026-06-19 | MIN_DURATION_REAL_SILENCE 2→1.5 (Exp-094 1.0s와 현행 2.0s 중간값) | `backend.py:36` `MIN_DURATION_REAL_SILENCE = 1.5` | sbs1 **19.0%** / ytn1 **22.1%** / eng1 **4.8%** | sbs1 **76.2%** / ytn1 **61.5%** | **기각** (ytn1 max 152.1% catastrophic — ytn1에 1.5-2.0s sentence-internal pause 존재 확인, 2.0s 임계값이 이미 최적점) |
 | **Exp-097** | 2026-06-19 | long_silence 후 tokenizer multilingual 즉시 리셋 (`create_tokenizer(None)`) | `backend.py` `end_silence()` long_silence 블록 앞에 `create_tokenizer(None)` 1줄 | sbs1 **19.0%** / ytn1 **20.9%** / eng1 **3.8%** | sbs1 **76.2%** / ytn1 **71.4%** | **기각** (sbs1 max 138.7% catastrophic — multilingual decoder가 KO 오디오에서 EN token 예측) |
 | **Exp-096** | 2026-06-19 | 무음 후 언어 체크 (post-silence lang check, 0.5s↑ silence 후 1.5s 수집+0.90 확신도) | `align_att_base.py` `detect_current_language()` 신규, `backend.py` `_check_post_silence_language()` + `_post_silence_check_at` | sbs1 **23.2%** / ytn1 **86.5%** / eng1 **3.8%** | sbs1 **66.7%** / ytn1 **62.5%** | **기각** (ytn1 max 101.2% catastrophic — ytn1/ytn2 모두 짧은 pause+EN↔KO 교대, 음향 수준에서 구별 불가) |
