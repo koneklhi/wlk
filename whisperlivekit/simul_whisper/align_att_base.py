@@ -140,6 +140,41 @@ class AlignAttBase(ABC):
 
     # === Language detection ===
 
+    def _apply_detected_language(self, lang: str):
+        """Switch tokenizer to lang and reset decoder state. Shared by normal and eager detection."""
+        self.create_tokenizer(lang)
+        self.state.last_attend_frame = -self.cfg.rewind_threshold
+        self.state.cumulative_time_offset = 0.0
+        self.init_tokens()
+        self.init_context()
+        self.state.detected_language = lang
+        logger.info("[EagerLang] applied tokenizer for: %s", lang)
+
+    def detect_current_language(self, window_secs: float = 1.5, min_prob: float = 0.85):
+        """Detect language from current audio buffer without waiting for 2s gate.
+
+        Called at speaker-change boundary (before refresh_segment) so the buffer
+        still contains audio that may include the new speaker's voice.
+        Returns language string if confident (>= min_prob), else None.
+        """
+        if not self.state.segments:
+            return None
+        try:
+            input_audio = self._concat_segments()
+            # 최근 window_secs 만 사용 — 경계에서 옛 화자 오디오에 휘둘리지 않도록
+            max_samples = int(window_secs * 16000)
+            if input_audio.shape[0] > max_samples:
+                input_audio = input_audio[-max_samples:]
+            encoder_feature, _ = self._encode(input_audio)
+            _, language_probs = self.lang_id(encoder_feature)
+            top_lan, p = max(language_probs[0].items(), key=lambda x: x[1])
+            logger.info("[EagerLang] candidate %s p=%.4f (min_prob=%.2f)", top_lan, p, min_prob)
+            if p >= min_prob:
+                return top_lan
+        except Exception as e:
+            logger.warning("[EagerLang] detection failed: %s", e)
+        return None
+
     def _detect_language_if_needed(self, encoder_feature):
         if (
             self.cfg.language == "auto"
@@ -147,20 +182,26 @@ class AlignAttBase(ABC):
         ):
             if self.state.first_timestamp:
                 seconds_since_start = self.segments_len() - self.state.first_timestamp
-            else:
-                # first_timestamp가 없으면(ChangeSpeaker/silence 후 리셋) 오디오 누적량 자체를 기준으로
+            elif self.state.eager_lang_detect:
+                # eager(화자전환) 경로만 first_timestamp 없이 오디오 누적량 기준으로 빠르게 감지
                 seconds_since_start = self.segments_len()
-            if seconds_since_start >= 2.0:
+            else:
+                # diar-off silence 경로: first_timestamp 설정 전엔 감지 보류 (Exp-093 안정 동작 — 잦은 _apply_detected_language 리셋으로 인한 반복 폭주 방지)
+                return
+            # 화자전환 직후엔 1.5s+확신도≥0.85로 빠른 감지 — 잘못된 언어 고착 방지
+            threshold = 1.5 if self.state.eager_lang_detect else 2.0
+            if seconds_since_start >= threshold:
                 language_tokens, language_probs = self.lang_id(encoder_feature)
                 top_lan, p = max(language_probs[0].items(), key=lambda x: x[1])
                 logger.info(f"Detected language: {top_lan} with p={p:.4f}")
-                self.create_tokenizer(top_lan)
-                self.state.last_attend_frame = -self.cfg.rewind_threshold
-                self.state.cumulative_time_offset = 0.0
-                self.init_tokens()
-                self.init_context()
-                self.state.detected_language = top_lan
-                logger.info(f"Tokenizer language: {self.tokenizer.language}")
+                # eager 모드: 1.5s~2.0s 사이에서 p>=0.85 일 때만 조기 적용
+                # 2.0s 이후엔 확신도 무관 적용(기존 동작 보존)
+                if self.state.eager_lang_detect and p < 0.85 and seconds_since_start < 2.0:
+                    logger.info("[EagerLang] p=%.4f < 0.85 at %.1fs, waiting for 2.0s gate", p, seconds_since_start)
+                else:
+                    self._apply_detected_language(top_lan)
+                    self.state.eager_lang_detect = False
+                    logger.info(f"Tokenizer language: {self.tokenizer.language}")
 
     # === Template infer() ===
 

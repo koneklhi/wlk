@@ -109,13 +109,23 @@ class SimulStreamingOnlineProcessor:
             self.model.insert_audio(audio_tensor)
 
     def new_speaker(self, change_speaker: ChangeSpeaker):
-        """Handle speaker change event."""
-        self.process_iter(is_last=True)
-        self.model.refresh_segment(complete=True)
-        # silence detection 과 동일하게 언어 재감지 허용:
-        # first_timestamp=None → _detect_language_if_needed 에서 segments_len() 기준으로 2초 후 재감지
+        """Handle speaker change event.
+
+        경계 재디코딩: held 음역을 final 확정하지 않고(flush 생략), 최근 오디오(경계 구간)를
+        complete=False 로 유지해 새 화자 언어로 재디코딩한다. refresh 전에 최근 1.5s 윈도우로
+        언어를 즉시 재감지하고, 성공 시 refresh 후 토크나이저를 교정한다(실패 시 None → 기존 2.0s 폴백).
+        """
+        # 1. refresh 전 버퍼로 새 화자 언어 즉시 감지 (경계 오디오가 아직 버퍼에 있음)
+        eager = self.model.detect_current_language(window_secs=1.5, min_prob=0.85)
+        # 2. flush 생략 + 경계 오디오 유지(complete=False) + 미확정 음역 폐기
+        self.model.refresh_segment(complete=False)
+        self.buffer = []
         self.model.state.detected_language = None
         self.model.state.first_timestamp = None
+        self.model.state.eager_lang_detect = True
+        # 3. 감지 성공 시 토크나이저 즉시 교정 (refresh 후 적용)
+        if eager:
+            self.model._apply_detected_language(eager)
         self.model.speaker = change_speaker.speaker
         self.model.global_time_offset = change_speaker.start
         self._last_emitted_word = None
@@ -169,9 +179,13 @@ class SimulStreamingOnlineProcessor:
         prev = self._last_emitted_word
 
         _LEADING_PUNCT = frozenset([".", "。", "!", "?", "！", "？"])
-        while tokens and self._normalize(tokens[0].text) in _LEADING_PUNCT:
-            logger.debug("[LeadingPunctFilter] 배치 선두 구두점 제거: %r", tokens[0].text)
-            tokens = tokens[1:]
+        # 직전 방출 단어가 이미 문장종료 구두점으로 끝난 진짜 중복일 때만 선두 구두점 제거.
+        # 아니면 보존 — 직전 단어의 문장끝 온점을 살린다(UI 표시용).
+        prev_ends_punct = bool(self._last_emitted_word) and self._last_emitted_word.rstrip()[-1:] in _LEADING_PUNCT
+        if prev_ends_punct:
+            while tokens and self._normalize(tokens[0].text) in _LEADING_PUNCT:
+                logger.debug("[LeadingPunctFilter] 중복 선두 구두점 제거: %r", tokens[0].text)
+                tokens = tokens[1:]
 
         for token in tokens:
             word = self._normalize(token.text)
