@@ -138,29 +138,65 @@ Phase 3 — 필터링 / 단어 교정 이식 🔄 진행 중 (2026-06-21, 3-3 �
 운용 중 사전 수정 후 다음 발화부터 즉시 반영됨 (갱신 직후 도착하는 첫 발화에 반영)
 
 
-Phase 4 — React UI 연결 + 번역 파이프라인 통합
+Phase 4 — React UI 연결 + 번역 파이프라인 통합 🔄 백엔드 완료 (2026-06-22, 4-7 React 연결 대기)
 목표
-기존 whisperlive React UI를 코드 수정 없이 연결하고,
+whisperlivekit 백엔드와 기존 whisperlive React UI를 연결하고,
 번역(llama) 파이프라인까지 묶어 전체 흐름을 통합한다.
+
+스키마 방침
+기존 whisperlive 스키마({text, start, end, completed, lang, …})를 기준으로,
+whisperlivekit 출력 구조와의 차이로 인해 불가피한 부분만 최소 변경한다.
+React UI 수정은 이 최소 변경 범위 내에서 허용한다.
+변경된 사항은 기존 스키마 대비 변경점으로 명세화해 프론트엔드 개발자에게 인계한다.
+
+배경: 기존 whisperlive는 React와 SSE+REST({content, language, status})로 통신했으나,
+whisperlivekit은 WebSocket(/asr)으로 {status, lines[], buffer_transcription, …}을 전송한다.
+통신 방식 전환이 불가피하며, 이로 인해 React 측 수정이 필요하다.
+
+Phase 4 사전 준비 — 번역 모델 테스트 환경 (2026-06-21 완료)
+배포 PC의 실제 번역 모델은 gpt-oss-20b(`gpt-oss-20b-F16.gguf`)이다.
+- 배포 PC 서빙: `start_oss.bat` 더블클릭 → llama.cpp 계열로 `localhost:2010`에 서빙.
+  config YAML은 `model_serve: llama`, `model_name: synatra`(synatra는 서빙용 별칭).
+- 코드(`whisperlive_code/translator.py`, `app.py`)의 `LlamaTranslator`/`OllamaTranslator`
+  네이밍은 모델명이 아니라 서빙 도구 구분용이다 — `model_serve` 값으로 분기.
+
+개발 PC(RTX 3080, VRAM 10GB)는 OSS 20B F16(~40GB)을 적재할 수 없다. Phase 4는 번역 자체
+품질이 아니라 React UI 연결·프롬프트 흐름 검증이 목적이므로, 테스트 전용 소형 대체 모델을 채택했다.
+- 개발 PC 테스트용 모델: qwen2.5:7b (Ollama, 4.7GB) — 다운로드 완료.
+- Ollama 기설치. OpenAI 호환 API: http://localhost:11434/v1/chat/completions
+- 한↔영 양방향 번역 정상 동작 확인 (군사 문장 샘플).
+- ⚠️ Windows에서 curl로 한글 전송 시 인코딩 깨짐 → Python urllib로 호출하고
+  sys.stdout.reconfigure(encoding='utf-8') 적용해야 함.
+
+> 배포(gpt-oss-20b @ llama.cpp:2010) vs 개발(qwen2.5:7b @ Ollama:11434)은 서빙
+> 엔드포인트·포트가 다르다. 4-2/4-4 이식 시 translator 엔드포인트를 환경별로 설정 가능하게 둘 것.
+
 태스크
 
- 4-1. React에 보내는 메시지 스키마 최종 결정 [설계 세션]
-→ 후보 A: 기존 {text, start, end, completed, lang, …} 스키마 유지, 백엔드에서 변환
-→ 후보 B: whisperlivekit 출력 기반 새 스키마 정의, React 측 변경 포함
-→ Phase 3 완료 후 진입 직전에 사용자와 합의해 결정
- 4-2. 기존 React UI WebSocket 프로토콜 호환 구현 [이식]
-→ whisperlive_code/server.py, app.py 참조
- 4-3. 번역 모델(OSS 20B LLM) 로컬 경로 및 파일 존재 확인
- 4-4. 번역 파이프라인 이식 [이식]
-→ whisperlive_code/translator.py, prompt_manager.py 그대로
- 4-5. 번역 결과를 전달하기 위한 메시지 스키마 필드 정의 및 구현0
- 4-6. 문장 확정 시점 → 번역 수행 → UI 출력 흐름 연결
- 4-7. 기존 React UI에서 전사·번역 결과 최종 확인
+ ✅ 4-1. 스키마 변경 범위 확정 [설계 세션]
+→ 기존 whisperlive React API(SSE, {content, language, status})와
+  whisperlivekit 출력({status, lines[{text,start,end,speaker,detected_language,translation}], buffer_transcription, …})을 필드별 비교
+→ 기존 스키마 기준으로 불가피한 변경 항목 목록화 후 사용자와 합의
+→ 합의 결과를 docs/SCHEMA_CHANGES.md에 정리 (프론트엔드 개발자 인계용)
+→ 호환 별칭 추가: completed←finalized, lang←detected_language (Segment.to_dict)
+ ✅ 4-2. whisperlivekit 기반 API 서버 구현 [이식 + 신규]
+→ /api/corrections GET/POST/DELETE 연결 완료 (WordCorrectionManager)
+→ /api/recordings, /api/prompts — React 소스 확보 후 4-7과 함께 처리 예정
+ ✅ 4-3. 번역 모델(OSS 20B LLM) 로컬 경로 및 파일 존재 확인
+→ 배포: gpt-oss-20b @ llama.cpp:2010, 개발: qwen2.5:7b @ Ollama:11434 (docs/TRANSLATION_SETUP.md)
+ ✅ 4-4. 번역 파이프라인 이식 [이식]
+→ whisperlivekit/llm_translation/translator.py (LlamaTranslator/OllamaTranslator, 정적 군사 프롬프트)
+ ✅ 4-5. 번역 결과 전달 필드 구현
+→ Segment.translation 필드로 전달 (to_dict 직렬화 포함)
+ ✅ 4-6. 문장 확정 시점 → 번역 수행 → UI 출력 흐름 연결
+→ TranslationManager: finalized 세그먼트 확정 후 비차단 async 번역 캐시 (filter_segments 직후 훅)
+ ⏳ 4-7. 기존 React UI에서 전사·번역 결과 최종 확인
+→ React 소스 확보 후 진행
 
 완료 기준
 
-4-1에서 합의된 스키마로 백엔드 구현 완료
-React UI 코드 수정 없이 whisperlivekit 백엔드와 연동됨
+4-1에서 확정된 스키마로 백엔드 구현 완료
+기존 whisperlive 스키마에서 변경된 사항이 docs/SCHEMA_CHANGES.md에 빠짐없이 명세화됨 (프론트엔드 개발자 인계 가능)
 확정된 문장이 번역되어 React UI에 출력됨
 인터넷 차단 상태에서 전체 파이프라인 동작함
 
