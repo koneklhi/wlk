@@ -18,16 +18,13 @@
 
 - 한 발화 안에 한·영 혼용 상황에서 단어 유실 / 환각 / 문장 조기 확정이 발생하지 않도록 검출·분할 트리거 설계.
 
-## 3. React에 보내는 메시지 스키마 + React UI 변경 범위
+## 3. React UI 실제 연결 범위 (메시지 스키마는 확정·구현됨)
 
-현 단계에서는 스키마 형태를 못박지 않는다. 의미상 가져갈 가능성이 높은 필드(기존 `whisperlive` 기준):
-`text`(원본 메시지), `start` / `end`(타임스탬프), `completed`(확정/비확정 플래그), `lang`(언어 정보) 등.
-`whisperlivekit` 기본 출력은 `lines[]` + `buffer_transcription` / `buffer_diarization` / `buffer_translation` 형태.
+메시지 스키마는 **확정·구현 완료** — 후보 A 방향(`whisperlivekit` 출력 + `completed` / `lang` 등
+React 호환 별칭 유지)으로 결정됐다. 필드 정의·매핑·비확정 텍스트 처리의 정본은
+[SCHEMA_CHANGES.md](SCHEMA_CHANGES.md)다.
 
-- **후보 A**: 기존 `whisperlive`의 세그먼트 스키마(`{text, start, end, completed, lang, …}`)를 가져가고
-  백엔드에서 `whisperlivekit` 출력을 그에 맞춰 변환
-- **후보 B**: `whisperlivekit` 출력에 맞춰 새 스키마를 정의하고 React UI를 그에 맞게 변경
-
-STT 핵심 기능(ROADMAP Phase 1~3) 구현 완료 후, React UI 연결 단계(ROADMAP Phase 4) 진입 직전에 의논해 결정.
+남은 미해결 부분은 **React UI를 실제로 연결·표출 검증하는 작업**(ROADMAP Phase 4-7 대기)뿐이며,
+이는 스키마 설계 선택지가 아니라 통합 동작 확인의 문제다.
 
 ## 4. 폐쇄망용 모델 디렉터리 레이아웃과 배포 패키징 형태

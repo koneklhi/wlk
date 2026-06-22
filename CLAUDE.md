@@ -56,7 +56,7 @@
 ### 3.3 문장 단위 출력 — 백엔드 책임 범위
 - **백엔드(우리 작업)가 하는 일**: ① 한 문장이 끝났는지 판단(확정/비확정 상태 결정) ② 결과를 React UI에 메시지로 전달.
 - **React 측에 이미 구현·완성된 부분**(백엔드가 손대지 않음): 확정/비확정 색상 변경, 문장 종료 시 줄바꿈, 레이아웃·렌더링.
-- 문장 확정 알고리즘·메시지 스키마의 구체 설계는 미정 — [docs/OPEN_QUESTIONS.md](docs/OPEN_QUESTIONS.md) 참조 후 사용자와 합의해 확정.
+- 메시지 스키마는 [docs/SCHEMA_CHANGES.md](docs/SCHEMA_CHANGES.md)로 **확정·구현됨**. 문장 확정 알고리즘(신호 조합)은 일부 미정 — [docs/OPEN_QUESTIONS.md](docs/OPEN_QUESTIONS.md) §1 참조 후 합의해 확정.
 - 문장 확정 품질은 `/eval`의 **문장 분리 F1**(정답 빈 줄 블록 기준, STT `lines[]` 경계와 단어 정렬 비교)로 정량 평가한다.
   **성능 판정 기준은 경로 C(VBCable 루프백)만** 사용한다. 경로 A(PCM 파일 주입)는 브라우저 오디오 파이프라인을 우회해 실사용과 무관한 수치를 내므로 폐기.
 
@@ -88,6 +88,7 @@
 - **언어**: 코드 식별자·주석을 제외한 모든 사용자 응답·문서·커밋 메시지는 한국어. 기존 `whisperlivekit` 코드의 영어 식별자/주석은 보존.
 - **Python**: `pyproject.toml` 기준 Python `>=3.11, <3.14`, FastAPI 기반. 린트 `ruff check`(line-length 120, target `py311`).
   테스트 `pytest`(`tests/`). 패키지 매니저 `uv`(`uv.lock` 존재).
+- **Git Worktree 환경 관리**: 디스크 용량 절약을 위해 실험/기능 개발용 워크트리 생성 시, 기본적으로 메인 저장소의 `.venv`를 공유(Windows 교차점/Junction 연결)하여 사용한다. 워크트리에서 패키지 추가나 버전 변경이 명시적으로 필요한 경우에만 예외적으로 독립된 `.venv`를 구성한다.
 - **Phase 2 실험 기록**: STT 성능 분석/개선 작업 시 [PHASE2_EXPERIMENTS.md](PHASE2_EXPERIMENTS.md)를 먼저 확인해 이전 시도와
   결론을 파악한다. 코드 변경 + 벤치마크 완료 후 새 항목(Exp-N)을 추가하며, 작성은 `/log-experiment` 슬래시 커맨드로 수행한다.
 - **경로 C 반복 측정**: 실시간 STT 특성 상 동일 조건에서도 매 실행마다 성능 편차가 크다(±30~120%p 관측 — 분산이
