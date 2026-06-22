@@ -1,6 +1,9 @@
 # Phase 2 자율 개선 루프 — WER 감소 우선 → 문장 분리 F1 60%+
 
-## 현재 상태 (2026-06-05 기준)
+## 초기 상태 (2026-06-05 — 역사적, Phase 2 착수 시점)
+
+> ⚠️ 아래는 문장 확정 로직 도입 **이전**의 출발 베이스라인이다. Phase 3/4가 머지된 **현재 수치는
+> [PHASE2_EXPERIMENTS.md](../../../PHASE2_EXPERIMENTS.md)의 최신 Exp 항목**을 참조한다.
 
 - 브랜치: `master`
 - 기준 베이스라인 (경로 C, 1회 측정):
@@ -100,10 +103,10 @@ WER이 높으면 F1 평가 자체가 의미 없다. 반복 토큰이 삽입되�
 ### 실행 명령
 
 ```powershell
-# 경로 C 측정 (기본) — N≥5회 반복 + median/분산 자동 집계
+# 경로 C 측정 (기본) — N≥3회 반복 + median/분산 자동 집계
 uv run python scripts/eval.py \
   --model-dir whisperlivekit/model/whisper-large-v3-turbo \
-  --repeat 5 \
+  --repeat 3 \
   --output .omc/benchmarks/eval_YYYYMMDD_HHMM_expN.json
 
 # 경로 A 회귀 확인 (코드 변경 후 빠른 스모크용)
@@ -114,7 +117,7 @@ uv run python scripts/eval.py \
 
 ### 반복 측정 규칙 (필수)
 
-- 경로 C 채택/기각 판단에 쓰는 수치는 **sbs1·ytn1 각각 N≥5회 측정**(`eval.py --repeat 5`) 후
+- 경로 C 채택/기각 판단에 쓰는 수치는 **sbs1·ytn1 각각 N≥3회 측정**(`eval.py --repeat 3`) 후
   **median + 분산(min/max/stdev)**. 1회 결과만으로 결론 내리지 말 것.
 - **fail-fast 금지**: 첫 회차가 나빠도 중단하지 않고 N회 전부 측정한다 (분산이 곧 데이터).
   단, VBCable 미설정·포트 충돌·무음 캡처 등 *하니스 버그*는 즉시 멈추고 고친다(분산이 아니라 결함).
@@ -125,7 +128,7 @@ uv run python scripts/eval.py \
 ## 채택/기각 규칙
 
 **채택 조건** (모두 충족):
-1. 경로 C N≥5회 **median** WER이 이전 베이스라인 대비 감소 (Phase A) 또는 F1이 상승 (Phase B)
+1. 경로 C N≥3회 **median** WER이 이전 베이스라인 대비 감소 (Phase A) 또는 F1이 상승 (Phase B)
 2. **최악 케이스(max/p95) 미회귀** — median이 좋아도 catastrophic run이 늘면 기각 (분산 축소가 1급 목표)
 3. WER 회귀 ≤ +5%p (F1 개선 중 WER이 악화되지 않아야 함)
 4. `pytest tests/` 전부 통과

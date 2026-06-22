@@ -105,31 +105,31 @@ uv run python -c "import whisperlivekit; print(whisperlivekit.__file__)"
 
 ---
 
-## 새 워크트리에서 작업 시작 시 (의존성 함정 주의)
+## 새 워크트리에서 작업 시작 시 (.venv 공유가 기본)
 
-새 `git worktree`를 만들어 feature/실험 작업을 시작할 때, **워크트리는 main과 별도의 `.venv`를
-가진다**. main `.venv`에 설치된 옵셔널 의존성(`sounddevice`, `playwright`, `comtypes` 등)이
-워크트리 `.venv`에는 없어 `ModuleNotFoundError`가 난다.
+새 `git worktree`를 만들 때 **`.venv`를 새로 만들지 않는다 — 메인 저장소(루트 `.venv`)를 Windows
+Directory Junction으로 연결하는 것이 기본값**이다. 워크트리를 수십 개 운용해도 공유 `.venv` 하나로
+동작에 차이가 없으며, 독립 `.venv`는 ~8GB씩 복제돼 디스크를 낭비한다.
 
-또한 셸의 `VIRTUAL_ENV`가 main `.venv`를 가리켜도, `uv`는 **현재 폴더 기준 `.venv`를 우선**하며
-다음 경고와 함께 main `.venv`를 무시한다:
-
-> `warning: VIRTUAL_ENV=...\wlk\.venv does not match the project environment path .venv and will be ignored`
-
-**그러므로 새 워크트리에서 처음 작업하기 전, 워크트리 경로에서 1회 실행한다:**
-
-```powershell
-cd <워크트리 절대경로>
-uv sync --extra vbcable --extra listen
+```cmd
+cd worktrees\<name>
+mklink /J .venv ..\..\.venv
 ```
 
-- `--extra vbcable`: 경로 C(VBCable 루프백) 브라우저 자동화에 필요한 `playwright`/`comtypes`
-- `--extra listen`: VBCable 재생에 필요한 `sounddevice`
+Junction을 걸면 메인 `.venv`의 옵셔널 의존성(`sounddevice`, `playwright`, `comtypes` 등)이 그대로
+보이므로 워크트리에서 `ModuleNotFoundError`가 나지 않는다.
 
-**중요 — `ModuleNotFoundError`가 나면 같은 설치를 반복하거나 pip 직접 호출로 전환하지 말 것.**
-원인은 거의 항상 "워크트리 `.venv` 미초기화"다. 위 `uv sync` 1회로 해결하고 멈춘다.
+**예외 — 독립 `.venv`를 만드는 경우**: 해당 워크트리에서 **패키지 추가/버전 변경이 명시적으로 필요할 때만.**
 
-> extra 이름은 `pyproject.toml`의 `[project.optional-dependencies]` 에서 확인 (현재: `vbcable`, `listen`).
+1. Junction 제거: `rmdir .venv`
+2. 독립 venv 생성 후 동기화: `uv venv && uv sync --extra vbcable --extra listen`
+
+> `--extra vbcable`=경로 C 브라우저 자동화(`playwright`/`comtypes`), `--extra listen`=VBCable 재생
+> (`sounddevice`). extra 이름은 `pyproject.toml`의 `[project.optional-dependencies]`에서 확인.
+
+**중요 — `ModuleNotFoundError`가 나도 같은 설치를 반복하거나 pip 직접 호출로 전환하지 말 것.**
+먼저 Junction이 제대로 걸렸는지 확인하고, 독립 venv가 필요한 예외 상황이면 위 `uv sync`를 **1회만**
+실행하고 멈춘다.
 
 ---
 

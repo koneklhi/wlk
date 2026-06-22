@@ -29,3 +29,29 @@
   [whisperlive_code/manager.py](../whisperlive_code/manager.py) — 필터링·Glossary 그대로 이식
 - [whisperlive_code/translator.py](../whisperlive_code/translator.py),
   [whisperlive_code/prompt_manager.py](../whisperlive_code/prompt_manager.py) — 번역 파이프라인 그대로 이식
+
+## Phase 2 — 문장 확정 / 스트리밍 디코더 (STT 품질 개선 작업 영역)
+
+- [whisperlivekit/tokens_alignment.py](../whisperlivekit/tokens_alignment.py) — 문장 확정 + 토큰 정렬 (`get_lines`, `get_lines_diarization`)
+- [whisperlivekit/simul_whisper/simul_whisper.py](../whisperlivekit/simul_whisper/simul_whisper.py) — SimulStreaming 핵심 디코더 (`_filter_repetitions` 등)
+- [whisperlivekit/simul_whisper/backend.py](../whisperlivekit/simul_whisper/backend.py) — SimulStreaming 온라인 프로세서 (`new_speaker` 등)
+- [whisperlivekit/silero_vad_iterator.py](../whisperlivekit/silero_vad_iterator.py) — VAD silence 감지
+- [whisperlivekit/timed_objects.py](../whisperlivekit/timed_objects.py) — `ASRToken` / `Silence` / `Segment`(`to_dict` 직렬화)
+
+## Phase 3 — 필터링 / 단어 교정 (그대로 이식, [CLAUDE.md](../CLAUDE.md) §3.5/§3.6)
+
+- [whisperlivekit/filtering/__init__.py](../whisperlivekit/filtering/__init__.py) — 환각 문장·단어 제거 로직
+- [whisperlivekit/filtering/manager.py](../whisperlivekit/filtering/manager.py) — `WordCorrectionManager` (단어 교정 사전, SQLite 동적 갱신)
+- [whisperlivekit/filtering/hallucination.json](../whisperlivekit/filtering/hallucination.json),
+  [whisperlivekit/filtering/admin_replacement.json](../whisperlivekit/filtering/admin_replacement.json) — 기본 사전
+
+## Phase 4 — 번역 파이프라인 (그대로 이식, [CLAUDE.md](../CLAUDE.md) §3.4)
+
+- [whisperlivekit/llm_translation/translator.py](../whisperlivekit/llm_translation/translator.py) — `LlamaTranslator` / `OllamaTranslator` (서빙 도구 분기)
+- [whisperlivekit/llm_translation/manager.py](../whisperlivekit/llm_translation/manager.py) — `TranslationManager` (확정 세그먼트 비차단 번역 캐시)
+
+## eval 하니스 (경로 C 정량 측정)
+
+- [scripts/eval.py](../scripts/eval.py) — 경로 C/A 측정, WER + 문장 분리 F1 산출 (`--repeat`, `--paths`)
+- [scripts/vbcable_test.py](../scripts/vbcable_test.py) — VBCable 브라우저 자동화
+- [scripts/audio_device.py](../scripts/audio_device.py) — VBCable 장치 자동 설정/복원
