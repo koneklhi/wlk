@@ -142,6 +142,9 @@ nllb-200-distilled-600M-ctranslate2/*
 .omc/session-logs/
 .worktrees/
 
+# superpowers SDD 플러그인 작업 상태 (로컬 전용, 매 실행마다 생성)
+.superpowers/
+
 # 기계별 로컬 Claude 설정 — 절대경로·권한이 PC마다 다름 (공유 금지)
 .claude/settings.local.json
 
