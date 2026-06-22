@@ -30,6 +30,8 @@ class MLXDecoderState:
 
     pending_incomplete_tokens: List[int] = field(default_factory=list)
     pending_retries: int = 0
+    quality_suppress_streak: int = 0
+    eager_lang_detect: bool = False
 
     global_time_offset: float = 0.0
     cumulative_time_offset: float = 0.0

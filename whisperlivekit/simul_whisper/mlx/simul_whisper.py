@@ -312,6 +312,10 @@ class MLXAlignAtt(AlignAttBase):
     def _init_sum_logprobs(self):
         return mx.zeros((self.cfg.beam_size,), dtype=mx.float32)
 
+    def _sum_logprobs_value(self, sum_logprobs):
+        import numpy as np
+        return float(np.array(sum_logprobs[0]))
+
     def _get_logits_and_cross_attn(self, tokens, encoder_feature):
         if self.state.decoder_type == "greedy":
             logits, self.state.kv_cache, cross_qk = self.model.decoder(

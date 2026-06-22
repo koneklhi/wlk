@@ -15,6 +15,8 @@ from comtypes import GUID, HRESULT, IUnknown, COMMETHOD
 EDataFlow_eRender  = 0  # 재생 장치
 EDataFlow_eCapture = 1  # 녹음 장치
 ERole_eConsole     = 0  # 기본 장치 역할
+ERole_eMultimedia  = 1  # 멀티미디어 롤
+ERole_eCommunications = 2  # 통신 롤 (브라우저 getUserMedia가 사용)
 DEVICE_STATE_ACTIVE = 1
 STGM_READ = 0
 VT_LPWSTR = 31  # PROPVARIANT 문자열 타입
@@ -214,10 +216,53 @@ def set_default_device(device_name_substring: str, flow: int) -> bool:
             interface=_IPolicyConfig,
             clsctx=comtypes.CLSCTX_ALL,
         )
-        hr = policy.SetDefaultEndpoint(device_id, ERole_eConsole)
-        return hr >= 0
+        ok = True
+        for role in (ERole_eConsole, ERole_eMultimedia, ERole_eCommunications):
+            hr = policy.SetDefaultEndpoint(device_id, role)
+            ok = ok and (hr >= 0)
+        return ok
     except Exception as e:
         print(f"[audio_device] SetDefaultEndpoint 실패: {e}")
+        return False
+
+
+def verify_loopback(threshold: float = 0.01, secs: float = 0.4) -> bool:
+    """CABLE Input에 톤 재생→CABLE Output 녹음하여 루프백이 실제로 오디오를 통과시키는지 검증.
+
+    RMS가 threshold 미만이면 케이블이 무음(사망/오설정) 상태 → False.
+    """
+    try:
+        import numpy as np
+        import sounddevice as sd
+        devs = sd.query_devices()
+
+        def _pick(name_low, want_out):
+            # '16ch' 변종은 제외하고 정규 CABLE Input/Output 선택
+            for i, d in enumerate(devs):
+                n = d["name"].lower()
+                if name_low in n and "16ch" not in n:
+                    if want_out and d["max_output_channels"] > 0:
+                        return i
+                    if not want_out and d["max_input_channels"] > 0:
+                        return i
+            return None
+
+        out_idx = _pick("cable input", True)
+        in_idx = _pick("cable output", False)
+        if out_idx is None or in_idx is None:
+            print("[audio_device] verify_loopback: CABLE Input/Output 정규 장치 없음")
+            return False
+        sr = 16000
+        n = int(sr * secs)
+        tone = (0.4 * np.sin(2 * np.pi * 440 * np.arange(n) / sr)).astype("float32").reshape(-1, 1)
+        rec = sd.playrec(tone, samplerate=sr, channels=1, device=(in_idx, out_idx))
+        sd.wait()
+        rms = float(np.sqrt(np.mean(rec ** 2)))
+        ok = rms > threshold
+        print(f"[audio_device] verify_loopback: RMS={rms:.5f} -> {'OK' if ok else 'SILENT(케이블 무음)'}")
+        return ok
+    except Exception as e:
+        print(f"[audio_device] verify_loopback 오류: {e}")
         return False
 
 
@@ -235,7 +280,13 @@ def vbcable_audio_context():
     """
     original_render  = get_default_device_name(EDataFlow_eRender)
     original_capture = get_default_device_name(EDataFlow_eCapture)
-    render_ok  = "CABLE" in original_render
+
+    def _is_regular_cable_input(name: str) -> bool:
+        # 정규 'CABLE Input'만 통과 — 'CABLE In 16ch' 변종은 'Input' 미포함이라 자연히 제외
+        low = name.lower()
+        return "cable input" in low and "16ch" not in low
+
+    render_ok  = _is_regular_cable_input(original_render)
     capture_ok = "CABLE" in original_capture
     changed = False
 
@@ -247,14 +298,22 @@ def vbcable_audio_context():
         changed = True
 
     # 설정 후 실제로 둘 다 CABLE인지 검증 (재생만 보고 넘어가던 버그 방지)
-    render_ok  = "CABLE" in get_default_device_name(EDataFlow_eRender)
+    # 재생은 정규 'CABLE Input'만 인정 — 'CABLE In 16ch' 변종 리셋을 차단
+    render_ok  = _is_regular_cable_input(get_default_device_name(EDataFlow_eRender))
     capture_ok = "CABLE" in get_default_device_name(EDataFlow_eCapture)
-    usable = render_ok and capture_ok
+    devices_ok = render_ok and capture_ok
+
+    # 기본장치가 정규 CABLE로 잡혔어도, 실제 루프백이 오디오를 통과시키는지 자가진단
+    loopback_ok = verify_loopback() if devices_ok else False
+    usable = devices_ok and loopback_ok
+
     if usable:
-        print(f"[audio_device] VBCable 준비됨 (재생/녹음 모두 CABLE)")
-    else:
-        print(f"[audio_device] VBCable 설정 실패 — 재생ok={render_ok} 녹음ok={capture_ok}. "
+        print(f"[audio_device] VBCable 준비됨 (재생/녹음 모두 CABLE, 루프백 검증 통과)")
+    elif not devices_ok:
+        print(f"[audio_device] VBCable 설정 실패 - 재생ok={render_ok} 녹음ok={capture_ok}. "
               f"Windows 소리 설정에서 CABLE Input(재생)·CABLE Output(녹음)을 기본으로 지정하세요.")
+    else:
+        print("[audio_device] [!] 루프백 무음 - VBCable이 오디오를 통과시키지 않음. 오디오 서비스 재시작/재부팅 필요. path C 측정 중단.")
 
     try:
         yield usable

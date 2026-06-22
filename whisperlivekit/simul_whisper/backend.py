@@ -3,7 +3,7 @@ import logging
 import platform
 import re
 import sys
-from collections import Counter, deque
+from collections import Counter
 from typing import List, Tuple
 
 import numpy as np
@@ -33,19 +33,17 @@ if HAS_FASTER_WHISPER:
 else:
     WhisperModel = None
 
-MIN_DURATION_REAL_SILENCE = 5
+MIN_DURATION_REAL_SILENCE = 2
 
 # 디코더 멈춤 복구: 오디오가 이 시간(초) 이상 전진했는데 토큰이 전혀 안 나오면
 # SimulStreaming 디코더가 비-fire 상태에 빠진 것으로 보고 강제 refresh로 복구한다.
 STALL_RECOVER_SEC = 10.0
 
+_FOREIGN_LANG_PATTERN = re.compile(r'\(speaking in foreign language', re.IGNORECASE)
+
 class SimulStreamingOnlineProcessor:
     """Online processor for SimulStreaming ASR."""
     SAMPLING_RATE = 16000
-
-    # 반복 루프 감지 파라미터: 최근 N 토큰 중 동일 단어가 K회 이상이면 refresh_segment() 리셋
-    _LOOP_WINDOW = 20
-    _LOOP_THRESHOLD = 5
 
     # 단일음절 반복 환각 억제: max_char_run >= _CHAR_RUN_THRESHOLD 인 토큰은 제거
     # _HALLUCINATION_RESET_THRESHOLD 연속 발생 시 context 리셋
@@ -60,7 +58,6 @@ class SimulStreamingOnlineProcessor:
         self.model = self._create_alignatt()
         self._last_emitted_word: str = None
         self._last_emit_end: float = 0.0  # 마지막으로 토큰을 방출한 시점의 audio end (stall 복구 baseline)
-        self._recent_tokens: deque = deque(maxlen=self._LOOP_WINDOW)
         self._consecutive_char_repeat: int = 0
 
         if asr.tokenizer:
@@ -97,10 +94,11 @@ class SimulStreamingOnlineProcessor:
                 self.model.insert_audio(gap_silence)
         if long_silence:
             self.model.refresh_segment(complete=True)
+            self.model.state.detected_language = None   # 재감지 허용
+            self.model.state.first_timestamp = None     # 재감지 조건 충족
             self.model.global_time_offset = silence_duration + offset
             self._last_emitted_word = None
             self._last_emit_end = self.end
-            self._recent_tokens.clear()
             self._consecutive_char_repeat = 0
 
     def insert_audio_chunk(self, audio: np.ndarray, audio_stream_end_time):
@@ -113,14 +111,27 @@ class SimulStreamingOnlineProcessor:
             self.model.insert_audio(audio_tensor)
 
     def new_speaker(self, change_speaker: ChangeSpeaker):
-        """Handle speaker change event."""
-        self.process_iter(is_last=True)
-        self.model.refresh_segment(complete=True)
+        """Handle speaker change event.
+
+        경계 재디코딩: held 음역을 final 확정하지 않고(flush 생략), 최근 오디오(경계 구간)를
+        complete=False 로 유지해 새 화자 언어로 재디코딩한다. refresh 전에 최근 1.5s 윈도우로
+        언어를 즉시 재감지하고, 성공 시 refresh 후 토크나이저를 교정한다(실패 시 None → 기존 2.0s 폴백).
+        """
+        # 1. refresh 전 버퍼로 새 화자 언어 즉시 감지 (경계 오디오가 아직 버퍼에 있음)
+        eager = self.model.detect_current_language(window_secs=1.5, min_prob=0.85)
+        # 2. flush 생략 + 경계 오디오 유지(complete=False) + 미확정 음역 폐기
+        self.model.refresh_segment(complete=False)
+        self.buffer = []
+        self.model.state.detected_language = None
+        self.model.state.first_timestamp = None
+        self.model.state.eager_lang_detect = True
+        # 3. 감지 성공 시 토크나이저 즉시 교정 (refresh 후 적용)
+        if eager:
+            self.model._apply_detected_language(eager)
         self.model.speaker = change_speaker.speaker
         self.model.global_time_offset = change_speaker.start
         self._last_emitted_word = None
         self._last_emit_end = self.end
-        self._recent_tokens.clear()
         self._consecutive_char_repeat = 0
 
     def get_buffer(self):
@@ -164,15 +175,27 @@ class SimulStreamingOnlineProcessor:
                 self.model.refresh_segment(complete=True)
                 self._last_emitted_word = None
                 self._last_emit_end = self.end
-                self._recent_tokens.clear()
                 self._consecutive_char_repeat = 0
                 return []
         result = []
         prev = self._last_emitted_word
+
+        _LEADING_PUNCT = frozenset([".", "。", "!", "?", "！", "？"])
+        # 직전 방출 단어가 이미 문장종료 구두점으로 끝난 진짜 중복일 때만 선두 구두점 제거.
+        # 아니면 보존 — 직전 단어의 문장끝 온점을 살린다(UI 표시용).
+        prev_ends_punct = bool(self._last_emitted_word) and self._last_emitted_word.rstrip()[-1:] in _LEADING_PUNCT
+        if prev_ends_punct:
+            while tokens and self._normalize(tokens[0].text) in _LEADING_PUNCT:
+                logger.debug("[LeadingPunctFilter] 중복 선두 구두점 제거: %r", tokens[0].text)
+                tokens = tokens[1:]
+
         for token in tokens:
             word = self._normalize(token.text)
             if not word:
                 result.append(token)
+                continue
+            if word in ("-", "–", "—"):
+                logger.debug("[DashFilter] 순수 대시 토큰 스킵: %r", word)
                 continue
             stripped = word.lstrip('-').strip()
             if len(stripped) >= 4 and self._max_char_run(stripped) >= self._CHAR_RUN_THRESHOLD:
@@ -186,28 +209,17 @@ class SimulStreamingOnlineProcessor:
                     self.model.refresh_segment(complete=True)
                     self._consecutive_char_repeat = 0
                     self._last_emitted_word = None
-                    self._recent_tokens.clear()
                     prev = None
                 continue
             self._consecutive_char_repeat = 0
             if prev is not None and word == prev:
-                logger.debug("[CrossBatchFilter] 반복 제거: %r", word)
+                logger.info("[CrossBatchFilter] 반복 제거: %r (prev=%r)", word, prev)
                 continue
             result.append(token)
             prev = word
         if result:
             self._last_emitted_word = self._normalize(result[-1].text)
         return result
-
-    def _detect_repetition_loop(self) -> bool:
-        """최근 _LOOP_WINDOW 토큰 중 동일 단어가 _LOOP_THRESHOLD 이상이면 반복 루프로 판정."""
-        if len(self._recent_tokens) < self._LOOP_WINDOW // 2:
-            return False
-        counts = Counter(self._recent_tokens)
-        if not counts:
-            return False
-        _, most_count = counts.most_common(1)[0]
-        return most_count >= self._LOOP_THRESHOLD
 
     def process_iter(self, is_last=False) -> Tuple[List[ASRToken], float]:
         """
@@ -217,6 +229,19 @@ class SimulStreamingOnlineProcessor:
         """
         try:
             timestamped_words = self.model.infer(is_last=is_last)
+
+            if timestamped_words:
+                logger.debug("[TokenTrace] infer→%d tokens: %s", len(timestamped_words),
+                             " ".join(t.text for t in timestamped_words[:20]))
+                decoded_text = ''.join(t.text for t in timestamped_words)
+                if _FOREIGN_LANG_PATTERN.search(decoded_text):
+                    logger.warning("[ForeignLang] '(speaking in foreign language)' 감지 → 즉시 언어재감지 트리거")
+                    self.model.state.detected_language = None
+                    self.model.state.first_timestamp = None
+                    self.model.state.eager_lang_detect = True
+                    self.model.state.last_lang_switch_time = 0.0
+                    timestamped_words = [t for t in timestamped_words
+                                         if not _FOREIGN_LANG_PATTERN.search(t.text)]
 
             if not timestamped_words:
                 # 디코더 멈춤 복구 워치독: 오디오가 STALL_RECOVER_SEC 이상 전진했는데
@@ -239,21 +264,9 @@ class SimulStreamingOnlineProcessor:
                 return [], self.end
 
             timestamped_words = self._filter_cross_batch_repetitions(timestamped_words)
-            for token in timestamped_words:
-                word = self._normalize(token.text)
-                if word:
-                    self._recent_tokens.append(word)
-            if self._detect_repetition_loop():
-                logger.warning(
-                    "반복 루프 감지 (window=%d, threshold=%d) → refresh_segment() 리셋.",
-                    self._LOOP_WINDOW, self._LOOP_THRESHOLD,
-                )
-                self.model.refresh_segment(complete=True)
-                self._last_emitted_word = None
-                self._last_emit_end = self.end
-                self._recent_tokens.clear()
-                self._consecutive_char_repeat = 0
-                return [], self.end
+            if timestamped_words:
+                logger.debug("[TokenTrace] emit→%d tokens: %s", len(timestamped_words),
+                             " ".join(t.text for t in timestamped_words[:20]))
             self.buffer = []
             self._last_emit_end = self.end
             return timestamped_words, self.end
@@ -360,6 +373,8 @@ class SimulStreamingASR:
                 init_prompt=self.init_prompt,
                 max_context_tokens=self.max_context_tokens,
                 static_init_prompt=self.static_init_prompt,
+                logprob_threshold=self.logprob_threshold,
+                compression_ratio_threshold=self.compression_ratio_threshold,
         )
 
         # Set up tokenizer for translation if needed

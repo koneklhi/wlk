@@ -305,6 +305,9 @@ class AlignAtt(AlignAttBase):
     def _init_sum_logprobs(self):
         return torch.zeros(self.cfg.beam_size, device=self.device)
 
+    def _sum_logprobs_value(self, sum_logprobs):
+        return float(sum_logprobs[0].item())
+
     def _get_logits_and_cross_attn(self, tokens, encoder_feature):
         if self.state.decoder_type == "greedy":
             return self.model.decoder(

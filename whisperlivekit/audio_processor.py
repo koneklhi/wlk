@@ -15,7 +15,7 @@ from whisperlivekit.core import (
 from whisperlivekit.ffmpeg_manager import FFmpegManager, FFmpegState
 from whisperlivekit.metrics_collector import SessionMetrics
 from whisperlivekit.silero_vad_iterator import FixedVADIterator, OnnxWrapper, load_jit_vad
-from whisperlivekit.timed_objects import ChangeSpeaker, FrontData, Silence, State
+from whisperlivekit.timed_objects import PUNCTUATION_MARKS, ChangeSpeaker, FrontData, Silence, State
 from whisperlivekit.tokens_alignment import TokensAlignment
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -34,6 +34,8 @@ async def get_all_from_queue(queue: asyncio.Queue) -> Union[object, Silence, np.
         return first_item
     if isinstance(first_item, Silence):
         return first_item
+    if isinstance(first_item, ChangeSpeaker):
+        return first_item
     items.append(first_item)
 
     while True:
@@ -43,6 +45,8 @@ async def get_all_from_queue(queue: asyncio.Queue) -> Union[object, Silence, np.
         if next_item is SENTINEL:
             break
         if isinstance(next_item, Silence):
+            break
+        if isinstance(next_item, ChangeSpeaker):
             break
         items.append(await queue.get())
         queue.task_done()
@@ -124,6 +128,7 @@ class AudioProcessor:
         self.watchdog_task: Optional[asyncio.Task] = None
         self.all_tasks_for_cleanup: List[asyncio.Task] = []
         self.metrics: SessionMetrics = SessionMetrics()
+        self._last_diar_speaker: Optional[int] = None  # 화자 변화 감지용
 
         self.transcription: Optional[Any] = None
         self.translation: Optional[Any] = None
@@ -427,6 +432,16 @@ class AudioProcessor:
             self.state.new_diarization.extend(diarization_segments)
             self.state.end_attributed_speaker = max(self.state.end_attributed_speaker, diar_end)
 
+        # 화자 전환 감지 → transcription_queue에 ChangeSpeaker 신호 전달
+        if self.transcription_queue:
+            for seg in diarization_segments:
+                new_spk = getattr(seg, 'speaker', None)
+                if new_spk is not None and new_spk != self._last_diar_speaker:
+                    if self._last_diar_speaker is not None:
+                        start_time = getattr(seg, 'start', 0.0)
+                        await self.transcription_queue.put(ChangeSpeaker(speaker=new_spk, start=start_time))
+                    self._last_diar_speaker = new_spk
+
     async def _drain_diarization_buffer(self) -> None:
         """Process all remaining audio in the diarization buffer.
 
@@ -527,6 +542,13 @@ class AudioProcessor:
                     current_silence=self.current_silence,
                     audio_time=self.total_pcm_samples / self.sample_rate if self.sample_rate else None,
                 )
+                # 확정 문장 끝 온점 부착 (UI 표시용; WER 무영향 — normalize_text가 구두점 제거).
+                # 마지막 세그먼트는 진행 중(미확정)일 수 있으므로 제외. 멱등 — 이미 구두점이면 미수정.
+                for seg in lines[:-1]:
+                    if not seg.is_silence() and seg.text:
+                        stripped = seg.text.rstrip()
+                        if stripped and stripped[-1] not in PUNCTUATION_MARKS:
+                            seg.text = stripped + "."
                 state = await self.get_current_state()
 
                 buffer_transcription_text = state.buffer_transcription.text if state.buffer_transcription else ''

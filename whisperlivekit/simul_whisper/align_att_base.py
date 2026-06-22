@@ -140,24 +140,87 @@ class AlignAttBase(ABC):
 
     # === Language detection ===
 
+    def _apply_detected_language(self, lang: str):
+        """Switch tokenizer to lang and reset decoder state. Shared by normal and eager detection."""
+        self.create_tokenizer(lang)
+        self.state.last_attend_frame = -self.cfg.rewind_threshold
+        self.state.cumulative_time_offset = 0.0
+        self.init_tokens()
+        self.init_context()
+        self.state.detected_language = lang
+        logger.info("[EagerLang] applied tokenizer for: %s", lang)
+
+    def detect_current_language(self, window_secs: float = 1.5, min_prob: float = 0.85):
+        """Detect language from current audio buffer without waiting for 2s gate.
+
+        Called at speaker-change boundary (before refresh_segment) so the buffer
+        still contains audio that may include the new speaker's voice.
+        Returns language string if confident (>= min_prob), else None.
+        """
+        if not self.state.segments:
+            return None
+        try:
+            input_audio = self._concat_segments()
+            # 최근 window_secs 만 사용 — 경계에서 옛 화자 오디오에 휘둘리지 않도록
+            max_samples = int(window_secs * 16000)
+            if input_audio.shape[0] > max_samples:
+                input_audio = input_audio[-max_samples:]
+            encoder_feature, _ = self._encode(input_audio)
+            _, language_probs = self.lang_id(encoder_feature)
+            top_lan, p = max(language_probs[0].items(), key=lambda x: x[1])
+            logger.info("[EagerLang] candidate %s p=%.4f (min_prob=%.2f)", top_lan, p, min_prob)
+            if p >= min_prob:
+                return top_lan
+        except Exception as e:
+            logger.warning("[EagerLang] detection failed: %s", e)
+        return None
+
     def _detect_language_if_needed(self, encoder_feature):
         if (
             self.cfg.language == "auto"
             and self.state.detected_language is None
-            and self.state.first_timestamp
         ):
-            seconds_since_start = self.segments_len() - self.state.first_timestamp
-            if seconds_since_start >= 2.0:
+            if self.state.first_timestamp:
+                seconds_since_start = self.segments_len() - self.state.first_timestamp
+            elif self.state.eager_lang_detect:
+                # eager(화자전환) 경로만 first_timestamp 없이 오디오 누적량 기준으로 빠르게 감지
+                seconds_since_start = self.segments_len()
+            else:
+                # diar-off silence 경로: first_timestamp 설정 전엔 감지 보류 (Exp-093 안정 동작 — 잦은 _apply_detected_language 리셋으로 인한 반복 폭주 방지)
+                return
+            # 화자전환 직후엔 1.5s+확신도≥0.85로 빠른 감지 — 잘못된 언어 고착 방지
+            threshold = 1.5 if self.state.eager_lang_detect else 2.0
+            if seconds_since_start >= threshold:
                 language_tokens, language_probs = self.lang_id(encoder_feature)
                 top_lan, p = max(language_probs[0].items(), key=lambda x: x[1])
                 logger.info(f"Detected language: {top_lan} with p={p:.4f}")
-                self.create_tokenizer(top_lan)
-                self.state.last_attend_frame = -self.cfg.rewind_threshold
-                self.state.cumulative_time_offset = 0.0
-                self.init_tokens()
-                self.init_context()
-                self.state.detected_language = top_lan
-                logger.info(f"Tokenizer language: {self.tokenizer.language}")
+                # eager 모드: 1.5s~2.0s 사이에서 p>=0.85 일 때만 조기 적용
+                # 2.0s 이후엔 확신도 무관 적용(기존 동작 보존)
+                if self.state.eager_lang_detect and p < 0.85 and seconds_since_start < 2.0:
+                    logger.info("[EagerLang] p=%.4f < 0.85 at %.1fs, waiting for 2.0s gate", p, seconds_since_start)
+                else:
+                    self._apply_detected_language(top_lan)
+                    self.state.eager_lang_detect = False
+                    logger.info(f"Tokenizer language: {self.tokenizer.language}")
+
+    def _maybe_periodic_lang_check(self, audio_end_secs: float) -> None:
+        """주기적 언어 재감지 — diar-off에서 언어 고착 방지."""
+        check_interval = self.cfg.periodic_lang_check_secs
+        if check_interval is None:
+            return
+        if self.state.detected_language is None:
+            return
+        if audio_end_secs - self.state.last_lang_switch_time < 3.0:
+            return
+        if audio_end_secs - self.state.last_periodic_lang_check < check_interval:
+            return
+        self.state.last_periodic_lang_check = audio_end_secs
+        new_lang = self.detect_current_language(window_secs=2.0, min_prob=0.90)
+        if new_lang and new_lang != self.state.detected_language:
+            logger.info("[PeriodicLang] %s→%s (%.1fs 간격 감지)",
+                        self.state.detected_language, new_lang, check_interval)
+            self._apply_detected_language(new_lang)
+            self.state.last_lang_switch_time = audio_end_secs
 
     # === Template infer() ===
 
@@ -288,6 +351,12 @@ class AlignAttBase(ABC):
             tokens_to_split, fire_detected, is_last
         )
 
+        num_generated = max(0, current_tokens.shape[1] - token_len_before)
+        if not is_last and self._quality_gate(new_hypothesis, sum_logprobs, num_generated):
+            self._on_quality_suppressed()
+            return []
+        self.state.quality_suppress_streak = 0
+
         new_tokens_tensor = self._make_new_tokens_tensor(new_hypothesis)
         self.state.tokens.append(new_tokens_tensor)
         logger.info(f"Output: {self.tokenizer.decode(new_hypothesis)}")
@@ -302,6 +371,7 @@ class AlignAttBase(ABC):
         )
         self._handle_pending_tokens(split_words, split_tokens)
 
+        self._maybe_periodic_lang_check(self.segments_len())
         return timestamped_words
 
     # === Post-decode shared helpers ===
@@ -327,13 +397,14 @@ class AlignAttBase(ABC):
 
         for word, word_tokens in zip(split_words, split_tokens):
             if replacement_char in word:
-                cleaned = word.replace(replacement_char, "")
-                if not cleaned.strip():
-                    logger.debug(f"[UTF-8 Filter] Skipping: {repr(word)}")
-                    timestamp_idx += len(word_tokens)
-                    continue
-                logger.debug(f"[UTF-8 Filter] Cleaned {repr(word)} -> {repr(cleaned)}")
-                word = cleaned
+                # Incomplete UTF-8 word (e.g. "미�": 미 complete, next syllable's bytes
+                # truncated at the chunk boundary). Do NOT emit the cleaned partial ("미"):
+                # _handle_pending_tokens holds the incomplete token for retry and the next
+                # chunk re-emits the FULL word ("미디어") exactly once. Emitting the partial
+                # here is what produced leading-fragment duplication ("미 미디어").
+                logger.debug(f"[UTF-8 Filter] Skipping incomplete (held for retry): {repr(word)}")
+                timestamp_idx += len(word_tokens)
+                continue
 
             try:
                 current_timestamp = l_absolute_timestamps[timestamp_idx]
@@ -438,6 +509,40 @@ class AlignAttBase(ABC):
 
         return logits
 
+    def _quality_gate(self, hypothesis, sum_logprobs, num_generated):
+        """avg-logprob 또는 compression-ratio 기준으로 저품질 세그먼트 억제."""
+        lp_thr = self.cfg.logprob_threshold
+        cr_thr = self.cfg.compression_ratio_threshold
+        if lp_thr is None and cr_thr is None:
+            return False
+        if not hypothesis:
+            return False
+        if lp_thr is not None and num_generated > 0:
+            avg_lp = self._sum_logprobs_value(sum_logprobs) / num_generated
+            if avg_lp < lp_thr:
+                logger.warning("[QualityGate] avg_logprob %.3f < %.3f — suppressing", avg_lp, lp_thr)
+                return True
+        if cr_thr is not None:
+            from whisperlivekit.whisper.utils import compression_ratio
+            text = self.tokenizer.decode(hypothesis).strip()
+            if text:
+                cr = compression_ratio(text)
+                if cr > cr_thr:
+                    logger.warning("[QualityGate] compression_ratio %.2f > %.2f — suppressing: %.200s", cr, cr_thr, text)
+                    return True
+        return False
+
+    def _on_quality_suppressed(self):
+        """품질 게이트 억제 처리 — 연속 N회 억제 시 context refresh."""
+        self._clean_cache()
+        streak = getattr(self.state, "quality_suppress_streak", 0) + 1
+        self.state.quality_suppress_streak = streak
+        reset_after = self.cfg.quality_gate_reset_after
+        if reset_after and streak >= reset_after:
+            logger.warning("[QualityGate] %d consecutive suppressions — refresh_segment", streak)
+            self.refresh_segment(complete=True)
+            self.state.quality_suppress_streak = 0
+
     # === Abstract methods — subclass must implement ===
 
     @abstractmethod
@@ -488,6 +593,11 @@ class AlignAttBase(ABC):
     @abstractmethod
     def _init_sum_logprobs(self):
         """Create zero sum_logprobs tensor for beam search."""
+        ...
+
+    @abstractmethod
+    def _sum_logprobs_value(self, sum_logprobs):
+        """Extract scalar float from sum_logprobs for avg-logprob quality gate."""
         ...
 
     @abstractmethod

@@ -55,8 +55,12 @@ class SortformerDiarization:
 
     def _load_model(self, model_name: str):
         """Load and configure the Sortformer model for streaming."""
+        import os
         try:
-            self.diar_model = SortformerEncLabelModel.from_pretrained(model_name)
+            if os.path.isfile(model_name):
+                self.diar_model = SortformerEncLabelModel.restore_from(model_name)
+            else:
+                self.diar_model = SortformerEncLabelModel.from_pretrained(model_name)
             self.diar_model.eval()
 
             device = torch.device("cuda" if torch.cuda.is_available() else "cpu")

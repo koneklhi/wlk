@@ -16,6 +16,10 @@ logger.setLevel(logging.DEBUG)
 logging.getLogger("whisperlivekit.qwen3_asr").setLevel(logging.DEBUG)
 
 config = parse_args()
+if config.trace_tokens:
+    logging.getLogger("whisperlivekit.simul_whisper.backend").setLevel(logging.DEBUG)
+    logging.getLogger("whisperlivekit.simul_whisper.align_att_base").setLevel(logging.DEBUG)
+    logger.info("[TraceTokens] DEBUG 레벨 로깅 활성화 (backend + align_att_base)")
 transcription_engine = None
 
 @asynccontextmanager

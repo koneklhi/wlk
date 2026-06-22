@@ -13,5 +13,13 @@
         ]
       }
     ]
+  },
+  "enabledPlugins": {
+    "python-development@claude-code-workflows": true
+  },
+  "extraKnownMarketplaces": {
+    "claude-code-workflows": {
+      "source": { "source": "github", "repo": "wshobson/agents" }
+    }
   }
 }

@@ -68,6 +68,13 @@ def parse_args():
     )
 
     parser.add_argument(
+        "--sortformer-model",
+        type=str,
+        default="nvidia/diar_streaming_sortformer_4spk-v2",
+        help="Sortformer model: HF model name or local .nemo file path (폐쇄망 적재 시 로컬 경로 지정).",
+    )
+
+    parser.add_argument(
         "--no-transcription",
         action="store_true",
         help="Disable transcription to only see live diarization results.",
@@ -312,6 +319,22 @@ def parse_args():
     )
 
     simulstreaming_group.add_argument(
+        "--logprob-threshold",
+        type=float,
+        default=None,
+        dest="logprob_threshold",
+        help="avg-logprob 품질 게이트 임계값 (예: -1.0). 낮은 신뢰도 세그먼트 억제. None=비활성.",
+    )
+
+    simulstreaming_group.add_argument(
+        "--compression-ratio-threshold",
+        type=float,
+        default=None,
+        dest="compression_ratio_threshold",
+        help="compression-ratio 품질 게이트 임계값 (예: 2.4). 반복 세그먼트 억제. None=비활성.",
+    )
+
+    simulstreaming_group.add_argument(
         "--model-path",
         type=str,
         default=None,
@@ -331,6 +354,22 @@ def parse_args():
         type=str,
         default="600M",
         help="600M or 1.3B",
+    )
+
+    simulstreaming_group.add_argument(
+        "--trace-tokens",
+        action="store_true",
+        default=False,
+        dest="trace_tokens",
+        help="TokenTrace 디버그 로그 활성화: infer/emit 단계별 토큰 목록을 DEBUG 레벨로 출력.",
+    )
+
+    simulstreaming_group.add_argument(
+        "--periodic-lang-check",
+        type=float,
+        default=None,
+        dest="periodic_lang_check_secs",
+        help="주기적 언어재감지 간격(초). None=비활성(기본). 권장값 4.0. diar-off 언어 고착 해소용.",
     )
 
     args = parser.parse_args()
