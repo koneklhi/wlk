@@ -13,6 +13,9 @@ from whisperlivekit.core import (
     online_translation_factory,
 )
 from whisperlivekit.ffmpeg_manager import FFmpegManager, FFmpegState
+from whisperlivekit.filtering import filter_segments
+from whisperlivekit.llm_translation.manager import TranslationManager
+from whisperlivekit.llm_translation.translator import create_translator
 from whisperlivekit.metrics_collector import SessionMetrics
 from whisperlivekit.silero_vad_iterator import FixedVADIterator, OnnxWrapper, load_jit_vad
 from whisperlivekit.timed_objects import PUNCTUATION_MARKS, ChangeSpeaker, FrontData, Silence, State
@@ -141,6 +144,15 @@ class AudioProcessor:
             self.diarization = online_diarization_factory(self.args, models.diarization_model)
         if models.translation_model:
             self.translation = online_translation_factory(self.args, models.translation_model)
+
+        self.llm_translation_manager: Optional[TranslationManager] = None
+        if getattr(self.args, "llm_translation", False):
+            _translator = create_translator(
+                serve=self.args.translation_serve,
+                model_name=self.args.translation_model,
+                endpoint=self.args.translation_endpoint,
+            )
+            self.llm_translation_manager = TranslationManager(_translator)
 
     async def _push_silence_event(self) -> None:
         if self.transcription_queue:
@@ -542,6 +554,7 @@ class AudioProcessor:
                     current_silence=self.current_silence,
                     audio_time=self.total_pcm_samples / self.sample_rate if self.sample_rate else None,
                 )
+                lines = filter_segments(lines)
                 # 확정 문장 끝 온점 부착 (UI 표시용; WER 무영향 — normalize_text가 구두점 제거).
                 # 마지막 세그먼트는 진행 중(미확정)일 수 있으므로 제외. 멱등 — 이미 구두점이면 미수정.
                 for seg in lines[:-1]:
@@ -549,6 +562,8 @@ class AudioProcessor:
                         stripped = seg.text.rstrip()
                         if stripped and stripped[-1] not in PUNCTUATION_MARKS:
                             seg.text = stripped + "."
+                if self.llm_translation_manager is not None:
+                    self.llm_translation_manager.apply_translations(lines)
                 state = await self.get_current_state()
 
                 buffer_transcription_text = state.buffer_transcription.text if state.buffer_transcription else ''
@@ -675,6 +690,9 @@ class AudioProcessor:
                 logger.warning(f"Error stopping FFmpeg manager: {e}")
         if self.diarization:
             self.diarization.close()
+
+        if self.llm_translation_manager is not None:
+            await self.llm_translation_manager.translator.close()
 
         # Finalize session metrics
         self.metrics.total_audio_duration_s = self.total_pcm_samples / self.sample_rate

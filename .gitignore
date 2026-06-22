@@ -145,6 +145,18 @@ nllb-200-distilled-600M-ctranslate2/*
 # 기계별 로컬 Claude 설정 — 절대경로·권한이 PC마다 다름 (공유 금지)
 .claude/settings.local.json
 
-# eval 스크래치 결과 — .omc/benchmarks/ 에 저장하는 것이 원칙
-eval_result.txt
-eval_pathc_result.txt
+# eval/측정 스크래치 결과 (루트) — .omc/benchmarks/ 에 저장하는 것이 원칙
+results_*.txt
+results_*.json
+eval_*.txt
+ytn2_*.txt
+
+# 워크트리 (git worktree add로 생성, 로컬 전용)
+worktrees/
+
+# 대형 모델 파일 (로컬 저장, git 비추적)
+*.nemo
+whisperlivekit/model/whisper-large-v3/
+
+# Phase 3 필터링 사용자 DB (런타임 자동 생성)
+whisperlivekit/filtering/*.db

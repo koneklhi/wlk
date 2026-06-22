@@ -105,6 +105,34 @@ uv run python -c "import whisperlivekit; print(whisperlivekit.__file__)"
 
 ---
 
+## 새 워크트리에서 작업 시작 시 (의존성 함정 주의)
+
+새 `git worktree`를 만들어 feature/실험 작업을 시작할 때, **워크트리는 main과 별도의 `.venv`를
+가진다**. main `.venv`에 설치된 옵셔널 의존성(`sounddevice`, `playwright`, `comtypes` 등)이
+워크트리 `.venv`에는 없어 `ModuleNotFoundError`가 난다.
+
+또한 셸의 `VIRTUAL_ENV`가 main `.venv`를 가리켜도, `uv`는 **현재 폴더 기준 `.venv`를 우선**하며
+다음 경고와 함께 main `.venv`를 무시한다:
+
+> `warning: VIRTUAL_ENV=...\wlk\.venv does not match the project environment path .venv and will be ignored`
+
+**그러므로 새 워크트리에서 처음 작업하기 전, 워크트리 경로에서 1회 실행한다:**
+
+```powershell
+cd <워크트리 절대경로>
+uv sync --extra vbcable --extra listen
+```
+
+- `--extra vbcable`: 경로 C(VBCable 루프백) 브라우저 자동화에 필요한 `playwright`/`comtypes`
+- `--extra listen`: VBCable 재생에 필요한 `sounddevice`
+
+**중요 — `ModuleNotFoundError`가 나면 같은 설치를 반복하거나 pip 직접 호출로 전환하지 말 것.**
+원인은 거의 항상 "워크트리 `.venv` 미초기화"다. 위 `uv sync` 1회로 해결하고 멈춘다.
+
+> extra 이름은 `pyproject.toml`의 `[project.optional-dependencies]` 에서 확인 (현재: `vbcable`, `listen`).
+
+---
+
 ## 이후 일상 동기화
 
 ```

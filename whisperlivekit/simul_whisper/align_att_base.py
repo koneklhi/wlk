@@ -222,6 +222,24 @@ class AlignAttBase(ABC):
             self._apply_detected_language(new_lang)
             self.state.last_lang_switch_time = audio_end_secs
 
+    def detect_current_language(self, window_secs: float = 1.5, min_prob: float = 0.90):
+        """최근 window_secs 초 오디오의 언어를 감지해 반환. 확신도 min_prob 미만이면 None."""
+        if not self.state.segments:
+            return None
+        try:
+            window_samples = int(window_secs * 16000)
+            all_audio = self._concat_segments()
+            recent = all_audio[-window_samples:] if len(all_audio) > window_samples else all_audio
+            encoder_feature, _ = self._encode(recent)
+            _, language_probs = self.lang_id(encoder_feature)
+            probs = language_probs[0] if isinstance(language_probs, list) else language_probs
+            top_lan, p = max(probs.items(), key=lambda x: x[1])
+            logger.info("[ShortSilenceLangCheck] 최근 %.1fs → %s (p=%.2f)", window_secs, top_lan, p)
+            return top_lan if p >= min_prob else None
+        except Exception as e:
+            logger.debug("[ShortSilenceLangCheck] 감지 실패: %s", e)
+            return None
+
     # === Template infer() ===
 
     def infer(self, is_last=False):

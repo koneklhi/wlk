@@ -238,7 +238,10 @@ class TokensAlignment:
             for token in self.new_tokens:
                 if isinstance(token, Silence):
                     if self.current_line_tokens:
-                        self.validated_segments.append(Segment.from_tokens(self.current_line_tokens))
+                        seg = Segment.from_tokens(self.current_line_tokens)
+                        if seg is not None:
+                            seg.finalized = True
+                            self.validated_segments.append(seg)
                         self.current_line_tokens = []
 
                     end_silence = token.end if token.has_ended else _silence_now

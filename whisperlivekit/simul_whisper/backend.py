@@ -34,6 +34,7 @@ else:
     WhisperModel = None
 
 MIN_DURATION_REAL_SILENCE = 2
+MIN_DURATION_SHORT_LANG_RESET = 0.5
 
 # 디코더 멈춤 복구: 오디오가 이 시간(초) 이상 전진했는데 토큰이 전혀 안 나오면
 # SimulStreaming 디코더가 비-fire 상태에 빠진 것으로 보고 강제 refresh로 복구한다.
@@ -59,6 +60,7 @@ class SimulStreamingOnlineProcessor:
         self._last_emitted_word: str = None
         self._last_emit_end: float = 0.0  # 마지막으로 토큰을 방출한 시점의 audio end (stall 복구 baseline)
         self._consecutive_char_repeat: int = 0
+        self._short_silence_check_at: float = 0.0
 
         if asr.tokenizer:
             self.model.tokenizer = asr.tokenizer
@@ -100,6 +102,25 @@ class SimulStreamingOnlineProcessor:
             self._last_emitted_word = None
             self._last_emit_end = self.end
             self._consecutive_char_repeat = 0
+            self._short_silence_check_at = 0.0
+        elif (
+            silence_duration >= MIN_DURATION_SHORT_LANG_RESET
+            and self.model.cfg.language == "auto"
+            and self.model.state.detected_language is not None
+        ):
+            self._short_silence_check_at = self.end + 1.5
+
+    def _check_short_silence_language(self):
+        """짧은 pause 후 1.5s 오디오 누적 시점에 언어 재감지. 전환 확인 시 경량 리셋."""
+        new_lang = self.model.detect_current_language(window_secs=1.5, min_prob=0.90)
+        if new_lang is not None and new_lang != self.model.state.detected_language:
+            logger.info(
+                "[ShortSilenceLangCheck] 언어 전환 감지: %s → %s",
+                self.model.state.detected_language, new_lang,
+            )
+            self.model.create_tokenizer(new_lang)
+            self.model.init_context()
+            self.model.state.detected_language = new_lang
 
     def insert_audio_chunk(self, audio: np.ndarray, audio_stream_end_time):
         """Append an audio chunk to be processed by SimulStreaming."""
@@ -228,6 +249,10 @@ class SimulStreamingOnlineProcessor:
         Returns a tuple: (list of committed ASRToken objects, float representing the audio processed up to time).
         """
         try:
+            if self._short_silence_check_at > 0 and self.end >= self._short_silence_check_at:
+                self._check_short_silence_language()
+                self._short_silence_check_at = 0.0
+
             timestamped_words = self.model.infer(is_last=is_last)
 
             if timestamped_words:
