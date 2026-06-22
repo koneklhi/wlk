@@ -284,8 +284,8 @@ def main() -> None:
     )
     parser.add_argument(
         "--files", nargs="+", type=Path,
-        default=[Path("test_data/sbs1.mp3"), Path("test_data/ytn1.mp3")],
-        help="테스트할 오디오 파일 (기본: test_data/sbs1.mp3 + test_data/ytn1.mp3)",
+        default=[Path("test_data/sbs1.mp3"), Path("test_data/ytn1.mp3"), Path("test_data/eng1.mp3")],
+        help="테스트할 오디오 파일 (기본: test_data/sbs1.mp3 + test_data/ytn1.mp3 + test_data/eng1.mp3)",
     )
     parser.add_argument("--wait", type=int, default=15, help="경로 C 재생 완료 후 대기 시간(초)")
     parser.add_argument("--output", type=Path, default=None, help="결과 JSON 저장 경로")
