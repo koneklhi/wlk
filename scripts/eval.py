@@ -114,6 +114,7 @@ def start_server(
     diarization: bool = False,
     sortformer_model: str = "",
     extra_server_args: list = None,
+    server_log_file: str = None,
 ) -> subprocess.Popen:
     cmd = [
         sys.executable, "-m", "whisperlivekit.basic_server",
@@ -132,6 +133,9 @@ def start_server(
             cmd.extend(["--sortformer-model", sortformer_model])
     if extra_server_args:
         cmd.extend(extra_server_args)
+    if server_log_file:
+        log_fh = open(server_log_file, "w", encoding="utf-8")
+        return subprocess.Popen(cmd, stdout=log_fh, stderr=log_fh)
     return subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
@@ -320,6 +324,20 @@ def main() -> None:
         dest="compression_ratio_threshold",
         help="compression-ratio 품질 게이트 임계값 (예: 2.4). None=비활성.",
     )
+    parser.add_argument(
+        "--trace-tokens",
+        action="store_true",
+        default=False,
+        dest="trace_tokens",
+        help="TokenTrace 디버그 로그 활성화 (서버에 --trace-tokens 전달).",
+    )
+    parser.add_argument(
+        "--periodic-lang-check",
+        type=float,
+        default=None,
+        dest="periodic_lang_check_secs",
+        help="주기적 언어재감지 간격(초). None=비활성(기본). 서버에 --periodic-lang-check 전달.",
+    )
     args = parser.parse_args()
 
     paths = [p.strip().upper() for p in args.paths.split(",")]
@@ -330,6 +348,10 @@ def main() -> None:
         extra_server_args.extend(["--logprob-threshold", str(args.logprob_threshold)])
     if args.compression_ratio_threshold is not None:
         extra_server_args.extend(["--compression-ratio-threshold", str(args.compression_ratio_threshold)])
+    if args.trace_tokens:
+        extra_server_args.append("--trace-tokens")
+    if args.periodic_lang_check_secs is not None:
+        extra_server_args.extend(["--periodic-lang-check", str(args.periodic_lang_check_secs)])
 
     for f in args.files:
         if not f.exists():
@@ -344,11 +366,15 @@ def main() -> None:
         model_dir=args.model_dir,
     )
 
+    server_log = "server_trace.log" if args.trace_tokens else None
+    if server_log:
+        print(f"[eval] --trace-tokens 활성: 서버 로그 → {server_log}")
+
     if "A" in paths:
         print(f"\n[eval] 경로 A 테스트 시작 (파일별 서버 재시작)...")
         for audio_path in args.files:
             print(f"[eval] 경로 A 서버 기동 중 (포트 {SERVER_PORT})...")
-            proc = start_server(args.model_dir, pcm_input=True, port=SERVER_PORT, warmup=warmup, lan=args.lan, diarization=args.diarization, sortformer_model=args.sortformer_model, extra_server_args=extra_server_args)
+            proc = start_server(args.model_dir, pcm_input=True, port=SERVER_PORT, warmup=warmup, lan=args.lan, diarization=args.diarization, sortformer_model=args.sortformer_model, extra_server_args=extra_server_args, server_log_file=server_log)
             try:
                 if not wait_for_ready(base_url, proc):
                     print("[오류] 서버 ready 대기 시간 초과", file=sys.stderr)
@@ -377,7 +403,7 @@ def main() -> None:
                     for rep in range(args.repeat):
                         rep_label = f"회차 {rep + 1}/{args.repeat}" if args.repeat > 1 else ""
                         print(f"[eval] 경로 C 서버 기동 중 (포트 {SERVER_PORT}) {rep_label}...")
-                        proc = start_server(args.model_dir, pcm_input=False, port=SERVER_PORT, warmup=warmup, lan=args.lan, diarization=args.diarization, sortformer_model=args.sortformer_model, extra_server_args=extra_server_args)
+                        proc = start_server(args.model_dir, pcm_input=False, port=SERVER_PORT, warmup=warmup, lan=args.lan, diarization=args.diarization, sortformer_model=args.sortformer_model, extra_server_args=extra_server_args, server_log_file=server_log)
                         try:
                             if not wait_for_ready(base_url, proc):
                                 print("[오류] 서버 ready 대기 시간 초과", file=sys.stderr)

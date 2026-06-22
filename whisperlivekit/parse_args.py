@@ -356,6 +356,22 @@ def parse_args():
         help="600M or 1.3B",
     )
 
+    simulstreaming_group.add_argument(
+        "--trace-tokens",
+        action="store_true",
+        default=False,
+        dest="trace_tokens",
+        help="TokenTrace 디버그 로그 활성화: infer/emit 단계별 토큰 목록을 DEBUG 레벨로 출력.",
+    )
+
+    simulstreaming_group.add_argument(
+        "--periodic-lang-check",
+        type=float,
+        default=None,
+        dest="periodic_lang_check_secs",
+        help="주기적 언어재감지 간격(초). None=비활성(기본). 권장값 4.0. diar-off 언어 고착 해소용.",
+    )
+
     args = parser.parse_args()
     args.transcription = not args.no_transcription
     args.vad = not args.no_vad

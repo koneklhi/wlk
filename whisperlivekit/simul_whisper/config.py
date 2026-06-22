@@ -24,3 +24,4 @@ class AlignAttConfig():
     logprob_threshold: Optional[float] = field(default=None)
     compression_ratio_threshold: Optional[float] = field(default=None)
     quality_gate_reset_after: int = 3
+    periodic_lang_check_secs: Optional[float] = field(default=None)

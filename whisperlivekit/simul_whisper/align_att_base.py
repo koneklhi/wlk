@@ -203,6 +203,25 @@ class AlignAttBase(ABC):
                     self.state.eager_lang_detect = False
                     logger.info(f"Tokenizer language: {self.tokenizer.language}")
 
+    def _maybe_periodic_lang_check(self, audio_end_secs: float) -> None:
+        """주기적 언어 재감지 — diar-off에서 언어 고착 방지."""
+        check_interval = self.cfg.periodic_lang_check_secs
+        if check_interval is None:
+            return
+        if self.state.detected_language is None:
+            return
+        if audio_end_secs - self.state.last_lang_switch_time < 3.0:
+            return
+        if audio_end_secs - self.state.last_periodic_lang_check < check_interval:
+            return
+        self.state.last_periodic_lang_check = audio_end_secs
+        new_lang = self.detect_current_language(window_secs=2.0, min_prob=0.90)
+        if new_lang and new_lang != self.state.detected_language:
+            logger.info("[PeriodicLang] %s→%s (%.1fs 간격 감지)",
+                        self.state.detected_language, new_lang, check_interval)
+            self._apply_detected_language(new_lang)
+            self.state.last_lang_switch_time = audio_end_secs
+
     # === Template infer() ===
 
     def infer(self, is_last=False):
@@ -352,6 +371,7 @@ class AlignAttBase(ABC):
         )
         self._handle_pending_tokens(split_words, split_tokens)
 
+        self._maybe_periodic_lang_check(self.segments_len())
         return timestamped_words
 
     # === Post-decode shared helpers ===
@@ -508,7 +528,7 @@ class AlignAttBase(ABC):
             if text:
                 cr = compression_ratio(text)
                 if cr > cr_thr:
-                    logger.warning("[QualityGate] compression_ratio %.2f > %.2f — suppressing: %.60s", cr, cr_thr, text)
+                    logger.warning("[QualityGate] compression_ratio %.2f > %.2f — suppressing: %.200s", cr, cr_thr, text)
                     return True
         return False
 

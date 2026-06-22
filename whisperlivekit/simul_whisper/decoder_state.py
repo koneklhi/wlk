@@ -34,6 +34,8 @@ class DecoderState:
     cumulative_time_offset: float = 0.0
     first_timestamp: Optional[float] = None
     last_attend_frame: int = 0
+    last_periodic_lang_check: float = 0.0
+    last_lang_switch_time: float = 0.0
 
     speaker: int = -1
     log_segments: int = 0

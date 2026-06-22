@@ -24,29 +24,97 @@ STT 성능 개선 과정에서 수행한 실험을 기록한다.
 
 ---
 
-## 현재 채택 베이스라인 (Exp-093 — 공식 N≥3 수치 2026-06-18)
+## 현재 채택 베이스라인 (Exp-105 — 공식 N≥3 수치 2026-06-22)
 
-**silence 시 언어 재감지 + MIN_DURATION_REAL_SILENCE=2 (beam_size=2, --lan auto)**
+**주기적 언어재감지 4.0s + ForeignLang 즉시 트리거 (beam_size=2, --lan auto, --periodic-lang-check 4.0)**
 
 | 파일 | R1 WER | R2 WER | R3 WER | median WER | F1 (median) | max WER | stdev |
 |---|---|---|---|---|---|---|---|
-| sbs1 | 20.8% | 19.6% | 17.3% | **19.6%** | **76.2%** | 20.8% | 1.8% |
-| ytn1 | 21.5% | 22.7% | 22.1% | **22.1%** | **71.4%** | **22.7%** | 0.6% |
-| eng1 | 3.8% | 5.7% | 5.7% | **5.7%** | 0.0% | 5.7% | 1.1% |
-| **평균** | | | | **15.8%** | **49.2%** | | |
+| sbs1 | 20.2% | 19.6% | 17.9% | **19.6%** | **76.2%** | 20.2% | 1.2% |
+| ytn1 | 18.4% | 18.4% | 20.2% | **18.4%** | **71.4%** | 20.2% | 1.1% |
+| eng1 | 5.7% | 3.8% | 5.7% | **5.7%** | 0.0% | 5.7% | 1.1% |
+| **평균** | | | | **15.9%** | **49.2%** | | |
 
-- ytn1 catastrophic run 완전 소멸 (이전 max 108.0% → 22.7%). stdev 44.6% → 0.6%로 극적 안정화.
-- sbs1 max 20.8%: 이전(19.6%) 대비 +1.2pp — 측정 노이즈 수준.
-- eng1 median 5.7%: 소폭 상승 (이전 3.8%). F1=0%는 eng1 단일 세그먼트 구조 특성.
-- ytn2(held-out) WER 114.8%, F1 44.4% — 한국어 구간 일부 전사 복구 확인 (baseline 대비 질적 개선).
-- JSON: `.omc/benchmarks/eval_exp093_primary_n3.json` / ytn2: `eval_exp093_ytn2.json`
+- ytn1 max 20.2%: Exp-104(22.1%) 대비 1.9pp 개선.
+- sbs1 max 20.2%: Exp-104(27.4%) 대비 7.2pp 개선 — watch item 해소.
+- eng1 max 5.7%: Exp-104(6.7%) 대비 1.0pp 개선.
+- ytn2(held-out, diar-on) WER median **25.1%**, max 27.1%, F1 50.0% — Exp-104(28.1%) 대비 3.0pp 개선. 폭주 0회.
 
 주요 변경 파일:
-- `whisperlivekit/simul_whisper/backend.py:36` — `MIN_DURATION_REAL_SILENCE = 5 → 2`
-- `whisperlivekit/simul_whisper/backend.py:95-96` — `end_silence()` long_silence 분기에 언어 재감지 2줄 추가
-- `tests/test_lang_redetect.py` — 단위 테스트 4개 (신규)
+- `whisperlivekit/simul_whisper/align_att_base.py` — `_maybe_periodic_lang_check()` 추가, `infer()` 마지막 호출
+- `whisperlivekit/simul_whisper/backend.py` — `_FOREIGN_LANG_PATTERN` 상수 + `process_iter()` 즉시 재감지 트리거
+- `whisperlivekit/simul_whisper/config.py` — `periodic_lang_check_secs` 필드
+- `whisperlivekit/simul_whisper/decoder_state.py` — `last_periodic_lang_check`, `last_lang_switch_time` 필드
+- `whisperlivekit/config.py`, `whisperlivekit/parse_args.py`, `whisperlivekit/basic_server.py` — `--trace-tokens`, `--periodic-lang-check` 옵션 배선
+- `scripts/eval.py` — `--trace-tokens`, `--periodic-lang-check`, `server_log_file`
 
-브랜치: `phase2/exp-093-lang-redetect` (commit `ea11c77`), master 통합: merge commit
+브랜치: `phase4/diarization-spike`
+
+---
+
+## Exp-105 (phase4/diarization-spike 채택 — 2026-06-22)
+
+**diar-off 언어 고착 해소 — 주기적 언어재감지 + ForeignLang 즉시 트리거 + 진단 인프라**
+
+정책: simulstreaming. 브랜치 `phase4/diarization-spike`.
+
+**가설**: Exp-093/104의 `MIN_DURATION_REAL_SILENCE=2` 방식은 2s 침묵이 없으면 언어 전환 불가 → diar-off 경로에서
+뉴스 한·영 연속 전환(짧은 pause) 구간 언어 고착. 두 가지 보완이 필요:
+1. **주기적 재감지**: 침묵 없이도 4s마다 `detect_current_language(window_secs=2.0, min_prob=0.90)` → 언어가 다르면
+   `_apply_detected_language()` 전환. 히스테리시스 3s(flip-flop 방지).
+2. **ForeignLang 즉시 트리거**: `(speaking in foreign language)` 패턴 방출 시 즉시 `detected_language=None` 리셋 →
+   다음 청크에서 강제 재감지.
+
+4단계 진행: Round 0(진단 인프라) → Round 1(기각) → Round 2(채택) → Round 3(ytn2 확인).
+
+**Round 0 — 진단 인프라 (코드 변경, 벤치마크 없음)**
+- `backend.py` CrossBatchFilter: `logger.debug` → `logger.info`
+- `backend.py` TokenTrace: `infer`/`emit` 단계별 토큰 목록 `logger.debug` 추가 (`--trace-tokens` 플래그)
+- `align_att_base.py` QualityGate: `%.60s` → `%.200s` (텍스트 잘림 제거)
+- 진단 결과: "텅 빈 바다가" 누락 = 필터 아닌 디코더 자체 미생성 → Round 2 언어 재감지로 해결
+
+**Round 1 — 기각: tokens_alignment.py 언어전환 경계 삽입**
+- `tokens_alignment.py` `get_lines()` 내 `_detect_script()` 기반 언어전환 경계 삽입
+- **기각 이유**: ytn1 max 27.0% > 22.1% 가드레일 위반 (옳은 문장 중간에 잘못된 경계 삽입)
+- `git checkout -- whisperlivekit/tokens_alignment.py`로 롤백
+
+**변경 (Round 0 진단 인프라 + Round 2 채택)**:
+- `whisperlivekit/simul_whisper/align_att_base.py` — `_maybe_periodic_lang_check(audio_end_secs)` 추가, `infer()` 마지막 호출
+- `whisperlivekit/simul_whisper/backend.py` — `_FOREIGN_LANG_PATTERN` 상수 + `process_iter()` 즉시 재감지 트리거 + CrossBatchFilter debug→info + TokenTrace 로그
+- `whisperlivekit/simul_whisper/config.py` — `periodic_lang_check_secs: Optional[float] = field(default=None)`
+- `whisperlivekit/simul_whisper/decoder_state.py` — `last_periodic_lang_check: float = 0.0`, `last_lang_switch_time: float = 0.0`
+- `whisperlivekit/config.py` — `trace_tokens: bool = False`, `periodic_lang_check_secs: Optional[float] = None`
+- `whisperlivekit/parse_args.py` — `--trace-tokens`, `--periodic-lang-check` 옵션
+- `whisperlivekit/basic_server.py` — `trace_tokens` 활성 시 backend/align_att_base logger DEBUG 설정
+- `scripts/eval.py` — `--trace-tokens`, `--periodic-lang-check`, `server_log_file` 파라미터
+
+**테스트**: `.venv\Scripts\python.exe scripts\eval.py --paths C --repeat 3 --periodic-lang-check 4.0 --files test_data\sbs1.mp3 test_data\ytn1.mp3 test_data\eng1.mp3`
+
+**정량 결과 (Round 2, 경로 C N=3, --periodic-lang-check 4.0):**
+
+| 파일 | R1 WER | R2 WER | R3 WER | median WER | max WER | stdev | F1 (median) | vs Exp-104 |
+|---|---|---|---|---|---|---|---|---|
+| sbs1 | 20.2% | 19.6% | 17.9% | **19.6%** | 20.2% | 1.2% | **76.2%** | median ↑2.3pp / max **↓7.2pp** |
+| ytn1 | 18.4% | 18.4% | 20.2% | **18.4%** | 20.2% | 1.1% | **71.4%** | median **↓2.5pp** / max ↓1.9pp |
+| eng1 | 5.7% | 3.8% | 5.7% | **5.7%** | 5.7% | 1.1% | **0.0%** | max ↓1.0pp |
+
+**ytn2 diar-on (Round 3, N=3, CR@3.0 + sortformer):**
+
+| R1 WER | R2 WER | R3 WER | median WER | max WER | stdev | F1 (median) | vs Exp-104 |
+|---|---|---|---|---|---|---|---|
+| 24.6% | 25.1% | 27.1% | **25.1%** | 27.1% | 1.3% | **50.0%** | median **↓3.0pp**, 폭주 0회 유지 |
+
+**정성**:
+- ytn1: `(speaking in foreign language)` 환각 패턴이 즉시 재감지로 제거됨. 영어 구간 진입 시 EN 토크나이저 전환 관측.
+- sbs1: 주기적 재감지가 KO 뉴스 중 영어 인용구 구간 토크나이저 교정. median 소폭 상승(+2.3pp)은 측정 편차 범위.
+- eng1: 단일 화자 영어 — ForeignLang 패턴 미발생, EN→EN 동일 결과. F1=0%는 단일 세그먼트 구조 특성.
+- ytn2: 화자전환 경계 재감지 + 주기적 재감지 복합 효과로 28.1%→25.1%.
+
+**결론**: **채택**. primary 3종 max 모두 미회귀 또는 개선(sbs1 27.4%→20.2%, ytn1 22.1%→20.2%, eng1 6.7%→5.7%).
+ytn2 범용 개선 확인(28.1%→25.1%). sbs1 median 소폭 상승(+2.3pp)은 VBCable 측정 편차 범위 내.
+
+**다음 가설**: ytn2 추가 하락(<20% 목표) — Sortformer 과분할 완화 또는 `periodic_lang_check_secs` 단축(4.0→2.0s).
+eng1 F1=0%는 단일 세그먼트 구조로 별도 접근 필요. [[diarization-spike-first-timestamp-regression]] [[vbcable-loopback-instability]]
 
 ---
 
@@ -121,6 +189,7 @@ STT 성능 개선 과정에서 수행한 실험을 기록한다.
 
 | Exp | 날짜 | 제목 | 핵심 변경 | WER (중앙값) | F1 | 결론 |
 |---|---|---|---|---|---|---|
+| **Exp-105** | 2026-06-22 | 주기적 언어재감지 + ForeignLang 즉시 트리거 (diar-off 언어 고착 해소) | `align_att_base.py` `_maybe_periodic_lang_check()` + `backend.py` `_FOREIGN_LANG_PATTERN` 즉시 재감지 + TokenTrace/QualityGate 진단 인프라 | sbs1 **19.6%**/ytn1 **18.4%**/eng1 **5.7%**(diar-off)·ytn2 **25.1%**(diar-on) | ytn1 **71.4%**/sbs1 **76.2%** | **채택** (ytn1 max 22.1%→20.2%, sbs1 max 27.4%→20.2% 해소, ytn2 28.1%→25.1%) |
 | **Exp-104** | 2026-06-22 | diar-off 베이스라인 복구(first_timestamp 조건부 게이트)+Round2 경계 재디코딩+CR@3.0+온점 | `align_att_base.py` `_detect_language_if_needed` 게이트 조건부 복원, `backend.py` `new_speaker` complete=False+eager 재감지, `audio_processor.py` ChangeSpeaker 크래시 수정+온점 | ytn1 **20.9%**/sbs1 **17.3%**/eng1 **3.8%**(diar-off)·ytn2 **28.1%**(diar-on) | ytn1 **71.4%**/sbs1 **76.2%** | **채택** (diar-off ytn1 156%→20.9%=Exp-093 수준, diar-on ytn2 147%→28.1%, primary 미회귀) |
 | **Exp-098** | 2026-06-19 | MIN_DURATION_REAL_SILENCE 2→1.5 (Exp-094 1.0s와 현행 2.0s 중간값) | `backend.py:36` `MIN_DURATION_REAL_SILENCE = 1.5` | sbs1 **19.0%** / ytn1 **22.1%** / eng1 **4.8%** | sbs1 **76.2%** / ytn1 **61.5%** | **기각** (ytn1 max 152.1% catastrophic — ytn1에 1.5-2.0s sentence-internal pause 존재 확인, 2.0s 임계값이 이미 최적점) |
 | **Exp-097** | 2026-06-19 | long_silence 후 tokenizer multilingual 즉시 리셋 (`create_tokenizer(None)`) | `backend.py` `end_silence()` long_silence 블록 앞에 `create_tokenizer(None)` 1줄 | sbs1 **19.0%** / ytn1 **20.9%** / eng1 **3.8%** | sbs1 **76.2%** / ytn1 **71.4%** | **기각** (sbs1 max 138.7% catastrophic — multilingual decoder가 KO 오디오에서 EN token 예측) |

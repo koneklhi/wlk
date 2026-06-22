@@ -65,6 +65,8 @@ class WhisperLiveKitConfig:
     max_context_tokens: Optional[int] = None
     logprob_threshold: Optional[float] = None
     compression_ratio_threshold: Optional[float] = None
+    trace_tokens: bool = False
+    periodic_lang_check_secs: Optional[float] = None
 
     # Diarization — Sortformer
     sortformer_model: str = "nvidia/diar_streaming_sortformer_4spk-v2"

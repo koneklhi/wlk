@@ -39,6 +39,8 @@ MIN_DURATION_REAL_SILENCE = 2
 # SimulStreaming 디코더가 비-fire 상태에 빠진 것으로 보고 강제 refresh로 복구한다.
 STALL_RECOVER_SEC = 10.0
 
+_FOREIGN_LANG_PATTERN = re.compile(r'\(speaking in foreign language', re.IGNORECASE)
+
 class SimulStreamingOnlineProcessor:
     """Online processor for SimulStreaming ASR."""
     SAMPLING_RATE = 16000
@@ -211,7 +213,7 @@ class SimulStreamingOnlineProcessor:
                 continue
             self._consecutive_char_repeat = 0
             if prev is not None and word == prev:
-                logger.debug("[CrossBatchFilter] 반복 제거: %r", word)
+                logger.info("[CrossBatchFilter] 반복 제거: %r (prev=%r)", word, prev)
                 continue
             result.append(token)
             prev = word
@@ -227,6 +229,19 @@ class SimulStreamingOnlineProcessor:
         """
         try:
             timestamped_words = self.model.infer(is_last=is_last)
+
+            if timestamped_words:
+                logger.debug("[TokenTrace] infer→%d tokens: %s", len(timestamped_words),
+                             " ".join(t.text for t in timestamped_words[:20]))
+                decoded_text = ''.join(t.text for t in timestamped_words)
+                if _FOREIGN_LANG_PATTERN.search(decoded_text):
+                    logger.warning("[ForeignLang] '(speaking in foreign language)' 감지 → 즉시 언어재감지 트리거")
+                    self.model.state.detected_language = None
+                    self.model.state.first_timestamp = None
+                    self.model.state.eager_lang_detect = True
+                    self.model.state.last_lang_switch_time = 0.0
+                    timestamped_words = [t for t in timestamped_words
+                                         if not _FOREIGN_LANG_PATTERN.search(t.text)]
 
             if not timestamped_words:
                 # 디코더 멈춤 복구 워치독: 오디오가 STALL_RECOVER_SEC 이상 전진했는데
@@ -249,6 +264,9 @@ class SimulStreamingOnlineProcessor:
                 return [], self.end
 
             timestamped_words = self._filter_cross_batch_repetitions(timestamped_words)
+            if timestamped_words:
+                logger.debug("[TokenTrace] emit→%d tokens: %s", len(timestamped_words),
+                             " ".join(t.text for t in timestamped_words[:20]))
             self.buffer = []
             self._last_emit_end = self.end
             return timestamped_words, self.end
