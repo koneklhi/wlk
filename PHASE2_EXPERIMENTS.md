@@ -26,6 +26,10 @@ STT 성능 개선 과정에서 수행한 실험을 기록한다.
 
 ## 현재 채택 베이스라인 (Exp-105 — 공식 N≥3 수치 2026-06-22)
 
+---
+
+## 이전 채택 베이스라인 (Exp-093 — 2026-06-18)
+
 **주기적 언어재감지 4.0s + ForeignLang 즉시 트리거 (beam_size=2, --lan auto, --periodic-lang-check 4.0)**
 
 | 파일 | R1 WER | R2 WER | R3 WER | median WER | F1 (median) | max WER | stdev |
@@ -39,6 +43,8 @@ STT 성능 개선 과정에서 수행한 실험을 기록한다.
 - sbs1 max 20.2%: Exp-104(27.4%) 대비 7.2pp 개선 — watch item 해소.
 - eng1 max 5.7%: Exp-104(6.7%) 대비 1.0pp 개선.
 - ytn2(held-out, diar-on) WER median **25.1%**, max 27.1%, F1 50.0% — Exp-104(28.1%) 대비 3.0pp 개선. 폭주 0회.
+- ytn1 catastrophic run 완전 소멸 (이전 max 108.0% → 22.7%). stdev 44.6% → 0.6%로 극적 안정화.
+- JSON: `.omc/benchmarks/eval_exp093_primary_n3.json`
 
 주요 변경 파일:
 - `whisperlivekit/simul_whisper/align_att_base.py` — `_maybe_periodic_lang_check()` 추가, `infer()` 마지막 호출
@@ -264,6 +270,9 @@ Exp-093 baseline 대비: WER 114.8% → 84.2% (−30.6pp 개선), F1 44.4% → 0
 | **Exp-105** | 2026-06-22 | 주기적 언어재감지 + ForeignLang 즉시 트리거 (diar-off 언어 고착 해소) | `align_att_base.py` `_maybe_periodic_lang_check()` + `backend.py` `_FOREIGN_LANG_PATTERN` 즉시 재감지 + TokenTrace/QualityGate 진단 인프라 | sbs1 **19.6%**/ytn1 **18.4%**/eng1 **5.7%**(diar-off)·ytn2 **25.1%**(diar-on) | ytn1 **71.4%**/sbs1 **76.2%** | **채택** (ytn1 max 22.1%→20.2%, sbs1 max 27.4%→20.2% 해소, ytn2 28.1%→25.1%) |
 | **Exp-104** | 2026-06-22 | diar-off 베이스라인 복구(first_timestamp 조건부 게이트)+Round2 경계 재디코딩+CR@3.0+온점 | `align_att_base.py` `_detect_language_if_needed` 게이트 조건부 복원, `backend.py` `new_speaker` complete=False+eager 재감지, `audio_processor.py` ChangeSpeaker 크래시 수정+온점 | ytn1 **20.9%**/sbs1 **17.3%**/eng1 **3.8%**(diar-off)·ytn2 **28.1%**(diar-on) | ytn1 **71.4%**/sbs1 **76.2%** | **채택** (diar-off ytn1 156%→20.9%=Exp-093 수준, diar-on ytn2 147%→28.1%, primary 미회귀) |
 | **Exp-102** | 2026-06-19 | Sortformer 화자 분할 + ChangeSpeaker 경로 활성화 + 언어 재감지 시너지 | `audio_processor.py` ChangeSpeaker enqueue, `backend.py` `new_speaker()` 언어 재감지 2줄, `sortformer_backend.py` 로컬 .nemo 분기, `eval.py` `--diarization` 플래그 | sbs1 **19.0%** / ytn1 **19.0%** / eng1 **5.7%** | sbs1 **76.2%** / ytn1 **71.4%** | **채택** (Exp-093 대비 max 미회귀, ytn1 median −3.1pp 개선, ytn2 WER −30.6pp) |
+| **Exp-101** | 2026-06-19 | short pause 후 최근 창 언어 재감지 (오디오 버퍼 유지) | `align_att_base.py` `detect_current_language()` 신규, `backend.py` `MIN_DURATION_SHORT_LANG_RESET=0.5` + `_check_short_silence_language()` | sbs1 **17.3%** / ytn1 **20.2%** | sbs1 **76.2%** / ytn1 **61.5%** | **채택** (primary max 미회귀, ytn2 93.1→75.4% −17.7pp 개선) |
+| **Exp-100** | 2026-06-19 | long_silence 후 보수적 즉시 재감지 (first_timestamp=-0.5, 1.5s 발동) | `backend.py:96` `first_timestamp = None → -0.5` | sbs1 **19.0%** / ytn1 **19.0%** / eng1 **5.7%** | sbs1 **76.2%** / ytn1 **71.4%** | **기각** (primary 통과·개선 실질적, ytn2 WER 114.3% — 한국어 복구 없음. ytn2 long_silence 미발동 패턴이라 first_timestamp 변경 효과 없음) |
+| **Exp-099** | 2026-06-19 | long_silence 후 즉시 재감지 (first_timestamp=-1.5 sentinel, 1.0s 발동) | `backend.py:96` `first_timestamp = None → -1.5` | sbs1 **19.0%** / ytn1 **19.6%** / eng1 **3.8%** | sbs1 **76.2%** / ytn1 **61.5%** | **기각** (ytn1 max 46.0% — R2 spike, 1.0s 오디오에서 발동해 신뢰도 저하·간헐적 오감지) |
 | **Exp-098** | 2026-06-19 | MIN_DURATION_REAL_SILENCE 2→1.5 (Exp-094 1.0s와 현행 2.0s 중간값) | `backend.py:36` `MIN_DURATION_REAL_SILENCE = 1.5` | sbs1 **19.0%** / ytn1 **22.1%** / eng1 **4.8%** | sbs1 **76.2%** / ytn1 **61.5%** | **기각** (ytn1 max 152.1% catastrophic — ytn1에 1.5-2.0s sentence-internal pause 존재 확인, 2.0s 임계값이 이미 최적점) |
 | **Exp-097** | 2026-06-19 | long_silence 후 tokenizer multilingual 즉시 리셋 (`create_tokenizer(None)`) | `backend.py` `end_silence()` long_silence 블록 앞에 `create_tokenizer(None)` 1줄 | sbs1 **19.0%** / ytn1 **20.9%** / eng1 **3.8%** | sbs1 **76.2%** / ytn1 **71.4%** | **기각** (sbs1 max 138.7% catastrophic — multilingual decoder가 KO 오디오에서 EN token 예측) |
 | **Exp-096** | 2026-06-19 | 무음 후 언어 체크 (post-silence lang check, 0.5s↑ silence 후 1.5s 수집+0.90 확신도) | `align_att_base.py` `detect_current_language()` 신규, `backend.py` `_check_post_silence_language()` + `_post_silence_check_at` | sbs1 **23.2%** / ytn1 **86.5%** / eng1 **3.8%** | sbs1 **66.7%** / ytn1 **62.5%** | **기각** (ytn1 max 101.2% catastrophic — ytn1/ytn2 모두 짧은 pause+EN↔KO 교대, 음향 수준에서 구별 불가) |
@@ -396,6 +405,315 @@ ytn2 한국어 구간 완전 복구 필요. 잔존 문제:
 - silence가 짧은 구간에서 재감지 미발동
 - 재감지 후 첫 토큰이 영어로 편향되는 현상 (직전 영어 prefix bias)
 방향 탐색: ① silence threshold 추가 조정 ② 재감지 후 컨텍스트 비우기 ③ `lang_id()` 활용한 배치 내 즉시 감지
+
+---
+
+## Exp-102: Sortformer 화자 분할 + ChangeSpeaker 경로 활성화 (채택)
+
+**날짜**: 2026-06-19 / **정책**: SimulStreaming / **결론**: **채택**
+
+### 가설
+
+화자 전환 = 언어 전환이 강하게 상관하는 한↔영 순차통역 환경에서, Sortformer 화자 분할을 디코더에 연결하면:
+1. 화자 전환 감지 시 `ChangeSpeaker`를 `transcription_queue`에 enqueue → `new_speaker()` 호출 → `refresh_segment()` 버퍼 리셋으로 문장 확정
+2. `new_speaker()` 직후 `detected_language=None`, `first_timestamp=None` 설정 → Exp-093 silence 재감지와 동일 패턴 → 언어 재감지 강제 발동
+
+**죽은 경로 활성화**: whisperlivekit은 `new_speaker()` → `refresh_segment()` 뼈대를 갖고 있으나 ChangeSpeaker enqueue 로직이 없어 비활성 상태였다. `_update_diarization_state` (모든 diarization 경로에서 호출됨)에 화자 변화 감지 + enqueue를 추가해 활성화.
+
+베이스: Exp-093 (silence 시 언어 재감지, MIN_DURATION_REAL_SILENCE=2). 브랜치: `phase4/diarization-spike`.
+
+### 변경 내용
+
+| 파일 | 라인 | 변경 |
+|---|---|---|
+| `whisperlivekit/audio_processor.py` | L127 | `_last_diar_speaker: Optional[int] = None` 초기화 |
+| `whisperlivekit/audio_processor.py` | L431-439 | `_update_diarization_state` 끝에 화자 변화 감지 → `ChangeSpeaker` enqueue |
+| `whisperlivekit/simul_whisper/backend.py` | L115-116 | `new_speaker()` 내 `detected_language=None`, `first_timestamp=None` |
+| `whisperlivekit/diarization/sortformer_backend.py` | L58-63 | `_load_model()`에 `os.path.isfile()` 분기 — 로컬 `.nemo` `restore_from` 지원 |
+| `whisperlivekit/config.py` | — | `sortformer_model: str = "nvidia/diar_streaming_sortformer_4spk-v2"` 추가 |
+| `whisperlivekit/parse_args.py` | — | `--sortformer-model` 플래그 추가 |
+| `whisperlivekit/core.py` | L219 | `SortformerDiarization(config.sortformer_model)` 전달 |
+| `scripts/eval.py` | — | `--diarization`, `--sortformer-model` 플래그 추가 (start_server 연동) |
+
+### 테스트
+
+```
+python scripts/eval.py --model-dir <abs>/whisperlivekit/model/whisper-large-v3-turbo \
+  --diarization --sortformer-model <abs>/whisperlivekit/model/sortformer-4spk-v2.nemo \
+  --repeat 3
+```
+
+smoke test: 로컬 .nemo 서버 기동 성공, ytn1 화자 라벨 출력 확인 (Speaker 2=KO, Speaker 3=EN).
+
+### 정량 결과 (경로 C, N=3, 2026-06-19 14:13)
+
+| 파일 | R1 WER | R2 WER | R3 WER | median WER | F1 (median) | max WER | stdev |
+|---|---|---|---|---|---|---|---|
+| sbs1 | 19.0% | 20.2% | 17.3% | **19.0%** | **76.2%** | **20.2%** | 1.5% |
+| ytn1 | 19.0% | 19.6% | 18.4% | **19.0%** | **71.4%** | **19.6%** | 0.6% |
+| eng1 | 5.7% | 5.7% | 3.8% | **5.7%** | 0.0% | 5.7% | 1.1% |
+| **평균** | | | | **14.3%** | **48.4%** | | |
+
+Exp-093 baseline 대비:
+- sbs1: median 19.0% vs 19.6% (−0.6pp ✓), max **20.2%** vs 20.8% (−0.6pp ✓)
+- ytn1: median 19.0% vs 22.1% (−3.1pp ✓), max **19.6%** vs 22.7% (−3.1pp ✓) — 유의미 개선
+- eng1: median 5.7% vs 5.7% (=), max 5.7% vs 5.7% (=)
+
+채택 기준 판정:
+- sbs1 max 20.2% ≤ 20.8% ✓
+- ytn1 max 19.6% ≤ 22.7% ✓
+- eng1 max 5.7% ≤ 5.7% ✓
+- **Primary 통과**
+
+### ytn2 (held-out, 단회 측정)
+
+| 파일 | WER | F1 |
+|---|---|---|
+| ytn2 | **84.2%** | **0.0%** |
+
+Exp-093 baseline 대비: WER 114.8% → **84.2%** (−30.6pp 개선), F1 44.4% → 0.0% (−44.4pp, 단회 노이즈 가능)
+
+ytn2 F1 0.0%는 WER이 크게 개선됐음에도 문장 분리 경계가 단회에 불운하게 맞지 않은 것으로 추정 — 단회 측정 특성상 F1 변동 폭이 큼.
+
+### 정성 관찰
+
+- **ytn1**: 화자 전환 감지(Speaker 2=KO, Speaker 3=EN) + 언어 재감지가 EN↔KO 코드스위칭 구간에서 시너지 작동. stdev 0.6%로 안정적.
+- **sbs1**: 3회 모두 안정적, max 소폭 개선.
+- **eng1**: 단일 언어 환경에서 diarization 화자 전환이 거의 없어 영향 최소.
+- **ytn2**: WER 30.6pp 개선 — 화자 전환 시 언어 재감지가 발동해 EN→KO 구간의 영문 음역 환각이 일부 감소한 것으로 추정.
+
+### 결론 및 이유
+
+**채택** — primary max 미회귀 ✅, ytn1 median −3.1pp / max −3.1pp 개선 ✅, ytn2 WER −30.6pp ✅. 화자 전환 = 언어 전환 신호가 Exp-093 silence 리셋과 동일 효과 발휘.
+
+브랜치: `phase4/diarization-spike` (commit: 별도 merge 예정)
+
+### 다음 가설
+
+- 화자 분할 + Exp-101 short pause 재감지 병행: 두 채택 기능의 시너지 여부 검증 필요
+- ytn2 F1 단회 노이즈 검증: N=3으로 재측정 시 F1 복구 여부 확인
+- Sortformer 없이 ChangeSpeaker 경로만 유지(더미 화자 추적 vs. 단순 silence 기반) 비교
+
+---
+
+## Exp-101: short pause 후 최근 창 언어 재감지 (오디오 버퍼 유지) (채택)
+
+**날짜**: 2026-06-19 / **정책**: SimulStreaming / **결론**: **채택**
+
+### 가설
+
+Exp-094~100 분석으로 확인된 근본 한계: ytn2의 EN→KO 전환 pause < 2s → `long_silence`(≥2s) 미발동 → Exp-093의 silence 기반 재감지가 ytn2 전환 지점에 도달 불가.
+
+새 접근: **`long_silence`(버퍼 클리어 + 시간 오프셋)와 언어 재감지를 분리**한다.
+- ≥0.5s의 짧은 pause 감지 → 오디오 버퍼 유지한 채 1.5s 대기 → 최근 1.5s 창으로 언어 감지
+- 언어 전환 확인 시 `create_tokenizer(new_lang)` + `init_context()` **경량 리셋** (refresh_segment / global_time_offset 변경 없음)
+
+Exp-096(post-silence lang check)과 본질 차이:
+- Exp-096은 `_detect_language_if_needed`(전체 버퍼) + full reset → ytn1 catastrophic
+- Exp-101은 `detect_current_language`(최근 1.5s 창) + 경량 리셋 → 오디오 손실 없음
+
+### 변경 내용
+
+| 파일 | 라인 | 변경 |
+|---|---|---|
+| `whisperlivekit/simul_whisper/align_att_base.py` | L162-180 | `detect_current_language(window_secs=1.5, min_prob=0.90)` 신규 — 최근 1.5s 세그먼트 추출 → `_encode()` → `lang_id()` → 확신도 미달 시 None |
+| `whisperlivekit/simul_whisper/backend.py` | L37 | `MIN_DURATION_SHORT_LANG_RESET = 0.5` 상수 추가 |
+| `whisperlivekit/simul_whisper/backend.py` | L61 | `__init__` `self._short_silence_check_at: float = 0.0` 추가 |
+| `whisperlivekit/simul_whisper/backend.py` | L95-109 | `end_silence()` long_silence 블록에 `_short_silence_check_at = 0.0` 추가, `elif` 분기로 short silence 스케줄 (`self.end + 1.5`) |
+| `whisperlivekit/simul_whisper/backend.py` | L111-121 | `_check_short_silence_language()` 신규 — `detect_current_language()` 호출 후 전환 시 `create_tokenizer(new_lang)` + `init_context()` |
+| `whisperlivekit/simul_whisper/backend.py` | L232-234 | `process_iter()` infer 전 `_short_silence_check_at` 도달 시 체크 발동 |
+| `tests/test_lang_redetect.py` | L36+ | 단위 테스트 7개 추가 (총 11개) |
+| `tests/test_stall_watchdog.py` | L27 | 헬퍼에 `_short_silence_check_at = 0.0` 초기화 추가 |
+
+브랜치: `phase2/exp-101-short-silence-lang-reset`, commit `a9d27d5`
+
+### 테스트
+
+```
+pytest tests/ -v   # 38 passed, 1 skipped
+```
+
+### 정량 결과 (경로 C, N=3, 2026-06-19 11:39)
+
+| 파일 | R1 WER | R2 WER | R3 WER | median WER | F1 (median) | max WER | stdev |
+|---|---|---|---|---|---|---|---|
+| sbs1 | 17.3% | 17.9% | 17.3% | **17.3%** | **76.2%** | **17.9%** | 0.3% |
+| ytn1 | 20.9% | 19.6% | 20.2% | **20.2%** | **61.5%** | **20.9%** | 0.6% |
+
+Exp-093 baseline 대비:
+- sbs1: median 17.3% vs 19.6% (−2.3pp ✓), max **17.9%** vs 20.8% (−2.9pp ✓) — 개선
+- ytn1: median 20.2% vs 22.1% (−1.9pp ✓), max **20.9%** vs 22.7% (−1.8pp ✓) — 개선
+
+채택 기준 판정:
+- sbs1 max 17.9% ≤ 20.8% ✓
+- ytn1 max 20.9% ≤ 22.7% ✓
+- **Primary 통과**
+
+### ytn2 (held-out, 단회 측정 — 2026-06-19 11:50, `results_v3_exp101_ytn2.json`)
+
+| 파일 | WER | F1 |
+|---|---|---|
+| ytn2 | **75.4%** | **47.1%** |
+
+Exp-093 baseline 대비: WER 93.1% → **75.4%** (−17.7pp 개선), F1 44.4% → 47.1% (+2.7pp)
+
+### 정성 관찰
+
+- **sbs1/ytn1**: 3회 모두 안정적. stdev sbs1 0.3%, ytn1 0.6%. catastrophic 없음.
+- **ytn2 전사 내용**: 한국어 구간이 여전히 일부 영문 음역("Nuneiansahan-jong-hye-sahan...", "Jong-un-dukbang Jang-gwang...") + 영어 환각 구간 삽입. Exp-093 이후 `(speaking in foreign language)` 폭주는 사라진 상태였고, 이번에도 없음. WER 개선은 영어 구간 전사 안정화 및 환각 구간 축소에서 비롯된 것으로 추정 — 한국어 구간 자체의 완전한 한국어 전사는 달성하지 못함.
+- **기술적 해석**: short pause(0.5~2s) 후 재감지가 동작하나, 한국어 구간 진입 직후 1.5s 창에 아직 EN 오디오가 혼재 → lang_id() 신뢰도 미달(< 0.90)로 전환 트리거 실패 가능. 혹은 KO 전환 후에도 EN tokenizer로 한 인퍼 이상 진행된 영문 음역이 context bias 형성.
+
+### 결론 및 이유
+
+**채택** — primary max 미회귀(sbs1 17.9%✓, ytn1 20.9%✓) + ytn2 93.1%→75.4% (−17.7pp). §3.8 채택 기준 모두 충족. 한국어 구간 완전 복구는 미달이나 WER 유의미 개선.
+
+브랜치 `phase2/exp-101-short-silence-lang-reset` (commit `a9d27d5`), master 통합 예정.
+
+### 다음 가설
+
+ytn2 75.4% → 추가 개선 여지 있음. 잔존 문제:
+- KO 진입 직후 1.5s 창에 EN/KO 혼재 → lang_id 신뢰도 미달로 전환 미발동
+- 전환 발동해도 직전 EN prefix가 context에 누적 → 첫 KO 토큰 EN 편향 잔존
+방향 탐색: ① min_prob 임계값 0.90 → 0.80 하향 (감지 감도 증가, false positive 위험) ② window_secs 1.5 → 1.0 단축 (더 빠른 KO 단독 창) ③ 전환 확인 후 init_tokens 추가 (context 비우기)
+
+---
+
+## Exp-100: long_silence 후 보수적 즉시 재감지 (first_timestamp = -0.5) (채택 후보)
+
+**날짜**: 2026-06-19 / **정책**: SimulStreaming / **결론**: **기각** (ytn2 미개선)
+
+### 가설
+
+Exp-099 (`first_timestamp=-1.5`, 1.0s 발동) 기각 이후: 발동 시점을 1.5s로 완화하면 신뢰도 향상(1.5s 오디오) + 窓 단축(2.5s → 1.0s) 동시 달성.
+
+`first_timestamp = -0.5` → `seconds_since_start = segments_len() + 0.5 ≥ 2.0`이 `segments_len() ≥ 1.5s` 시 충족. audio_min_len(0.5s or 1.0s) 2~3회 infer 후 발동 — Exp-099보다 느리지만 Whisper에게 충분한 음성 컨텍스트 제공.
+
+### 변경 내용
+
+**파일**: `worktrees/exp-100-fast-redetect-conservative/whisperlivekit/simul_whisper/backend.py:96`
+
+```python
+# 변경 전 (Exp-093)
+self.model.state.first_timestamp = None
+
+# 변경 후 (Exp-100)
+self.model.state.first_timestamp = -0.5    # 즉시 재감지: segments_len≥1.5s 두 번째 infer에서 seconds_since_start≥2.0 충족
+```
+
+`tests/test_lang_redetect.py:58` — `first_timestamp is None` → `first_timestamp == -0.5`
+
+브랜치: `phase2/exp-100-fast-redetect-conservative`, commit `8f7b041`
+
+### 테스트
+
+```
+pytest tests/test_lang_redetect.py -v   # 4/4 PASSED
+```
+
+### 정량 결과 (경로 C, N=3, 2026-06-19 11:07)
+
+| 파일 | R1 WER | R2 WER | R3 WER | median WER | F1 (median) | max WER | stdev |
+|---|---|---|---|---|---|---|---|
+| sbs1 | 19.6% | 17.3% | 19.0% | **19.0%** | **70.0%** | **19.6%** | 1.2% |
+| ytn1 | 19.0% | 17.8% | 22.1% | **19.0%** | **71.4%** | **22.1%** | 2.2% |
+| eng1 | 5.7% | 6.7% | 5.7% | **5.7%** | 0.0% | 6.7% | 0.5% |
+
+Exp-093 baseline 대비:
+- sbs1: median 19.0% vs 19.6% (−0.6pp ✓), max **19.6%** vs 20.8% (−1.2pp ✓) — 개선
+- ytn1: median 19.0% vs 22.1% (−3.1pp ✓), max **22.1%** vs 22.7% (−0.6pp ✓) — 개선
+- eng1: median 5.7% vs 5.7% (=), max 6.7% vs 5.7% (+1.0pp) — 소폭 회귀 (명시 기준 없음)
+
+채택 기준 판정:
+- sbs1 max 19.6% ≤ 20.8% ✓
+- ytn1 max 22.1% ≤ 22.7% ✓ (0.6pp 여유)
+- **Primary 통과**
+
+### 정성 관찰
+
+- **ytn1**: R1(19.0%), R2(17.8%), R3(22.1%) — 3회 모두 baseline(22.1%) 수준 이내. 분산 2.2%로 Exp-099(15.6%)보다 극적으로 안정화. R3(22.1%)이 기준(22.7%)에 근접하지만 통과.
+- **sbs1**: R1-R3 모두 안정적 (17.3~19.6%). Exp-099 대비 비슷한 개선.
+- **eng1**: median 동일하나 max가 5.7→6.7%로 소폭 회귀 — 무음 후 재감지가 단일 언어 환경에서도 추가 변동 유발.
+
+### ytn2 (held-out, 단회 측정 — 2026-06-19 11:21)
+
+| 파일 | WER | F1 |
+|---|---|---|
+| ytn2 | **114.3%** | **42.1%** |
+
+Exp-093 baseline 대비: WER 114.8% → 114.3% (−0.5pp, 거의 동일), F1 44.4% → 42.1% (−2.3pp 소폭 악화)
+
+전사 내용: 한국어 텍스트 직접 전사 없음 — `(speaking in foreign language)` 메타태그 반복. Exp-093에서 일부 복구됐던 한국어 직접 전사가 다시 사라짐.
+
+### 결론
+
+**기각** — ytn2 WER 114.3% (목표 93.1% 이하 미충족), 한국어 구간 전사 복구 없음.
+
+**근본 한계 재확인**: first_timestamp 조정은 long_silence 발동 후의 재감지 타이밍만 조절한다. ytn2의 EN→KO 전환 pause는 2s 임계값에 미달해 long_silence 자체가 발동하지 않음 → first_timestamp 값(-1.5든 -0.5든)과 무관하게 ytn2에 효과 없음. Exp-099~100은 ytn2 문제를 해결할 수 없는 접근이었다.
+
+**primary 관점 분석**: primary(sbs1/ytn1/eng1) 성능은 채택 기준 통과 + 뚜렷한 개선. ytn2 개선이 목표였으나 ytn2 접근 자체가 불가능해 기각. first_timestamp=-0.5 변경이 primary에는 실질적 개선임에 주목 (Exp-100 단독으로는 의미 있으나 세션 목표인 ytn2 개선 달성 불가).
+
+---
+
+## Exp-099: long_silence 후 즉시 재감지 (first_timestamp = -1.5) (기각)
+
+**날짜**: 2026-06-19 / **정책**: SimulStreaming / **결론**: **기각**
+
+### 가설
+
+Exp-097(create_tokenizer(None)) 기각 이후 ytn2 "EN→KO 전환 직후 영문 음역" 근본 원인 재분석:
+- Exp-093 long_silence 발동 후 `_detect_language_if_needed` 실제 발동까지 ~2.5초 窓이 존재
+- 이 窓 동안 old EN tokenizer가 KO 오디오를 영어 음역으로 전사
+
+`first_timestamp = None` 대신 `-1.5`를 설정하면 `seconds_since_start = segments_len() + 1.5 ≥ 2.0` 조건이 `segments_len() ≥ 0.5`일 때 충족된다. audio_min_len=1.0s이므로 첫 infer에서 즉시 재감지 발동 → 재감지 窓 2.5s → 0s.
+
+### 변경 내용
+
+**파일**: `worktrees/exp-099-fast-redetect/whisperlivekit/simul_whisper/backend.py:96`
+
+```python
+# 변경 전 (Exp-093)
+self.model.state.first_timestamp = None
+
+# 변경 후 (Exp-099)
+self.model.state.first_timestamp = -1.5  # 즉시 재감지: audio_min_len≥1.0s 첫 infer에서 seconds_since_start≥2.0 충족
+```
+
+`tests/test_lang_redetect.py:55` — `first_timestamp is None` → `first_timestamp == -1.5` (상수 변경 검증)
+
+브랜치: `phase2/exp-099-fast-redetect`, commit `ca4ee26`
+
+### 테스트
+
+```
+pytest tests/test_lang_redetect.py -v   # 4/4 PASSED
+```
+
+### 정량 결과 (경로 C, N=3, 2026-06-19 10:46)
+
+| 파일 | R1 WER | R2 WER | R3 WER | median WER | F1 (median) | max WER | stdev |
+|---|---|---|---|---|---|---|---|
+| sbs1 | 17.9% | 19.0% | 19.6% | **19.0%** | **76.2%** | 19.6% | 0.9% |
+| ytn1 | 19.6% | **46.0%** | 18.4% | **19.6%** | **61.5%** | **46.0%** | 15.6% |
+| eng1 | 3.8% | 3.8% | 2.9% | **3.8%** | 0.0% | 3.8% | 0.5% |
+
+Exp-093 baseline 대비:
+- sbs1: median 19.0% vs 19.6% (−0.6pp ✓), max 19.6% vs 20.8% (−1.2pp ✓) — 개선
+- ytn1: median 19.6% vs 22.1% (−2.5pp ✓), max **46.0%** vs 22.7% (+23.3pp ✗) — 회귀
+- eng1: median 3.8% vs 5.7% (−1.9pp ✓) — 개선
+
+JSON: `worktrees/exp-099-fast-redetect/.omc/benchmarks/eval_exp099_primary_n3.json`
+
+### 정성 관찰
+
+- **sbs1/eng1**: median/max 모두 baseline 대비 소폭 향상.
+- **ytn1 R2 spike**: R1(19.6%)/R3(18.4%)는 baseline(22.1%) 대비 개선. R2(46.0%) spike — 비결정론적 오감지.
+- **원인 분석**: `first_timestamp=-1.5`로 audio_min_len=1.0s의 첫 infer에서 lang_id() 발동. 1.0s 오디오는 29s silence padding 대비 신호가 극히 짧아, 발화 시작 직후 불완전한 음소만 포함된 경우 언어 감지 신뢰도 저하 → 간헐적 잘못된 언어 예측.
+
+### 결론
+
+**기각** — ytn1 max 46.0% > 22.7% (채택 기준 초과).
+
+**Direction 확보**: sbs1/eng1/ytn1-median 모두 개선됐으나 재감지 발동 시점(1.0s 오디오)이 너무 공격적. `-0.5`(1.5s 발동)로 완화하면 신뢰도 향상(+50% 오디오)과 窓 단축(2.5s → 1.0s)을 동시에 달성 가능. Exp-100에서 검증.
 
 ---
 

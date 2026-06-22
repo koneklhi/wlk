@@ -75,7 +75,13 @@ python -m whisperlivekit.basic_server \
 - 정답 스크립트가 없는 음성파일도 존재 가능
 - **정답 스크립트 형식**: 빈 줄(`\n\n`)로 구분된 블록 = 문장 1개. 문장 분리 F1 평가의 기준이 된다.
   (마침표 기준 분리는 하지 않음 — `U.S.` 등 약어 오분할 회피)
-- 현재: `sbs1.mp3`/`sbs1.txt` (뉴스 리포트, 한·영 인용구), `ytn1.mp3`/`ytn1.txt` (SCM 회의 통역, 한·영 코드 스위칭 풍부)
+- **파일 목록**:
+  - `sbs1.mp3` / `sbs1.txt` — 뉴스 리포트(한국어) + 영어 인용 구절. 13 문장 블록. **primary eval.**
+  - `ytn1.mp3` / `ytn1.txt` — SCM 회의 통역, 한·영 코드스위칭 풍부 (KO→EN→KO 교차, 9 블록). **primary eval.**
+  - `eng1.mp3` / `eng1.txt` — 영어 전용 발화 (VoxPopuli taoiseach, 2 블록). script-switch false split 감시용. **primary eval.**
+  - `ytn2.mp3` / `ytn2.txt` — SCM 회의 통역 (ytn1 동일 이벤트 다른 구간), EN→KO 교차, 10 블록, 코드스위칭 경계 9개.
+    **held-out**: primary 채택 기준 통과 후 단회(`--repeat 1`) 측정 — ytn1 과적합 검증 전용.
+    평소 `--repeat 3` primary 루틴에는 포함하지 않는다.
 - 용도: STT 전사 정확도(WER) + 문장 확정 정확도(F1) 정량 분석
 
 ### STT 동작 확인용 UI 선택지
