@@ -38,6 +38,61 @@ sys.path.insert(0, str(_ROOT_DIR))
 sys.path.insert(0, str(_SCRIPTS_DIR))
 
 
+def _probe_provenance(cwd: Path, args) -> dict:
+    """서버가 실제 import할 whisperlivekit 경로·git 정보·디코더 설정을 수집한다."""
+    # 1) 서버와 같은 python+cwd 환경에서 import 경로 프로브
+    try:
+        probe = subprocess.run(
+            [sys.executable, "-c",
+             "import whisperlivekit as wlk, sys; print(wlk.__file__)"],
+            capture_output=True, text=True, cwd=str(cwd), timeout=15,
+        )
+        wlk_file = probe.stdout.strip() if probe.returncode == 0 else "(오류)"
+    except Exception as e:
+        wlk_file = f"(프로브 실패: {e})"
+
+    # 2) 그 디렉터리에서 git branch / HEAD SHA
+    wlk_dir = str(Path(wlk_file).parent.parent) if wlk_file and not wlk_file.startswith("(") else str(cwd)
+    try:
+        sha = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            capture_output=True, text=True, cwd=wlk_dir, timeout=10,
+        ).stdout.strip() or "?"
+        branch = subprocess.run(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            capture_output=True, text=True, cwd=wlk_dir, timeout=10,
+        ).stdout.strip() or "?"
+    except Exception:
+        sha, branch = "?", "?"
+
+    # 3) 서버 기본 beams 값 프로브 (parse_args.py 기본값)
+    try:
+        beams_probe = subprocess.run(
+            [sys.executable, "-c",
+             "from whisperlivekit.parse_args import create_parser; p=create_parser(); a=p.parse_args([]); print(a.beams)"],
+            capture_output=True, text=True, cwd=str(cwd), timeout=15,
+        )
+        beams = int(beams_probe.stdout.strip()) if beams_probe.returncode == 0 else None
+    except Exception:
+        beams = None
+
+    return {
+        "whisperlivekit_file": wlk_file,
+        "git_branch": branch,
+        "git_sha": sha,
+        "decoder": {
+            "beams": beams,
+            "compression_ratio_threshold": getattr(args, "compression_ratio_threshold", None),
+            "logprob_threshold": getattr(args, "logprob_threshold", None),
+            "periodic_lang_check": getattr(args, "periodic_lang_check_secs", None),
+        },
+        "diarization": getattr(args, "diarization", False),
+        "vbcable_loopback": "pending",  # eval 실행 후 갱신
+        "files": [str(f) for f in getattr(args, "files", [])],
+        "repeat": getattr(args, "repeat", 1),
+    }
+
+
 @dataclass
 class FileResult:
     audio_file: str
@@ -338,7 +393,51 @@ def main() -> None:
         dest="periodic_lang_check_secs",
         help="주기적 언어재감지 간격(초). None=비활성(기본). 서버에 --periodic-lang-check 전달.",
     )
+    parser.add_argument(
+        "--expect-code-root",
+        type=Path,
+        default=None,
+        dest="expect_code_root",
+        help=(
+            "측정 대상 whisperlivekit 코드의 기대 루트 경로 (기본: 현재 작업 디렉터리). "
+            "프로브 결과가 이 경로 하위가 아니면 즉시 중단."
+        ),
+    )
     args = parser.parse_args()
+
+    # --- provenance 프로브 (cwd 기반 코드 버전 검증) ---
+    _cwd = Path(".").resolve()
+    _expect_root = (args.expect_code_root or _cwd).resolve()
+    _prov = _probe_provenance(_cwd, args)
+
+    # fail-fast: 기대 경로와 실제 import 경로가 다르면 즉시 중단
+    _actual_wlk = Path(_prov["whisperlivekit_file"]).resolve() if not _prov["whisperlivekit_file"].startswith("(") else None
+    if _actual_wlk is not None:
+        try:
+            _actual_wlk.relative_to(_expect_root)
+        except ValueError:
+            print(
+                f"[provenance] ❌ 측정 대상 코드가 기대 경로와 다릅니다!\n"
+                f"  기대: {_expect_root}\n"
+                f"  실제: {_actual_wlk}\n"
+                f"  → cwd가 올바른 워크트리 경로인지 확인하세요. --expect-code-root로 명시도 가능.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
+    # provenance 1줄 출력 (VBCable 결과는 측정 후 갱신)
+    _diar_str = "on" if _prov["diarization"] else "off"
+    _crt = _prov["decoder"]["compression_ratio_threshold"]
+    _plc = _prov["decoder"]["periodic_lang_check"]
+    print(
+        f"[provenance] code={Path(_prov['whisperlivekit_file']).parent.parent.name}"
+        f" branch={_prov['git_branch']}@{_prov['git_sha']}"
+        f" beams={_prov['decoder']['beams']}"
+        f" CRT={_crt}"
+        f" PLC={_plc}"
+        f" diar={_diar_str}"
+        f" vbcable=pending"
+    )
 
     paths = [p.strip().upper() for p in args.paths.split(",")]
     base_url = f"http://localhost:{SERVER_PORT}"
@@ -394,6 +493,20 @@ def main() -> None:
         from audio_device import vbcable_audio_context
 
         with vbcable_audio_context() as vbcable_ok:
+            # provenance에 VBCable 상태 기록 + 콘솔 1줄 갱신
+            _prov["vbcable_loopback"] = "ok" if vbcable_ok else "silent/failed"
+            _diar_str2 = "on" if _prov["diarization"] else "off"
+            _crt2 = _prov["decoder"]["compression_ratio_threshold"]
+            _plc2 = _prov["decoder"]["periodic_lang_check"]
+            print(
+                f"[provenance] code={Path(_prov['whisperlivekit_file']).parent.parent.name}"
+                f" branch={_prov['git_branch']}@{_prov['git_sha']}"
+                f" beams={_prov['decoder']['beams']}"
+                f" CRT={_crt2}"
+                f" PLC={_plc2}"
+                f" diar={_diar_str2}"
+                f" vbcable={'ok' if vbcable_ok else 'FAIL'}"
+            )
             if not vbcable_ok:
                 print("[eval] 경고: VBCable 설정 실패. 경로 C를 건너뜁니다.", file=sys.stderr)
             else:
@@ -454,6 +567,7 @@ def main() -> None:
         "model_dir": result.model_dir,
         "paths_run": result.paths_run,
         "repeat": args.repeat,
+        "provenance": _prov,
         "avg_wer_a": result.avg_wer_a,
         "avg_wer_c": result.avg_wer_c,
         "avg_seg_f1_a": result.avg_seg_f1_a,
