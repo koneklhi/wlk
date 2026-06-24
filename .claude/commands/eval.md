@@ -3,7 +3,7 @@
 기능 수정 후 경로 C(VBCable 루프백)로 실제 오디오 파이프라인 전체를 통과한 성능을 측정한다.
 **WER(전사 정확도) + 문장 분리 F1(문장 확정 정확도)**를 출력한다.
 서버 기동/종료와 VBCable 장치 설정/복원은 스크립트가 자동으로 처리한다.
-기본 평가 대상은 `sbs1.mp3` + `ytn1.mp3` + `eng1.mp3` 3개 파일이다.
+**테스트(채택/기각) 세트 = `bong1.wav` + `ytn2.mp3` + `sbs1.mp3`** (화자분할 ON, `--repeat 3` 루틴; ytn2·bong1 공동 최우선). **held-out 일반화 검증 = `ytn1.mp3` + `eng1.mp3`** (채택 후보에 한해 동일 diar-ON 설정으로 측정). `eval.py`의 기본 `--files`는 코드 상 여전히 sbs1/ytn1/eng1이므로 **루틴은 `--files` 명시 필수**.
 
 **성능 판정 기준은 경로 C만** 사용한다. 경로 A(PCM 파일 주입)는 브라우저 오디오 파이프라인을 우회하므로 폐기.
 
@@ -15,20 +15,35 @@
 ## 기본 사용법
 
 ```powershell
-# 경로 C 실행 (빠른 현황 확인 — repeat 없음)
+# 테스트(채택/기각) — bong1 + ytn2 + sbs1, 화자분할 ON, 빠른 현황 확인
 $env:PYTHONIOENCODING = "utf-8"
 .venv\Scripts\python.exe scripts/eval.py `
-  --model-dir whisperlivekit/model/whisper-large-v3-turbo
+  --model-dir whisperlivekit/model/whisper-large-v3-turbo `
+  --files test_data/bong1.wav test_data/ytn2.mp3 test_data/sbs1.mp3 `
+  --diarization --sortformer-model whisperlivekit/model/sortformer-4spk-v2.nemo `
+  --compression-ratio-threshold 3.0
 
 # 채택/기각 결정용 (N≥3회 반복 — Claude가 실험 비교 시 사용)
 .venv\Scripts\python.exe scripts/eval.py `
   --model-dir whisperlivekit/model/whisper-large-v3-turbo `
-  --repeat 3
+  --files test_data/bong1.wav test_data/ytn2.mp3 test_data/sbs1.mp3 `
+  --diarization --sortformer-model whisperlivekit/model/sortformer-4spk-v2.nemo `
+  --compression-ratio-threshold 3.0 --repeat 3
+
+# held-out 일반화 검증 — 채택 후보에 한해 ytn1 + eng1 (동일 diar-ON 설정)
+.venv\Scripts\python.exe scripts/eval.py `
+  --model-dir whisperlivekit/model/whisper-large-v3-turbo `
+  --files test_data/ytn1.mp3 test_data/eng1.mp3 `
+  --diarization --sortformer-model whisperlivekit/model/sortformer-4spk-v2.nemo `
+  --compression-ratio-threshold 3.0 --repeat 3
 
 # 결과를 파일로 저장 (베이스라인 또는 비교용)
 $ts = Get-Date -Format "yyyyMMdd_HHmm"
 .venv\Scripts\python.exe scripts/eval.py `
   --model-dir whisperlivekit/model/whisper-large-v3-turbo `
+  --files test_data/bong1.wav test_data/ytn2.mp3 test_data/sbs1.mp3 `
+  --diarization --sortformer-model whisperlivekit/model/sortformer-4spk-v2.nemo `
+  --compression-ratio-threshold 3.0 --repeat 3 `
   --output ".omc/benchmarks/eval_$ts.json"
 ```
 
@@ -65,7 +80,7 @@ WER과 문장 분리 F1 모두 주요 지표다. 두 지표를 함께 보아야 
 
 ### 문장 분리 F1 (문장 확정 정확도)
 
-정답의 빈 줄 블록(= 문장 1개)과 STT 확정 문장(`lines[]`)의 경계 위치를 단어 정렬로 비교한다.
+정답의 빈 줄 경계(화자전환 1순위 + 온점분리 2순위)와 STT 확정 문장(`lines[]`)의 경계 위치를 단어 정렬로 비교한다.
 
 | F1 | 판정 |
 |----|------|
@@ -91,5 +106,5 @@ WER과 문장 분리 F1 모두 주요 지표다. 두 지표를 함께 보아야 
 
 - 서버 포트 8001 사용 (개발 서버 8000과 충돌 방지)
 - 서버 ready까지 최대 120초 대기 (모델 로딩 시간)
-- 경로 C `--repeat 3` 실행 시 (오디오 길이 + `--wait`) × 3 소요 (2파일: 약 12분). 백그라운드 실행 권장
+- 경로 C `--repeat 3` 실행 시 (오디오 길이 + `--wait`) × 3 소요 (테스트 3파일 bong1+ytn2+sbs1 기준: 약 18분 이상; 화자분할 서버 로딩 최초 1회 +약 30초 추가). 백그라운드 실행 권장
 - 결과 JSON은 `.omc/benchmarks/` 디렉토리에 저장 권장 (`.gitignore` 적용됨)
