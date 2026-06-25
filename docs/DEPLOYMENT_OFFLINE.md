@@ -37,7 +37,7 @@ whisperlivekit-server
 | 2 | **STT 모델** | `whisperlivekit/model/whisper-large-v3-turbo/` (≈1.6GB, `model.safetensors`+토크나이저) | 이미 저장소에 동봉됨 → 코드와 함께 이동 |
 | 3 | **화자분할 모델** | `whisperlivekit/model/sortformer-4spk-v2.nemo` | 이미 저장소에 동봉됨 |
 | 4 | **번역 LLM** | `gpt-oss-20b-F16.gguf` (≈40GB) + `start_oss.bat` | **저장소 외부** — 별도로 USB에 담아 배포 PC에 배치 |
-| 5 | **의존성 wheelhouse** | `wheelhouse/` + `dist/*.whl` (§2에서 생성) | 오프라인 pip 설치용 |
+| 5 | **의존성 + 설치도구** | `deploy/` 전체 — `wheelhouse/`(패키지), `*.whl`(프로젝트), `uv-installer/`(uv), `deploy_source.zip`, `requirements-deploy.txt` (§2에서 생성) | 오프라인 pip·uv 설치용 |
 | 6 | **playwright 브라우저** | `%USERPROFILE%\AppData\Local\ms-playwright\` (chromium) | 경로 C 자동화에 필요 |
 | 7 | **시스템 바이너리** | `ffmpeg.exe`(PATH 등록), VBCable 드라이버 설치본 | ffmpeg=WebM/mp3 디코딩, VBCable=경로 C 루프백 |
 
@@ -68,9 +68,9 @@ USB에 담을 3가지:
 
 | # | 내용 | 방법 |
 |---|---|---|
-| ① `deploy_source.zip` | master 소스 코드 | `git archive HEAD --output=deploy_source.zip` |
+| ① `deploy/deploy_source.zip` | master 소스 코드 | `git archive HEAD --output=deploy\deploy_source.zip` |
 | ② `whisperlivekit/model/` 디렉터리(≈20GB + ≈1.5GB) | STT·화자분할 모델 | `.gitignore` 비추적이라 아카이브에 안 들어옴 → **폴더 수동 복사** |
-| ③ `wheelhouse/` + `dist/` | 오프라인 pip 설치용 | §2에서 생성 |
+| ③ `deploy/` 전체 | 패키지+uv 설치도구 | §2에서 생성 (`wheelhouse/`·`*.whl`·`uv-installer/` 포함) |
 
 배포 PC에서 unzip 후 §3대로 `uv venv` + 오프라인 설치하면 editable 경로·Python 경로가 폐쇄망 기준으로 새로 잡혀 정상 동작한다.
 
@@ -91,33 +91,50 @@ USB에 담을 3가지:
 > `listen`(sounddevice) extra는 별도 CLI 청취 모드용으로 **경로 B/C에는 불필요**(경로 B는 브라우저 마이크, 경로 C는 VBCable+브라우저).
 > `translation`(`nllw`) extra는 NLLB(`--target-language`) 경로용으로 **LLM 번역(gpt-oss)에는 불필요**.
 
-### 2.2 wheelhouse 만들기 (온라인 개발 PC)
+### 2.2 deploy/ 폴더 만들기 (온라인 개발 PC)
+
+모든 배포 산출물은 **`deploy/`** 한 폴더에 모인다. USB 반입 시 이 폴더만 통째로 복사하면 된다.
 
 ```powershell
+# 0) 폴더 초기화 (최초 1회 또는 재생성 시)
+New-Item -ItemType Directory -Force deploy\wheelhouse, deploy\uv-installer | Out-Null
+
 # 1) lock된 의존성을 requirements로 내보내기 (배포에서 켤 extra 포함)
 #    --no-emit-project 필수: 빼면 프로젝트 자체가 editable(-e .)로 박혀 hash 모드 pip download가 실패한다.
 uv export --frozen --no-dev --no-emit-project `
-  --extra diarization-sortformer --extra vbcable --extra cu128 -o requirements-deploy.txt
+  --extra diarization-sortformer --extra vbcable --extra cu128 -o deploy\requirements-deploy.txt
 
 # 2) 모든 wheel 다운로드 (torch cu128 인덱스 포함)
 #    uv엔 pip download 서브커맨드가 없다. .venv에 pip를 넣고 그 python으로 받는다
 #    (배포 타깃과 동일한 마커: Windows AMD64 + 동일 파이썬으로 받아야 한다).
 uv pip install pip
-.venv\Scripts\python.exe -m pip download -r requirements-deploy.txt -d wheelhouse `
+.venv\Scripts\python.exe -m pip download -r deploy\requirements-deploy.txt -d deploy\wheelhouse `
   --extra-index-url https://download.pytorch.org/whl/cu128
 
 # 3) sdist 빌드 백엔드 보강: 일부 의존성(antlr4·docopt·kaldi-python-io·sox·wget 등)은
 #    wheel이 없는 sdist라 폐쇄망에서 빌드된다 → setuptools·wheel이 wheelhouse에 있어야 한다.
-.venv\Scripts\python.exe -m pip download wheel -d wheelhouse   # setuptools는 보통 자동 동봉됨
+.venv\Scripts\python.exe -m pip download wheel -d deploy\wheelhouse   # setuptools는 보통 자동 동봉됨
 
-# 4) 프로젝트 자체도 wheel로 빌드
+# 4) uv 설치 파일 준비 (배포 PC에 uv 없음 → 두 가지 방법 모두 확보)
+#    4a) standalone binary — pip 없이도 설치 가능 (권장)
+$uvVer = (uv --version).Split(" ")[1]
+Invoke-WebRequest -Uri "https://github.com/astral-sh/uv/releases/download/$uvVer/uv-x86_64-pc-windows-msvc.zip" `
+  -OutFile "deploy\uv-installer\uv-$uvVer-x86_64-pc-windows-msvc.zip" -UseBasicParsing
+#    4b) uv wheel — pip 경유 설치용 (wheelhouse에 포함)
+.venv\Scripts\python.exe -m pip download uv -d deploy\wheelhouse
+
+# 5) 프로젝트 자체도 wheel로 빌드 → deploy/에 복사
 uv build --wheel        # → dist/whisperlivekit-0.2.20-*.whl
+Copy-Item (Get-ChildItem dist -Filter "*.whl" | Sort-Object LastWriteTime -Descending | Select-Object -First 1 -ExpandProperty FullName) deploy\
 
-# 5) 경로 C 자동화용 브라우저
+# 6) 소스 아카이브
+git archive HEAD --output=deploy\deploy_source.zip
+
+# 7) 경로 C 자동화용 브라우저
 python -m playwright install chromium    # → %USERPROFILE%\AppData\Local\ms-playwright\
 ```
 
-> ⚠️ **반드시 개발 PC에서 1회 검증**: `wheelhouse/`에 torch cu128(`torch-2.x+cu128-...win_amd64.whl`),
+> ⚠️ **반드시 개발 PC에서 1회 검증**: `deploy\wheelhouse\`에 torch cu128(`torch-2.x+cu128-...win_amd64.whl`),
 > `nemo-toolkit`과 그 전이 의존성까지 **빠짐없이** 받아졌는지 확인하라(nemo는 의존성이 매우 많다).
 > pip 마지막 줄 `Successfully downloaded ...`에 전체 목록이 나오면 OK. 빠진 wheel이 있으면 폐쇄망 설치가 중단된다.
 > dev/deploy 둘 다 Windows x64 + cu128이므로 wheel 호환은 일반적으로 OK.
@@ -131,14 +148,42 @@ cu128 torch wheel의 버전이 **Blackwell 커널을 포함**하는지(torch 2.7
 
 ## 3. 폐쇄망 설치 (배포 PC에서, 오프라인)
 
+> USB에서 **`deploy/` 폴더 전체**를 배포 PC 임의 위치에 복사한 뒤, 아래 명령을 순서대로 실행한다.
+> 아래에서 `D:\deploy\`는 복사한 위치 예시 — 실제 경로로 바꿔 쓴다.
+
+### 3.0 uv 설치 (Python + pip가 없는 상태)
+
+배포 PC에는 uv가 없다. **standalone binary**(권장)로 먼저 uv를 설치한다.
+
+```powershell
+# USB의 deploy\uv-installer\ 안에 있는 zip을 C:\uv\ 에 압축 해제
+Expand-Archive -Path "D:\deploy\uv-installer\uv-0.9.24-x86_64-pc-windows-msvc.zip" -DestinationPath "C:\uv"
+
+# uv.exe를 PATH에 추가 (현재 세션)
+$env:PATH = "C:\uv;" + $env:PATH
+
+# 확인
+uv --version
+```
+
+> PATH를 영구 등록하려면: 시스템 속성 → 환경변수 → Path에 `C:\uv` 추가.
+>
+> **대안 — pip 경유 설치** (Python + pip가 이미 있는 경우):
+> ```powershell
+> pip install uv --no-index --find-links D:\deploy\wheelhouse
+> ```
+
+### 3.1 패키지 설치
+
 ```powershell
 # 0) 오프라인 환경변수 (런타임 HF/네트워크 호출 차단 — 세션마다 또는 시스템 환경변수로)
 $env:HF_HUB_OFFLINE = "1"
 $env:TRANSFORMERS_OFFLINE = "1"
 
-# 1) 가상환경 + 오프라인 설치 (USB의 wheelhouse/ + dist/ 사용)
+# 1) 가상환경 + 오프라인 설치 (USB의 deploy\wheelhouse\ + deploy\*.whl 사용)
 uv venv
-uv pip install --no-index --find-links wheelhouse --find-links dist "whisperlivekit[diarization-sortformer,vbcable]"
+uv pip install --no-index --find-links D:\deploy\wheelhouse --find-links D:\deploy `
+  "whisperlivekit[diarization-sortformer,vbcable]"
 
 # 2) playwright 브라우저 배치: USB의 ms-playwright 폴더를
 #    %USERPROFILE%\AppData\Local\ms-playwright\ 로 복사
@@ -150,7 +195,7 @@ uv pip install --no-index --find-links wheelhouse --find-links dist "whisperlive
 python -c "import whisperlivekit, torch; print('torch', torch.__version__, 'cuda', torch.cuda.is_available())"
 ```
 
-### 3.1 런타임 자동 다운로드 차단 — 이제 기본값이 로컬 경로
+### 3.2 런타임 자동 다운로드 차단 — 이제 기본값이 로컬 경로
 
 > **변경됨**: 과거엔 아래 3개를 매번 CLI로 오버라이드해야 했으나, 이제 `parse_args.py` **기본값이 로컬 경로**라
 > `whisperlivekit-server`만 쳐도 다운로드 시도 없이 켜진다(요청 3). 아래는 그 기본값과 근거 — **추가 조치 불필요**.
@@ -375,7 +420,8 @@ curl http://localhost:2010/v1/models
 
 | 트랩 | 증상 | 조치 |
 |---|---|---|
-| HF repo ID 기본값 | (과거) 기동 시 네트워크 시도/실패 | **해결됨** — 기본값이 로컬 경로(§3.1). 안전상 `HF_HUB_OFFLINE=1` 권장 |
+| uv 미설치 | `uv: command not found` | `deploy\uv-installer\uv-*.zip` 압축 해제 → PATH 등록(§3.0) |
+| HF repo ID 기본값 | (과거) 기동 시 네트워크 시도/실패 | **해결됨** — 기본값이 로컬 경로(§3.2). 안전상 `HF_HUB_OFFLINE=1` 권장 |
 | `--warmup-file` 미지정 | (과거) github `jfk.wav` 다운로드 | **해결됨** — 기본값 `test_data/sbs1_10s.mp3`(§3.1) |
 | 루트 밖에서 실행 | 모델·warmup 상대경로 못 찾음 | **저장소 루트에서** `whisperlivekit-server` 실행(요청 1) |
 | 번역 미동작(과거) | `--llm-translation` 줘도 번역 안 붙음 | **해결됨** — config.py 4필드 master 머지(§5.2) |
