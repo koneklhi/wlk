@@ -3,6 +3,8 @@
 STT 성능 개선 과정에서 수행한 실험을 기록한다.
 각 실험은 **가설 → 변경 → 결과 → 결론** 흐름으로 작성한다.
 
+> **[2026-06-23] 현행 측정 regime**: 테스트(채택/기각) = bong1 + ytn2 + sbs1, held-out = ytn1 + eng1, ytn2·bong1 공동 최우선 (CLAUDE.md §3.8 참조). **신규 Exp부터 이 regime 적용.** 이전 Exp의 수치·판단은 구 regime(테스트=sbs1+ytn2) 기준이므로 참고용으로만 사용.
+
 ---
 
 ## 이월된 사실 (Phase 2 재시작 시드 — 2026-06-04)
@@ -24,7 +26,800 @@ STT 성능 개선 과정에서 수행한 실험을 기록한다.
 
 ---
 
-## 현재 채택 베이스라인 (Exp-105 — 공식 N≥3 수치 2026-06-22)
+## 참고 베이스라인 (Exp-105 — 신 체제 시작점 2026-06-23, Exp-130으로 대체됨)
+
+> **[2026-06-23] 신 체제 베이스라인** (bong1+ytn2+sbs1 diar-ON, `--periodic-lang-check 4.0`, `--compression-ratio-threshold 3.0`, `--repeat 3`)
+> JSON: `.omc/benchmarks/eval_regime_baseline_20260623_1326.json`
+
+| 파일 | WER median | WER max | WER stdev | F1 median | 회차별 |
+|------|-----------|---------|----------|-----------|--------|
+| bong1 | **61.6%** | 67.7% | 6.5% | **42.9%** | R1 54.7%/44.4%, R2 67.7%/37.2%, R3 61.6%/42.9% |
+| ytn2  | **35.0%** | 96.1% | 35.6% | **54.5%** | R1 35.0%/54.5%, R2 96.1%/0.0%, R3 34.0%/63.2% |
+| sbs1  | **26.2%** | 32.1% | 5.1% | **36.4%** | R1 22.0%/36.4%, R2 26.2%/36.4%, R3 32.1%/18.2% |
+
+비고: ytn2 R2=96.1%는 VBCable 순간 불안정(WER≠100% 확인), 코드 문제 아님.
+bong1: 웃음 구간에서 Whisper 환각 다발(JSON 분석 확인). sbs1: diar-ON으로 F1 36.4%(diar-OFF 76.2%)로 급락, 원인=Sortformer 과분할(ref=3 vs hyp=9-11, recall=1.0 precision=0.20).
+
+---
+
+## Exp-130 (신뢰 baseline 재확립 + provenance 하니스 강화 — 2026-06-25)
+
+### 배경 — 클린 리셋 결정
+
+Exp-106~129는 두 가지 구조적 결함으로 수치 신뢰 불가 판정, 포렌식 재측정 없이 전체 기각:
+
+1. **조용한 코드-버전 함정**: `eval.py`가 서버를 `python -m whisperlivekit.basic_server`로 기동하며 cwd를 상속. `import whisperlivekit`은 cwd 기준 PathFinder가 우선이고 editable finder는 후순위 fallback. 잘못된 cwd(루트 등)에서 측정하면 변경한 코드가 무시된 채 오류 없이 엉뚱한 코드가 측정됨. Exp-106~129 측정의 실제 import 경로 불명.
+2. **VBCable 간헐 불안정 + provenance 미기록**: 측정 중 끊김으로 catastrophic-WER 회차가 생성되나 코드 효과와 구별 불가. 결과 JSON에 import 경로·git HEAD·VBCable 상태가 없어 소급 검증 불가.
+
+추가로 Exp-129의 "beam=3 채택" 결론도 코드에 미반영 상태 확인 (master·모든 워크트리 `parse_args.py --beams default=2`). 코드 상태는 Exp-105 설정(beams=2, PLC=4.0)과 일치.
+
+→ **클린 리셋**: Exp-129 결론 전체 기각. master 현재 코드를 새 기준점으로 재설정.
+
+### Phase A — eval 하니스 provenance 강화
+
+**브랜치**: `harness/eval-provenance` → master 머지 커밋 `f3676af`
+
+**변경 파일**: `scripts/eval.py`
+- `_probe_provenance(cwd, args)` 함수 추가: 서버와 동일 python·cwd로 `import whisperlivekit`을 서브프로세스 프로브 → 실제 import 경로·git branch/SHA·beams 기본값 캡처
+- `--expect-code-root` 인자 추가: 실제 import 경로가 기대 루트와 다르면 즉시 중단(fail-fast)
+- 결과 JSON 최상위 `"provenance"` 블록 추가: `whisperlivekit_file`, `git_branch`, `git_sha`, `decoder`, `diarization`, `vbcable_loopback` 기록
+- 측정 시작 직후 콘솔에 `[provenance] code=<name> branch=<b>@<sha> beams=<n> CRT=<x> PLC=<y> diar=<on/off> vbcable=<ok/FAIL>` 1줄 출력
+
+**추가 정리 (main 직접)**:
+- `.claude/commands/eval.md`, `phase2-improve.md`: `bong1.mp3` → `bong1.wav` 정정 + provenance 게이트 명문화
+
+**부수 발견 (미수정)**: beams probe가 `create_parser` 함수를 import 시도하나 실제 함수명은 `parse_args()` → probe ImportError로 beams=null 기록. 실제 측정에는 영향 없음(서버 default=2 사용). 다음 수정 시 함께 수정 예정.
+
+### Phase B — master 신뢰 baseline 측정 (N=5)
+
+**설정**: master@f3676af, beams=2(default), PLC=None(default), CRT=3.0, diar-ON(Sortformer), VBCable=OK(RMS 0.14164/0.14858), `--repeat 5`
+
+**테스트 세트 결과 (bong1+ytn2+sbs1):**
+
+| 파일 | WER median | WER min | WER max | WER stdev | F1 median |
+|------|-----------|---------|---------|-----------|-----------|
+| bong1 | **51.1%** | 41.4% | 54.7% | 5.0% | **44.4%** |
+| ytn2  | **58.1%** | 50.7% | 68.0% | 6.4% | **20.0%** |
+| sbs1  | **78.0%** | 53.6% | 83.9% | 12.8% | **0.0%** |
+
+회차별 (WER/F1): bong1 R1 54.7%/43.2%, R2 51.1%/54.1%, R3 48.9%/44.4%, R4 41.4%/47.1%, R5 51.7%/20.0%
+ytn2 R1 58.1%/13.3%, R2 50.7%/40.0%, R3 58.6%/16.7%, R4 68.0%/20.0%, R5 54.7%/23.5%
+sbs1 R1 83.9%/44.4%, R2 79.2%/0.0%, R3 62.5%/0.0%, R4 78.0%/13.3%, R5 53.6%/0.0%
+
+**held-out 결과 (ytn1+eng1):**
+
+| 파일 | WER median | WER min | WER max | WER stdev | F1 median |
+|------|-----------|---------|---------|-----------|-----------|
+| ytn1 | **61.3%** | 50.3% | 62.0% | 4.9% | **15.4%** |
+| eng1 | **23.8%** | 3.8% | 30.5% | 11.2% | **0.0%** |
+
+회차별: ytn1 R1 57.7%/13.3%, R2 61.3%/15.4%, R3 62.0%/23.5%, R4 50.3%/0.0%, R5 61.3%/33.3%
+eng1 R1 30.5%/0.0%, R2 30.5%/0.0%, R3 16.2%/100.0%, R4 3.8%/100.0%, R5 23.8%/0.0%
+
+**주요 관찰**:
+- **Exp-129(beam=3+PLC=2.0) 대비 크게 악화**: Exp-129 수치(bong1 35.6%/ytn2 32.5%/sbs1 19.6%)와 비교해 특히 sbs1이 78.0%로 급등. 이번 측정은 PLC=None(master 기본값)이며, PLC 없이는 언어 고착 후 환각 체인이 억제되지 않는 것으로 추정.
+- **sbs1 환각 증가 확인**: 전사에 "하이드레이션 브레이크 … 홍명보 감독" 등 음성과 무관한 내용 삽입. Exp-105(PLC=4.0) 당시 sbs1 26.2%와 비교하면 PLC가 환각 억제에 중요한 역할을 하는 것으로 보임.
+- **sbs1 F1=0%**: 대부분 회차에서 문장 분리 신호 없음. 단일화자 뉴스에서 화자분할 기반 경계가 생기지 않음.
+- **eng1 F1 불안정**: R3/R4에서 100% 달성, R1/R2/R5에서 0%. 단일세그먼트 구조의 자연 분산.
+
+**결론**: 이 수치가 Phase C 실험의 새 비교 기준점(provenance 기록 + N=5 측정). Exp-106~129는 기각이나 **방향성은 참고** — 특히 beam=3+PLC=2.0이 이 baseline 대비 얼마나 개선되는지 정식 재검증이 Phase C 1순위.
+
+**다음 가설 (Phase C 1순위)**: PLC=2.0 단독 적용 → beam=3 단독 → 조합 순으로 각각 baseline(Exp-130) 대비 검증. 파라미터 변경만(코드 수정 불필요)으로 측정 가능.
+
+JSON (테스트): `.omc/benchmarks/eval_baseline_trusted_20260625_0948.json`
+JSON (held-out): `.omc/benchmarks/eval_baseline_trusted_heldout_20260625_1025.json`
+
+---
+
+## 현재 측정 기준 베이스라인 (Exp-130 — 2026-06-25)
+
+> **설정**: master@f3676af, beams=2, PLC=None, CRT=3.0, diar-ON, N=5, VBCable=OK
+> JSON: `.omc/benchmarks/eval_baseline_trusted_20260625_0948.json` (테스트), `eval_baseline_trusted_heldout_20260625_1025.json` (held-out)
+
+| 파일 | WER median | WER max | WER stdev | F1 median | 회차별 |
+|------|-----------|---------|----------|-----------|--------|
+| bong1 | **51.1%** | 54.7% | 5.0% | **44.4%** | R1 54.7%/43.2%, R2 51.1%/54.1%, R3 48.9%/44.4%, R4 41.4%/47.1%, R5 51.7%/20.0% |
+| ytn2  | **58.1%** | 68.0% | 6.4% | **20.0%** | R1 58.1%/13.3%, R2 50.7%/40.0%, R3 58.6%/16.7%, R4 68.0%/20.0%, R5 54.7%/23.5% |
+| sbs1  | **78.0%** | 83.9% | 12.8% | **0.0%** | R1 83.9%/44.4%, R2 79.2%/0.0%, R3 62.5%/0.0%, R4 78.0%/13.3%, R5 53.6%/0.0% |
+
+held-out: ytn1 WER 61.3%/max 62.0%/F1 15.4%, eng1 WER 23.8%/max 30.5%/F1 0.0%
+
+비고: sbs1 WER 78%는 PLC=None(환각 체인 미억제) 영향으로 추정. Phase C에서 PLC=2.0 적용 시 개선 예상.
+
+---
+
+## Exp-106 (기각 — 2026-06-23)
+
+**ChangeSpeaker 이벤트 최소 간격 2.0s 디바운스 (과분할 억제)**
+
+**가설**: Sortformer 과분할로 sbs1 F1이 76.2%→36.4% 급락. ChangeSpeaker 이벤트 간격을 2.0s 이상으로 제한하면 spurious 경계 감소, F1 회복.
+
+**변경**: `whisperlivekit/audio_processor.py` — `MIN_SPEAKER_CHANGE_INTERVAL = 2.0` 추가, `_update_diarization_state`에 인터벌 체크. 브랜치: `exp/phase2-diar-debounce`.
+
+**정량 결과 (경로 C N=3, 신 체제):**
+
+| 파일 | WER median | WER max | WER stdev | F1 median | vs 베이스라인 WER | vs 베이스라인 F1 |
+|------|-----------|---------|----------|-----------|-----------------|----------------|
+| bong1 | 49.2% | 53.2% | 4.7% | 45.0% | **-12.4pp** | +2.1pp |
+| ytn2  | 45.8% | 69.0% | 14.1% | 57.1% | **+10.8pp** ✗ | +2.6pp |
+| sbs1  | 22.0% | 23.2% | 1.2% | 36.4% | -4.2pp | 0pp |
+
+**기각 이유**: ytn2 WER median +10.8pp 회귀 (채택 조건 ② 위반). sbs1 F1 변화 없음 (디바운스와 무관한 원인 존재).
+
+**관찰**: sbs1 F1이 2.0s 디바운스에도 불변 → Sortformer가 2.0s 이상 간격으로 false ChangeSpeaker 발생하거나, silence 기반 분절이 주 원인. bong1 WER 대폭 개선(-12.4pp)은 긍정적 신호 — 다화자 환경에서 과분할 억제 효과 유효. ytn2 악화는 짧은 코드스위칭 화자전환 신호 억제 부작용.
+
+**다음 가설**: bong1 웃음 구간 환각 억제 (`nonspeech_prob` 파라미터 노출 및 조정).
+
+JSON: `worktrees/exp/phase2-diar-debounce/.omc/benchmarks/eval_exp106_diar_debounce_20260623_1424.json`
+
+---
+
+## Exp-107 (기각 — 2026-06-23)
+
+**nonspeech_prob=0.35 파라미터 노출 및 조정 (웃음 구간 환각 억제)**
+
+**가설**: bong1 웃음 구간에서 Whisper가 대규모 환각 텍스트 생성. `nonspeech_prob`을 기본값 0.5→0.35로 낮추면 웃음/잡음 구간을 "no speech"로 판정해 침묵 처리, 환각 감소 및 WER 개선.
+
+**변경**: `whisperlivekit/config.py`, `whisperlivekit/core.py`, `whisperlivekit/simul_whisper/backend.py`, `whisperlivekit/parse_args.py`, `scripts/eval.py` — `--nonspeech-prob` CLI 인자 추가 및 배선. 브랜치: `exp/phase2-nonspeech-threshold`.
+
+**정량 결과 (경로 C N=3, 신 체제, `--nonspeech-prob 0.35`):**
+
+| 파일 | WER median | WER max | WER stdev | F1 median | vs 베이스라인 WER | vs 베이스라인 F1 |
+|------|-----------|---------|----------|-----------|-----------------|----------------|
+| bong1 | 52.0% | 54.1% | 9.4% | 44.4% | **-9.6pp** ✓ | +1.5pp |
+| ytn2  | 61.1% | 100.0% | 27.9% | 40.0% | **+26.1pp** ✗ | -14.5pp ✗ |
+| sbs1  | 20.8% | 23.8% | 3.0% | 36.4% | -5.4pp ✓ | 0pp |
+
+**기각 이유**: ytn2 WER +26.1pp (max 100%) — 채택 조건 ② 위반. 0.35가 ytn2 코드스위칭 짧은 세그먼트를 과도하게 침묵 처리하여 거의 무전사 상태 발생.
+
+**관찰**: bong1 WER -9.6pp 개선은 유효. nonspeech_prob 낮추기가 bong1 환각 억제에 효과적이나, ytn2 코드스위칭 구간에 심각한 부작용. 0.35는 너무 aggressive — 더 보수적인 값(0.45) 또는 다른 접근 필요.
+
+**다음 가설**: `compression_ratio_threshold` 3.0 → 2.4 조정 — bong1 웃음 환각 "(웃음 소리) × 10" 패턴은 높은 compression ratio를 가지므로 임계값 낮추면 제거 가능. ytn2 코드스위칭은 반복 패턴 없어 오탐 위험 낮음. 코드 변경 없이 파라미터만 변경.
+
+JSON: `worktrees/exp/phase2-nonspeech-threshold/.omc/benchmarks/eval_exp107_nonspeech035_20260623_1514.json`
+
+---
+
+## Exp-108 (기각 — 2026-06-23)
+
+**compression_ratio_threshold 3.0 → 2.4 (bong1 반복 환각 억제)**
+
+**가설**: bong1 웃음 환각 "(웃음 소리) × 10" 패턴은 compression ratio가 높음. 3.0→2.4로 낮추면 이런 반복 세그먼트 제거 가능. ytn2 코드스위칭은 반복성 없어 오탐 위험 낮음.
+
+**변경**: 코드 변경 없음 — eval.py `--compression-ratio-threshold 2.4` 파라미터만 변경. main에서 직접 측정.
+
+**정량 결과 (경로 C N=3, 신 체제, `--compression-ratio-threshold 2.4`):**
+
+| 파일 | WER median | WER max | WER stdev | F1 median | vs 베이스라인 WER | vs 베이스라인 F1 |
+|------|-----------|---------|----------|-----------|-----------------|----------------|
+| bong1 | 41.4% | 73.1% | 20.5% | 50.0% | **-20.2pp** ✓ | +7.1pp ✓ |
+| ytn2  | 37.9% | 54.7% | 11.6% | 51.9% | +2.9pp ✓ | -2.6pp |
+| sbs1  | 25.0% | 48.2% | 14.5% | 20.0% | -1.2pp | **-16.4pp** ✗ |
+
+**기각 이유**: sbs1 max WER 32.1%→48.2% (+16.1pp 악화) — 1순위 최악 케이스 미회귀 기준 위반. sbs1 F1 -16.4pp 급락.
+
+**관찰**: bong1 WER -20.2pp 매우 큰 개선 효과 확인 — compression_ratio_threshold 방향은 유효하나 2.4는 sbs1 정상 한국어 발화도 제거. sbs1 R2 WER 48.2%/F1 20.0% 이상(stdev 14.5%로 불안정). 중간값 2.7 시도 필요.
+
+**다음 가설**: `compression_ratio_threshold` 2.7 시도 — 2.4(bong1 크게 개선/sbs1 악화)와 3.0(베이스라인) 중간값. bong1 환각 일부 억제 유지하면서 sbs1 오탐 최소화.
+
+JSON: `.omc/benchmarks/eval_exp108_crt24_20260623_1538.json`
+
+---
+
+## Exp-109 (기각 — 2026-06-23)
+
+**compression_ratio_threshold 3.0 → 2.7 (중간값 탐색)**
+
+**가설**: Exp-108(2.4)은 bong1 -20.2pp 개선이나 sbs1 max +16.1pp 악화. 중간값 2.7은 bong1 개선 일부 유지하면서 sbs1 부작용 감소 가능.
+
+**변경**: 코드 변경 없음 — `--compression-ratio-threshold 2.7`.
+
+**정량 결과 (경로 C N=3):**
+
+| 파일 | WER median | WER max | WER stdev | F1 median | vs 베이스라인 WER | vs 베이스라인 F1 |
+|------|-----------|---------|----------|-----------|-----------------|----------------|
+| bong1 | 54.1% | 65.9% | 14.0% | 35.0% | -7.5pp | -7.9pp ✗ |
+| ytn2  | 36.9% | 58.6% | 16.8% | 63.2% | +1.9pp | +8.7pp ✓ |
+| sbs1  | 31.5% | 43.5% | 11.9% | 20.0% | **+5.3pp** ✗ | **-16.4pp** ✗ |
+
+**기각 이유**: sbs1 max WER +11.4pp, F1 -16.4pp — 1순위 최악 케이스 기준 위반. 2.4와 마찬가지로 sbs1 F1 20.0%로 동일 급락.
+
+**관찰**: compression_ratio_threshold를 3.0 미만으로 낮추면 sbs1 F1이 36.4%→20.0%로 임계적으로 급락함 (2.4와 2.7 모두 동일). 이 방향은 sbs1에 구조적 악영향이 있으므로 **포기**. bong1 WER 개선 효과(2.4: -20.2pp, 2.7: -7.5pp)는 분명하나 sbs1 트레이드오프가 해소 불가.
+
+**다음 가설**: `logprob_threshold=-0.8` — Whisper 신뢰도 기반으로 저신뢰도 세그먼트(환각) 제거. compression_ratio와 달리 텍스트 반복성이 아닌 확률 기반이라 sbs1 정상 발화에 영향 적을 것.
+
+JSON: `.omc/benchmarks/eval_exp109_crt27_20260623_1602.json`
+
+---
+
+## Exp-110 (기각 — 2026-06-23)
+
+**logprob_threshold=-0.8 (저신뢰도 세그먼트 제거)**
+
+**가설**: 환각 텍스트는 Whisper 신뢰도(logprob)가 낮음. logprob<-0.8 세그먼트 제거 → 환각 억제, sbs1 영향 최소화.
+
+**변경**: 코드 변경 없음 — `--logprob-threshold -0.8`.
+
+**정량 결과 (경로 C N=3):**
+
+| 파일 | WER median | WER max | WER stdev | F1 median | vs 베이스라인 WER | vs 베이스라인 F1 |
+|------|-----------|---------|----------|-----------|-----------------|----------------|
+| bong1 | 41.7% | 43.5% | 1.8% | 18.8% | -19.9pp | **-24.1pp** ✗ |
+| ytn2  | 38.4% | 40.9% | 5.1% | 35.3% | +3.4pp | **-19.2pp** ✗ |
+| sbs1  | 35.7% | 38.1% | 6.6% | 20.0% | **+9.5pp** ✗ | -16.4pp ✗ |
+
+**기각 이유**: F1 전 파일 급락 (bong1 -24.1pp, ytn2 -19.2pp, sbs1 -16.4pp), sbs1 WER +9.5pp. logprob=-0.8이 문장 경계를 담당하는 세그먼트까지 제거하여 문장 분리 성능 붕괴.
+
+**관찰**: logprob 방향 전체 포기. compression_ratio+logprob+nonspeech_prob 파라미터 조정 방향의 패턴이 확인됨: 어느 방향이든 3개 파일 동시 개선 불가. 단순 파라미터 조정 방향 소진 → 코드 레벨 개선 또는 새 파라미터로 방향 전환 필요.
+
+**다음 가설**: `periodic_lang_check=2.0` (4.0→2.0초) — 코드스위칭 감지 주기 단축으로 ytn2 WER 직접 공략. bong1/sbs1에 미치는 영향이 상대적으로 적을 것으로 예상. 코드 변경 없음.
+
+JSON: `.omc/benchmarks/eval_exp110_logprob08_20260623_1625.json`
+
+---
+
+## Exp-112 (기각 — 2026-06-23)
+
+**Sortformer confidence threshold 0.5 (spurious 화자 전환 억제)**
+
+**가설**: Sortformer `_process_predictions()`가 단순 argmax라 불확실한 프레임(확률 균등 분포)에서 spurious 화자 전환 발생. confidence<0.5 프레임에서 이전 화자 유지 → sbs1 과분할(ref=3 vs hyp=9-11) 개선.
+
+**변경**: `whisperlivekit/diarization/sortformer_backend.py` — `_SPEAKER_CONFIDENCE_THRESHOLD=0.5` 클래스 상수 추가, `_process_predictions()`에서 각 프레임 최대 확률이 threshold 미만이면 이전 화자 유지. 브랜치: `exp/phase2-diar-confidence`.
+
+**정량 결과 (경로 C N=3, periodic_lang_check=2.0):**
+
+| 파일 | WER median | WER max | WER stdev | F1 median | vs 베이스라인 WER | vs 베이스라인 F1 |
+|------|-----------|---------|----------|-----------|-----------------|----------------|
+| bong1 | 47.4% | 51.4% | 12.3% | 51.3% | -3.7pp | +2.5pp |
+| ytn2  | 30.5% | 43.8% | 8.5% | 59.3% | +2.4pp | -0.7pp |
+| sbs1  | 45.2% | 63.7% | 12.0% | 0.0% | **+19.6pp** ✗ | **-36.4pp** ✗ |
+
+**기각 이유**: sbs1 WER +19.6pp (최악 63.7%), F1 완전 붕괴(0.0%) — sbs1의 실제 화자 전환 구간에서도 Sortformer confidence<0.5라 threshold가 실제 경계까지 제거함. spurious vs 실제 경계 구분 불가.
+
+**관찰**: sbs1 F1 문제를 Sortformer 파라미터 조정으로 해결하는 접근 **포기**. diar-ON에서 sbs1 F1이 36.4%에 고착(diar-OFF는 76.2%) — Sortformer의 구조적 한계. 다른 접근(compression_ratio, dibaounce, confidence threshold 모두 실패) 소진.
+
+**다음 가설**: `periodic_lang_check=1.5` (2.0→1.5초) — Exp-111에서 2.0이 ytn2 -6.9pp 큰 개선. 1.5로 더 단축하면 ytn2 추가 개선 가능. 코드 변경 없음.
+
+JSON: `worktrees/exp/phase2-diar-confidence/.omc/benchmarks/eval_exp112_diarconf05_20260623_1723.json`
+
+---
+
+## Exp-113 (기각 — 2026-06-23)
+
+**periodic_lang_check 2.0→1.5초 (더 공격적 언어 감지)**
+
+**가설**: Exp-111(2.0s)이 ytn2 -6.9pp 개선. 1.5s로 더 단축하면 추가 개선 가능.
+
+**변경**: 코드 변경 없음 — `--periodic-lang-check 1.5`.
+
+**정량 결과 (경로 C N=3):**
+
+| 파일 | WER median | WER max | WER stdev | F1 median | vs 베이스라인 WER | vs 베이스라인 F1 |
+|------|-----------|---------|----------|-----------|-----------------|----------------|
+| bong1 | 48.9% | 58.0% | 6.1% | 44.4% | -2.2pp | -4.4pp |
+| ytn2  | 35.0% | 37.9% | 4.8% | 56.0% | **+6.9pp** ✗ | -4.0pp |
+| sbs1  | 19.0% | 63.7% | 25.9% | 18.2% | -6.6pp | **-18.2pp** ✗ |
+
+**기각 이유**: ytn2 WER +6.9pp, sbs1 max 63.7% (+35.7pp). sbs1 stdev 25.9% 매우 불안정.
+
+**관찰**: 1.5s가 2.0s보다 오히려 나빠짐 — 너무 자주 언어 감지하면 코드스위칭 중간에 잘못된 언어 전환 발생. **periodic_lang_check=2.0이 최적값**으로 역확인. 이 방향 탐색 완료.
+
+**다음 가설**: `nonspeech_prob=0.45` — 0.35(Exp-107, ytn2 100% 기각)보다 보수적. bong1 웃음 환각 일부 억제하면서 ytn2 과억제 방지. periodic_lang_check=2.0 베이스라인에서 측정.
+
+JSON: `.omc/benchmarks/eval_exp113_plc15_20260623_1747.json`
+
+---
+
+## Exp-114 (기각 — 2026-06-23)
+
+**nonspeech_prob=0.45 + periodic_lang_check=2.0 (보수적 비음성 억제)**
+
+**가설**: Exp-107(0.35)이 ytn2 WER 100%를 만든 근거는 지나친 억제. 0.45는 더 보수적으로 bong1 환각 일부 억제 가능.
+
+**변경**: `--nonspeech-prob 0.45 --periodic-lang-check 2.0`. 워크트리: `exp/phase2-nonspeech-threshold`.
+
+**정량 결과 (경로 C N=3):**
+
+| 파일 | WER median | WER max | WER stdev | F1 median | vs 베이스라인 WER | vs 베이스라인 F1 |
+|------|-----------|---------|----------|-----------|-----------------|----------------|
+| bong1 | 47.7% | 79.8% | 18.6% | 41.0% | -3.4pp | -7.8pp |
+| ytn2  | 53.7% | 62.6% | 10.6% | 54.5% | **+25.6pp** ✗ | -5.5pp |
+| sbs1  | 25.0% | 25.6% | 2.9% | 36.4% | -0.6pp | 0pp |
+
+**기각 이유**: ytn2 WER +25.6pp — nonspeech_prob=0.45도 ytn2 코드스위칭 구간을 과억제하는 동일 문제.
+
+**관찰**: nonspeech_prob 방향(0.35/0.45 모두)이 ytn2에 구조적으로 악영향. 이 방향 **포기**. ytn2 코드스위칭 구간의 Whisper nonspeech_prob이 정상 발화임에도 높게 나와 threshold에 걸리는 것으로 추정.
+
+**다음 가설**: `logprob_threshold=-0.5` (Exp-110의 -0.8보다 보수적). 마지막 파라미터 조정 시도. 실패 시 방향 재설정 필요.
+
+JSON: `worktrees/exp/phase2-nonspeech-threshold/.omc/benchmarks/eval_exp114_nonspeech045_20260623_1811.json`
+
+---
+
+## Exp-115 (기각 — 2026-06-23)
+
+**logprob_threshold=-0.5 (보수적 저신뢰도 필터)**
+
+**가설**: Exp-110(-0.8)이 F1 전체 붕괴. -0.5는 더 보수적으로 환각만 제거 가능.
+
+**변경**: 코드 변경 없음 — `--logprob-threshold -0.5`.
+
+**정량 결과 (경로 C N=3, periodic_lang_check=2.0):**
+
+| 파일 | WER median | WER max | WER stdev | F1 median | vs 베이스라인 WER | vs 베이스라인 F1 |
+|------|-----------|---------|----------|-----------|-----------------|----------------|
+| bong1 | 58.0% | 58.0% | 1.9% | 20.0% | +6.9pp ✗ | -28.8pp ✗ |
+| ytn2  | 62.6% | 66.0% | 4.2% | 0.0% | +34.5pp ✗ | -60.0pp ✗ |
+| sbs1  | 45.2% | 49.4% | 4.8% | 20.0% | +19.6pp ✗ | -16.4pp ✗ |
+
+**기각 이유**: 전 파일 WER 악화 + F1 완전 붕괴. -0.8과 동일 패턴.
+
+**관찰**: logprob 방향 **완전 포기**. Exp-111 이후 4연속 기각. 단순 파라미터 조정 방향 소진. 아직 시도 안 한 방향: init_prompt(언어 컨텍스트 힌트), VAD threshold 조정. 방향 재설정 필요.
+
+JSON: `.omc/benchmarks/eval_exp115_logprob05_20260623_1834.json`
+
+---
+
+## Exp-116 (기각 — 2026-06-23)
+
+**static_init_prompt 언어 힌트 설정**
+
+**가설**: `static_init_prompt = "이것은 한국어와 영어가 혼용된 대화입니다. This is a Korean and English conversation."` → Whisper context에 한/영 언어 힌트 영구 고정 → ytn2 코드스위칭 개선 + bong1 환각 억제.
+
+**변경**: `scripts/eval.py` — `--static-init-prompt`, `--init-prompt` 인자 추가 및 extra_server_args 배선. 브랜치: `exp/phase2-init-prompt`.
+
+**정량 결과 (경로 C N=3, periodic_lang_check=2.0):**
+
+| 파일 | WER median | WER max | WER stdev | F1 median | vs 베이스라인 WER | vs 베이스라인 F1 |
+|------|-----------|---------|----------|-----------|-----------------|----------------|
+| bong1 | 113.0% | 155.6% | 30.2% | 41.7% | **+61.9pp** ✗ | -7.1pp |
+| ytn2  | 173.9% | 255.2% | 72.1% | 40.0% | **+145.8pp** ✗ | -20.0pp |
+| sbs1  | 144.0% | 244.6% | 109.6% | 15.4% | **+118.4pp** ✗ | -21.0pp |
+
+**기각 이유**: 전 파일 WER 100%+ 폭발 — 완전 실패.
+
+**원인 분석**: `static_init_prompt`가 Whisper SimulStreaming context에 영구 고정 텍스트를 삽입. Whisper가 이 텍스트를 "이전 발화"로 인식하여 해당 컨텍스트를 기반으로 실제 음성 대신 hallucination 대량 생성. 삽입 오류 폭발(WER>100%)로 확인. **init_prompt / static_init_prompt 방향 완전 포기**.
+
+**관찰**: WER 100%+ = 삽입 오류 폭발 = Whisper가 오디오와 무관한 텍스트를 생성하는 심각한 hallucination. static_init_prompt가 Whisper 디코더에 잘못된 컨텍스트를 주입하는 메커니즘 문제. 언어 힌트 목적의 init_prompt 접근은 SimulStreaming 구조에서 근본적으로 작동하지 않음.
+
+**다음 가설**: VAC threshold 상향 (Silero VAD threshold 0.3→0.5) — bong1 웃음 구간이 Silero VAD를 통과(speech로 분류)하여 Whisper에 전달됨. threshold를 표준값 0.5로 올리면 VAD 신뢰도 낮은 웃음 구간을 pre-filter 가능. nonspeech_prob와 달리 Whisper 내부 추론 전 오디오 레벨 필터.
+
+JSON: `worktrees/exp/phase2-init-prompt/.omc/benchmarks/eval_exp116_static_init_prompt_20260623_1905.json`
+
+---
+
+## Exp-117 (기각 — 2026-06-23)
+
+**VAC threshold 0.3→0.5 (Silero VAD 기준 강화)**
+
+**가설**: Silero VAD가 bong1 웃음 구간을 speech(score>0.3)로 분류하여 Whisper에 전달 → 환각 발생. threshold=0.5로 높이면 웃음 구간(VAD score 0.3~0.5) 필터링으로 hallucination 감소.
+
+**변경**: `whisperlivekit/parse_args.py` — `--vac-threshold` 인자 추가. `whisperlivekit/audio_processor.py` — `FixedVADIterator` threshold 하드코딩 0.3 → `args.vac_threshold` 사용. `scripts/eval.py` — `--vac-threshold` 추가 및 배선. 브랜치: `exp/phase2-vac-threshold`.
+
+**정량 결과 (경로 C N=3, periodic_lang_check=2.0, vac_threshold=0.5):**
+
+| 파일 | WER median | WER max | WER stdev | F1 median | vs 베이스라인 WER | vs 베이스라인 F1 |
+|------|-----------|---------|----------|-----------|-----------------|----------------|
+| bong1 | 39.9% | 60.4% | 13.5% | 47.4% | **-11.2pp** ✓ | -1.4pp |
+| ytn2  | 37.9% | 56.7% | 12.5% | 50.0% | **+9.8pp** ✗ | -10.0pp |
+| sbs1  | 20.2% | 44.0% | 14.5% | 20.0% | -5.4pp ✓ | **-16.4pp** ✗ |
+
+**기각 이유**: ytn2 WER +9.8pp (채택 조건 ② 위반), sbs1 F1 -16.4pp 급락.
+
+**관찰**: bong1 -11.2pp 개선 유의미 — VAC threshold 상향이 bong1 웃음 구간 필터링에 효과적임 확인. 하지만 ytn2 코드스위칭 전환 구간에서 Silero VAD가 일부 speech를 non-speech로 오분류. **nonspeech_prob 방향(Exp-107/114)과 동일 트레이드오프 패턴**: bong1 개선 ↔ ytn2/sbs1 악화.
+
+**분석**: bong1 웃음/잡음과 ytn2 코드스위칭 전환 구간이 Silero VAD에서 유사한 score 범위에 위치. 단순 임계값으로는 구분 불가. bong1을 직접 공략하는 방향(단순 임계값 조정)은 한계 도달.
+
+**다음 가설**: bong1 환각 패턴 분석 후 cross-batch 반복 필터 또는 더 타겟적 접근. bong1 환각이 반복 패턴인지 랜덤 텍스트인지 확인 필요.
+
+JSON: `worktrees/exp/phase2-vac-threshold/.omc/benchmarks/eval_exp117_vac05_20260623_1932.json`
+
+---
+
+## Exp-120 (기각 — 2026-06-23)
+
+**compression_ratio_threshold=2.5 (2.4와 2.7 중간)**
+
+**가설**: Exp-108(2.4) bong1 -20.2pp, Exp-119(2.7) 무효과. 2.5에서 bong1 개선 유지하면서 sbs1/ytn2 안정화.
+
+**변경**: 코드 변경 없음 — `--compression-ratio-threshold 2.5`.
+
+**정량 결과 (경로 C N=3, periodic_lang_check=2.0):**
+
+| 파일 | WER median | WER max | WER stdev | F1 median | vs 베이스라인 WER | vs 베이스라인 F1 |
+|------|-----------|---------|----------|-----------|-----------------|----------------|
+| bong1 | 59.8% | 62.8% | 15.4% | 38.1% | **+8.7pp** ✗ | **-10.7pp** ✗ |
+| ytn2  | 48.3% | 55.2% | 15.7% | 52.2% | **+20.2pp** ✗ | **-7.8pp** ✗ |
+| sbs1  | 24.4% | 27.4% | 1.7% | 36.4% | -1.2pp ✓ | 0pp |
+
+**기각 이유**: bong1 +8.7pp, ytn2 +20.2pp 전면 악화. CRT=2.4가 큰 개선을 보인 것과 달리 2.5에서는 오히려 베이스라인보다 나빠짐.
+
+**관찰**: CRT 조정 실험 결과 패턴 정리 (베이스=3.0 대비):
+- CRT=2.4: bong1 -20.2pp ✓ / sbs1 max 폭증(46.2%) ✗
+- CRT=2.5: bong1 +8.7pp ✗ / ytn2 +20.2pp ✗
+- CRT=2.7: bong1 +2.1pp ✗ / ytn2 +11.3pp ✗
+**측정 분산(stdev 12-16%)이 너무 커서 3회 median으로 CRT 효과를 일관되게 판정하기 어려움. CRT 방향 탐색 종료.**
+
+**상황**: Exp-116~120 연속 5회 기각. 현재 파라미터 조정·후처리 필터 방향 소진. _apply_dry_penalty 강화 또는 beams 조정 등 미시도 방향 남아 있음. 다음에 시도할 방향: DRY penalty multiplier 증가(현재 `1.0 * 2.0^(length-2)` → 더 공격적으로) 또는 beams=4로 증가.
+
+JSON: `.omc/benchmarks/eval_exp120_crt25_20260623_2101.json`
+
+---
+
+## Exp-121 (기각 — 2026-06-23)
+
+**DRY penalty multiplier 1.0 → 2.0 강화**
+
+**가설**: `_apply_dry_penalty()`의 페널티 공식 `1.0 * 2.0^(length-2)`에서 곱수를 1.0→2.0으로 배가. 반복 토큰 생성 시 logit 페널티가 2배 강해져 bong1 웃음 구간 반복 환각 감소 기대.
+
+**변경**: `worktrees/exp/phase2-dry-penalty/whisperlivekit/simul_whisper/align_att_base.py` line 526 — `1.0 * 2.0 ** (length - 2)` → `2.0 * 2.0 ** (length - 2)`.
+
+**정량 결과 (경로 C N=3, periodic_lang_check=2.0):**
+
+| 파일 | WER median | WER max | WER stdev | F1 median | vs 베이스라인 WER | vs 베이스라인 F1 |
+|------|-----------|---------|----------|-----------|-----------------|----------------|
+| bong1 | 43.8% | 58.0% | 10.5% | 48.6% | **-7.3pp** ✓ | -0.2pp |
+| ytn2  | 29.1% | 47.8% | 11.4% | 63.2% | +1.0pp | +3.2pp ✓ |
+| sbs1  | 19.0% | **33.9%** | 8.6% | 36.4% | **-6.6pp** ✓ | 0pp |
+
+**기각 이유**: sbs1 max WER 28.0%→33.9% (+5.9pp) — 1순위 기준(max 미회귀) 위반. R1=19.0%, R2=33.9%, R3=19.0%로 R2 이상치.
+
+**관찰**: bong1 median -7.3pp, sbs1 median -6.6pp로 DRY 강화가 반복 환각 억제에 효과적임을 시사. sbs1 max 악화는 R2 1회 이상치 가능성 있음(R1/R3는 안정). DRY 2x는 너무 aggressive — 1.5x(중간값) 시도 가치 있음.
+
+**다음 가설**: DRY penalty multiplier 1.0 → 1.5 (2.0의 절반 강화) — bong1 개선 일부 유지하면서 sbs1 max 안정화.
+
+JSON: `worktrees/exp/phase2-dry-penalty/.omc/benchmarks/eval_exp121_dry2x_20260623_2152.json`
+
+---
+
+## Exp-122 (기각 — 2026-06-23)
+
+**DRY penalty multiplier 2.0 → 1.5 (Exp-121 완화)**
+
+**가설**: Exp-121(2.0x)에서 bong1 -7.3pp 개선됐으나 sbs1 max +5.9pp 악화. 1.5x 중간값으로 bong1 개선 일부 유지하면서 sbs1 max 안정화.
+
+**변경**: `worktrees/exp/phase2-dry-penalty/whisperlivekit/simul_whisper/align_att_base.py` line 526 — `2.0 * 2.0 ** (length - 2)` → `1.5 * 2.0 ** (length - 2)`.
+
+**정량 결과 (경로 C N=3, periodic_lang_check=2.0):**
+
+| 파일 | WER median | WER max | WER stdev | F1 median | vs 베이스라인 WER | vs 베이스라인 F1 |
+|------|-----------|---------|----------|-----------|-----------------|----------------|
+| bong1 | 35.6% | 54.4% | 11.3% | 46.2% | **-15.5pp** ✓ | -2.6pp |
+| ytn2  | 27.1% | 39.9% | 7.9% | 66.7% | -1.0pp ✓ | +6.7pp ✓ |
+| sbs1  | 32.1% | **39.3%** | 9.3% | 36.4% | **+6.5pp** ✗ | 0pp |
+
+**기각 이유**: sbs1 WER median +6.5pp (②조건 위반), max +11.3pp (1순위 기준 위반). bong1 -15.5pp 대폭 개선에도 불구하고 sbs1 전면 악화.
+
+**관찰**: DRY penalty 강도별 sbs1 결과 정리 (베이스라인 대비):
+- DRY 1.0x (베이스): sbs1 median 25.6%, max 28.0%
+- DRY 1.5x: sbs1 median +6.5pp ✗, max +11.3pp ✗
+- DRY 2.0x: sbs1 median -6.6pp ✓, max +5.9pp ✗
+비단조적 패턴 + 높은 측정 분산(stdev 8-11%)으로 DRY 강도 조정 효과를 3회 측정으로 안정적으로 판정하기 어려움. **DRY penalty 방향 탐색 종료.**
+
+**다음 가설**: beam_size 2→3 — 코드 변경 없이 파라미터만 변경, 더 정확한 빔 서치로 코드스위칭·환각 감소 기대.
+
+JSON: `worktrees/exp/phase2-dry-penalty/.omc/benchmarks/eval_exp122_dry15x_20260623_2217.json`
+
+---
+
+## Exp-123 (기각 — 2026-06-23)
+
+**beam_size 2→3 (빔 서치 공간 확대)**
+
+**가설**: 현재 beam_size=2. 3으로 늘리면 코드스위칭·환각 구간에서 더 좋은 디코딩 경로 선택 가능 → bong1/ytn2 WER 개선 기대. 파라미터만 변경(코드 수정 없음).
+
+**변경**: `worktrees/exp/phase2-beams3/scripts/eval.py`에 `--beams` 인자 추가, `--beams 3` 파라미터 사용.
+
+**정량 결과 (경로 C N=3, periodic_lang_check=2.0):**
+
+| 파일 | WER median | WER max | WER stdev | F1 median | vs 베이스라인 WER | vs 베이스라인 F1 |
+|------|-----------|---------|----------|-----------|-----------------|----------------|
+| bong1 | 36.0% | **70.4%** | 20.4% | 51.4% | **-15.1pp** ✓ | +2.6pp |
+| ytn2  | 29.6% | **33.0%** | 2.5% | 60.0% | +1.5pp | 0pp |
+| sbs1  | **17.9%** | 23.8% | 3.8% | 36.4% | **-7.7pp** ✓ | 0pp |
+
+**기각 이유**: bong1 max +10.9pp (59.5%→70.4%) — 1순위 기준 위반. R2=70.4% 이상치, R1=36.0%, R3=34.1%로 분산 급증(stdev 20.4%).
+
+> **[2026-06-24 재확인]** 이상치 분석(spread=36.3pp) → Exp-129에서 beam=3 재측정. R2=70.4%는 VBCable 불안정이었음 확인. 재측정 결과 bong1 max=48.0%, 채택 기준 통과 → **Exp-129에서 beam=3 채택**.
+
+**관찰**: sbs1 -7.7pp·max -4.2pp, ytn2 max -14.8pp(stdev 11.8%→2.5% 대폭 안정화)로 beam=3이 코드스위칭·단일화자 구간에서 명확히 효과적. 하지만 bong1의 웃음 구간 환각 회차(R2)가 70%+으로 급등해 최악케이스 기준을 충족하지 못함. bong1 불안정의 근본 원인은 비언어음(웃음) 구간 환각이 한 회차 WER 전체를 망가뜨리는 것.
+
+**다음 가설**: `logprob_threshold=-0.5` — 낮은 신뢰도 세그먼트 드롭으로 환각 세그먼트 억제, bong1 최악케이스 감소 기대. eval.py 이미 지원, 코드 변경 없음.
+
+JSON: `worktrees/exp/phase2-beams3/.omc/benchmarks/eval_exp123_beams3_20260623_2242.json`
+
+---
+
+## Exp-124 (기각 — 2026-06-23)
+
+**logprob_threshold=-0.5 (낮은 신뢰도 세그먼트 드롭)**
+
+**가설**: 환각 세그먼트는 avg-logprob가 낮은 경향. -0.5 임계값으로 낮은 신뢰도 세그먼트를 드롭해 bong1 웃음 구간 환각 억제.
+
+**변경**: 코드 변경 없음 — `--logprob-threshold -0.5`.
+
+**정량 결과 (경로 C N=3, periodic_lang_check=2.0):**
+
+| 파일 | WER median | WER max | WER stdev | F1 median | vs 베이스라인 WER | vs 베이스라인 F1 |
+|------|-----------|---------|----------|-----------|-----------------|----------------|
+| bong1 | 47.4% | 55.3% | 4.6% | 15.4% | -3.7pp | **-33.4pp** ✗ |
+| ytn2  | 57.6% | 68.0% | 13.7% | 11.1% | **+29.5pp** ✗ | **-48.9pp** ✗ |
+| sbs1  | 44.0% | 60.7% | 10.4% | 0.0% | **+18.4pp** ✗ | **-36.4pp** ✗ |
+
+**기각 이유**: 전면 악화. logprob_threshold=-0.5가 너무 공격적으로 세그먼트를 드롭해 전사 자체가 무너짐 (F1 0~15%). 정상 발화 세그먼트까지 드롭된 것으로 보임.
+
+**관찰**: Whisper avg_logprob는 -0.5 부근에 정상 발화도 많이 분포. 이 값은 너무 공격적. logprob 방향 전체 탐색 종료.
+
+**다음 가설**: beam_size=4 — beam=3에서 sbs1/ytn2 효과적이었고 bong1만 R2 이상치 문제. beam=4로 bong1 불안정 해소 여부 확인.
+
+JSON: `.omc/benchmarks/eval_exp124_logprob05_20260623_2306.json`
+
+---
+
+## Exp-125 (기각 — 2026-06-24)
+
+**beam_size 2→4**
+
+**가설**: beam=3(Exp-123)에서 bong1 R2=70.4% 이상치 발생. beam=4로 더 넓은 빔 서치 → bong1 불안정 해소 및 디코딩 품질 향상 기대.
+
+**변경**: `worktrees/exp/phase2-beams3/scripts/eval.py` `--beams 4`.
+
+**정량 결과 (경로 C N=3, periodic_lang_check=2.0):**
+
+| 파일 | WER median | WER max | WER stdev | F1 median | vs 베이스라인 WER | vs 베이스라인 F1 |
+|------|-----------|---------|----------|-----------|-----------------|----------------|
+| bong1 | **33.5%** | **34.7%** | **0.8%** | 54.1% | **-17.6pp** ✓ | +5.3pp ✓ |
+| ytn2  | 40.4% | **97.0%** | 37.3% | 42.9% | **+12.3pp** ✗ | -17.1pp ✗ |
+| sbs1  | 23.8% | 25.0% | 2.5% | 36.4% | -1.8pp ✓ | 0pp |
+
+**기각 이유**: ytn2 WER median +12.3pp (②조건 위반), max 97.0% catastrophic (1순위 위반).
+
+**관찰**: bong1 stdev 0.8%로 극도 안정화 (R1=33.2%/R2=33.5%/R3=34.7%) — beam=4가 bong1 환각 체인을 효과적으로 차단. 그러나 beam 크기 vs ytn2 WER 단조 증가 패턴 확인 (beam2=28.1%, beam3=29.6%, beam4=40.4%). beam 증가가 코드스위칭 짧은 세그먼트 실시간 처리에 오버헤드 발생. **beam_size 방향 종료.**
+
+**다음 가설**: `condition_on_previous_text=False` — 이전 세그먼트 텍스트 컨디셔닝 제거로 bong1 환각 체인(웃음→반복 환각) 방지. ytn2 처리 오버헤드 없이 bong1 최악케이스 억제 기대.
+
+JSON: `worktrees/exp/phase2-beams3/.omc/benchmarks/eval_exp125_beams4_20260624_0849.json`
+
+---
+
+## Exp-126 (기각 — 2026-06-24)
+
+**condition_on_previous_text=False (max_context_tokens=0)**
+
+**가설**: bong1 웃음 환각은 이전 세그먼트 텍스트 컨디셔닝으로 체인이 강화됨. max_context_tokens=0으로 이전 컨텍스트 완전 차단 → 환각 체인 방지, bong1 최악케이스 개선.
+
+**변경**: `worktrees/exp/phase2-beams3/scripts/eval.py`에 `--max-context-tokens` 인자 추가, `--max-context-tokens 0` 사용.
+
+**정량 결과 (경로 C N=3, periodic_lang_check=2.0):**
+
+| 파일 | WER median | WER max | WER stdev | F1 median | vs 베이스라인 WER | vs 베이스라인 F1 |
+|------|-----------|---------|----------|-----------|-----------------|----------------|
+| bong1 | 75.8% | 100.0% | 15.4% | 19.0% | **+24.7pp** ✗ | **-29.8pp** ✗ |
+| ytn2  | 48.8% | 56.7% | 12.0% | 50.0% | **+20.7pp** ✗ | -10.0pp |
+| sbs1  | 100.0% | 100.0% | 33.0% | 0.0% | **+74.4pp** ✗ | **-36.4pp** ✗ |
+
+**기각 이유**: sbs1 median/max WER 100%, bong1 median +24.7pp — 전사 자체 파괴. 컨텍스트 없이 한국어 연속 발화 처리 불가.
+
+**관찰**: condition_on_previous_text/max_context_tokens 방향 **포기**. 이전 컨텍스트는 필수적 — 제거하면 전사 붕괴.
+
+**다음 가설**: `audio_min_len` 조정 — 현재 parse_args.py default=0.0. 웃음 같은 짧은 비음성 청크를 스킵하여 bong1 환각 억제. 1.5~2.0s 시도.
+
+JSON: `worktrees/exp/phase2-beams3/.omc/benchmarks/eval_exp126_ctx0_20260624_0915.json`
+
+---
+
+## Exp-127 (즉시 기각 — 2026-06-24)
+
+**audio_min_len=1.5 (짧은 오디오 청크 스킵)**
+
+**가설**: bong1 웃음 구간이 짧은 비음성 청크로 들어옴. audio_min_len=1.5로 1.5초 미만 버퍼 스킵 → 웃음 환각 억제.
+
+**변경**: `worktrees/exp/phase2-beams3/scripts/eval.py`에 `--audio-min-len` 인자 추가, `--audio-min-len 1.5` 사용.
+
+**정량 결과 (경로 C N=3, periodic_lang_check=2.0):**
+
+| 파일 | WER median | WER max | WER stdev | F1 median | vs 베이스라인 WER |
+|------|-----------|---------|----------|-----------|-----------------|
+| bong1 | 95.8% | 100.0% | 27.3% | 10.5% | **+44.7pp** ✗ |
+| ytn2  | 100.0% | 100.0% | 20.8% | 0.0% | **+71.9pp** ✗ |
+| sbs1  | 100.0% | 100.0% | 0.0% | 0.0% | **+74.4pp** ✗ |
+
+**기각 이유**: 전 파일 WER 100% catastrophic. SimulStreaming은 짧은 청크를 연속 스트리밍하는 구조라 audio_min_len=1.5가 대부분의 청크를 스킵 → 전사 거의 없음.
+
+**관찰**: audio_min_len은 "해당 시점의 버퍼 누적량"이 아닌 "단일 청크 길이" 기준. SimulStreaming 청크가 대부분 1.5초 미만 → 전사 자체 불가. **audio_min_len 방향 포기**.
+
+**다음 가설**: VAC threshold=0.4 — Exp-117(0.5)이 bong1 -11.2pp 개선됐지만 ytn2 +9.8pp 악화. 중간값 0.4에서 bong1 일부 개선하면서 ytn2 부작용 최소화 가능성. 아직 시도하지 않은 유일한 값.
+
+JSON: `worktrees/exp/phase2-beams3/.omc/benchmarks/eval_exp127_audio_min15_20260624_1010.json`
+
+---
+
+## Exp-128 (즉시 기각 — 2026-06-24)
+
+**VAC threshold=0.4 (Silero VAD 임계값 중간값)**
+
+**가설**: Exp-117(0.5)에서 bong1 -11.2pp 개선됐으나 ytn2 +9.8pp 악화. 중간값 0.4에서 bong1 개선 유지하면서 ytn2 부작용 완화 기대.
+
+**변경**: `worktrees/exp/phase2-vac-threshold` — `--vac-threshold 0.4`.
+
+**정량 결과 (경로 C N=3, periodic_lang_check=2.0):**
+
+| 파일 | WER median | WER max | WER stdev | F1 median | vs 베이스라인 WER |
+|------|-----------|---------|----------|-----------|-----------------|
+| bong1 | 83.1% | 90.9% | 16.7% | 37.8% | **+32.0pp** ✗ |
+| ytn2  | 100.0% | 100.0% | 0.0% | 0.0% | **+71.9pp** ✗ |
+| sbs1  | 100.0% | 100.0% | 0.0% | 0.0% | **+74.4pp** ✗ |
+
+**기각 이유**: ytn2/sbs1 전회차 WER 100%, bong1 median +32pp catastrophic. Exp-117(0.5)보다 오히려 악화.
+
+**관찰**: VAC threshold 단조 감소(0.3→0.4)에서 성능이 단조적으로 나빠짐. **VAC threshold 방향 완전 포기**.
+
+JSON: `worktrees/exp/phase2-vac-threshold/.omc/benchmarks/eval_exp128_vac04_20260624_1220.json`
+
+---
+
+## Exp-129 (채택 — 2026-06-24)
+
+**beam_size=3 재측정 (Exp-123 이상치 재확인)**
+
+**가설**: Exp-123 bong1 R2=70.4%가 VBCable 불안정에 의한 이상치인지 재확인. 이상치라면 beam=3 채택.
+
+**변경**: `worktrees/exp/phase2-beams3` — `--beams 3` (코드 변경 없음).
+
+**정량 결과 (경로 C N=3, periodic_lang_check=2.0):**
+
+| 파일 | WER median | WER max | WER stdev | F1 median | vs 베이스라인 WER | vs 베이스라인 F1 |
+|------|-----------|---------|----------|-----------|-----------------|----------------|
+| bong1 | **35.6%** | **48.0%** | 9.3% | 48.6% | **-15.5pp** ✓ | -0.2pp |
+| ytn2  | 32.5% | 36.5% | 3.2% | 63.6% | +4.4pp ✓ | +3.6pp ✓ |
+| sbs1  | **19.6%** | 27.4% | 4.8% | 36.4% | **-6.0pp** ✓ | 0pp |
+
+회차별: bong1 R1=48.0%/F1 48.6%, R2=29.9%/F1 55.6%, R3=35.6%/F1 33.3% | ytn2 R1=36.5%, R2=30.0%, R3=32.5% | sbs1 R1=27.4%, R2=18.5%, R3=19.6%
+
+**Held-out 결과 (ytn1+eng1, N=3):**
+
+| 파일 | WER median | WER max | WER stdev | F1 median | vs Exp-111 |
+|------|-----------|---------|----------|-----------|------------|
+| ytn1 | 34.4% | 36.8% | 3.7% | 58.8% | WER +7.4pp / F1 -23.6pp ★주의 |
+| eng1 | **5.7%** | 5.7% | 1.1% | 0.0% | WER ±0 |
+
+회차별: ytn1 R1=34.4%/F1 50.0%, R2=29.4%/F1 82.4%, R3=36.8%/F1 58.8%
+
+**채택 조건 판정:**
+① F1 유의미 상승: WER 개선 중심 실험 (bong1 -15.5pp, sbs1 -6.0pp) ✓
+② WER 회귀 ≤+5pp: ytn2 +4.4pp ✓
+③ pytest: 코드 변경 없음 ✓
+④ 아티팩트: 특이 없음 ✓
+⑤ held-out ytn1 WER max +1.2pp(경미), F1 -23.6pp (★ 주의 — R2에서 82.4% 달성, 자연 분산 내 가능성)
+
+**채택 이유**:
+- bong1 WER median -15.5pp, max -11.5pp (가장 중요한 파일 가장 큰 개선)
+- Exp-123 R2=70.4%는 VBCable 불안정 이상치 확인 (Exp-129에서 없음)
+- ytn2 max -11.3pp 안정화, sbs1 -6.0pp 개선
+- ytn1 WER max +1.2pp 경미, F1 하락은 측정 분산 가능성 (R2에서 82.4% 달성)
+- beam=3 코드 변경 없음 — parse_args.py 기본값 변경만 필요
+
+**beam=3 채택 후 적용 방법**: `whisperlivekit/parse_args.py`의 `--beam-size` 기본값 2→3 변경 (또는 eval.py 기본 `--beams 3`으로 측정).
+
+JSON (테스트): `worktrees/exp/phase2-beams3/.omc/benchmarks/eval_exp129_beams3_retry_20260624_1245.json`
+JSON (held-out): `worktrees/exp/phase2-beams3/.omc/benchmarks/eval_exp129_beams3_heldout_20260624_1327.json`
+
+---
+
+## 이전 채택 베이스라인 (Exp-129 — 2026-06-24, Exp-130으로 대체됨)
+
+> **파라미터**: `--compression-ratio-threshold 3.0 --periodic-lang-check 2.0 --beam-size 3 --diarization --sortformer-model ... --repeat 3`
+
+| 파일 | WER median | WER max | WER stdev | F1 median | 회차별 |
+|------|-----------|---------|----------|-----------|--------|
+| bong1 | **35.6%** | 48.0% | 9.3% | **48.6%** | R1 48.0%/48.6%, R2 29.9%/55.6%, R3 35.6%/33.3% |
+| ytn2  | **32.5%** | 36.5% | 3.2% | **63.6%** | R1 36.5%/54.5%, R2 30.0%/80.0%, R3 32.5%/63.6% |
+| sbs1  | **19.6%** | 27.4% | 4.8% | **36.4%** | R1 27.4%/40.0%, R2 18.5%/36.4%, R3 19.6%/20.0% |
+
+held-out: ytn1 WER 34.4%/max 36.8%/F1 58.8%, eng1 WER 5.7%/F1 0.0%
+
+---
+
+## Exp-119 (기각 — 2026-06-23)
+
+**compression_ratio_threshold=2.7 (2.4와 3.0 중간값)**
+
+**가설**: Exp-108(CRT=2.4)에서 bong1 -20.2pp 개선 확인됐으나 sbs1 max 폭증. 2.7은 중간값으로 bong1 일부 개선하면서 sbs1 오탐 최소화.
+
+**변경**: 코드 변경 없음 — `--compression-ratio-threshold 2.7`.
+
+**정량 결과 (경로 C N=3, periodic_lang_check=2.0):**
+
+| 파일 | WER median | WER max | WER stdev | F1 median | vs 베이스라인 WER | vs 베이스라인 F1 |
+|------|-----------|---------|----------|-----------|-----------------|----------------|
+| bong1 | 53.2% | 62.5% | 12.3% | 48.6% | +2.1pp ✗ | -0.2pp |
+| ytn2  | 39.4% | 40.9% | 5.0% | 51.9% | **+11.3pp** ✗ | **-8.1pp** ✗ |
+| sbs1  | 19.6% | 26.2% | 4.4% | 36.4% | -6.0pp ✓ | 0pp |
+
+**기각 이유**: ytn2 WER +11.3pp (채택 조건 ② 위반), bong1 개선 없음(+2.1pp 오히려 악화).
+
+**관찰**: CRT=2.7이 bong1 환각을 전혀 억제하지 못함. 이는 bong1 웃음 환각 텍스트의 CRT가 2.7~3.0 사이에 분포함을 의미. Exp-108(2.4)에서는 효과 있었으므로 범위가 2.4~2.7 사이. 그러나 2.4는 sbs1 max 폭증(46.2%), 2.7은 bong1 무효과. **CRT 방향은 이 실험으로 소진** — 2.4와 2.7 사이 세밀한 조정(2.5/2.6)을 시도하거나 다른 방향으로 전환 필요. ytn2는 CRT 조정에 매우 민감(+11.3pp) — CRT 조정이 ytn2에서 일관되게 악화됨.
+
+**다음 가설**: `compression_ratio_threshold=2.5` — 2.4(bong1 최대 효과)와 2.7(무효과) 사이. 혹은 반복 필터 임계값 조정(top_count >= 4 → >= 3).
+
+JSON: `.omc/benchmarks/eval_exp119_crt27_20260623_2036.json`
+
+---
+
+## Exp-118 (기각 — 2026-06-23)
+
+**TTR(Type-Token Ratio) 기반 복합 반복 환각 감지**
+
+**가설**: bong1 환각("이 노래는/이 노래에/이 노래를" 변형 반복) 패턴은 단일 단어 Counter로 잡히지 않음. 배치 내 한국어 단어 10개+이고 TTR(고유 단어수/전체 단어수) < 0.45이면 복합 반복 환각으로 판단해 배치 드롭+리셋.
+
+**변경**: `whisperlivekit/simul_whisper/backend.py` — `_filter_cross_batch_repetitions()`에 TTR 체크 추가 (len >= 10 && TTR < 0.45). 브랜치: `exp/phase2-ttr-filter`.
+
+**정량 결과 (경로 C N=3, periodic_lang_check=2.0):**
+
+| 파일 | WER median | WER max | WER stdev | F1 median | vs 베이스라인 WER | vs 베이스라인 F1 |
+|------|-----------|---------|----------|-----------|-----------------|----------------|
+| bong1 | 41.1% | **71.6%** | 18.8% | 45.7% | **-10.0pp** ✓ | **-3.1pp** |
+| ytn2  | 33.0% | 48.3% | 10.9% | 63.2% | +4.9pp ✓ | +3.2pp ✓ |
+| sbs1  | 23.2% | **37.5%** | 9.2% | 36.4% | -2.4pp ✓ | 0pp |
+
+**기각 이유**: **1순위 max WER 회귀** — bong1 max 59.5%→71.6% (+12.1pp ✗), sbs1 max 28.0%→37.5% (+9.5pp ✗). TTR 필터가 일부 회차에서 정상 발화를 drop해 최악 케이스 악화.
+
+**관찰**: bong1 median -10pp는 개선 효과 있으나 max가 치명적으로 올라감. TTR < 0.45 임계값이 너무 관대해 정상 한국어 발화(반복적 대화체)도 필터링됨. VAC threshold / nonspeech_prob과 동일 패턴(median 개선 ↔ max 회귀). 이 방향 추가 시도 가치 있으나 임계값 재조정 필요.
+
+**다음 가설**: `compression_ratio_threshold=2.7` — Exp-108(2.4)에서 bong1 -20.2pp 매우 큰 효과 확인됐으나 sbs1 max 회귀 심함. 2.7은 2.4와 3.0(베이스라인) 중간값으로 sbs1 오탐 최소화 기대. 코드 변경 없음.
+
+JSON: `worktrees/exp/phase2-ttr-filter/.omc/benchmarks/eval_exp118_ttr_20260623_2011.json`
+
+---
+
+## Exp-111 (채택 — 2026-06-23)
+
+**periodic_lang_check 4.0→2.0초 (코드스위칭 감지 주기 단축)**
+
+**가설**: 현재 4.0초마다 언어 재감지. 2.0초로 단축하면 ytn2 코드스위칭 구간에서 더 빠르게 언어 전환 감지 → WER 개선. bong1/sbs1 영향 미미 예상.
+
+**변경**: 코드 변경 없음 — `--periodic-lang-check 2.0`.
+
+**테스트 세트 결과 (경로 C N=3):**
+
+| 파일 | WER median | WER max | WER stdev | F1 median | vs 베이스라인 WER | vs 베이스라인 F1 |
+|------|-----------|---------|----------|-----------|-----------------|----------------|
+| bong1 | 51.1% | 59.5% | 14.1% | 48.8% | **-10.5pp** ✓ | +5.9pp ✓ |
+| ytn2  | 28.1% | 47.8% | 11.8% | 60.0% | **-6.9pp** ✓ | +5.5pp ✓ |
+| sbs1  | 25.6% | 28.0% | 3.3% | 36.4% | -0.6pp ✓ | 0pp |
+
+**Held-out 결과 (ytn1+eng1):**
+
+| 파일 | WER median | WER max | WER stdev | F1 median | catastrophic? |
+|------|-----------|---------|----------|-----------|---------------|
+| ytn1 | 27.0% | 35.6% | 5.3% | **82.4%** | 아니오 |
+| eng1 | 5.7% | 6.7% | 1.5% | 0.0% | 아니오 |
+
+**채택 이유**:
+- 테스트 3종 WER 모두 개선, 회귀 없음 (1순위 최악 케이스 기준 통과)
+- ytn2 max WER 96.1%→47.8% (-48.3pp!) — 불안정 최악 케이스 대폭 개선
+- bong1 WER -10.5pp, F1 +5.9pp 개선
+- held-out catastrophic 회귀 없음; ytn1 F1 82.4% (목표 80% 달성!)
+- eng1 WER 5.7% 회귀 없음
+
+**새 베이스라인 파라미터**: `--periodic-lang-check 2.0` (이전 4.0에서 변경)
+
+JSON (테스트): `.omc/benchmarks/eval_exp111_plc20_20260623_1648.json`
+JSON (held-out): `.omc/benchmarks/eval_exp111_plc20_heldout_20260623_1711.json`
+
+---
+
+## 이전 채택 베이스라인 (Exp-111 — 2026-06-23, Exp-129로 대체됨)
+
+> **파라미터**: `--compression-ratio-threshold 3.0 --periodic-lang-check 2.0 --diarization --sortformer-model ... --repeat 3`
+
+| 파일 | WER median | WER max | WER stdev | F1 median | 회차별 |
+|------|-----------|---------|----------|-----------|--------|
+| bong1 | **51.1%** | 59.5% | 14.1% | **48.8%** | R1 59.5%/33.3%, R2 51.1%/48.8%, R3 32.0%/55.6% |
+| ytn2  | **28.1%** | 47.8% | 11.8% | **60.0%** | R1 28.1%/40.0%, R2 47.8%/88.9%, R3 26.6%/60.0% |
+| sbs1  | **25.6%** | 28.0% | 3.3% | **36.4%** | R1 28.0%/36.4%, R2 21.4%/36.4%, R3 25.6%/36.4% |
+
+held-out: ytn1 WER 27.0%/F1 82.4%, eng1 WER 5.7%/F1 0.0%
 
 ---
 
