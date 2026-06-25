@@ -105,5 +105,7 @@ React는 `buffer_transcription`을 마지막 줄에 `"진행중"` 스타일로 �
 - `completed` 필드가 화자분리 모드에서 신뢰할 수 없음
 - LLM 인라인 번역이 화자분리 모드에서 동작하지 않음 (확정 세그먼트 없음)
 
-**해결:** 화자분리 모드와 LLM 번역을 함께 사용하려면 `get_lines_diarization()` 경로에도
-확정 신호 설정이 필요하다 (Phase 5 이후 개선 예정).
+**해결 (feat/closed-network-deploy에서 구현 완료):** `tokens_alignment.py`
+`get_lines_diarization()` — 화자 전환이 발생한 세그먼트(`segments[:-1]`)에 `finalized=True`
+설정. 마지막(현재 발화 중) 세그먼트는 제외. 이 수정으로 화자분리 ON 상태에서도
+LLM 번역이 동작한다.

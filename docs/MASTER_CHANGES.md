@@ -1,0 +1,301 @@
+# master 최종본 — upstream 대비 전체 변경 요약
+
+> **이 문서의 목적**: `whisperlivekit` upstream 0.2.20 대비 **현재 master 브랜치에 반영된 모든 변경**을
+> 도메인별로 증류해 설명한다. 실험 시행착오는 [../PHASE2_EXPERIMENTS.md](../PHASE2_EXPERIMENTS.md)에 있다.
+> 이 문서는 master의 **최종 상태만** 담는다.
+>
+> **갱신 주기**: 채택 실험을 master에 머지한 직후 `/update-master-changes` 슬래시 커맨드로 갱신한다.
+
+---
+
+## 1. 개요
+
+### 상위 라이브러리 / 베이스라인
+
+| 항목 | 값 |
+|---|---|
+| 상위 라이브러리 | [WhisperLiveKit](https://github.com/QuentinFuxa/WhisperLiveKit) (Quentin Fuxa) |
+| 벤더링 버전 | `0.2.20` (in-tree 사본, `pyproject.toml` `version` 참조) |
+| 복구 방법 | `pip download whisperlivekit==0.2.20` 또는 upstream 태그 `v0.2.20` diff |
+| 우리 변경 표식 | `whisperlivekit/` 내 **한글 주석** 포함 파일 = 우리가 수정한 파일 (CLAUDE.md 규약) |
+| 신규 추가 모듈 | `filtering/`, `llm_translation/`, `metrics.py`, `scripts/eval.py` 등 |
+| STT 모델 | `whisper-large-v3-turbo` (로컬 경로 `whisperlivekit/model/whisper-large-v3-turbo/`) |
+
+### 변경 목적
+
+기존 upstream은 일반 목적 실시간 STT 라이브러리다. 우리 시스템은:
+- **한국어 / 영어 두 언어**만 처리하는 폐쇄망 환경 (§3.1/§3.2)
+- **코드스위칭** (한↔영 혼용 발화) 처리
+- **문장 단위 확정** → React UI 연동 + 번역 트리거
+- **번역·필터링·사전 교정** 기능 통합
+
+upstream 기본값만으로는 반복 아티팩트(`바 바 바`), 언어 고착, WER 100% 초과가 발생했다.
+아래 변경들이 이를 해소한다.
+
+---
+
+## 2. 현재 채택 베이스라인 수치 (Exp-105 — 2026-06-22)
+
+> **채택 기준** (CLAUDE.md §4): **1순위 = max(최악 케이스) 미회귀, 2순위 = median 개선**.
+> 수치는 경로 C(VBCable 루프백) N≥3 반복 측정 결과 — `median / max / stdev`.
+
+| 파일 | 설정 | WER median | WER max | stdev | 문장분리 F1 |
+|---|---|---|---|---|---|
+| sbs1 | diar-off | **19.6%** | 20.2% | 1.2% | **76.2%** |
+| ytn1 | diar-off | **18.4%** | 20.2% | 1.1% | **71.4%** |
+| eng1 | diar-off | **5.7%** | 5.7% | 1.1% | 0.0%\* |
+| **평균** (sbs1+ytn1+eng1) | — | **14.6%** | — | — | — |
+| ytn2 (held-out) | diar-on | **25.1%** | 27.1% | 1.3% | **50.0%** |
+
+\* eng1 F1=0%는 단일 세그먼트 구조 특성 — WER 자체는 우수. 향후 별도 접근 필요.
+
+**참고: upstream 0.2.20 기본값 (Exp-000 베이스라인, 2026-06-04)**
+
+| 파일 | WER | F1 | 비고 |
+|---|---|---|---|
+| sbs1 | 108.3% | 0.0% | 반복 아티팩트로 WER >100% |
+| ytn1 | 47.9% | 0.0% | — |
+
+---
+
+## 3. STT 전사 품질 변경
+
+### 3-1. 디코딩 정책 — SimulStreaming 채택 (Exp-000/001)
+
+| 항목 | upstream 기본값 | 우리 변경 |
+|---|---|---|
+| 백엔드 정책 | LocalAgreement (기본값) | **SimulStreaming(AlignAtt+CIF)** 고정 |
+| 근거 | LocalAgreement는 영어 코드스위칭을 통째로 누락하고 발화 후반부 커버리지를 잃는 구조적 문제 | SimulStreaming의 반복 아티팩트는 후처리로 보완 가능 |
+
+설정: [`parse_args.py`](../whisperlivekit/parse_args.py) `--backend-policy` 기본값 = `simulstreaming`.
+
+---
+
+### 3-2. 반복 / 환각 억제 필터 (Exp-002/028/057/086/090)
+
+upstream `_filter_repetitions()`는 **단일 `update()` 배치 내부**에서만 동작해, 토큰이 1개씩 도착하는
+실시간 스트리밍에서 배치 경계 반복(`바/바/바`)이 살아남았다.
+
+**추가된 필터 (모두 [`simul_whisper/backend.py`](../whisperlivekit/simul_whisper/backend.py))**:
+
+| 필터 | 상수 / 파라미터 | 동작 | 도입 |
+|---|---|---|---|
+| Cross-batch 동일 단어 필터 | `_last_emitted_word` | 직전 방출 단어와 동일하면 드롭 | Exp-002 |
+| 단일음절 연속 반복 억제 | `_CHAR_RUN_THRESHOLD = 4` (max_char_run ≥ 4) | 연속 n회 이상 시 context 리셋 (`_HALLUCINATION_RESET_THRESHOLD = 5`) | Exp-028 |
+| 배치 내 4-word 반복 드롭 | `_filter_cross_batch_repetitions()` | 한글 4회 이상 연속 반복 토큰 제거 후 context 리셋 | Exp-057 |
+| 온점/대시 시각 버그 수정 | `LeadingPunctFilter`, `DashFilter` | 선두 온점·대시 아티팩트 제거 | Exp-086 |
+| `_detect_repetition_loop` 제거 | 전체 제거 (−34줄) | 밀도 기반 false positive였던 Exp-009 잔재 청산 | Exp-090 |
+
+또한 디코더 **stall(멈춤) 복구**: 오디오가 `STALL_RECOVER_SEC = 10.0`초 이상 진행했는데 토큰 미방출 시
+`refresh_segment()` 강제 호출로 복구. (`backend.py` 상단 상수)
+
+---
+
+### 3-3. 불완전 UTF-8 토큰 부분 emit 차단 (Exp-087)
+
+| 항목 | upstream | 우리 변경 |
+|---|---|---|
+| 동작 | 미완성(`�`) 단어도 바로 방출 → 선두 음절 중복 발생 | `_build_timestamped_words()` — `�` 포함 단어 emit 스킵 |
+| 파일 | [`simul_whisper/align_att_base.py`](../whisperlivekit/simul_whisper/align_att_base.py) | 동일 |
+| 효과 | sbs1 선두-중복 6/6 run 완전 소멸, WER **43.0% → 20.6%** | — |
+
+---
+
+### 3-4. 디코딩 파라미터 튜닝 (Exp-075/080)
+
+upstream 기본값에서 아래 파라미터를 변경했다:
+
+| 파라미터 | upstream 기본값 | 우리 값 | 파일 / 옵션 | 도입 |
+|---|---|---|---|---|
+| `--beams` (beam_size) | 1 (greedy) | **2** | [`parse_args.py`](../whisperlivekit/parse_args.py) `default=2` | Exp-080 |
+| `--vac-chunk-size` | 0.1s | **0.2s** | `parse_args.py` `default=0.2` | Exp-075 |
+| `max_context_tokens` | None | **0** | `AlignAttConfig` / `--max-context-tokens 0` | Exp-075 |
+| VAD threshold | 0.5 | **0.3** | [`audio_processor.py`](../whisperlivekit/audio_processor.py) VAD 설정 | Exp-007 |
+| MIN_DURATION_REAL_SILENCE (오디오 레벨) | 0.5s | **0.4s** | `audio_processor.py:29` | Exp-075 |
+
+> `MIN_DURATION_REAL_SILENCE = 0.4` (audio_processor) — VAD Silence 토큰을 transcription queue에 넣는 기준.
+> `MIN_DURATION_REAL_SILENCE = 2` (backend.py:36) — 언어 재감지를 트리거하는 기준(별도 임계값).
+
+beam_size=2 효과: WER **33.2% → 31.4%** (Exp-080), 이후 누적 개선으로 현재 14.6%.
+
+---
+
+### 3-5. 품질 게이트 추가 (Exp-104)
+
+upstream에 없는 두 게이트를 새로 추가했다 ([`parse_args.py`](../whisperlivekit/parse_args.py)):
+
+| 게이트 | 옵션 | 기본값 | 역할 |
+|---|---|---|---|
+| avg-logprob 게이트 | `--logprob-threshold` | None (비활성) | 낮은 신뢰도 세그먼트 억제 — 정상 한국어 삭제 위험으로 실사용 시 주의 (실제 플래그명은 `--logprob-threshold`, dest=`logprob_threshold`) |
+| compression-ratio 게이트 | `--compression-ratio-threshold` | None (비활성) | 반복 세그먼트 억제. Exp-104에서 **3.0** 권장값 사용 (`--compression-ratio-threshold 3.0`) |
+
+> avg-logprob 게이트는 Exp-104에서 ytn2 28→46% 악화로 기각. 런타임 옵션으로만 존재.
+> compression-ratio 3.0은 언어 무관 반복 환각 백스톱으로 안전.
+
+---
+
+### 3-6. 언어 재감지 / 코드스위칭 대응 (Exp-093/101/105)
+
+upstream의 **언어 TRIPLE-LOCK** 문제 해소:
+- `detected_language` 한 번 결정 → 이후 변경 불가
+- `first_timestamp` 게이트 통과 후 재감지 비활성
+- 결과: 한↔영 코드스위칭 시 언어 고착 → 잘못된 토크나이저로 전사
+
+**Exp-093 — 침묵 기반 재감지** ([`backend.py:36,85-105`](../whisperlivekit/simul_whisper/backend.py)):
+- `MIN_DURATION_REAL_SILENCE = 2` (upstream 5→2)
+- 2초 이상 침묵(`long_silence`) 시 `detected_language = None`, `first_timestamp = None` 리셋 → 다음 청크에서 강제 재감지
+- 효과: ytn1 max WER **108.0% → 22.7%** (catastrophic 완전 제거)
+
+**Exp-101 — 짧은 pause 후 최근 창 재감지** ([`backend.py`](../whisperlivekit/simul_whisper/backend.py), [`align_att_base.py`](../whisperlivekit/simul_whisper/align_att_base.py)):
+- `MIN_DURATION_SHORT_LANG_RESET = 0.5s` — 0.5초 이상 침묵 후 1.5초 오디오 누적 시 `detect_current_language(window_secs=1.5, min_prob=0.90)` 호출
+- `_check_short_silence_language()` — 언어 변경 감지 시 경량 리셋 (버퍼 유지, context 유지)
+- `detect_current_language()` — `align_att_base.py` 신규 메서드. 최근 window_secs 오디오만 슬라이싱해 언어 감지 (화자 전환 시 이전 화자 오디오 배제)
+
+**Exp-105 — 주기적 재감지 + ForeignLang 즉시 트리거** ([`align_att_base.py`](../whisperlivekit/simul_whisper/align_att_base.py), [`backend.py`](../whisperlivekit/simul_whisper/backend.py)):
+- `_maybe_periodic_lang_check(audio_end_secs)` — 4.0s마다 (`--periodic-lang-check 4.0`) 최근 2.0s 창 언어 감지, 히스테리시스 3s
+- `_FOREIGN_LANG_PATTERN = re.compile(r'\(speaking in foreign language', re.IGNORECASE)` — 이 패턴 방출 시 `detected_language = None` 즉시 리셋
+- 관련 설정 필드: `AlignAttConfig.periodic_lang_check_secs`, `decoder_state.last_periodic_lang_check`, `decoder_state.last_lang_switch_time`
+- 권장 실행: `--periodic-lang-check 4.0` (기본값=None, 비활성)
+
+**Exp-104 — diar-off `first_timestamp` 조건부 게이트 복원** ([`align_att_base.py`](../whisperlivekit/simul_whisper/align_att_base.py)):
+- diarization-spike 브랜치가 eager 재감지를 위해 `first_timestamp` 게이트를 전면 제거했다가 diar-off에서 ytn1 156% 폭주 유발
+- 수정: `elif eager_lang_detect` (diar-on 전용) / `else: return` (diar-off silence는 first_timestamp까지 보류)
+
+---
+
+### 3-7. 문장 확정 + 종료 부호 (Exp-104)
+
+| 항목 | 파일 | 동작 |
+|---|---|---|
+| Silence 토큰 기반 문장 확정 | [`tokens_alignment.py`](../whisperlivekit/tokens_alignment.py) | Silence 신호 수신 시 현재 세그먼트 `finalized = True` 마킹 |
+| `get_lines()` / `get_lines_diarization()` | `tokens_alignment.py` | React UI에 보낼 라인 목록 반환 — `finalized` 상태 포함 |
+| 확정 세그먼트 종료 마침표 부착 | [`audio_processor.py`](../whisperlivekit/audio_processor.py) `results_formatter` | 확정된 세그먼트 끝에 마침표 폴백 부착 (진짜 온점은 보존). WER 무영향 (`normalize_text` 구두점 제거) |
+
+---
+
+### 3-8. 화자분할 / Sortformer 연동 (Exp-102/104)
+
+upstream whisperlivekit에는 `new_speaker()` → `refresh_segment()` 뼈대가 있으나 **ChangeSpeaker enqueue 로직이 없어 비활성** 상태였다.
+
+**Exp-102 — 죽은 경로 활성화**:
+- [`audio_processor.py`](../whisperlivekit/audio_processor.py) `_update_diarization_state()` 끝에 화자 변화 감지 → `ChangeSpeaker` enqueue 추가
+- [`backend.py`](../whisperlivekit/simul_whisper/backend.py) `new_speaker()` — `detected_language = None`, `first_timestamp = None` 리셋 (Exp-093 silence 재감지와 동일 패턴)
+- [`diarization/sortformer_backend.py`](../whisperlivekit/diarization/sortformer_backend.py) `_load_model()` — `os.path.isfile()` 분기로 로컬 `.nemo` 파일 직접 로드 지원 (폐쇄망 오프라인)
+- [`config.py`](../whisperlivekit/config.py) `sortformer_model` 필드, [`parse_args.py`](../whisperlivekit/parse_args.py) `--sortformer-model` 옵션 추가
+
+**Exp-104 — `new_speaker` Round 2 경계 재디코딩**:
+- `new_speaker()`: `process_iter(is_last=True)` flush 생략 + `refresh_segment(complete=False)` (경계 오디오 유지) + `detect_current_language(1.5, 0.85)` 즉시 재감지
+
+사용 예시: `--diarization --sortformer-model <경로>/sortformer-4spk-v2.nemo`
+상세는 [DIARIZATION_SPIKE.md](DIARIZATION_SPIKE.md) 참조.
+
+---
+
+### 3-9. 진단 인프라 (Exp-105 Round 0)
+
+| 기능 | 옵션 | 파일 |
+|---|---|---|
+| TokenTrace — 토큰 단계별 디버그 로그 | `--trace-tokens` | [`backend.py`](../whisperlivekit/simul_whisper/backend.py), [`basic_server.py`](../whisperlivekit/basic_server.py) |
+| QualityGate 텍스트 잘림 제거 | (상시 적용) | `align_att_base.py` `%.200s` |
+
+---
+
+## 4. 필터링 / 단어 교정
+
+> **이식 기준**: [../CLAUDE.md](../CLAUDE.md) §3.5/§3.6 — `whisperlive_code/`에서 **그대로 이식**, 임의 개선 금지.
+
+| 모듈 | 파일 | 동작 |
+|---|---|---|
+| 환각 문장·단어 제거 | [`filtering/__init__.py`](../whisperlivekit/filtering/__init__.py) | `hallucination.json` 목록에 매칭되는 문장·단어를 전사 결과에서 제거 |
+| 단어 교정 사전 | [`filtering/manager.py`](../whisperlivekit/filtering/manager.py) `WordCorrectionManager` | `admin_replacement.json` (기본 사전) + SQLite DB (`user_replacement.db`) 동적 갱신. 갱신 즉시 반영 |
+| 기본 사전 파일 | [`filtering/hallucination.json`](../whisperlivekit/filtering/hallucination.json), [`filtering/admin_replacement.json`](../whisperlivekit/filtering/admin_replacement.json) | 환각 목록 / 기본 단어 교정 테이블 |
+
+**동적 Glossary 갱신**: `WordCorrectionManager`는 SQLite를 폴링해 운용 중 사전 추가/삭제가 가능하다.
+변경 즉시 다음 전사부터 반영된다.
+
+---
+
+## 5. 번역 파이프라인
+
+> **이식 기준**: [../CLAUDE.md](../CLAUDE.md) §3.4 — 문장 확정 시 번역 수행, `whisperlive_code/` 구조 그대로.
+
+| 모듈 | 파일 | 동작 |
+|---|---|---|
+| 번역기 | [`llm_translation/translator.py`](../whisperlivekit/llm_translation/translator.py) | `LlamaTranslator` (llama.cpp) / `OllamaTranslator` (Ollama). 환경별 분기 |
+| 번역 관리자 | [`llm_translation/manager.py`](../whisperlivekit/llm_translation/manager.py) `TranslationManager` | 확정 세그먼트 수신 시 비차단 번역 캐시. 번역 결과를 세그먼트에 부착 |
+| 번역 트리거 | [`audio_processor.py`](../whisperlivekit/audio_processor.py) | 문장 `finalized = True` 시점에 번역 큐에 enqueue |
+
+**환경별 엔드포인트** (상세: [TRANSLATION_SETUP.md](TRANSLATION_SETUP.md)):
+- 배포: `gpt-oss-20b` @ `llama.cpp:2010`
+- 개발: `qwen2.5:7b` @ `Ollama:11434`
+
+---
+
+## 6. 스키마 / React 호환
+
+upstream `Segment.to_dict()`는 React UI 스키마와 필드명이 달랐다.
+
+**변경 파일**: [`timed_objects.py`](../whisperlivekit/timed_objects.py) `Segment.to_dict()`
+
+| upstream 필드 | 추가된 alias | 역할 |
+|---|---|---|
+| `finalized` | `'completed': self.finalized` | React 기존 `completed` 키 호환 |
+| `detected_language` | `'lang': self.detected_language` | React 기존 `lang` 키 호환 |
+
+두 필드를 병렬로 직렬화해 **React 측 코드 변경 없이** 기존 UI와 호환된다.
+상세 스키마 변경 히스토리: [SCHEMA_CHANGES.md](SCHEMA_CHANGES.md).
+
+---
+
+## 7. eval 하니스 / 메트릭
+
+upstream에는 정량 평가 도구가 없었다. 아래 모듈을 새로 추가했다.
+
+| 파일 | 역할 |
+|---|---|
+| [`scripts/eval.py`](../scripts/eval.py) | 경로 C(VBCable) / 경로 A(파일) WER + 문장분리 F1 측정. `--repeat N`으로 N≥3 반복, median/min/max/stdev 집계. `--paths`, `--files`, `--diarization`, `--sortformer-model`, `--trace-tokens`, `--periodic-lang-check` 옵션 지원 |
+| [`whisperlivekit/metrics.py`](../whisperlivekit/metrics.py) | `compute_wer()` (정규화 WER), 문장분리 F1 (`_align_words`, Levenshtein 기반) |
+| [`scripts/vbcable_test.py`](../scripts/vbcable_test.py) | 경로 C 브라우저 자동화 (VBCable 루프백을 브라우저 마이크로 노출, 음원 재생 → 캡처) |
+| [`scripts/audio_device.py`](../scripts/audio_device.py) | VBCable 오디오 장치 자동 설정 / 측정 후 복원 |
+
+**측정 기준** (CLAUDE.md §4):
+- 경로 C만 채택/기각 판정에 사용 (경로 A는 빠른 회귀 체크용)
+- N≥3 반복 → median + min/max/stdev 기준으로 판단
+- **1순위: max(최악 케이스) 미회귀, 2순위: median 개선**
+
+---
+
+## 8. 향후 개선점 (TODO)
+
+### 단기 (다음 실험 후보)
+
+- **ytn2 WER < 20%**: 현재 25.1%(diar-on). Sortformer 과분할 완화 또는 `--periodic-lang-check` 4.0→2.0s 단축 실험 필요.
+- **eng1 F1=0%**: 단일 화자 영어 발화가 단일 세그먼트로 처리되어 문장분리 F1이 0. 별도 접근 방법 필요 (예: 무음 감지 기반 분할, 또는 평가 지표 재정의).
+- **sbs1 산발적 max spike**: 간헐적 VBCable 루프백 불안정이 원인 추정. 정기 진단 절차 확립 (`vbcable_test.py --verify` 활용). → [MEMORY: vbcable-loopback-instability]
+
+### 중기 (다음 Phase)
+
+- **diarization → finalized 마킹 완전 연결**: ChangeSpeaker 경로는 활성화됐으나 화자분할 기반 finalized 마킹이 아직 완전히 React까지 연결되지 않음. ([SCHEMA_CHANGES.md](SCHEMA_CHANGES.md) §6 참조)
+- **번역 React 연결 완성**: `TranslationManager`는 구현됐으나 번역 결과의 실시간 React 반영 경로가 Phase 4+ 작업으로 남아 있음. ([TRANSLATION_SETUP.md](TRANSLATION_SETUP.md) 참조)
+- **periodic_lang_check_secs 자동 튜닝**: 현재 수동 설정(4.0s 권장). ytn2 추가 개선 시 2.0s 실험 예정. → [MEMORY: diarization-spike-first-timestamp-regression]
+
+### 장기 / 설계 제약 (§3.8)
+
+- **백엔드 우선 개선**: 추가 후처리 필터보다 VAD 전처리, 오디오 전처리, 디코더 파라미터(beam_size, nonspeech_prob 등) 개선 우선.
+- **범용성 유지**: 특정 테스트 파일(sbs1/ytn1)에 과적합되는 개선 금지. ytn2(held-out)를 정기 검증에서 제외하여 일반화 데이터 가치 보존.
+- **폐쇄망 패키징**: 배포 환경 오프라인 설치 절차 미완. ([docs/OPEN_QUESTIONS.md](OPEN_QUESTIONS.md) 참조)
+- **하드코딩 제한**: 특정 언어·패턴 특화 하드코딩 신규 추가 금지 (CLAUDE.md §3.8). 기존 Exp-002/028/057 베이스라인 필터는 유지하되 같은 방식 확장 금지.
+
+---
+
+## 9. 갱신 규약
+
+채택 실험을 master에 머지한 직후 아래 절차를 따른다:
+
+1. `/update-master-changes` 슬래시 커맨드 실행 (Claude가 문서 갱신)
+2. 갱신 대상:
+   - §2 베이스라인 수치 (최신 path C N≥3 결과로 교체)
+   - 해당 도메인 섹션 (§3~§7) — `upstream → 변경 → 이유 → 파일 → Exp-N` 형식 유지
+   - §8 TODO — 해결된 항목 제거 + 새 "다음 가설" 추가
+3. **시행착오는 여기에 적지 않는다** — 실험 상세는 [../PHASE2_EXPERIMENTS.md](../PHASE2_EXPERIMENTS.md) 소관.
+4. 갱신 후 커밋 메시지: `docs: MASTER_CHANGES.md — Exp-N 채택 반영` 형식.
