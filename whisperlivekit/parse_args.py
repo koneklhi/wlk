@@ -1,8 +1,9 @@
 
-from argparse import ArgumentParser
+from argparse import ArgumentParser, BooleanOptionalAction
 
 
-def parse_args():
+def create_parser():
+    # 아래 경로 기본값(model_dir/warmup/sortformer)은 저장소 루트 기준 상대경로다. 서버를 루트에서 실행할 것.
     parser = ArgumentParser(description="Whisper FastAPI Online Server")
     parser.add_argument(
         "--host",
@@ -11,17 +12,16 @@ def parse_args():
         help="The host address to bind the server to.",
     )
     parser.add_argument(
-        "--port", type=int, default=8000, help="The port number to bind the server to."
+        "--port", type=int, default=8900, help="The port number to bind the server to. (기본값 8900: master 배포 설정)"
     )
     parser.add_argument(
         "--warmup-file",
         type=str,
-        default=None,
+        default="test_data/sbs1_10s.mp3",
         dest="warmup_file",
         help="""
         The path to a speech audio wav file to warm up Whisper so that the very first chunk processing is fast.
-        If not set, uses https://github.com/ggerganov/whisper.cpp/raw/master/samples/jfk.wav.
-        If empty, no warmup is performed.
+        기본값 test_data/sbs1_10s.mp3 (저장소 루트 기준 상대경로). If empty, no warmup is performed.
         """,
     )
 
@@ -33,9 +33,9 @@ def parse_args():
 
     parser.add_argument(
         "--diarization",
-        action="store_true",
-        default=False,
-        help="Enable speaker diarization.",
+        action=BooleanOptionalAction,
+        default=True,
+        help="화자분할 활성(기본 ON). 끄려면 --no-diarization.",
     )
 
     parser.add_argument(
@@ -70,8 +70,8 @@ def parse_args():
     parser.add_argument(
         "--sortformer-model",
         type=str,
-        default="nvidia/diar_streaming_sortformer_4spk-v2",
-        help="Sortformer model: HF model name or local .nemo file path (폐쇄망 적재 시 로컬 경로 지정).",
+        default="whisperlivekit/model/sortformer-4spk-v2.nemo",
+        help="Sortformer model: HF model name or local .nemo file path. 기본값 = 로컬 .nemo(저장소 루트 기준 상대경로).",
     )
 
     parser.add_argument(
@@ -110,8 +110,8 @@ def parse_args():
     parser.add_argument(
         "--model_dir",
         type=str,
-        default=None,
-        help="Dir where Whisper model.bin and other files are saved. This option overrides --model and --model_cache_dir parameter.",
+        default="whisperlivekit/model/whisper-large-v3-turbo",
+        help="Dir where Whisper model.bin and other files are saved. This option overrides --model and --model_cache_dir parameter. 기본값 = 로컬 turbo 경로(저장소 루트 기준 상대경로).",
     )
     parser.add_argument(
         "--lora-path",
@@ -153,7 +153,7 @@ def parse_args():
     parser.add_argument(
         "--backend",
         type=str,
-        default="auto",
+        default="whisper",
         choices=["auto", "mlx-whisper", "faster-whisper", "whisper", "openai-api", "voxtral", "voxtral-mlx", "qwen3", "qwen3-mlx", "qwen3-mlx-simul", "qwen3-simul", "vllm-realtime"],
         help="Select the ASR backend implementation. Use 'qwen3-mlx-simul' for Qwen3-ASR SimulStreaming on Apple Silicon (MLX). Use 'qwen3-mlx' for Qwen3-ASR LocalAgreement on MLX. Use 'qwen3-simul' for Qwen3-ASR SimulStreaming (PyTorch). Use 'vllm-realtime' for vLLM Realtime WebSocket.",
     )
@@ -329,9 +329,9 @@ def parse_args():
     simulstreaming_group.add_argument(
         "--compression-ratio-threshold",
         type=float,
-        default=None,
+        default=3.0,
         dest="compression_ratio_threshold",
-        help="compression-ratio 품질 게이트 임계값 (예: 2.4). 반복 세그먼트 억제. None=비활성.",
+        help="compression-ratio 품질 게이트 임계값. 반복 세그먼트 억제. 기본값 3.0(master 설정). None=비활성.",
     )
 
     simulstreaming_group.add_argument(
@@ -367,9 +367,9 @@ def parse_args():
     simulstreaming_group.add_argument(
         "--periodic-lang-check",
         type=float,
-        default=None,
+        default=4.0,
         dest="periodic_lang_check_secs",
-        help="주기적 언어재감지 간격(초). None=비활성(기본). 권장값 4.0. diar-off 언어 고착 해소용.",
+        help="주기적 언어재감지 간격(초). 기본값 4.0(master 설정). diar-off 언어 고착 해소용. None=비활성.",
     )
 
     # LLM 번역 인자
@@ -403,7 +403,11 @@ def parse_args():
         help="번역 모델명. 기본값: qwen2.5:7b (dev). prod: gpt-oss-20b",
     )
 
-    args = parser.parse_args()
+    return parser
+
+
+def parse_args():
+    args = create_parser().parse_args()
     args.transcription = not args.no_transcription
     args.vad = not args.no_vad
     args.vac = not args.no_vac

@@ -37,11 +37,14 @@ from eval import (  # noqa: E402
     wait_for_ready,
 )
 
-# master 최선 기본값 (docs/MASTER_CHANGES.md Exp-105 / CLAUDE.md §4)
-DEFAULT_MODEL_DIR = "whisperlivekit/model/whisper-large-v3-turbo"
-DEFAULT_SORTFORMER = "whisperlivekit/model/sortformer-4spk-v2.nemo"
-DEFAULT_COMPRESSION_RATIO = 3.0
-DEFAULT_PERIODIC_LANG_CHECK = 4.0
+from whisperlivekit.parse_args import create_parser  # noqa: E402
+
+# 서버 parse_args 기본값을 단일 출처로 동기화 (phase2에서 parse_args 기본값을 바꾸면 여기 자동 반영)
+_SERVER_DEFAULTS = create_parser().parse_args([])
+DEFAULT_MODEL_DIR = _SERVER_DEFAULTS.model_dir
+DEFAULT_SORTFORMER = _SERVER_DEFAULTS.sortformer_model
+DEFAULT_COMPRESSION_RATIO = _SERVER_DEFAULTS.compression_ratio_threshold
+DEFAULT_PERIODIC_LANG_CHECK = _SERVER_DEFAULTS.periodic_lang_check_secs
 DEFAULT_OUT_DIR = "transcripts"
 AUDIO_EXTS = {".mp3", ".wav", ".m4a", ".flac", ".ogg"}
 

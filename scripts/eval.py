@@ -27,7 +27,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-SERVER_PORT = 8001
+SERVER_PORT = 8901
 WARMUP_FILE = "test_data/sbs1_10s.mp3"
 SERVER_READY_TIMEOUT = 120
 POLL_INTERVAL = 2.0
@@ -186,6 +186,8 @@ def start_server(
         cmd.extend(["--diarization", "--diarization-backend", "sortformer"])
         if sortformer_model:
             cmd.extend(["--sortformer-model", sortformer_model])
+    else:
+        cmd.append("--no-diarization")
     if extra_server_args:
         cmd.extend(extra_server_args)
     if server_log_file:
