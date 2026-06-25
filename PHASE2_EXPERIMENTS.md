@@ -70,7 +70,9 @@ Exp-106~129는 두 가지 구조적 결함으로 수치 신뢰 불가 판정, �
 
 **부수 발견 (미수정)**: beams probe가 `create_parser` 함수를 import 시도하나 실제 함수명은 `parse_args()` → probe ImportError로 beams=null 기록. 실제 측정에는 영향 없음(서버 default=2 사용). 다음 수정 시 함께 수정 예정.
 
-### Phase B — master 신뢰 baseline 측정 (N=5)
+### Phase B — master 신뢰 baseline 측정 (N=5) ⚠️ 수치 무효 — 재측정 필요
+
+> **측정 오염**: 측정 중 다른 음성 파일이 동시 재생되어 VBCable에 혼합 오디오가 입력됨. 아래 수치는 신뢰 불가. 재측정 전까지 기준으로 사용 금지.
 
 **설정**: master@f3676af, beams=2(default), PLC=None(default), CRT=3.0, diar-ON(Sortformer), VBCable=OK(RMS 0.14164/0.14858), `--repeat 5`
 
@@ -111,20 +113,12 @@ JSON (held-out): `.omc/benchmarks/eval_baseline_trusted_heldout_20260625_1025.js
 
 ---
 
-## 현재 측정 기준 베이스라인 (Exp-130 — 2026-06-25)
+## 현재 측정 기준 베이스라인 (Exp-130 — **재측정 필요**)
 
-> **설정**: master@f3676af, beams=2, PLC=None, CRT=3.0, diar-ON, N=5, VBCable=OK
-> JSON: `.omc/benchmarks/eval_baseline_trusted_20260625_0948.json` (테스트), `eval_baseline_trusted_heldout_20260625_1025.json` (held-out)
+> ⚠️ **아래 수치 무효**: 2026-06-25 측정 시 다른 음성 파일이 동시 재생되어 전사 오염 발생. 재측정 전까지 이 수치를 기준으로 사용하지 않는다.
+> 재측정 설정: master 최신 HEAD, beams=2(default), PLC=None(default), CRT=3.0, diar-ON, **N=5**, VBCable 단독 연결 확인 후 실행.
 
-| 파일 | WER median | WER max | WER stdev | F1 median | 회차별 |
-|------|-----------|---------|----------|-----------|--------|
-| bong1 | **51.1%** | 54.7% | 5.0% | **44.4%** | R1 54.7%/43.2%, R2 51.1%/54.1%, R3 48.9%/44.4%, R4 41.4%/47.1%, R5 51.7%/20.0% |
-| ytn2  | **58.1%** | 68.0% | 6.4% | **20.0%** | R1 58.1%/13.3%, R2 50.7%/40.0%, R3 58.6%/16.7%, R4 68.0%/20.0%, R5 54.7%/23.5% |
-| sbs1  | **78.0%** | 83.9% | 12.8% | **0.0%** | R1 83.9%/44.4%, R2 79.2%/0.0%, R3 62.5%/0.0%, R4 78.0%/13.3%, R5 53.6%/0.0% |
-
-held-out: ytn1 WER 61.3%/max 62.0%/F1 15.4%, eng1 WER 23.8%/max 30.5%/F1 0.0%
-
-비고: sbs1 WER 78%는 PLC=None(환각 체인 미억제) 영향으로 추정. Phase C에서 PLC=2.0 적용 시 개선 예상.
+~~bong1 51.1% / ytn2 58.1% / sbs1 78.0% / ytn1 61.3% / eng1 23.8%~~ ← 오염된 수치, 무시
 
 ---
 
