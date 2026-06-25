@@ -33,7 +33,7 @@ whisperlivekit-server --model_dir whisperlivekit/model/whisper-large-v3-turbo --
 
 | # | 항목 | 내용 / 경로 | 비고 |
 |---|---|---|---|
-| 1 | **소스 코드** | 이 저장소 전체(`whisperlivekit/`, `scripts/`, `test_data/`, `docs/`, `pyproject.toml`, `uv.lock`) | `feat/closed-network-deploy` 머지된 master 권장(§5 번역 수정 포함) |
+| 1 | **소스 코드** | `whisperlivekit/`, `scripts/`, `test_data/`, `docs/`, `pyproject.toml`, `uv.lock` | **`.git/`·`worktrees/`·`.venv/` 제외** — §1.1의 `git archive` 방식 권장 |
 | 2 | **STT 모델** | `whisperlivekit/model/whisper-large-v3-turbo/` (≈1.6GB, `model.safetensors`+토크나이저) | 이미 저장소에 동봉됨 → 코드와 함께 이동 |
 | 3 | **화자분할 모델** | `whisperlivekit/model/sortformer-4spk-v2.nemo` | 이미 저장소에 동봉됨 |
 | 4 | **번역 LLM** | `gpt-oss-20b-F16.gguf` (≈40GB) + `start_oss.bat` | **저장소 외부** — 별도로 USB에 담아 배포 PC에 배치 |
@@ -55,9 +55,24 @@ whisperlivekit-server --model_dir whisperlivekit/model/whisper-large-v3-turbo --
 | ❌ 통째 복사해도 깨짐 | `worktrees/*/.git`, 워크트리 `.venv` Junction | 메인 `.git`·`.venv`를 절대경로로 참조 — **워크트리는 옮길 필요 없음** |
 | ✅ 그대로 따라옴 | `whisperlivekit/model/`(≈20GB), `.py` 소스, `pyproject.toml`, `uv.lock` | 절대경로 하드코딩 없음 |
 
-**권장 반입 방식**: `.venv/`·`worktrees/`·`.git/`을 **빼고** ① 소스 코드 + ② 모델 디렉터리 + ③ wheelhouse(§2)만 옮긴다. 폐쇄망에서 §3대로 `uv venv` + 오프라인 설치하면 editable 경로·Python 경로가 폐쇄망 기준으로 새로 잡혀 정상 동작한다.
+**권장 반입 방식 — `git archive`로 소스만 추출**:
 
-> 모델 파일은 `.gitignore`상 git 비추적(`*.nemo`, `whisper-large-v3/`, `*.safetensors` 등)이라 **`git clone`/아카이브로는 따라오지 않는다** → `whisperlivekit/model/` 디렉터리를 **파일 그대로 수동 복사**해야 한다. (통째 폴더 복사 시엔 자동 포함됨.)
+```powershell
+# 개발 PC에서 (인터넷 가능, 저장소 루트에서 실행)
+git archive HEAD --output=deploy_source.zip
+```
+
+`git archive`는 **추적 파일만** zip으로 묶는다 — `.git/`·`worktrees/`·`.venv/`·gitignore된 파일이 **자동 제외**되므로 절대경로 함정 없이 깨끗한 소스 스냅샷이 만들어진다. 별도 zip 압축·파일 선별 작업이 불필요하다.
+
+USB에 담을 3가지:
+
+| # | 내용 | 방법 |
+|---|---|---|
+| ① `deploy_source.zip` | master 소스 코드 | `git archive HEAD --output=deploy_source.zip` |
+| ② `whisperlivekit/model/` 디렉터리(≈20GB + ≈1.5GB) | STT·화자분할 모델 | `.gitignore` 비추적이라 아카이브에 안 들어옴 → **폴더 수동 복사** |
+| ③ `wheelhouse/` + `dist/` | 오프라인 pip 설치용 | §2에서 생성 |
+
+배포 PC에서 unzip 후 §3대로 `uv venv` + 오프라인 설치하면 editable 경로·Python 경로가 폐쇄망 기준으로 새로 잡혀 정상 동작한다.
 
 ---
 
