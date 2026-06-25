@@ -2,7 +2,7 @@
 
 > **대상 독자**: 폐쇄망(RTX 5090, 오프라인) 배포 PC 운영자.
 > **목적**: 개발 PC(RTX 3080, 온라인)에서 라이브러리·모델을 준비해 USB로 옮기고, 폐쇄망에서
-> **master(가장 좋은 버전)** 실시간 STT를 켜서 경로 C(자동)·경로 B(마이크)로 검증하기까지의 전 과정.
+> **master(가장 좋은 버전)** 실시간 STT를 켜서 내장 UI 전사 → React 프론트 연결 → 번역까지 검증하는 전 과정.
 > 폐쇄망에선 Claude 자동화가 불가하므로 **모든 명령을 복붙 가능**하게 정리했다.
 >
 > 관련 문서: [TESTING.md](TESTING.md)(경로 정의) · [MASTER_CHANGES.md](MASTER_CHANGES.md)(master 변경요약) ·
@@ -25,7 +25,7 @@ whisperlivekit-server --model_dir whisperlivekit/model/whisper-large-v3-turbo --
 # → 브라우저에서 http://localhost:8000/ 접속 후 마이크로 발화
 ```
 
-환경 준비가 안 됐다면 아래 §1~§4를 순서대로 따른다.
+환경 준비가 안 됐다면 아래 §1~§4를 순서대로 따른다. **처음 반입한다면 §1.1(통째 복사 함정)을 먼저 읽고, 검증은 §4.4의 3단계(전사 → React 프론트 → 번역) 순서를 권장한다.**
 
 ---
 
@@ -43,6 +43,21 @@ whisperlivekit-server --model_dir whisperlivekit/model/whisper-large-v3-turbo --
 
 > `whisperlivekit/model/whisper-large-v3/`(turbo 아님) 폴더와 그 안의 `.cache/huggingface/download/*.lock` 잔재는
 > **배포에 불필요**하다. 용량 절약 차 제외해도 된다(실제 사용 모델은 turbo).
+
+### 1.1 ⚠️ "폴더를 통째로 USB에 복사하면 그대로 실행되는가" — 아니다
+
+폴더 전체를 그대로 복사해도 **`.venv`는 폐쇄망에서 깨진다.** 절대경로가 박혀 있기 때문이다. 따라서 **어떤 방식으로 옮기든 폐쇄망에서 `.venv`는 새로 만들어야 한다**(§3).
+
+| 구분 | 항목 | 이유 |
+|---|---|---|
+| ❌ 통째 복사해도 깨짐 | `.venv/pyvenv.cfg`, `.venv/Scripts/activate.*` | 개발 PC의 Python 설치 경로·`.venv` 폴더 절대경로가 박혀 있음 |
+| ❌ 통째 복사해도 깨짐 | `.venv/.../__editable___whisperlivekit_..._finder.py` | editable 설치라 `import whisperlivekit`가 **개발 PC의 워크트리 절대경로**를 소스로 가리킴(폐쇄망에 그 경로 없음) |
+| ❌ 통째 복사해도 깨짐 | `worktrees/*/.git`, 워크트리 `.venv` Junction | 메인 `.git`·`.venv`를 절대경로로 참조 — **워크트리는 옮길 필요 없음** |
+| ✅ 그대로 따라옴 | `whisperlivekit/model/`(≈20GB), `.py` 소스, `pyproject.toml`, `uv.lock` | 절대경로 하드코딩 없음 |
+
+**권장 반입 방식**: `.venv/`·`worktrees/`·`.git/`을 **빼고** ① 소스 코드 + ② 모델 디렉터리 + ③ wheelhouse(§2)만 옮긴다. 폐쇄망에서 §3대로 `uv venv` + 오프라인 설치하면 editable 경로·Python 경로가 폐쇄망 기준으로 새로 잡혀 정상 동작한다.
+
+> 모델 파일은 `.gitignore`상 git 비추적(`*.nemo`, `whisper-large-v3/`, `*.safetensors` 등)이라 **`git clone`/아카이브로는 따라오지 않는다** → `whisperlivekit/model/` 디렉터리를 **파일 그대로 수동 복사**해야 한다. (통째 폴더 복사 시엔 자동 포함됨.)
 
 ---
 
@@ -199,6 +214,62 @@ $env:PYTHONIOENCODING = "utf-8"
 python -m whisperlivekit.test_client test_data/sbs1.mp3 --live
 ```
 
+### 4.4 배포 검증 3단계 (권장 시나리오) ★
+
+기능을 한 번에 다 켜지 말고 **전사 → 프론트 연결 → 번역** 순으로 하나씩 늘려가며 확인한다.
+**1·2단계는 playwright/VBCable이 필요 없다**(마이크 직접). 경로 C 자동측정(§4.1)에만 그 둘이 필요하다.
+
+#### 1단계 — whisperlivekit 내장 UI로 전사 확인 (번역 OFF)
+master 설정으로 서버를 띄우고, 추가 설치 없이 브라우저만으로 전사·화자분할이 도는지 본다.
+```powershell
+whisperlivekit-server `
+  --model_dir whisperlivekit/model/whisper-large-v3-turbo `
+  --backend whisper --lan auto --host localhost --port 8000 `
+  --warmup-file test_data/sbs1_10s.mp3 `
+  --diarization --diarization-backend sortformer `
+  --sortformer-model whisperlivekit/model/sortformer-4spk-v2.nemo `
+  --compression-ratio-threshold 3.0 --periodic-lang-check 4.0
+```
+→ 브라우저 **http://localhost:8000/** 접속(내장 UI) → 마이크 권한 허용 후 한·영 섞어 발화.
+- **통과 기준**: 발화가 끊김·환각 없이 실시간 전사되고, 화자가 바뀌면 화자 배지(1·2·3…)가 분리된다.
+- 음성 파일로 보려면 VBCable 재생장치를 통해 틀거나(경로 C), 빠른 방법은 마이크 앞에서 직접 발화.
+
+#### 2단계 — whisperlive React 프론트 UI 연결
+같은 서버(`/asr`)에 기존 whisperlive React UI를 붙인다. 기존 whisperlive와 **달라진 점**만 맞추면 된다 — 상세·코드 위치는 [FRONTEND_HANDOFF.md](FRONTEND_HANDOFF.md):
+
+| 맞출 항목 | 신규 whisperlivekit |
+|---|---|
+| 엔드포인트 | WebSocket **`ws://<host>:<port>/asr`** (기존 SSE/REST 아님) |
+| 메시지 모델 | 50ms마다 **전체 스냅샷** `lines[]`(델타 아님) |
+| 시간 필드 | `start`/`end`가 **문자열 `"H:MM:SS.cc"`**(기존 float 아님) |
+| 확정 표시 | `finalized`(별칭 `completed`) bool |
+| 화자 | `lines[].speaker` int(−2=침묵, 0=diar 로딩중, 1·2·3…=화자) |
+| 오디오 송신 | 서버 `config` 메시지의 `useAudioWorklet` 분기 — PCM AudioWorklet(16kHz s16le) 또는 WebM MediaRecorder |
+
+- **통과 기준**: React 화면에 1단계와 동일한 전사·화자가 표시된다.
+
+#### 3단계 — OSS 20b 실행 후 번역 확인
+번역기를 마지막에 켠다(1·2단계로 전사가 검증된 뒤).
+```powershell
+# (1) llama.cpp 번역 서버 기동
+start_oss.bat                        # llama.cpp가 localhost:2010에 gpt-oss-20b 서빙
+curl http://localhost:2010/v1/models # 실제 모델 별칭(id) 확인 → 아래 --translation-model에 사용
+
+# (2) STT 서버를 번역 + 화자분할 동시 ON으로 재기동 (§5.3과 동일)
+whisperlivekit-server `
+  --model_dir whisperlivekit/model/whisper-large-v3-turbo `
+  --backend whisper --lan auto --host localhost --port 8000 `
+  --warmup-file test_data/sbs1_10s.mp3 `
+  --diarization --diarization-backend sortformer `
+  --sortformer-model whisperlivekit/model/sortformer-4spk-v2.nemo `
+  --compression-ratio-threshold 3.0 --periodic-lang-check 4.0 `
+  --llm-translation --translation-serve llama `
+  --translation-endpoint http://localhost:2010 --translation-model gpt-oss-20b
+```
+→ React(또는 내장 UI)에서 한↔영 한 문장씩 발화.
+- **통과 기준**: 문장이 **확정되는 순간** `lines[].translation`에 번역문이 채워져 표시된다.
+- 화자분할 ON 상태에선 화자가 바뀌어야 직전 문장이 확정·번역된다(§5.4 한계). 한 화자만 길게 말하면 번역이 늦으니, 검증은 **두 사람이 번갈아** 또는 짧게 끊어 발화.
+
 ---
 
 ## 5. 번역(gpt-oss-20b) 배포 설정 — Q3
@@ -206,26 +277,31 @@ python -m whisperlivekit.test_client test_data/sbs1.mp3 --live
 ### 5.1 결론
 현재 이식된 번역기(`LlamaTranslator`)는 **프로토콜상 gpt-oss-20b와 호환**된다(`/v1/completions` + harmony 프롬프트 + 완성형 응답 파싱이 원본 whisperlive와 동일, [translator.py:58-93](../whisperlivekit/llm_translation/translator.py#L58-L93)). 다만 **그대로는 켜지지 않는 차단 버그가 있어 선결 수정이 필요**하다.
 
-### 5.2 [필수 수정] config.py LLM 4필드 누락 — `feat/closed-network-deploy`에서 수정됨
-- **버그**: `parse_args.py`는 `--llm-translation`/`--translation-serve`/`--translation-endpoint`/`--translation-model`을 파싱하지만([parse_args.py:375-404](../whisperlivekit/parse_args.py#L375-L404)), `WhisperLiveKitConfig`에 해당 4필드가 없어 `from_namespace`가 버렸다([config.py:100-104](../whisperlivekit/config.py#L100-L104)) → `TranslationManager`가 생성되지 않아 **번역이 절대 안 켜졌다**(코드로 4단 체인 확인).
-- **수정**: `config.py`에 4필드 추가(`llm_translation`/`translation_serve`/`translation_endpoint`/`translation_model`). → **`feat/closed-network-deploy` 브랜치에 포함**. 배포 전 **master에 머지**해야 번역이 동작한다.
+### 5.2 [수정 완료] config.py LLM 4필드 누락 — master 머지됨
+- **버그(과거)**: `parse_args.py`는 `--llm-translation`/`--translation-serve`/`--translation-endpoint`/`--translation-model`을 파싱하지만([parse_args.py:375-404](../whisperlivekit/parse_args.py#L375-L404)), `WhisperLiveKitConfig`에 해당 4필드가 없어 `from_namespace`가 버렸다 → `TranslationManager`가 생성되지 않아 **번역이 절대 안 켜졌다**(코드로 4단 체인 확인).
+- **수정(완료)**: `config.py`에 4필드 추가(`llm_translation`/`translation_serve`/`translation_endpoint`/`translation_model`, [config.py:78-84](../whisperlivekit/config.py#L78-L84)). **master에 머지 완료** → 추가 조치 없이 `--llm-translation`만 주면 번역이 켜진다.
 
-### 5.3 배포 기동 명령 (번역 ON)
+### 5.3 배포 기동 명령 (번역 + 화자분할 동시 ON)
 전제: 배포 PC에서 `start_oss.bat` 더블클릭 → llama.cpp가 `localhost:2010`에 gpt-oss-20b 서빙.
 ```powershell
 whisperlivekit-server `
   --model_dir whisperlivekit/model/whisper-large-v3-turbo `
   --backend whisper --lan auto --host localhost --port 8000 `
   --warmup-file test_data/sbs1_10s.mp3 `
+  --diarization --diarization-backend sortformer `
+  --sortformer-model whisperlivekit/model/sortformer-4spk-v2.nemo `
+  --compression-ratio-threshold 3.0 --periodic-lang-check 4.0 `
   --llm-translation `
   --translation-serve llama `
   --translation-endpoint http://localhost:2010 `
   --translation-model gpt-oss-20b
 ```
+> `--translation-model`의 `gpt-oss-20b`는 `start_oss.bat`의 `-a` 별칭에 맞춰라(§5.5 — `/v1/models`로 확인). 화자분할을 빼고 번역만 보려면 위에서 `--diarization` 줄 2개만 제거하면 된다.
 
-### 5.4 ⚠️ 화자분할 ON ↔ 번역 동시 불가 (선택 필요)
-- 화자분할 경로가 `finalized=True`를 설정하지 않아([tokens_alignment.py:184-214](../whisperlivekit/tokens_alignment.py#L184-L214)), 번역 매니저가 모든 세그먼트를 건너뛴다([manager.py:38](../whisperlivekit/llm_translation/manager.py#L38)). → **`--diarization`과 `--llm-translation`을 함께 쓰면 번역이 안 붙는다.**
-- 현재 선택지: ① **번역 검증은 `--diarization` 빼고**(diar OFF) 수행, ② 화자분할+번역 동시 지원은 Phase 5 후속 과제(`get_lines_diarization`에 화자경계 finalized 부여)로 별도 진행. (자세한 영향은 [FRONTEND_HANDOFF.md §3.4](FRONTEND_HANDOFF.md))
+### 5.4 [수정 완료] 화자분할 ON + 번역 동시 가능
+- **과거 버그**: 화자분할 경로가 `finalized=True`를 설정하지 않아 번역 매니저가 모든 세그먼트를 건너뛰어, `--diarization`과 `--llm-translation`을 함께 쓰면 번역이 안 붙었다.
+- **수정(완료)**: `get_lines_diarization()`이 화자 전환이 끝난 세그먼트(`segments[:-1]`)에 `finalized=True`를 부여한다([tokens_alignment.py:214-216](../whisperlivekit/tokens_alignment.py#L214-L216)). master 머지 완료 → **§5.3처럼 `--diarization` + `--llm-translation` 동시 기동 가능.**
+- **한 가지 한계**: 현재 발화 중인 마지막 세그먼트(`segments[-1]`)는 아직 미확정이라, **다음 화자로 전환되는 순간** 확정되며 번역이 붙는다(화자가 계속 말하는 동안엔 그 문장 번역이 한 박자 늦게 표시됨). 실사용엔 무방하나 동작 특성으로 알아둘 것. (스키마 영향은 [FRONTEND_HANDOFF.md §3](FRONTEND_HANDOFF.md))
 
 ### 5.5 배포 전 점검
 ```powershell
@@ -277,12 +353,15 @@ curl http://localhost:2010/v1/models
 
 ## 7. 배포 점검 순서 (권장)
 
+> **빠른 기능 검증은 §4.4의 3단계**(전사 → React 프론트 → 번역)를 따른다. 아래는 **설치 무결성 + 정량 측정 + 단어 교정**까지 포함한 전체 점검 체크리스트로, §4.4를 감싸는 상위 순서다.
+
 1. **설치 확인**: `python -c "import whisperlivekit, torch; print(torch.cuda.is_available())"` → `True`.
 2. **경로 A 스모크**(§4.3): 파일 송신으로 전사가 나오는지 — 코드/모델 로드 정상 확인.
-3. **경로 C 자동**(§4.1): `python scripts/closed_test.py test_data/sbs1.mp3` → WER/F1이 [MASTER_CHANGES §2](MASTER_CHANGES.md) 수치대(sbs1 ≈ WER 20%/F1 76%) 근처인지.
-4. **경로 B 마이크**(§4.2): 브라우저에서 한·영 발화 → 화자 배지·실시간 품질 정성 확인.
-5. **번역**(§5, 필요 시): config.py 머지 + `start_oss.bat` 후 diar OFF로 번역 ON 기동 → 한↔영 1문장 스모크.
-6. **단어 교정**(§6.2): `admin_replacement.json`/`hallucination.json`을 배포본으로 채운 뒤 해당 단어가 교정되는지 확인.
+3. **내장 UI 전사**(§4.4 1단계): 브라우저 마이크로 한·영 발화 → 전사·화자 배지 정성 확인.
+4. **React 프론트 연결**(§4.4 2단계): React UI를 `/asr`에 붙여 동일 전사 표시 확인.
+5. **번역**(§4.4 3단계 / §5): `start_oss.bat` 후 번역 + 화자분할 동시 ON 기동 → 한↔영 1문장 스모크(동시 사용 가능, §5.4).
+6. **경로 C 정량**(§4.1): `python scripts/closed_test.py test_data/sbs1.mp3` → WER/F1이 [MASTER_CHANGES §2](MASTER_CHANGES.md) 수치대(sbs1 ≈ WER 20%/F1 76%) 근처인지. (playwright/VBCable 필요)
+7. **단어 교정**(§6.2): `admin_replacement.json`/`hallucination.json`을 배포본으로 채운 뒤 해당 단어가 교정되는지 확인.
 
 ---
 
@@ -292,8 +371,8 @@ curl http://localhost:2010/v1/models
 |---|---|---|
 | HF repo ID 기본값 | 기동 시 네트워크 시도/실패 | `--model_dir`·`--sortformer-model`(로컬) 명시, `HF_HUB_OFFLINE=1` |
 | `--warmup-file` 미지정 | github `jfk.wav` 다운로드 시도 | `--warmup-file test_data/sbs1_10s.mp3` 또는 빈 문자열 |
-| 번역 미동작 | `--llm-translation` 줘도 번역 안 붙음 | config.py 4필드 수정 머지(§5.2) |
-| diar + 번역 | 화자분할 ON이면 번역 공백 | diar OFF로 번역 검증(§5.4) |
+| 번역 미동작(과거) | `--llm-translation` 줘도 번역 안 붙음 | **해결됨** — config.py 4필드 master 머지(§5.2) |
+| diar + 번역(과거) | 화자분할 ON이면 번역 공백 | **해결됨** — `get_lines_diarization` finalized 마킹 master 머지(§5.4). 동시 사용 가능 |
 | VBCable 불안정 | 경로 C 무음/100% WER/분산 폭증 | 케이블 상태(코드 아님) — 재부팅/Audiosrv 재시작, `vbcable_test.py --verify` |
 | playwright 미설치 | 경로 C 실패 | chromium 바이너리 복사 + `PLAYWRIGHT_BROWSERS_PATH` |
 | RTX 5090 커널 | torch가 sm_120 미지원 | cu128 + torch 2.7+ 버전 확인 |
