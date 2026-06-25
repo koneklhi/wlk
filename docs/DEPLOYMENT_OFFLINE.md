@@ -106,16 +106,22 @@ uv pip install pip
 .venv\Scripts\python.exe -m pip download -r requirements-deploy.txt -d wheelhouse `
   --extra-index-url https://download.pytorch.org/whl/cu128
 
-# 3) 프로젝트 자체도 wheel로 빌드
+# 3) sdist 빌드 백엔드 보강: 일부 의존성(antlr4·docopt·kaldi-python-io·sox·wget 등)은
+#    wheel이 없는 sdist라 폐쇄망에서 빌드된다 → setuptools·wheel이 wheelhouse에 있어야 한다.
+.venv\Scripts\python.exe -m pip download wheel -d wheelhouse   # setuptools는 보통 자동 동봉됨
+
+# 4) 프로젝트 자체도 wheel로 빌드
 uv build --wheel        # → dist/whisperlivekit-0.2.20-*.whl
 
-# 4) 경로 C 자동화용 브라우저
+# 5) 경로 C 자동화용 브라우저
 python -m playwright install chromium    # → %USERPROFILE%\AppData\Local\ms-playwright\
 ```
 
-> ⚠️ **반드시 개발 PC에서 1회 검증**: `wheelhouse/`에 torch cu128, `nemo-toolkit`과 그 전이 의존성까지
-> **빠짐없이** 받아졌는지 확인하라(nemo는 의존성이 매우 많다). 빠진 wheel이 있으면 폐쇄망 설치가 중단된다.
+> ⚠️ **반드시 개발 PC에서 1회 검증**: `wheelhouse/`에 torch cu128(`torch-2.x+cu128-...win_amd64.whl`),
+> `nemo-toolkit`과 그 전이 의존성까지 **빠짐없이** 받아졌는지 확인하라(nemo는 의존성이 매우 많다).
+> pip 마지막 줄 `Successfully downloaded ...`에 전체 목록이 나오면 OK. 빠진 wheel이 있으면 폐쇄망 설치가 중단된다.
 > dev/deploy 둘 다 Windows x64 + cu128이므로 wheel 호환은 일반적으로 OK.
+> (실측: 192개·약 3.0GB, torch `2.11.0+cu128` 포함. sdist 5개는 위 setuptools+wheel로 폐쇄망에서 빌드됨.)
 
 ### 2.3 RTX 5090(Blackwell) 주의
 RTX 5090은 Blackwell(sm_120)이라 **CUDA 12.8+ / cu128 torch**가 필수다. 개발 PC(RTX 3080)에서 받은
