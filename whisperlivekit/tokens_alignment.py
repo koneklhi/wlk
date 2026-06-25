@@ -211,6 +211,10 @@ class TokensAlignment:
                 else:
                     segments.append(segment)
 
+        # 화자 전환이 발생한 세그먼트는 확정 완료 — 마지막 세그먼트(현재 발화 중)는 제외
+        for seg in segments[:-1]:
+            seg.finalized = True
+
         return segments, diarization_buffer
 
 

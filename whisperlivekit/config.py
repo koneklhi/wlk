@@ -79,6 +79,12 @@ class WhisperLiveKitConfig:
     nllb_backend: str = "transformers"
     nllb_size: str = "600M"
 
+    # LLM translation (parse_args --llm-translation 계열; config 누락으로 from_namespace에서 버려지던 버그 수정)
+    llm_translation: bool = False
+    translation_serve: str = "ollama"
+    translation_endpoint: str = "http://localhost:11434"
+    translation_model: str = "qwen2.5:7b"
+
     # vLLM Realtime backend
     vllm_url: str = "ws://localhost:8000/v1/realtime"
     vllm_model: str = ""
