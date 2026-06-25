@@ -62,7 +62,7 @@ whisperlivekit-server --model_dir whisperlivekit/model/whisper-large-v3-turbo --
 git archive HEAD --output=deploy_source.zip
 ```
 
-`git archive`는 **추적 파일만** zip으로 묶는다 — `.git/`·`worktrees/`·`.venv/`·gitignore된 파일이 **자동 제외**되므로 절대경로 함정 없이 깨끗한 소스 스냅샷이 만들어진다. 별도 zip 압축·파일 선별 작업이 불필요하다.
+`git archive`는 **추적 파일만** zip으로 묶는다 — `.git/`(git 이력 전체)·`worktrees/`·`.venv/`·gitignore된 파일이 **자동 제외**된다. 결과물은 **git 기록·worktree가 없는 깨끗한 단일 폴더** — IDE에서 열면 버전 관리 없는 일반 프로젝트로 보인다. 절대경로 함정 없이 가장 깔끔한 방식이다.
 
 USB에 담을 3가지:
 
@@ -172,7 +172,7 @@ python -c "import whisperlivekit, torch; print('torch', torch.__version__, 'cuda
 
 ```powershell
 # 단일 파일 (정답 test_data/sbs1.txt 있으면 비교, 없으면 전사 저장)
-python scripts/closed_test.py test_data/sbs1.mp3
+python scripts/closed_test.py test_daa/sbs1.mp3
 
 # 폴더 일괄 (폴더 내 모든 mp3/wav/m4a/flac/ogg)
 python scripts/closed_test.py test_data/
