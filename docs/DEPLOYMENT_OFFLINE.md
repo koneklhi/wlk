@@ -17,13 +17,13 @@
 python scripts/closed_test.py <음성파일_또는_폴더>
 
 # (2) 경로 B (마이크 직접) — 서버 켜고 브라우저로 말하기
-whisperlivekit-server --model_dir whisperlivekit/model/whisper-large-v3-turbo --backend whisper --lan auto `
-  --host localhost --port 8000 --warmup-file test_data/sbs1_10s.mp3 `
-  --diarization --diarization-backend sortformer `
-  --sortformer-model whisperlivekit/model/sortformer-4spk-v2.nemo `
-  --compression-ratio-threshold 3.0 --periodic-lang-check 4.0
-# → 브라우저에서 http://localhost:8000/ 접속 후 마이크로 발화
+#     master 권장 설정이 parse_args.py 기본값이라 인자 없이 그대로 켜진다.
+whisperlivekit-server
+# → 브라우저에서 http://localhost:8900/ 접속 후 마이크로 발화
 ```
+
+> **⚠️ 항상 저장소 루트에서 실행한다(요청 1).** 기본값의 모델·warmup 경로(`whisperlivekit/model/...`,
+> `test_data/sbs1_10s.mp3`)는 **루트 기준 상대경로**다. 다른 폴더에서 띄우면 모델을 못 찾는다.
 
 환경 준비가 안 됐다면 아래 §1~§4를 순서대로 따른다. **처음 반입한다면 §1.1(통째 복사 함정)을 먼저 읽고, 검증은 §4.4의 3단계(전사 → React 프론트 → 번역) 순서를 권장한다.**
 
@@ -141,15 +141,18 @@ uv pip install --no-index --find-links wheelhouse --find-links dist "whisperlive
 python -c "import whisperlivekit, torch; print('torch', torch.__version__, 'cuda', torch.cuda.is_available())"
 ```
 
-### 3.1 런타임 자동 다운로드 차단 — 핵심 트랩
+### 3.1 런타임 자동 다운로드 차단 — 이제 기본값이 로컬 경로
 
-폐쇄망에서 **HF repo ID 기본값을 그대로 두면 다운로드를 시도**해 실패한다. 아래는 반드시 로컬 경로로 오버라이드:
+> **변경됨**: 과거엔 아래 3개를 매번 CLI로 오버라이드해야 했으나, 이제 `parse_args.py` **기본값이 로컬 경로**라
+> `whisperlivekit-server`만 쳐도 다운로드 시도 없이 켜진다(요청 3). 아래는 그 기본값과 근거 — **추가 조치 불필요**.
 
-| 위험 지점 | 기본값(다운로드 시도) | 폐쇄망 조치 | 근거 |
+| 위험 지점 | 과거 기본값(다운로드 시도) | 현재 기본값(로컬, 자동) | 근거 |
 |---|---|---|---|
-| Whisper 모델 | `--model base` → HF 다운로드 | **`--model_dir whisperlivekit/model/whisper-large-v3-turbo`** | [parse_args.py:96-115](../whisperlivekit/parse_args.py#L96-L115) |
-| Sortformer | `--sortformer-model nvidia/diar_streaming_sortformer_4spk-v2`(HF) | **`--sortformer-model whisperlivekit/model/sortformer-4spk-v2.nemo`**(로컬 `.nemo`) | [parse_args.py:70-75](../whisperlivekit/parse_args.py#L70-L75) |
-| warmup | `--warmup-file` 미지정 → github에서 `jfk.wav` 다운로드 | **`--warmup-file test_data/sbs1_10s.mp3`**(또는 빈 문자열로 비활성) | [parse_args.py:16-26](../whisperlivekit/parse_args.py#L16-L26) |
+| Whisper 모델 | `--model base` → HF 다운로드 | **`--model_dir whisperlivekit/model/whisper-large-v3-turbo`** | [parse_args.py](../whisperlivekit/parse_args.py) |
+| Sortformer | `nvidia/diar_streaming_sortformer_4spk-v2`(HF) | **`whisperlivekit/model/sortformer-4spk-v2.nemo`**(로컬 `.nemo`) | [parse_args.py](../whisperlivekit/parse_args.py) |
+| warmup | 미지정 → github `jfk.wav` 다운로드 | **`test_data/sbs1_10s.mp3`** | [parse_args.py](../whisperlivekit/parse_args.py) |
+
+> 다른 모델로 바꾸려면 해당 플래그를 직접 주면 기본값을 덮어쓴다. `HF_HUB_OFFLINE=1`은 그래도 안전상 권장.
 
 **안전 항목(추가 조치 불필요)**:
 - `tiktoken` vocab(`whisper/assets/*.tiktoken`), `silero` VAD(`silero_vad_models/*.jit/*.onnx`)는 패키지에 **번들**되어 오프라인 안전([pyproject.toml:152-156](../pyproject.toml#L152-L156)).
@@ -161,8 +164,10 @@ python -c "import whisperlivekit, torch; print('torch', torch.__version__, 'cuda
 
 > master 권장 설정(= [MASTER_CHANGES.md](MASTER_CHANGES.md) Exp-105): 백엔드 SimulStreaming(기본), `--beams 2`(기본),
 > `--vac-chunk-size 0.2`(기본), **화자분할 ON**, **`--compression-ratio-threshold 3.0`**, **`--periodic-lang-check 4.0`**.
-> `eval.py`/`closed_test.py`가 띄우는 서버도 이 설정과 동일하게 맞춰져 있다([eval.py:108-139](../scripts/eval.py#L108-L139)).
-> 서버 진입점은 콘솔 스크립트 `whisperlivekit-server`(= `python -m whisperlivekit.basic_server`)를 쓴다.
+> **이 설정 전체가 이제 `parse_args.py` 기본값**이라(요청 3) 인자 없이 `whisperlivekit-server`만 쳐도 그대로 켜진다.
+> 기본 포트는 **8900**(과거 8000), 자동측정(`eval.py`/`closed_test.py`)은 **8901**(과거 8001) — 배포 PC의 기존 8000/8001 점유와 충돌 회피(요청 2).
+> 향후 설정 변경은 **CLI를 늘리지 말고 `parse_args.py` 기본값을 고친다**(closed_test도 그 값을 자동 동기화 — 요청 5).
+> 서버 진입점은 콘솔 스크립트 `whisperlivekit-server`(= `python -m whisperlivekit.basic_server`)를 쓴다. **저장소 루트에서 실행.**
 
 ### 4.1 경로 C — 자동 전사/평가 (`closed_test.py`) ★요청 기능
 
@@ -172,7 +177,7 @@ python -c "import whisperlivekit, torch; print('torch', torch.__version__, 'cuda
 
 ```powershell
 # 단일 파일 (정답 test_data/sbs1.txt 있으면 비교, 없으면 전사 저장)
-python scripts/closed_test.py test_daa/sbs1.mp3
+python scripts/closed_test.py test_data/sbs1.mp3
 
 # 폴더 일괄 (폴더 내 모든 mp3/wav/m4a/flac/ogg)
 python scripts/closed_test.py test_data/
@@ -192,7 +197,7 @@ python scripts/closed_test.py my_audio.wav --no-diarization
 - 콘솔 출력 예:
   ```
   [closed_test] ▶ sbs1.mp3  (정답 있음 → WER/F1)
-  [closed_test]   서버 기동(포트 8001) 회차 1/3 ...
+  [closed_test]   서버 기동(포트 8901) 회차 1/3 ...
   [closed_test]   → WER 19.6% | F1 76.2%
   ...
   [closed_test] ✓ sbs1.mp3  WER median 19.6% | F1 median 76.2%  → transcripts\sbs1_20260624_....txt
@@ -204,26 +209,19 @@ python scripts/closed_test.py my_audio.wav --no-diarization
 ### 4.2 경로 B — 마이크 직접 (정성 평가)
 
 서버를 master 설정으로 띄우고 브라우저에서 직접 말한다(`--pcm-input` 없음 = 브라우저 MediaRecorder).
+master 설정이 기본값이라 인자가 없다(저장소 루트에서 실행).
 
 ```powershell
-whisperlivekit-server `
-  --model_dir whisperlivekit/model/whisper-large-v3-turbo `
-  --backend whisper --lan auto `
-  --host localhost --port 8000 `
-  --warmup-file test_data/sbs1_10s.mp3 `
-  --diarization --diarization-backend sortformer `
-  --sortformer-model whisperlivekit/model/sortformer-4spk-v2.nemo `
-  --compression-ratio-threshold 3.0 --periodic-lang-check 4.0
+whisperlivekit-server
 ```
-→ 브라우저에서 **http://localhost:8000/** 접속 → 내장 웹 UI에서 마이크로 발화, 실시간 전사·화자 확인.
+→ 브라우저에서 **http://localhost:8900/** 접속 → 내장 웹 UI에서 마이크로 발화, 실시간 전사·화자 확인.
 
 ### 4.3 경로 A — 파일 직접 송신 (빠른 스모크, 참고)
 
 VBCable 없이 코드 회귀만 빠르게 보는 용도(성능 판정 아님):
 ```powershell
-# 서버: --pcm-input 으로 기동
-whisperlivekit-server --model_dir whisperlivekit/model/whisper-large-v3-turbo --backend whisper --lan auto `
-  --pcm-input --warmup-file test_data/sbs1_10s.mp3
+# 서버: --pcm-input 만 추가(나머지는 기본값). 화자분할 빼고 더 빠른 스모크는 --no-diarization 추가.
+whisperlivekit-server --pcm-input
 # 송신:
 $env:PYTHONIOENCODING = "utf-8"
 python -m whisperlivekit.test_client test_data/sbs1.mp3 --live
@@ -235,17 +233,11 @@ python -m whisperlivekit.test_client test_data/sbs1.mp3 --live
 **1·2단계는 playwright/VBCable이 필요 없다**(마이크 직접). 경로 C 자동측정(§4.1)에만 그 둘이 필요하다.
 
 #### 1단계 — whisperlivekit 내장 UI로 전사 확인 (번역 OFF)
-master 설정으로 서버를 띄우고, 추가 설치 없이 브라우저만으로 전사·화자분할이 도는지 본다.
+master 설정으로 서버를 띄우고, 추가 설치 없이 브라우저만으로 전사·화자분할이 도는지 본다(인자는 모두 기본값).
 ```powershell
-whisperlivekit-server `
-  --model_dir whisperlivekit/model/whisper-large-v3-turbo `
-  --backend whisper --lan auto --host localhost --port 8000 `
-  --warmup-file test_data/sbs1_10s.mp3 `
-  --diarization --diarization-backend sortformer `
-  --sortformer-model whisperlivekit/model/sortformer-4spk-v2.nemo `
-  --compression-ratio-threshold 3.0 --periodic-lang-check 4.0
+whisperlivekit-server
 ```
-→ 브라우저 **http://localhost:8000/** 접속(내장 UI) → 마이크 권한 허용 후 한·영 섞어 발화.
+→ 브라우저 **http://localhost:8900/** 접속(내장 UI) → 마이크 권한 허용 후 한·영 섞어 발화.
 - **통과 기준**: 발화가 끊김·환각 없이 실시간 전사되고, 화자가 바뀌면 화자 배지(1·2·3…)가 분리된다.
 - 음성 파일로 보려면 VBCable 재생장치를 통해 틀거나(경로 C), 빠른 방법은 마이크 앞에서 직접 발화.
 
@@ -271,13 +263,8 @@ start_oss.bat                        # llama.cpp가 localhost:2010에 gpt-oss-20
 curl http://localhost:2010/v1/models # 실제 모델 별칭(id) 확인 → 아래 --translation-model에 사용
 
 # (2) STT 서버를 번역 + 화자분할 동시 ON으로 재기동 (§5.3과 동일)
+#     전사·화자분할은 기본값이라, 번역 4플래그만 추가하면 된다.
 whisperlivekit-server `
-  --model_dir whisperlivekit/model/whisper-large-v3-turbo `
-  --backend whisper --lan auto --host localhost --port 8000 `
-  --warmup-file test_data/sbs1_10s.mp3 `
-  --diarization --diarization-backend sortformer `
-  --sortformer-model whisperlivekit/model/sortformer-4spk-v2.nemo `
-  --compression-ratio-threshold 3.0 --periodic-lang-check 4.0 `
   --llm-translation --translation-serve llama `
   --translation-endpoint http://localhost:2010 --translation-model gpt-oss-20b
 ```
@@ -298,20 +285,15 @@ whisperlivekit-server `
 
 ### 5.3 배포 기동 명령 (번역 + 화자분할 동시 ON)
 전제: 배포 PC에서 `start_oss.bat` 더블클릭 → llama.cpp가 `localhost:2010`에 gpt-oss-20b 서빙.
+전사·화자분할·포트(8900)는 모두 기본값이라, **번역 4플래그만** 추가한다(저장소 루트에서 실행).
 ```powershell
 whisperlivekit-server `
-  --model_dir whisperlivekit/model/whisper-large-v3-turbo `
-  --backend whisper --lan auto --host localhost --port 8000 `
-  --warmup-file test_data/sbs1_10s.mp3 `
-  --diarization --diarization-backend sortformer `
-  --sortformer-model whisperlivekit/model/sortformer-4spk-v2.nemo `
-  --compression-ratio-threshold 3.0 --periodic-lang-check 4.0 `
   --llm-translation `
   --translation-serve llama `
   --translation-endpoint http://localhost:2010 `
   --translation-model gpt-oss-20b
 ```
-> `--translation-model`의 `gpt-oss-20b`는 `start_oss.bat`의 `-a` 별칭에 맞춰라(§5.5 — `/v1/models`로 확인). 화자분할을 빼고 번역만 보려면 위에서 `--diarization` 줄 2개만 제거하면 된다.
+> `--translation-model`의 `gpt-oss-20b`는 `start_oss.bat`의 `-a` 별칭에 맞춰라(§5.5 — `/v1/models`로 확인). 화자분할을 빼고 번역만 보려면 위 명령에 `--no-diarization`을 추가한다.
 
 ### 5.4 [수정 완료] 화자분할 ON + 번역 동시 가능
 - **과거 버그**: 화자분할 경로가 `finalized=True`를 설정하지 않아 번역 매니저가 모든 세그먼트를 건너뛰어, `--diarization`과 `--llm-translation`을 함께 쓰면 번역이 안 붙었다.
@@ -384,12 +366,13 @@ curl http://localhost:2010/v1/models
 
 | 트랩 | 증상 | 조치 |
 |---|---|---|
-| HF repo ID 기본값 | 기동 시 네트워크 시도/실패 | `--model_dir`·`--sortformer-model`(로컬) 명시, `HF_HUB_OFFLINE=1` |
-| `--warmup-file` 미지정 | github `jfk.wav` 다운로드 시도 | `--warmup-file test_data/sbs1_10s.mp3` 또는 빈 문자열 |
+| HF repo ID 기본값 | (과거) 기동 시 네트워크 시도/실패 | **해결됨** — 기본값이 로컬 경로(§3.1). 안전상 `HF_HUB_OFFLINE=1` 권장 |
+| `--warmup-file` 미지정 | (과거) github `jfk.wav` 다운로드 | **해결됨** — 기본값 `test_data/sbs1_10s.mp3`(§3.1) |
+| 루트 밖에서 실행 | 모델·warmup 상대경로 못 찾음 | **저장소 루트에서** `whisperlivekit-server` 실행(요청 1) |
 | 번역 미동작(과거) | `--llm-translation` 줘도 번역 안 붙음 | **해결됨** — config.py 4필드 master 머지(§5.2) |
 | diar + 번역(과거) | 화자분할 ON이면 번역 공백 | **해결됨** — `get_lines_diarization` finalized 마킹 master 머지(§5.4). 동시 사용 가능 |
 | VBCable 불안정 | 경로 C 무음/100% WER/분산 폭증 | 케이블 상태(코드 아님) — 재부팅/Audiosrv 재시작, `vbcable_test.py --verify` |
 | playwright 미설치 | 경로 C 실패 | chromium 바이너리 복사 + `PLAYWRIGHT_BROWSERS_PATH` |
 | RTX 5090 커널 | torch가 sm_120 미지원 | cu128 + torch 2.7+ 버전 확인 |
-| 포트 충돌 | eval/closed_test는 8001, 수동 경로B는 8000 | 동시 기동 시 GPU 2배 점유 주의 |
+| 포트 충돌 | 수동 서버=8900, eval/closed_test=8901(기본). 배포 PC 기존 점유와 충돌하면 | `--port`로 변경, 또는 `parse_args.py`/`eval.py SERVER_PORT` 기본값 수정. 동시 기동 시 GPU 2배 점유 주의 |
 | 문서 플래그 오타 | `--avg-logprob-threshold`는 없음 | 실제 플래그는 `--logprob-threshold`([parse_args.py:321](../whisperlivekit/parse_args.py#L321)) |
