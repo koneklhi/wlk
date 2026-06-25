@@ -137,7 +137,7 @@ nllb-200-distilled-600M-ctranslate2/*
 .omc/sessions/
 .omc/project-memory.json
 .omc/benchmarks/*.log
-# eval 결과 JSON — 매 실행마다 내용·절대경로가 변해 PC 간 충돌 유발. 큐레이션 이력은 PHASE2_EXPERIMENTS.md에 보존.
+# eval 결과 JSON — 매 실행마다 내용·절대경로가 변해 PC 간 충돌 유발. 큐레이션 이력은 EXPERIMENTS.md(활성)/PHASE2_EXPERIMENTS.md(아카이브)에 보존.
 .omc/benchmarks/*.json
 .omc/session-logs/
 .worktrees/
@@ -163,3 +163,8 @@ whisperlivekit/model/whisper-large-v3/
 
 # Phase 3 필터링 사용자 DB (런타임 자동 생성)
 whisperlivekit/filtering/*.db
+
+# 폐쇄망 배포 산출물 (개발 PC에서 생성 → USB 반입, git 비추적; docs/DEPLOYMENT_OFFLINE.md §1.1·§2)
+wheelhouse/
+deploy_source.zip
+requirements-deploy.txt

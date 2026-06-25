@@ -95,13 +95,16 @@ USB에 담을 3가지:
 
 ```powershell
 # 1) lock된 의존성을 requirements로 내보내기 (배포에서 켤 extra 포함)
-uv export --frozen --no-dev --extra diarization-sortformer --extra vbcable --extra cu128 -o requirements-deploy.txt
+#    --no-emit-project 필수: 빼면 프로젝트 자체가 editable(-e .)로 박혀 hash 모드 pip download가 실패한다.
+uv export --frozen --no-dev --no-emit-project `
+  --extra diarization-sortformer --extra vbcable --extra cu128 -o requirements-deploy.txt
 
 # 2) 모든 wheel 다운로드 (torch cu128 인덱스 포함)
-uv pip download -r requirements-deploy.txt -d wheelhouse
-#   ↳ 설치된 uv가 download 서브커맨드를 지원 안 하면 pip 사용:
-#   python -m pip download -r requirements-deploy.txt -d wheelhouse `
-#       --extra-index-url https://download.pytorch.org/whl/cu128
+#    uv엔 pip download 서브커맨드가 없다. .venv에 pip를 넣고 그 python으로 받는다
+#    (배포 타깃과 동일한 마커: Windows AMD64 + 동일 파이썬으로 받아야 한다).
+uv pip install pip
+.venv\Scripts\python.exe -m pip download -r requirements-deploy.txt -d wheelhouse `
+  --extra-index-url https://download.pytorch.org/whl/cu128
 
 # 3) 프로젝트 자체도 wheel로 빌드
 uv build --wheel        # → dist/whisperlivekit-0.2.20-*.whl
