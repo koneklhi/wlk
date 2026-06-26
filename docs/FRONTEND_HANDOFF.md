@@ -27,7 +27,7 @@ React가 반드시 새로 구현할 것: ① WS 연결·종료 시퀀스 ② con
 ## 1. 연결 라이프사이클
 
 ### 1.1 엔드포인트
-- WebSocket: `ws://<host>:<port>/asr` (기본 `ws://localhost:8000/asr`), TLS면 `wss://`.
+- WebSocket: `ws://<host>:<port>/asr` (기본 `ws://localhost:8900/asr`), TLS면 `wss://`.
   - 핸들러: [basic_server.py:82](../whisperlivekit/basic_server.py#L82) `@app.websocket("/asr")`.
   - 내장 UI의 URL 구성 예: [live_transcription.js:180-190](../whisperlivekit/web/live_transcription.js#L180-L190).
 - `GET /`는 내장 데모 UI(HTML 1파일)를 서빙한다([basic_server.py:48-50](../whisperlivekit/basic_server.py#L48-L50)). **React 배포 시엔 사용하지 않는다** — `/asr`만 쓰면 된다.
