@@ -59,7 +59,8 @@ whisperlivekit-server
 
 ```powershell
 # 개발 PC에서 (인터넷 가능, 저장소 루트에서 실행)
-git archive HEAD --output=deploy_source.zip
+# master 브랜치를 명시 — 현재 체크아웃 브랜치(feature 등)에 무관하게 master 기준으로 묶임
+git archive master --output=deploy_source.zip
 ```
 
 `git archive`는 **추적 파일만** zip으로 묶는다 — `.git/`(git 이력 전체)·`worktrees/`·`.venv/`·gitignore된 파일이 **자동 제외**된다. 결과물은 **git 기록·worktree가 없는 깨끗한 단일 폴더** — IDE에서 열면 버전 관리 없는 일반 프로젝트로 보인다. 절대경로 함정 없이 가장 깔끔한 방식이다.
@@ -68,7 +69,7 @@ USB에 담을 3가지:
 
 | # | 내용 | 방법 |
 |---|---|---|
-| ① `deploy/deploy_source.zip` | master 소스 코드 | `git archive HEAD --output=deploy\deploy_source.zip` |
+| ① `deploy/deploy_source.zip` | master 소스 코드 | `git archive master --output=deploy\deploy_source.zip` |
 | ② `whisperlivekit/model/` 디렉터리(≈20GB + ≈1.5GB) | STT·화자분할 모델 | `.gitignore` 비추적이라 아카이브에 안 들어옴 → **폴더 수동 복사** |
 | ③ `deploy/` 전체 | 패키지+uv 설치도구 | §2에서 생성 (`wheelhouse/`·`*.whl`·`uv-installer/` 포함) |
 
@@ -127,8 +128,8 @@ Invoke-WebRequest -Uri "https://github.com/astral-sh/uv/releases/download/$uvVer
 uv build --wheel        # → dist/whisperlivekit-0.2.20-*.whl
 Copy-Item (Get-ChildItem dist -Filter "*.whl" | Sort-Object LastWriteTime -Descending | Select-Object -First 1 -ExpandProperty FullName) deploy\
 
-# 6) 소스 아카이브
-git archive HEAD --output=deploy\deploy_source.zip
+# 6) 소스 아카이브 — HEAD가 아닌 master 명시 (feature 브랜치 체크아웃 중이어도 master 기준으로 묶임)
+git archive master --output=deploy\deploy_source.zip
 
 # 7) 경로 C 자동화용 브라우저
 python -m playwright install chromium    # → %USERPROFILE%\AppData\Local\ms-playwright\
