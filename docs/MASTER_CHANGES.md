@@ -1,7 +1,7 @@
 # master 최종본 — upstream 대비 전체 변경 요약
 
 > **이 문서의 목적**: `whisperlivekit` upstream 0.2.20 대비 **현재 master 브랜치에 반영된 모든 변경**을
-> 도메인별로 증류해 설명한다. 실험 시행착오는 [../PHASE2_EXPERIMENTS.md](../PHASE2_EXPERIMENTS.md)에 있다.
+> 도메인별로 증류해 설명한다. 실험 시행착오는 [../EXPERIMENTS.md](../EXPERIMENTS.md)(활성; Exp-001~130은 [../PHASE2_EXPERIMENTS.md](../PHASE2_EXPERIMENTS.md) 아카이브)에 있다.
 > 이 문서는 master의 **최종 상태만** 담는다.
 >
 > **갱신 주기**: 채택 실험을 master에 머지한 직후 `/update-master-changes` 슬래시 커맨드로 갱신한다.
@@ -297,5 +297,5 @@ upstream에는 정량 평가 도구가 없었다. 아래 모듈을 새로 추가
    - §2 베이스라인 수치 (최신 path C N≥3 결과로 교체)
    - 해당 도메인 섹션 (§3~§7) — `upstream → 변경 → 이유 → 파일 → Exp-N` 형식 유지
    - §8 TODO — 해결된 항목 제거 + 새 "다음 가설" 추가
-3. **시행착오는 여기에 적지 않는다** — 실험 상세는 [../PHASE2_EXPERIMENTS.md](../PHASE2_EXPERIMENTS.md) 소관.
+3. **시행착오는 여기에 적지 않는다** — 실험 상세는 [../EXPERIMENTS.md](../EXPERIMENTS.md) 소관.
 4. 갱신 후 커밋 메시지: `docs: MASTER_CHANGES.md — Exp-N 채택 반영` 형식.

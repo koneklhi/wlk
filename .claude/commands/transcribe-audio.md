@@ -1,29 +1,85 @@
 # /transcribe-audio — 음성 파일 정답 전사 워크플로
 
 새 음성 파일을 정답(ground truth) 텍스트로 변환하는 3단계 워크플로:
-① 자동 전사 → ② 사람 검토 → ③ Claude 문맥 검증
+① (YouTube면 구간 다운로드) → ② 자동 전사 → ③ 사람 검토 → ④ Claude 문맥 검증
 
 ## 사용법
 
 ```
+# 로컬 파일
 /transcribe-audio test_data/foo.mp3
+
+# YouTube URL + 시간 구간
+/transcribe-audio https://youtu.be/XXXXX 1:30 5:00
+/transcribe-audio https://www.youtube.com/watch?v=XXXXX 00:01:30 00:05:00
 ```
 
-`$ARGUMENTS` = 음성 파일 경로 (예: `test_data/ytn1.mp3`)
+`$ARGUMENTS` 구조: `<파일경로_또는_YouTube_URL> [시작시간] [종료시간]`  
+시간 포맷: `HH:MM:SS` 또는 `MM:SS`
 
 ---
 
 ## Claude가 따를 순서
 
+### Step 0 — 입력 분기 판단
+
+`$ARGUMENTS`의 첫 번째 토큰이 `https://` 또는 `youtu.be`로 시작하면 **YouTube 다운로드 분기**로, 그 외에는 **로컬 파일 분기**로 진행한다.
+
+#### 로컬 파일 분기
+`AUDIO_PATH = $ARGUMENTS` (첫 번째 토큰) 로 설정하고 Step 1로 바로 이동.
+
+#### YouTube 다운로드 분기
+
+인자를 파싱한다:
+- `URL` = 첫 번째 토큰
+- `START` = 두 번째 토큰
+- `END` = 세 번째 토큰
+
+`START` 또는 `END`가 없으면 아래를 출력하고 **중단**한다:
+
+> **오류**: YouTube URL은 시작·종료 시간이 필요합니다.
+> 사용법: `/transcribe-audio <youtube_url> <시작시간> <종료시간>`
+> 예시: `/transcribe-audio https://youtu.be/XXXXX 1:30 5:00`
+
+**1. yt-dlp 설치 확인**
+
+```powershell
+yt-dlp --version
+```
+
+실패하면 아래를 출력하고 **중단**한다:
+
+> **오류**: yt-dlp 가 설치되어 있지 않습니다.
+> 다음 명령으로 설치 후 재실행하세요:
+> ```
+> uv tool install yt-dlp
+> ```
+
+**2. 구간 다운로드**
+
+```powershell
+$env:PYTHONIOENCODING = "utf-8"
+yt-dlp --download-sections "*{START}-{END}" -x --audio-format wav -o "test_data/yt_%(id)s.%(ext)s" {URL}
+```
+
+- `--download-sections "*START-END"` : 지정 구간만 다운로드 (전체 영상 다운로드 없음)
+- `-x --audio-format wav` : 오디오 추출 후 WAV 변환
+- 출력 파일: `test_data/yt_<video_id>.wav`
+
+다운로드 완료 후 생성된 파일 경로를 확인해 `AUDIO_PATH`로 설정한다.  
+다운로드 실패 시(비공개·지역 제한 등) yt-dlp 오류를 그대로 출력하고 **중단**한다.
+
+---
+
 ### Step 1 — 자동 전사 실행
 
 ```powershell
 $env:PYTHONIOENCODING = "utf-8"
-uv run --no-sync python scripts/transcribe_groundtruth.py $ARGUMENTS
+uv run --no-sync python scripts/transcribe_groundtruth.py {AUDIO_PATH}
 ```
 
 - 완료 후 생성된 `.txt` 파일 내용을 전체 출력한다.
-- 출력 형식: 문장당 한 줄, 문장 사이 빈 줄 (sbs1.txt 형식과 동일).
+- 출력 형식: **빈 줄 = 문장 경계** — ① 화자가 바뀌는 순간 빈 줄(1순위, 필수) ② 한 화자의 긴 발화는 온점 기준 분리, 한 블록 ≤2문장 허용·3문장+ 분리(2순위). (sbs1.txt·bong1.txt 형식과 동일).
 
 ### Step 2 — 사람 검토 요청
 
@@ -63,3 +119,4 @@ uv run --no-sync python scripts/transcribe_groundtruth.py $ARGUMENTS
 - VAD 병합 간격(MERGE_GAP_S), 최대 청크(MAX_CHUNK_S) 등은
   `scripts/transcribe_groundtruth.py` 상단 상수에서 조정 가능
 - 전사 품질이 낮으면 재실행 전 해당 상수를 조정한 뒤 다시 시도
+- YouTube 다운로드 파일은 `test_data/yt_<video_id>.wav` 형태로 저장됨

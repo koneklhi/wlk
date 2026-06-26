@@ -1,9 +1,14 @@
 # Phase 2 자율 개선 루프 — WER 감소 우선 → 문장 분리 F1 60%+
 
+> **[2026-06-23 업데이트]** 측정 세트·우선순위는 **CLAUDE.md §3.8 현행 regime**을 따른다:
+> 테스트(채택/기각) = bong1 + ytn2 + sbs1 (화자분할 ON, `--repeat 3`), held-out(일반화) = ytn1 + eng1, **ytn2·bong1 공동 최우선**.
+> 문장 분리 F1 기준: 정답 빈 줄 = 화자전환 경계(1순위 필수) + 온점분리 경계(2순위 선택). primary F1=화자전환 경계, secondary F1=온점 경계 — metric 구현 후속.
+> 아래 Phase A/B 목표·측정 프로토콜 구조는 유지하되, 데이터 세트와 측정 명령은 위 regime 적용.
+
 ## 초기 상태 (2026-06-05 — 역사적, Phase 2 착수 시점)
 
 > ⚠️ 아래는 문장 확정 로직 도입 **이전**의 출발 베이스라인이다. Phase 3/4가 머지된 **현재 수치는
-> [PHASE2_EXPERIMENTS.md](../../../PHASE2_EXPERIMENTS.md)의 최신 Exp 항목**을 참조한다.
+> [EXPERIMENTS.md](../../../EXPERIMENTS.md)(활성 로그)의 최신 Exp 항목**을 참조한다.
 
 - 브랜치: `master`
 - 기준 베이스라인 (경로 C, 1회 측정):
@@ -21,7 +26,8 @@
 |---|---|---|
 | 평균 WER | < 50% (단기) | **< 30%** (상용 STT 수준) |
 | sbs1 WER | < 60% | < 35% |
-| ytn1 WER | < 30% | < 20% |
+| ytn2 WER | < 25% | < 20% |
+| bong1 WER | 측정 예정 | < 30% |
 | 문장 분리 F1 (avg) | **≥ 60%** | ≥ 70% |
 
 > WER < 30% 근거: 한국어 실시간 STT 상용 서비스(Naver Clova, Kakao i) 기준
@@ -117,7 +123,7 @@ uv run python scripts/eval.py \
 
 ### 반복 측정 규칙 (필수)
 
-- 경로 C 채택/기각 판단에 쓰는 수치는 **sbs1·ytn1 각각 N≥3회 측정**(`eval.py --repeat 3`) 후
+- 경로 C 채택/기각 판단에 쓰는 수치는 **테스트 세트(bong1·ytn2·sbs1) 각각 N≥3회 측정**(`eval.py --repeat 3 --files test_data/bong1.mp3 test_data/ytn2.mp3 test_data/sbs1.mp3`) 후
   **median + 분산(min/max/stdev)**. 1회 결과만으로 결론 내리지 말 것.
 - **fail-fast 금지**: 첫 회차가 나빠도 중단하지 않고 N회 전부 측정한다 (분산이 곧 데이터).
   단, VBCable 미설정·포트 충돌·무음 캡처 등 *하니스 버그*는 즉시 멈추고 고친다(분산이 아니라 결함).
@@ -132,7 +138,7 @@ uv run python scripts/eval.py \
 2. **최악 케이스(max/p95) 미회귀** — median이 좋아도 catastrophic run이 늘면 기각 (분산 축소가 1급 목표)
 3. WER 회귀 ≤ +5%p (F1 개선 중 WER이 악화되지 않아야 함)
 4. `pytest tests/` 전부 통과
-5. sbs1·ytn1 중 한 파일만 개선되고 다른 파일이 ≥ 5%p 악화 → 기각 (과적합)
+5. bong1·ytn2·sbs1 중 일부만 개선되고 나머지가 ≥ 5%p 악화 → 기각 (과적합)
 
 **기각 즉시**:
 - 어느 한 언어(한국어 or 영어)의 커버리지가 의미 있게 하락
@@ -142,7 +148,7 @@ uv run python scripts/eval.py \
 
 ## 실험 기록 규칙
 
-1. 각 실험 완료 후 `PHASE2_EXPERIMENTS.md`에 Exp-N 항목 추가
+1. 각 실험 완료 후 `EXPERIMENTS.md`에 Exp-N 항목 추가
    - 형식: 가설 → 변경 내용(파일:라인) → 측정 결과(3회 수치 + 중앙값) → 결론
 2. 채택 실험은 커밋 후 다음 실험의 베이스라인으로 사용
 3. 기각 실험도 기록 (같은 실수 반복 방지)
@@ -161,7 +167,7 @@ uv run python scripts/eval.py \
 | 타이밍 객체 (ASRToken, Silence) | `whisperlivekit/timed_objects.py` |
 | 평가 스크립트 | `scripts/eval.py` |
 | VBCable 브라우저 자동화 | `scripts/vbcable_test.py` |
-| 실험 로그 | `PHASE2_EXPERIMENTS.md` |
+| 실험 로그 | `EXPERIMENTS.md` (활성; Exp-001~130 `PHASE2_EXPERIMENTS.md` 아카이브) |
 | 설계 제약 | `CLAUDE.md` |
 
 ---
@@ -170,13 +176,13 @@ uv run python scripts/eval.py \
 
 ```
 while avg_WER > 30% or avg_F1 < 60%:
-    1. PHASE2_EXPERIMENTS.md 직전 실험 결과 확인
+    1. EXPERIMENTS.md 직전 실험 결과 확인
     2. 가설 수립 (위 접근 방향 중 우선순위 순)
     3. 외과적 코드 변경 (최소 범위)
     4. pytest 통과 확인
     5. 경로 C eval.py 3회 실행 → 중앙값 계산
     6. 채택/기각 판단
-    7. PHASE2_EXPERIMENTS.md 기록 + 채택이면 git commit
+    7. EXPERIMENTS.md 기록 + 채택이면 git commit
     8. 다음 루프
 ```
 

@@ -17,27 +17,15 @@
 ```powershell
 # 테스트(채택/기각) — bong1 + ytn2 + sbs1, 화자분할 ON, 빠른 현황 확인
 $env:PYTHONIOENCODING = "utf-8"
+$ts = Get-Date -Format "yyyyMMdd_HHmm"
 .venv\Scripts\python.exe scripts/eval.py `
   --model-dir whisperlivekit/model/whisper-large-v3-turbo `
   --files test_data/bong1.wav test_data/ytn2.mp3 test_data/sbs1.mp3 `
   --diarization --sortformer-model whisperlivekit/model/sortformer-4spk-v2.nemo `
-  --compression-ratio-threshold 3.0
+  --compression-ratio-threshold 3.0 `
+  --output ".omc/benchmarks/eval_$ts.json"
 
 # 채택/기각 결정용 (N≥3회 반복 — Claude가 실험 비교 시 사용)
-.venv\Scripts\python.exe scripts/eval.py `
-  --model-dir whisperlivekit/model/whisper-large-v3-turbo `
-  --files test_data/bong1.wav test_data/ytn2.mp3 test_data/sbs1.mp3 `
-  --diarization --sortformer-model whisperlivekit/model/sortformer-4spk-v2.nemo `
-  --compression-ratio-threshold 3.0 --repeat 3
-
-# held-out 일반화 검증 — 채택 후보에 한해 ytn1 + eng1 (동일 diar-ON 설정)
-.venv\Scripts\python.exe scripts/eval.py `
-  --model-dir whisperlivekit/model/whisper-large-v3-turbo `
-  --files test_data/ytn1.mp3 test_data/eng1.mp3 `
-  --diarization --sortformer-model whisperlivekit/model/sortformer-4spk-v2.nemo `
-  --compression-ratio-threshold 3.0 --repeat 3
-
-# 결과를 파일로 저장 (베이스라인 또는 비교용)
 $ts = Get-Date -Format "yyyyMMdd_HHmm"
 .venv\Scripts\python.exe scripts/eval.py `
   --model-dir whisperlivekit/model/whisper-large-v3-turbo `
@@ -45,14 +33,24 @@ $ts = Get-Date -Format "yyyyMMdd_HHmm"
   --diarization --sortformer-model whisperlivekit/model/sortformer-4spk-v2.nemo `
   --compression-ratio-threshold 3.0 --repeat 3 `
   --output ".omc/benchmarks/eval_$ts.json"
+
+# held-out 일반화 검증 — 채택 후보에 한해 ytn1 + eng1 (동일 diar-ON 설정)
+$ts = Get-Date -Format "yyyyMMdd_HHmm"
+.venv\Scripts\python.exe scripts/eval.py `
+  --model-dir whisperlivekit/model/whisper-large-v3-turbo `
+  --files test_data/ytn1.mp3 test_data/eng1.mp3 `
+  --diarization --sortformer-model whisperlivekit/model/sortformer-4spk-v2.nemo `
+  --compression-ratio-threshold 3.0 --repeat 3 `
+  --output ".omc/benchmarks/eval_$ts.json"
 ```
 
 ## 실행 절차 (Claude가 따를 순서)
 
-1. `$env:PYTHONIOENCODING = "utf-8"` 설정 후 eval.py 실행
+1. `$env:PYTHONIOENCODING = "utf-8"` 설정 후 eval.py 실행 (`--output`으로 JSON 자동 저장됨)
 2. VBCable 자동 설정 여부 로그 확인 (성공/실패/건너뜀)
-3. 결과 JSON에서 파일별 `summary`(wer_median/min/max/stdev, f1_*)와 `avg_wer_c_median`/`avg_seg_f1_c_median` 추출.
-   **median + 최악 케이스(max)를 함께** 본다 (경로 C = 성능 기준 지표)
+3. 저장된 JSON에서 파일별 `wer_median/min/max/stdev`, `seg_f1_median`, `avg_wer_c_median`/`avg_seg_f1_c_median` 추출.
+   **median + 최악 케이스(max)를 함께** 본다 (경로 C = 성능 기준 지표).
+   JSON의 `files[].transcription` / `files[].reference` 필드에 회차별 전사 전문이 저장됨 — `/log-experiment`에서 정성 분석에 사용.
 4. `.omc/benchmarks/`의 가장 최근 JSON과 비교:
    ```powershell
    Get-ChildItem .omc/benchmarks/eval_*.json | Sort-Object Name | Select-Object -Last 1

@@ -1,0 +1,1714 @@
+Findings of the WMT25 Terminology Translation Task:
+    Terminology is Useful Especially for Good MTs
+
+Kirill Semenov  Xu Huang                                    Vilém Zouhar  Nathaniel Berger
+                                                                            Amazon AGI
+University of Zurich Nanjing University ETH Zurich
+
+ Dawei Zhu      Arturo Oncevay                                        Pinzhen Chen
+Amazon AGI         Independent                              University of Edinburgh & Aveni
+
+Abstract                                                    Nonetheless, it remains an open question whether
+
+The WMT25 Terminology Translation Task re-                  these powerful models or techniques can success-
+leases new resources in high-stakes domains                 fully address terminology translation, where the
+and investigates the capabilities of translation            need for accurate and consistent conversion of ter-
+systems to accurately and consistently trans-               minologies poses extra difficulty in addition to gen-
+late specialized terms. This year, we feature               eral translation quality.
+
+new domain and language coverage over pre-                     In professional fields like finance, medicine, and
+vious editions, introducing two distinct tracks:            law, the correct use of specialized, agreed terms
+(1) sentence-level translation in the informa-              is critical for accuracy and clarity in communica-
+tion technology domain for EnglishGerman,                   tions, making terminology translation a research
+EnglishRussian, and EnglishSpanish, and                     problem of high commercial value (Oncevay et al.,
+(2) document-level translation in the finance               2025b). The field has seen various efforts in mod-
+domain for EnglishTraditional Chinese with
+
+a document-level one-to-many dictionary. Par-               eling (Hasler et al., 2018; Dinu et al., 2019), eval-
+ticipants are challenged to translate texts under           uation (Zouhar et al., 2020; Semenov and Bojar,
+three modes: no terminology, proper terminol-               2022), and translator tool development (Vargas-
+ogy, and random terminology, allowing for a                 Sierra, 2011; Arcan et al., 2017; Lagzdin, s et al.,
+causal analysis of terminology utility. Eval-               2022), but recent progress seems to slow down
+uation combines overall quality, terminology                even for high-resourced languages. For example, at
+accuracy, and terminology consistency. This                 the 2024 Conference on Machine Translation, only
+shared task attracted broad participation, with
+
+13 teams submitting 20 systems in Track 1 and               two papers were dedicated to terminology transla-
+4 teams participating in Track 2. The results               tion (Kim et al., 2024; Myung et al., 2024).
+show that providing proper terminology con-
+sistently boosts both overall translation quality              It is in this context of exciting general domain
+and term accuracy, whereas reliance on random               progress versus modest attention to terminology
+terminology yields smaller gains. Despite the               translation that we organize the WMT25 Terminol-
+near-saturation of sentence-level benchmarks,               ogy Translation Task. The task comes with two pri-
+
+document-level finance translation still falls              mary objectives: (1) to provide an understanding of
+short, indicating an urgent need for long-form              the current landscape of terminology-aware transla-
+evaluation and more robust metrics tailored to              tion, and (2) to announce and release new, human-
+professional domains.                                       annotated datasets to facilitate future research. We
+
+1 Introduction                                              organize two tracks covering five translation direc-
+                                                            tions and both sentence- and document-level trans-
+Time flies. Since the 2023 edition of the WMT               lation. Particularly, the document track features
+Terminology Translation Task (Semenov et al.,               large document-level one-to-many dictionaries that
+2023), rapid advances in machine translation (MT)           are more realistic in production. In terms of evalu-
+and large language models (LLMs) have achieved              ation, we run multiple metrics that target different
+near-human quality for general-domain translation           facets of terminology conversion, all while taking
+in several languages (Kocmi et al., 2024, 2025b).           into account the general quality. Moreover, to esti-
+
+  All authors contributed considerably to the design, exe-  mate the added value (causal effect) of a provided
+cution, and presentation of this work. Dawei Zhu's and      terminology dictionary, systems are evaluated in
+Nathaniel Berger's work was done outside Amazon. Cor-       three translation conditions: without a dictionary,
+respondence to kirill.semenov@uzh.ch. All resources are     with a proper terminology dictionary, and with a
+available at github.com/wmt-conference/wmt25-terminology.
+
+                                                   554
+
+Proceedings of the Tenth Conference on Machine Translation (WMT), Volume 2: Shared Task Papers, pages 554­576
+                           November 8­9, 2025. ©2025 Association for Computational Linguistics
+dictionary of random words.                               to correspond to the English output of up to 2K
+   The main findings from the WMT 2025 Termi-             words.
+
+nology Translation Task across submissions are:              Terminology constraints differ by direction:
+                                                          for EnglishChinese, terms are one-to-one
+ Most systems involve an LLM in some way.                 mapped, same as in Track 1; for Chinese En-
+    Top systems achieve close to perfect terminol-        glish, terms may be one-to-many mapped, for in-
+    ogy accuracy in the sentence-level track, indi-       stance, the target can have both full entity names
+    cating LLM's suitability for the task, and a sat-     and acronyms. This track tests terminology ac-
+    uration in the sentence benchmark. We need to         curacy and consistency in long-form translation,
+    move to document-level benchmarking, which            reflecting real-world professional needs.
+    is also more aligned with the practical use.
+                                                        2.2 Terminology Modes
+ Contrary to the expectations based on previ-
+    ous research, there is little trade-off between     To enable a causal analysis of terminology utility
+    general translation ability and terminology ac-     and translation quality, each system is requested to
+    curacy for most participating systems.              translate our tests under three modes separately:
+
+ Incorporating some terminologies always ben-           · No Terminology (No Term): The system trans-
+    efits overall translation quality; using proper       lates the input text without a terminology dictio-
+    terms is more useful than random terms for top-       nary.
+    performing systems.
+                                                        · Proper Terminology (Proper Term): The sys-
+2 Task Description                                        tem is provided with a dictionary of domain-
+                                                          specific terms; relevant to the input.
+Our task is organized into two tracks, each focused
+on different domains and input sizes (of both texts     · Random Terminology (Random Term): The
+and dictionaries), with a unified evaluation protocol.    system receives a dictionary of randomly selected
+This allows this edition of the terminology shared        source words and their aligned translations from
+task to cover wider scope of fields and input types       the references (the random pool excludes the
+(contrary to (Alam et al., 2021), where only medi-        proper terms).
+cal domain and sentence-level data were provided),
+as well as tackling the domains in a more controlled    The use of Random Term mode allows for mea-
+manner (contrary to (Semenov et al., 2023), where       suring if improvements in translation quality stem
+every translation direction had its own domain of       from incorporating terminologies or from simply
+texts, from NLP abstracts to web novels).               seeing part of the correct translation (Zouhar, 2023;
+                                                        Semenov et al., 2023).
+
+2.1 Tracks and Domains                                  3 Data
+
+Track 1: Sentence-level translation                     The data for both tracks2 is provided in the jsonl
+· Domain: Information Technology (IT), SAP              format, where each instance has the following en-
+· Translation direction: EnglishGerman, En-             tries. See Table 1 for an example.
+                                                        · Text in language 1
+  glish Russian, and EnglishSpanish                     · Text in language 2
+· Setup: Participants are provided with sentence        · Real terminology mapping dictionary (Proper)
+                                                        · Random word mapping dictionary (Random)
+  segments, each with a small terminology dictio-       · Dummy empty dictionary (NoTerm)
+  nary containing only the terms present in the
+  segment, usually 1-2 entries.
+
+Track 2: Document-Level Translation                     3.1 Track 1: Sentence-level IT Documentation
+· Domain: Hong Kong finance
+· Translation direction: EnglishChinese1                Data source. Our sentence-level data was pro-
+· Setup: Participants are given documents, each         duced by SAP to investigate ambiguous termi-
+                                                        nology in the IT business domain (Berger et al.,
+  accompanied by a large (up to 1K entries)             2025).3 The data originates from their online help
+  document-level terminology dictionary. English
+
+input documents are capped at 2K words; for                 2github.com/wmt-conference/wmt25-
+ChineseEnglish, the Chinese input is truncated          terminology/tree/main/ranking/references
+
+ 1Traditional; henceforth only "Chinese" for brevity.       3github.com/SAP/software-documentation-data-set-for-
+                                                        machine-translation
+
+                                                       555
+{                                                     each. Each instance is accompanied by a terminol-
+     "en": "Open the consumption model containing     ogy dictionary containing entries for that instance
+            the measures and attributes you want to   only. All test references are only made publicly
+            include in your perspective, and click    available after the shared task submission deadline.
+            the Perspectives tab.",
+     "de": "Offnen Sie das Verbrauchsmodell mit       3.2 Track 2: Document-Level Finance
+            den Kennzahlen und Attribute, die Sie in
+             Ihre Perspektive aufnehmen möchten, un   Data source. Our document track test data are
+            wechseln Sie zur Registerkarte            sourced from the public annual reports on the offi-
+            Perspektiven.",                           cial website of the Hong Kong Monetary Authority
+     "proper": {                                      (HKMA), available in English and Traditional Chi-
+          "consumption model": "Verbrauchsmodell"     nese.5 Each annual report contains multiple chap-
+     },                                               ters, and each chapter is available to download as a
+     "random": {                                      standalone PDF file. In this task, we define such a
+          "include": "aufnehmen",                     chapter as a document. We collect all English and
+          "want": "möchten"
+     },
+     "noterm": {}
+
+}
+
+                                                                Traditional Chinese annual reports from 2015 to
+Table 1: An EnglishGerman example from Track 1. 2024. An annual report yields the same number of
+
+                                                      chapters (documents) in English and Chinese, and
+
+portal. Pages on the help portal are written in En- corresponding chapters are parallel to each other.
+
+glish, and translations are produced by post-editing  Document processing. We convert the chapter
+machine translations to ensure proper terminology     PDFs into markdown using MinerU (Wang et al.,
+usage and adherence to corporate style guides.        2024), with table recognition, formula recognition,
+
+Terminologies. SAP additionally maintains a and optical character recognition disabled. We drop
+
+one-to-many terminology dictionary across all of tables and formulae because they consist mostly
+its production languages called SAPTerm.4 Source of numbers without text, and are difficult to trans-
+
+and target terms were fuzzy-matched in the source late or evaluate. We then truncate each chapter to
+
+and post-edited segments, with additional filtering 2000 whitespace-delimited English words to keep
+
+performed to ensure post-edits made corrections the documents at a reasonable length for partici-
+
+of terminology usage. We make available a termi- pants. Then, three authors, who are native Chinese
+
+nology dictionary for each segment pair, usually speakers fluent in English, manually inspected and
+
+containing one or two entries.                        processed the markdown files. This includes trun-
+
+The random terms were retrieved automatically cating the Chinese side and re-aligning Chinese
+
+by the following procedure: For every sentence pair and English at the paragraph level in order to fix
+
+(given input and reference translation), the pool errors as a result of the automatic processing of the
+
+of possible random terms is formed by all source chapter PDFs, which are in a two-column format.
+
+sentence words except the terms and the stopwords As a result, each chapter (document) pair has the
+
+(based on NLTK2024 stopword lists). Out of this same number of lines in both languages.
+
+pool, we sample as many words as there are in         Terminology extraction and mapping. We ex-
+the corresponding proper dictionary. Then, we         tract terms specific to Hong Kong finance from
+prompt ChatGPT to retrieve its translations from      the source and target documents and establish a
+the reference sentence. We run an exact match         mapping via two stages. First, we prompt GPT-4.1
+search to ensure that the translation of the word is  with a pair of source and target documents to au-
+in the reference. The instruction for ChatGPT is      tomatically identify and align terminologies in the
+provided in Appendix B.                               two languages, producing a preliminary mapping.
+
+Test set release. We select the English {Ger- Second, two authors independently review the gen-
+
+man, Russian, Spanish} translation directions for erated mapping and correct it as necessary. Most
+
+the sentence track in our shared task. Per language revisions are removals of relatively generic named
+
+pair, 1000 instances that contain terminology were entities (e.g., Hong Kong and US dollar) that al-
+
+sampled, and we split the 1000 segments into de- ready have standard translations. The prompt used
+
+velopment and test sets consisting of 500 instances       5www.hkma.gov.hk/gb_chi/data-publications-and-
+                                                      research/publications/annual-report/
+    4sapterm.com
+
+                                                      556
+in this first stage is provided in Appendix A for ref-   were not part of the metrics' training data (Lavie
+erence. To extract a word mapping for the Random         et al., 2025; Zouhar et al., 2024a,b).
+Term mode, we reuse the same technique from the
+sentence-level Track 1. To better approximate a             New this year, we rank submissions based on
+real-world scenario, we merge the extracted map-         the Pareto efficiency measured by the quality met-
+pings from the chapters (documents) within the           ric and the terminology. We provide terminol-
+same report and generate report-level mappings for       ogy consistency scores as an analysis, and use the
+both Proper and Random Term modes.                       document-level AutoMQM scores for a separate
+                                                         ranking in Track 2, as this is not fully empirically
+   It is worth noting that the HKMA website pro-         validated.
+vides a glossary for Chinese and English sepa-
+rately.6 However, we did not use it because the          4.1 Overall Translation Quality
+Chinese and English lists are independently or-
+dered, are not index-aligned, and contain different      BLEU and chrF2++. As an indication of overall
+numbers of entries. Consequently, it is difficult to     quality, we run two reference-based metrics, BLEU
+construct positional correspondence between en-          (Papineni et al., 2002) and chrF2++ (Popovic´,
+tries in the two languages. This can be explored by      2017), as implemented in sacrebleu (Post, 2018)
+future work.                                             with default settings.7,8 In the main paper we report
+                                                         chrF2++ which is tokenization-insensitive, allow-
+Test set release. We release all document-level          ing for consistent evaluation of German, Russian,
+data we have prepared as the test set for this year's    Spanish, English, and Traditional Chinese outputs.
+shared task. To avoid temporal bias and to ensure        Specifically to run the metrics in the document
+balanced representation of the translation direc-        translation track, we treat each entire translation
+tions, we partitioned the data so that translation       and reference document as a single string (O'Brien
+direction alternates by year. Reports from odd-          et al., 2025).
+numbered years (2015, 2017, 2019, 2021, 2023)
+are used for EnglishChinese tests, whereas those         Doc-level AutoMQM. For document-level trans-
+from even-numbered years (2016, 2018, 2020,              lation quality assessment, we use an LLM-as-a-
+2022, 2024) are used for ChineseEnglish tests.           judge: LLMs are prompted to identify translation
+We release each document as a single string, but         error spans and assign severity levels, from which
+paragraphs are delimited by \n\n, allowing partic-       the final score is computed. This evaluation method
+ipants to make their own chunking choices. With          is well interpretable and has been shown to corre-
+each test document, a large terminology dictio-          late well with human judgment (Kocmi and Fe-
+nary is provided, containing mappings for all ter-       dermann, 2023; Freitag et al., 2023, 2024). An
+minologies in the whole report (i.e., the dictionary     extension to the document level is focus-sentence
+is shared between all documents within the report).      prompting (FSP), which evaluates documents sen-
+                                                         tence by sentence (Domhan and Zhu, 2025). In FSP,
+4 Metrics and Evaluation                                 the judge model is provided with the full source and
+                                                         translation as context, along with the specific target
+For both tracks, we run reference-based evaluation       sentence to be evaluated. To evaluate document-
+using gold translations and corresponding terminol-      level translation in Track 2, we use GPT-4o and
+ogy dictionaries. We use three types of metrics in       GPT-5 as judge models, applying the FSP prompt
+our shared task evaluation: overall quality (string      with two modifications: (1) we evaluate three con-
+match using BLEU and chrF2++; document-level             secutive sentences at a time to improve efficiency;
+MQM with LLM-as-a-judge), terminology accu-              and (2) we provide the judge model with a termi-
+racy, and terminology consistency.                       nology mapping to better assess translation quality.
+                                                         Details of the judge prompt are provided in Ap-
+   This choice of metrics is motivated by two fac-       pendix C. Once the model outputs the errors and
+tors: (1) we wish to measure different aspects in        their severities, we compute the final MQM score
+translating terminologies, and (2) modern auto-          for each annual report as a weighted average over
+mated metrics can be less robust than a simple           the severity levels. We define three categories of
+string-matching chrF, especially in domains that         severity: minor, major, and critical, with weights
+
+    6E.g. www.hkma.gov.hk/eng/data-publications-and-              7BLEU|#:1|c:mixed|e:no|tok:{13a,zh}|s:exp|v:2.4.1
+research/guide-to-monetary-banking-and-financial-terms/           8chrF2++|#:1|c:mixed|e:yes|nc:6|nw:2|s:no|v:2.4.1
+
+                                                         557
+1: countsrc  0, counttgt  0                                       mappings in a dictionary. The metric moves from
+                                                                  a binary check to a percentage score. For each
+2: for srci, tgti, di  X do                                       source term present in the source document, we
+     for termjsrc,   termjtgt  di                                 calculate a ratio determined by the total number
+3:      if termjsrc   srci then      do                           of appearances of all its possible target terms in
+4:                                                                the translation, divided by the total number of ap-
+                                                                  pearances of the source term itself. This ratio for
+5:        countsrc  countsrc + 1                                  each term is capped at 1 to avoid false positives,
+          if termjtgt  tgti then                                  and the final document-level terminology accuracy
+6:                                                                is the average of all individual ratios across all
+                                                                  source terms across all documents. The algorithm
+7:           counttgt  counttgt + 1                               is shown in Algorithm 2.
+
+8: if countsrc > 0 then                                              The main difficulty of checking terminology ac-
+9: return counttgt/countsrc                                       curacy lies in the terminology dictionary usually
+                                                                  containing source and target entries in their stem
+10: else                                                          form, but for many languages, we need to capture
+                                                                  the inflected forms of the entries too. Hence, when
+11: return 0                                                      we need to check whether a word is in a segment or
+                                                                  count the number of appearances of the word, we
+Algorithm 1: Terminology Accuracy (Track 1: sentence-             always employ a two-pronged matching strategy.
+level). Input X is a list of source, translation, terminol-       First, we run a direct surface-form match between
+ogy dictionary triplets (src1, tgt1, d1), . . ..                  the word and the segment. Second, to account for
+                                                                  morphological variations, we check the lowercased
+1: A                             # accuracy for individual terms  lemmatized word against the lowercased lemma-
+                                                                  tized segment.9 The final result is the higher value
+2: for srci, tgti, di  X do                                       resulting from the two matching strategies--this
+     for termjsrc,   Termstjgt                                    applies to both binary outcomes or counts.
+3:      if termjsrc   srci then      di  do
+4:
+
+5:        countsrc  srci.COUNT(termsjrc)
+
+6:        counttgt  0
+          for termtjg,kt  Termstjgt do
+7:
+
+8:           counttgtcounttgt+tgti.COUNT(termjtg,kt)
+
+9:        A.A  P  P  E  ND(M  I  N(  counttgt  ,  1.0))
+                                     countsrc
+
+10: if |A| = 0 then
+
+11:  return     A
+             |A|
+
+12: else
+
+13: return 0
+
+Algorithm 2: Terminology Accuracy (Track 2:
+document-level). Input X is a list of source, translation,
+terminology dictionary triplets (src1, tgt1, d1), . . ..
+
+of 1, 5, and 10, respectively. For example, an MT                 4.3 Terminology Consistency
+system receives an MQM score of 25 if it produces
+three major errors and one critical error.                        We use the framework for the term consistency
+                                                                  metric suggested by Semenov and Bojar (2022).
+                                                                  The framework allows for automated (and more
+
+4.2 Terminology Accuracy                                          interpretable than LLM-as-a-judge) evaluation on
+                                                                  how consistent the models are when choosing the
+We also evaluate how accurately translation sys-                  translation of specialized terms. The modular struc-
+tems can convert terms based on a given dictionary.               ture of the framework allows for different levels of
+We reckon that a source term usually occurs only                  strictness in evaluation, so for the current shared
+once in a sentence input, but is more likely to ap-               task, we focused on two versions of the metric
+pear multiple times in a document. Thus, we use                   based on term frequency and the dictionary. As
+different implementations for the two tracks as de-               illustrated in Algorithm 3, the evaluation consists
+tailed below.                                                     of the following steps:
+
+   In the sentence track, for each source term ap-                · Preprocessing: This step requires sentence-level
+pearing in the input text, we check if its correspond-              or paragraph-level alignments. Track 1 data al-
+ing target term appears in the translation, yielding a              ready meets this; for Track 2, since the input
+binary score. The accuracy is then computed as the                  texts have clear separation between paragraphs
+sum of successful conversions divided by the total                  (double newline characters), we split the system
+number of source words across all input instances.                  outputs into segments accordingly.10
+The algorithm is illustrated in Algorithm 1.
+
+   At the document level, the accuracy measure is                     9github.com/stanfordnlp/stanza for lemmatization.
+modified to account for: (1) a source word can                       10For most systems, this simple preprocessing allowed for
+appear multiple times and thus a target word is ex-               consistent alignment. The only exception was that for STITCH
+pected as many times; (2) potential one-to-many                   outputs, we additionally applied LaBSE embeddings (Feng
+                                                                  et al., 2022) to align the split segments.
+
+                                                                  558
+· Source term selection: At this step, we retrieved      1: for srci, tgti  X do # Source term selection & align.
+  the subsets of terms present in a given segment.
+  For Track 1, terminology dictionaries already          2: for termj  SRCTERMSELECT(srci) do
+  meet the requirement. For Track 2, we filter the
+  document-level dictionary to construct a segment-      3:   candj  ALIGNER(srci, tgti, termj )
+  level dictionary for each segment using a sub-
+  string match for Chinese and an exact match over       4:   CandDicttermj ,candj CandDicttermj ,candj + 1
+  lemmatized text for other languages.
+                                                         5:   AlgDicti,termj  candj
+· Term translation alignment: We then locate the
+  exact part of the output that is a translation of the  6: PseudRefDict  {}  # Pseudo-reference choice
+  source term. The most effective way appeared to
+  be few-shot prompting ChatGPT with additional          7: for termk  CandDict do
+  post-processing, with details in Appendix E. We        8: PseudRefDicttermk ASSIGNPSEUDOREF(termk)
+  refer to the aligned term translations as "candi-
+  dates".                                                9: for srci, tgti, AlgDicti  X do                 # Scoring
+
+· Pseudo-reference choice: To estimate the con-          10:  forhtiteir,mj j 1A[tlegrDmijct=i dPoseudRefDicttermj ]
+  sistency of a system, we need to define "pseudo-       11:
+  references": translations against which we com-
+  pare candidates. For the main analysis, we             12: return                                  hitk  # Macro-average
+  choose a frequency criterion: For each source                      kPseudRefDict |hitk|
+  term type, we order the candidate types by their
+  frequency, and define the most frequent one as a       Algorithm 3: Terminology Consistency (Track 1: sen-
+  pseudo-reference. Notably, this choice is insensi-     tence level) with pseudo-reference initialization of the
+  tive to the term accuracy: the pseudo-reference        most frequent terms. Input X is a list of source-
+  may not be the best translation, but it should         translation pairs (src1, tgt1), . . ..
+  be used stably over the whole text. In an ad-
+  ditional experiment in Appendix F, we also try         · models used:
+  another pseudo-reference option based on the              NMT NMT model (encoder-decoder)
+  Proper Term dictionary.                                   LLM LLM (decoder-only model)
+                                                                    multiple models (agents, preprocess-
+· Evaluation: For each term occurrence in each             ing+postprocessing, etc.)
+  text segment, we check whether the observed
+  translation candidate differs from the pseudo-         · training data:
+  reference. The final score is formalized as a             DatAug data augmentation
+  multi-class accuracy: for each source term type           DatCur data curation (filtering big corpora, en-
+  (class), we count the percentage of the candidates       riching training data with annotation, etc.)
+  matching the pseudo-reference in the submitted
+  texts and run macro-averaging over the class per-      · model update techniques:
+  centages. As a result, we get a score within a            *FT fine-tuning, continuous pre-training, su-
+  range of 0 to 1, which shows the percentage of           pervised fine-tuning, etc.
+  occurrences of the term translation that are con-         *PO various types of preference optimization:
+  sistent with the chosen pseudo-reference.                GRPO, PPO, DPO, etc.
+
+                                                         · inference-time strategies:
+                                                                   code-switched prompts
+
+                                                            ICL in-context learning, few-shot prompts, etc.
+                                                                   multi-metric decoding (using both general
+
+                                                           quality and term accuracy for sequence choice)
+                                                                   term injection (for NMT models)
+
+                                                         o3-term-guide LLM The participant put termi-
+                                                         nology constraints in the form of explanatory state-
+                                                         ments and presumably prompted o3 from OpenAI.
+
+                                                         DuTerm NMT LLM                                    DatAug *FT
+
+                                                         This is a two-stage algorithm for terminology trans-
+
+5 Participants and System Descriptions                   lation (Jaswal, 2025). It uses a terminology-aware
+                                                         NMT model fine-tuned from NLLB 3.3B (Costa-
+
+This year, apart from our baseline, we see 20 sys- Jussà et al., 2022), and prompts GPT-4o for post-
+
+tems in Track 1 and 4 systems in Track 2. Their editing. To construct the NMT training data, they
+
+descriptions are provided below. For an easier nav- first extract bilingual terminology dictionaries from
+
+igation over the variety of approaches, we label WMT25 dev sets, which are then supplemented
+
+them with the main features and components of with terminologies generated by the LLM. Then
+
+particular submissions, namely:                          they use an LLM to synthesize parallel sentences
+
+                                        559
+containing one or more terminologies. Specifi- IRB-MT (MeGuMa) LLM                The
+
+cally, the terms in both source and target sentences submitted system, named MeGuMa, uses LLM
+
+are bounded with special tags for identification. agents with terminology-aware translation prompts,
+
+After filtering the training data for quality with in combination with two MT metrics for per-
+
+COMET-QE and other rules, the NMT undergoes translation-unit solution selection: MetricX
+
+terminology-aware fine-tuning. Given the source, (Juraska et al., 2023) and a custom approximation
+
+the NMT's translation and term pairs, they prompt of terminology accuracy which uses an explicit
+
+GPT-4o to refine the translation for better fluency alignment system by Steingrimsson et al. (2023) be-
+
+while keeping the constraints.                        yond surface mapping of lemmatized terms. Trans-
+
+Erlendur LLM  ICL Ingólfsdóttir et al.                lation is done in two phases: translation and revi-
+                                                      sion. Models used for translation are taken from
+(2025) presented an LLM-based translation system      three families: Gemma 3 (27B and 12B) by Team
+                                                      et al. (2025), Qwen3 (14B-thinking, 8B-thinking,
+using a pipeline approach that combines prompt-       14B, 8B) by Yang et al. (2025), and EuroLLM (9B)
+                                                      by (Martins et al., 2025). In the second phase, three
+ing with modular preprocessing and postprocess-       models are used to revise all translations: Gemma
+                                                      3 27B with thinking, Gemma 3 12B with thinking,
+ing components. In a preparatory stage, the LLM       and Qwen 3 14B with thinking. While Qwen 3
+                                                      supports thinking natively but not Gemma 3, all of
+analyzes the source text to extract key terms and     the revision models were prompt-induced to first
+                                                      think and then produce the final solution. The fi-
+idioms, which are then matched with entries from      nal translation is selected from all of the generated
+                                                      solutions, both initial and revised. The selection
+bilingual dictionaries; user-provided glossaries can  criterion is an arithmetic mean of the arithmetic, ge-
+                                                      ometric, and harmonic means of MetricX (Juraska
+also be incorporated to enforce consistent terminol-  et al., 2024) and terminology accuracy.
+
+ogy. After translation, additional post-processing
+
+steps may be applied. For example, a custom
+
+seq2seq grammatical error correction model is used
+
+to improve Icelandic translations. The system par-
+
+ticipated in both terminology tracks: for Track 1,
+
+it employed its standard pipeline with terminology
+
+mapping, while for Track 2, the backbone model
+
+was switched from Claude 3.5 to GPT-4.1, as the
+
+former refused to translate some test examples.       CommandA-WMT                LLM DatCur *PO
+
+ISMT-TiU (TiUTerm-V0, TiUTerm-V1) LLM                 Kocmi et al. (2025a) submitted a post-trained
+ ICL The team submitted two systems, both re-
+lying on in-context learning of LLMs, with few-       version of Command A from Cohere. The
+shot examples retrieved with BM25 from the dev
+set. TiUTerm-V0 is Llama-3-8B (Grattafiori et al.,    data contains a mix of the languages the model
+2024) with 10 in-context examples; TiUTerm-V1 is
+XGLM-7.5B (Lin et al., 2022) with 12 in-context       was originally trained on, as well as machine
+examples.
+                                                      translation data in new languages. The data was
+Barcelona Supercomputing Center (tower,
+salamandrata) LLM DatCur *PO Garcia Gi-               heavily filtered for quality. This was followed
+labert et al. (2025) submitted two models: Tower
+based on Llama2-7B (Touvron et al., 2023) and         by preference tuning with a bespoke MTExpert
+salamandrata based on Salamandra-7B (Gonzalez-
+                                                      dataset for all languages.
+
+                                                      BIT LLM *PO Based on Qwen3-8B-Instruct,
+                                                      the participants used the PPO algorithm to perform
+                                                      reinforcement learning according to the terminol-
+                                                      ogy accuracy of the model's outputs without using
+                                                      any Dev Data.
+
+Agirre et al., 2025). They use a novel approach of Laniqo LLM DatCur *FT          ICL
+
+fine-tuning terminology translation using GRPO Guttmann et al. (2025) use the EuroLLM-9B-
+
+(Shao et al., 2024). Specifically, they introduce Instruct model (Martins et al., 2025) as a founda-
+
+a terminology adherence reward, which penalizes tion. Given an explicit dictionary, the terms in the
+
+outputs that do not contain the correct terminology. source sentence in a prompt are substituted with the
+
+The training data are based on pseudo-terminology target language translations of it, creating a code-
+
+mined heuristically using named entities, noun switched sentence. Additional prompt engineering
+
+phrases, and adverbial constructions. The reward analysis showed that two-shot prompts were the
+
+during training is joined with a general MT quality most efficient. The second modification was fine-
+
+reward using a quality estimation model.              tuning on augmented data from OPUS (Tiedemann
+
+                                                      560
+and Nygaard, 2004), where the randomly selected Pong (2025) submitted a system named Context-
+
+source text nouns and verbs were aligned with their Term, a Transformer-based NMT model (roughly
+
+translations, and were replaced with them in the Transformer-base size) with terminology-aware
+
+same way as the prompts for the LLM. Fine-tuning data augmentation. The system identifies termi-
+
+was conducted with LoRA (Hu et al., 2022). The nology constraints by selecting source­target align-
+
+decoding is done with constraints: inspired by our ments whose source words are judged most "im-
+
+announced metrics, the Pareto frontier between portant" by the encoder (measured via the norm
+
+overall quality and term accuracy, they used ep- of their hidden-state vectors) rather than merely
+
+silon sampling of 100 sentences, followed by multi- low-frequency ones. Training data combined the
+
+dimensional ranking by various QE metrics and IT-specific parallel corpora selected with Cross-
+
+term accuracy of a given segment. This approach Entropy Difference filtering and 30k synthetic En-
+
+was named Pareto-Optimal Decoding. The abla- glish sentences generated using Aya-Expanse-8b
+
+tion experiments showed that the best scores were (Dang et al., 2024), with inline soft constraints ap-
+
+achieved by combining a fine-tuned model together plied to 10% of the data.
+
+with a modified prompt and few-shot examples.          Multitan (Systran-ft, EuroLLM-ft, MarianMT-
+
+Lingua Custodia (LC-primary, LC-2, LC-3) ft) LLM NMT DatAug *FT The partic-
+
+ LLM DatCur *FT *PO Liu et al. (2025)                  ipants submitted three systems. The general
+submitted three systems in total: LC-primary, LC-      approach was fine-tuning on in-domain data.
+2, and LC-3. They first filtered bilingual data from   Specifically, for Systran-ft, the authors used
+Common Crawl and WMT25 using LaBSE and                 Systran Model Studio Lite to fine-tune Systran's
+applied an unsupervised terminology extraction         baseline model with augmented in-domain data.
+approach, developed in their 2023 terminology          For EuroLLM-ft, EuroLLM was updated with
+task submission (Liu et al., 2023), to create ter-     in-domain aligned segments and glossary by using
+minology mappings. They then fine-tuned open-          LoRA (Hu et al., 2022). For the third system,
+weight and efficient LLMs, Qwen3-4B (Yang et al.,      MarianMT-ft, the team used two fine-tuning
+2025) (with thinking mode disabled) and Gemma-         strategies: in No Term mode, using the dev set
+3-4b-it (Team et al., 2025). They conducted super-     and other in-domain aligned segments; in Proper
+vised fine-tuning in the first stage and then applied  Term mode, in addition to fine-tuning the model
+GRPO in the second stage, using a sentence-level       with in-domain segments, they used a glossary for
+BLEU reward for overall quality and a constraint-      hard-forced training.
+
+following reward for terminology adherence.            TranssionMT *FT       This participant used
+
+CurTermNLLB NMT DatCur *FT                             training constraints and post-processing constraints
+
+Gonzalez-Gomez (2025)'s system is based on to improve terminology translation accuracy.
+
+LoRA (Hu et al., 2022) fine-tuning of NLLB 200M        STITCH LLM ICL The participants aimed at
+(Costa-Jussà et al., 2022) on the consumer-grade       solving a recently highlighted problem of adding
+Apple M3 with an automated pipeline for creating       overly large context into prompts. The proposed
+terminology containing data similar to the Track 1     method is named STITCH, which stands for Struc-
+dataset. They select data from OPUS (Tiedemann         tured Terminology Integration for Translation with
+and Nygaard, 2004), specifically data from the         Context Handling. STITCH makes use of the ob-
+GNOME, KDE4, and WikiMatrix projects. Sentence         servation that long-form documents are coarsely
+pairs from this subset of data were embedded with      aligned on a paragraph-level and injects local ter-
+all-mpnet-base-v2 in Sentence-Transformers             minology context in-flight during generation, while
+(Reimers and Gurevych, 2019), and cosine               removing already integrated terminology informa-
+similarity to Track 1 dev set sentence pairs was       tion from the prompt. The approach leads to a
+computed for filtering together with filtering         task decomposition, allowing the model to perform
+based on part-of-speech. Source terminology            document-level translation while being guided by
+was then aligned to target sentences to create a       local terminology information.
+term dictionary; relevant dictionary entries were
+provided to the NLLB model as additional input.        Baseline (GPT-4.1-nano) LLM The organizers
+                                                       prepared a baseline approach by querying GPT-4.1-
+
+UW-BENMT (ContextTerm) NMT DatCur nano (2025-04-14) with a long prompt containing
+
+                                                    561
+        72                               o3-term-guide                   6.2 Translation Quality and Terminology
+                                                                               Accuracy
+ChrF++  70                                  TiUTermEVr1lendudruterm
+        68                               salamGaPnTd-r4a.t1a-nanMoeGuMa  In both tracks, the quality differences between
+                                                                         top systems are marginal, as indicated by chrF++
+        66     CommandAWMT               tower                           scores, which are usually within 1 chrF++ differ-
+                                                                         ence. Terminology handling exhibits sharper con-
+        64                 TiUTermV0     BIT                             trasts across the two tracks. In the sentence-level
+            CurTermNLLCL-BLpCri-m23 ary                                  Track 1, strong systems achieve very high terminol-
+        62                                      laniqo                   ogy accuracy of above 97%, implying that state-of-
+        60                                                               the-art translators can almost perfectly adhere to a
+            60% 70% 80% 90% 100%                                         few terminology constraints at the sentence level.
+                  Terminology Accuracy
+
+Figure 1: Tradeoff between quality (chrF++) and termi-                   This also implies that sentence-level terminology
+nology accuracy in the proper terminology mode, aver-                    translation, as a rather artificial task, lacks difficulty
+aged across three directions in Track 1. Top-performing                  for modern systems. By contrast, the document-
+systems are labelled as rank 1, rank 2, and rank 3                       level Track 2 exposes the harder challenge, as we
+according to Pareto optimality.                                          observe that accuracy scores drop to the 70­80%
+
+                                                                         range. When many terms need to be translated
+
+the input sentence or document and the entire ter-                       throughout longer contexts, systems frequently fall
+minology dictionary, when applicable.                                    short.
+
+                                                                            Terminology accuracy is not uniform across
+
+                                                                         translation directions. In Track 1, the best systems
+
+6 Shared Task Results                                                    have similar (and very high) terminology accuracy
+                                                                         for the three languages, but a few other systems
+
+Main results are presented in Table 2 for the                            show some divergence. Our GPT-4.1-nano baseline
+sentence-level IT documentation and Table 3 for                          attains good accuracy when translating into Span-
+financial documents. For all three dictionary modes                      ish, but not German or Russian. CommandAWMT
+(Proper Term, Random Term, and No Term), the                             and CurTermNLLB show markedly lower accuracy
+terminology accuracy is always measured with re-                         for Russian terminologies compared to Spanish and
+spect to the proper terminology dictionary. In ad-                       German. In Track 2, Erlendur delivers better qual-
+dition to chrF++ and terminology accuracy used                           ity and accuracy for EnglishChinese, whereas
+for system ranking, we also supply terminology                           CommandAWMT leads in ChineseEnglish.
+consistency, which measures the consistency of the
+translated terminologies.                                                   The four systems that entered both tracks (Er-
+                                                                         lendur, MeGuMa, CommandAWMT, and our base-
+                                                                         line GPT-4.1-nano) enable us to compare termi-
+
+                                                                         nology handling under different input lengths and
+
+6.1 Ranking                                                              terminology constraint loads. Given longer docu-
+
+We rank all systems in each track by a Pareto ef-                        ments and more terminologies, we expect termi-
+ficiency between translation quality (chrF++) and                        nology accuracy to be lower in Track 2. However,
+terminology accuracy in the Proper Term mode,                            CommandAWMT maintains accuracy comparable
+where the systems translate real terminologies. For                      to, if not better than, its Track 1 results. More-
+both Track 1 and Track 2, we average chrF++ and                          over, MeGuMa's accuracy is stable across the three
+term accuracy across all directions for comparison.                      languages in Track 1 but shows a dramatic gap
+                                                                         of over 30 points between EnglishChinese and
+
+   Figure 1 visualizes the two-dimensional results                       ChineseEnglish in Track 2. Nonetheless, we
+for Track 1 systems. In total, there are 5 top-                          note that the domain and translation direction also
+performing systems labelled by 's, namely, rank                          changed, which may cause the observed pattern.
+
+1 (o3-term-guide and laniqo), rank 2 (duterm), Finally, as shown in Figure 1 earlier, there is no
+
+and rank 3 (Erlendur and MeGuMa), according clear quality-accuracy tradeoff for many systems;
+
+to Pareto optimality. In Track 2, among the 4 par- chrF++ and terminology accuracy tend to rise (or
+
+ticipants, Erlendur and CommandAWMT are at drop) together. Outliers such as MeGuMa, tower,
+
+the frontier.                                                            BIT, and laniqo lean towards optimizing for termi-
+
+                                                                         562
+System             Proper, ChrF Proper, Acc. Proper, Cons. Random, ChrF Random, Acc. NoTerm, ChrF
+                   Avg Es De Ru Avg Es De Ru Avg Es De Ru Avg Es De Ru Avg Es De Ru Avg Es De Ru
+
+o3-term-guide      71.0 75.9 71.6 65.6            99.1 99.1 99.1 99.0            87.7 86.7 86.1 90.4            68.1 72.4 69.4 62.4  49.2 50.7 52.3 44.6  63.6 69.5 64.7 56.6
+duterm             70.1 76.1 70.7 63.6            98.2 98.7 98.2 97.6            87.3 86.0 86.3 89.5            66.4 72.1 67.2 59.8  46.6 48.8 48.4 42.4  61.6 67.0 62.6 55.3
+Erlendur           69.3 74.8 69.9 63.3            92.9 94.4 93.2 91.2            86.7 83.8 86.3 90.0            66.4 71.6 67.6 59.8  44.4 47.1 47.1 38.9  62.6 68.1 64.0 55.6
+TiUTermV1          68.9 77.1 65.7 63.8            87.6 89.4 87.3 86.1            86.7 85.7 85.9 88.5            66.8 74.2 64.4 61.8  54.6 59.2 56.7 47.9  64.4 72.4 61.9 58.9
+GPT-4.1-nano       67.4 72.4 67.4 62.3            90.7 95.2 89.0 88.0            87.5 86.3 86.3 90.0
+salamandrata       67.3 72.0 69.6 60.4            91.3 92.7 91.7 89.4            87.4 87.3 86.4 88.6            64.7 69.3 66.2 58.5  48.2 53.1 48.1 43.4  62.0 67.2 64.0 54.7
+MeGuMa             67.2 72.0 67.7 61.9            97.4 97.0 96.3 98.8            88.6 86.9 88.6 90.2            64.5 70.3 64.2 59.0  46.7 53.1 46.4 40.5  58.9 65.2 59.4 52.1
+tower              66.0 74.0 65.9 58.1            93.7 95.0 94.8 91.2            88.4 87.6 86.8 90.7            63.8 71.2 63.0 57.1  44.3 48.6 45.7 38.5  60.9 68.6 61.2 53.0
+CommandAWMT        65.9 70.7 67.6 59.3            79.9 81.9 86.9 70.7            86.6 84.5 87.5 87.8            63.7 68.4 65.0 57.6  45.8 49.3 48.1 40.1  60.7 65.5 62.2 54.4
+BIT                63.7 69.8 62.4 58.9            97.0 96.3 98.0 96.7            87.8 86.8 86.9 89.8            65.7 67.2 66.3 63.5  80.5 47.5 97.4 96.5  66.5 69.8 66.3 63.5
+TiUTermV0          62.7 69.0 61.0 58.3            74.4 75.2 71.1 76.8            86.4 85.0 85.6 88.6            61.0 68.1 59.1 55.8  49.6 54.2 49.9 44.8  60.2 68.0 57.9 54.6
+laniqo             61.7 68.5 59.8 56.9            99.3 98.7 99.4 99.6            87.6 85.6 89.3 87.9            60.2 66.3 59.5 54.8  42.7 46.9 43.5 37.7  55.0 60.3 55.5 49.4
+LC-primary         61.4 68.9 61.2 54.2            70.2 74.1 70.7 65.8            85.4 83.6 85.8 87.0            61.0 68.1 59.7 55.2  38.6 43.8 37.4 34.6  57.5 65.0 56.9 50.5
+LC-2               60.8 67.7 61.0 53.7            70.0 73.6 70.7 65.6            85.8 85.4 85.7 86.2            60.5 67.1 59.5 54.9  38.5 43.4 37.4 34.6  56.9 64.1 56.8 49.9
+LC-3               60.8 67.7 61.0 53.7            70.0 73.6 70.7 65.6            86.0 85.6 85.7 86.7            60.5 67.1 59.5 54.9  38.5 43.4 37.4 34.6  56.9 64.1 56.8 49.9
+CurTermNLLB        60.1 69.1 60.3 51.0            63.4 76.5 79.0 34.6            88.0 87.5 87.6 88.8            58.8 67.4 58.0 50.8  36.1 44.1 31.7 32.6  55.6 65.6 52.8 48.4
+ContexTerm         48.5 53.7 40.2 51.5            72.0 68.5 79.9 67.6            81.9 75.6 85.8 84.4            48.2 52.0 40.7 51.7  24.6 20.5 18.6 34.8  45.7 50.2 37.4 49.4
+Systran-ft
+MarianMT-ft                  71.1                           44.1                           88.1                 71.1                 44.1                           71.1
+EuroLLM-ft
+TranssionMT                  65.6                           17.5                           54.1                 68.9                 48.8                           68.9
+
+                             63.5                           38.9                           82.5                 63.5                 38.9                           63.5
+
+                                            47.8                           33.2                           90.1        47.8                 33.2                                    47.8
+
+Table 2: Main results for Track 1: sentence-level IT documentation terminology-informed translation.
+
+System             Proper, ChrF Proper, Acc. Proper, Cons.                                                      Random, ChrF Random, Acc.                 NoTerm, ChrF
+                   Avg EnZh ZhEn Avg EnZh ZhEn Avg EnZh ZhEn                                                    Avg EnZh ZhEn Avg EnZh ZhEn               Avg EnZh ZhEn
+
+Erlendur           60.2 46.1 74.2 78.7 85.4 71.9 92.0 91.6 92.3                                                 57.9 41.8 74.0 64.9 60.1 69.6             57.4 40.8 74.0
+                                                                                                                56.7 39.8 73.7 58.8 52.1 65.4             54.9 36.9 72.9
+CommandAWMT 59.6 43.6 75.5 83.6 78.9 88.3 91.5 90.1 93.0                                                        48.4 31.6 65.2 47.7 43.9 51.5             51.0 33.7 68.3
+                                                                                                                49.9 31.1 68.8 46.9 39.5 54.4             47.5 31.8 63.1
+MeGuMa             54.3 39.1 69.4 79.5 96.6 62.4 90.8 93.3 88.3                                                 46.5 29.1 63.9 43.8 37.6 50.0             46.1 28.6 63.7
+
+STITCH             53.4 37.5 69.3 72.8 70.9 74.8 87.4 87.2 87.6
+
+GPT-4.1-nano 47.9 31.6 64.1 54.7 51.6 57.9 81.9 80.3 83.5
+
+          Table 3: Main results for Track 2: document-level finance terminology-informed translation.
+
+nology accuracy, at variable costs in chrF++. A pos- another version of the consistency metric: with the
+
+sible explanation for that, at least for MeGuMa and "first-seen" pseudo-reference choice. The absolute
+
+laniqo, can be that the multi-metric optimization scores in both versions of the metrics, as well as
+
+used by the authors tends to favor the terminology- their rankings, behave in a surprisingly similar man-
+
+specific metrics.                                                                ner: the absolute scores of the "first-seen" pseudo-
+
+6.3 Terminology Consistency                                                      reference initialization are stably lower compared
+                                                                                 to the "most frequent" initialization by 0.02 on av-
+
+Tables 2 and 3 show that, contrary to the general                                erage. This suggests that the first translation of the
+MT quality and success rate scores, the spreads of                               term would tend to be the most frequent over the
+the consistency scores in the Proper Term mode are                               document.
+relatively small, ranging from 0.81 to 0.92. This
+shows that the models are quite stable in choosing                                  Another observation is that, in stark contrast to
+the translations of the specific terms. The perfor-                              the terminology accuracy, the system scores are rel-
+mance of the models in Track 2 is overall higher                                 atively robust to different types (and presence) of
+than that of Track 1: the score of 0.87 is among                                 explicit terminology. Yet, as was noted for the two
+the highest for sentence-level translation and the                               main metrics, the difference in consistency between
+lowest for document-level translation. A possible                                the proper terminology and the two other modes
+reason for that can be the contextual dependency                                 becomes more pronounced in the higher-scoring
+of the generated terms: in a document-level setup,                               systems. Such a trend, however, has exceptions:
+a system attends to previously generated text, and                               while it is true for English to Russian, German
+it can be more prone to copying already gener-                                   (sentence level), and Chinese (document level) sen-
+ated sequences, while each occurrence of a term in                               tence pairs, the English to Spanish and Chinese to
+a sentence-level setup is translated independently.                              English outputs do not show much difference over
+                                                                                 the whole range of the systems.
+
+This is indirectly supported by the observation of Finally, we should note that if the pseudo-
+
+                                                                                 563
+        72                               o3-term-guide                  72
+
+ChrF++  70                   duterm                     MeGuMa          70
+        68         TEirUleTnedrmurV1                                    68
+
+                      salamanGdPrTa-t4a.1-nano
+
+        66     CommandAWMT                              tower           66
+
+        64                               BIT                    ChrF++  64
+        6602LC-primaLryC-2LC-3TiUTermV0
+                                         laniqo                         62
+                                          CurTermNLLB                   60
+                                                                        58
+            85% 86% 86% 87% 87% 88% 88%
+               Terminology Consistency
+
+Figure 2: Relationship between quality (chrF++) and ter-                56
+
+minology consistency in the proper terminology mode,                    54
+
+averaged across three directions in Track 1. Top-ranking                    o3-term-guide
+                                                                               TiUTermV1
+systems are labelled as in Figure 1.                                              Erlendur
+                                                                                      duterm
+                                                                                         BIT
+
+                                                                                            salamandrata
+                                                                                                tower
+
+                                                                                                   MeGuMa
+                                                                                                      CommandAWMT
+
+                                                                                                          TiUTermV0
+                                                                                                             LC-primary
+
+                                                                                                                 LC-2
+                                                                                                                    LC-3
+                                                                                                                       laniqo
+                                                                                                                           CurTermNLLB
+
+references are initiated according to the proper ter-           Figure 3: Effect of terminology mode on performance
+minology dictionaries, the absolute scores drop sig-            (measured by ChrF++) in Track 1. Legend: × denotes
+nificantly (resulting in the range of 0.5 to 0.8), and          No Term, R denotes Random Term, and  denotes
+the effect of the terminology mode becomes more                 Proper Term.
+pronounced. This is demonstrated in Appendix F,
+
+where the scores for each system in Random Term
+
+and No Term modes range between 0.2 and 0.4,
+
+while the proper terminology lies in a span of a proper dictionary adds extra target-side infor-
+
+0.5-0.8. Moreover, the difference between modes mation compared to using no dictionary, we also
+
+becomes more pronounced in higher-scoring sys- request participants to translate under a Random
+
+tems. We conclude that the variant of the metric Term mode to enable a causal analysis. We plot the
+
+with dictionary-based pseudo-reference initializa- chrF++ scores under the three terminology modes
+
+tion may be more informative for the task of ter- on a vertical bar in Figure 3 for each participant
+
+minology translation, as it correlates with other in the sentence-level Track 1. This helps us easily
+
+metrics better and distinguishes between systems inspect the quality gap between systems translating
+
+more clearly.                                                   under different modes. It is clear that using a dic-
+
+7 Analysis                                                      tionary, either random or proper, consistently helps
+                                                                systems' translation quality. For top-performing
+
+Apart from reporting general translation quality, ter-          systems, the benefit of using proper dictionary en-
+minology accuracy, and terminology consistency,                 tries outweighs that of using a random dictionary,
+we analyze the terminology incorporation and met-               but for systems with a lower translation quality,
+rics, hoping to provide insights to the community:              there is no clear difference.
+
+· A causal analysis of the impact of incorporating              7.2 Doc-Level MQM Results
+  terminology on translation quality.
+
+· A document-level AutoMQM using LLM-as-a- Table 4 presents the weighted MQM scores for each
+
+judge, all while considering a large terminology LLM judge, while Figures 4 and 6 visualize the
+
+dictionary for Track 2.                                         distribution of error types and severities across the
+
+· A study of the correlation between different met- submitted systems in both the No Term and Proper
+
+rics for Track 1.                                               Term settings for GPT-5 and GPT-4o, respectively.
+
+7.1 Effect of Terminology Incorporation                            Both LLM judges yield broadly consistent rank-
+We investigate the impact of incorporating termi-               ings among the top systems, with CommandAWMT
+                                                                and Erlendur generally outperforming MeGuMa
+
+nologies on translation quality. Since providing and STITCH in terms of overall MQM scores.
+
+                                                                564
+                  Weighted MQM score                                                                                                       Erlendur  CommandAWMT    STITCH  MeGuMa
+
+                  GPT-4o               GPT-5                                                                                               NoTerm - Minor Severity  Proper - Minor Severity
+                                                            Total Number of Errors
+System    Avg EnZh ZhEn Avg EnZh ZhEn                              mi tsterraaamonicswlnflmckiao.uuslterisopiaonghoccnry.nyy1250
+                                                                                                                         mi tsterraaamonicswlnflmckiao.uuslterisopiaonghoccnry.nyy1000
+Proper
+                                                             750
+Erlendur  75.7     75.4    76.0  29.2  37.5 19.5             500
+                   77.6    84.8  37.7  41.0 34.5             250
+CommandAWMT 81.2  185.6   163.4  57.2  65.8 48.7
+                  151.2   182.2  85.1  69.5 100.5                0
+STITCH    174.4
+
+MeGuMa    166.8
+
+Random
+
+Erlendur  76.0     81.2 71.0 35.0       49.4   20.8
+                   88.9 81.5 56.1       67.7   44.7
+CommandAWMT 85.2   89.6 91.3 74.4       83.3   65.8
+                  160.2 279.1 186.5    164.4  208.2
+STITCH    90.5                                                           NoTerm - Major Severity                                                                    Proper - Major Severity
+                                                            800
+                                                            600
+                                                            400
+                                                            200
+
+                                                               0
+MeGuMa    217.4                                             Total Number of Errors
+                                                                 mi tsterraaamonicswlnflmckiao.uuslterisopiaonghoccnry.nyy
+NoTerm                                                                                                                 mi tsterraaamonicswlnflmckiao.uuslterisopiaonghoccnry.nyy
+
+Erlendur  74.0     74.6 73.5 33.1       44.4   22.1
+                   86.2 83.5 56.0       62.2   49.9
+CommandAWMT 84.8  110.4 99.5 90.4      103.3   77.8
+                  125.1 141.0 116.0    117.3  114.7
+STITCH    104.9
+
+MeGuMa    133.1
+
+Table 4: Weighted MQM scores (lower is better, sorted                   NoTerm - Critical Severity                                                                  Proper - Critical Severity
+ascending by GPT-5 Proper Avg), averaged over all,          300
+EnZh, and ZhEn documents in Track 2. Detailed               200
+counts for different error severities are presented in Ap-  Total Number of Errors
+pendix D.                                                        mi tsterraaamonicswlnflmckiao.uuslterisopiaonghoccnry.nyy
+                                                                                                                       mi tsterraaamonicswlnflmckiao.uuslterisopiaonghoccnry.nyy
+                                                            100
+
+                                                                                                                                        0
+
+Lower scores for the leading systems indicate fewer
+
+and less severe errors. However, while the over-
+
+all patterns are similar, the judges diverge in the
+
+final ranking of the lower-performing systems in            Figure 4: Distribution of error types and severities in No
+the Proper mode. Notably, GPT-5 tends to be more            Term and Proper settings using GPT-5 as a judge. Total
+conservative, flagging fewer errors overall, whereas        error counts indicate the number of errors each system
+GPT-4o is stricter in its error identification.             made on the complete Task 2 test sets, comprising 10
+                                                            annual reports across two translation directions. Error
+   Examining the error type distribution, Figure 4          types with fewer than 100 occurrences across all severity
+(GPT-5) shows that most errors are classified as            levels and systems are omitted for clarity. "awk. phr."
+minor or major, with critical errors being relatively       denotes awkward phrasing.
+
+rare. The most frequent error types across all sever-
+
+ity levels are accuracy, mistranslation, and termi-
+
+nology. The Proper terminology mode consistently 7.3 Ranking Correlation
+
+reduces the number of terminology-related errors            One of the reasons for the slow progress in the
+compared to the No Term mode, confirming the                field of terminology-aware translation is the lack
+utility of providing domain-specific dictionaries.          of clarity on the best evaluation protocol(s) due
+
+This trend, however, is not consistently observed to it being a multifaceted problem. We suggested
+
+with GPT-4o (see Appendix Figure 6). Manual several types of metrics--general quality, accuracy,
+
+inspection revealed that GPT-4o occasionally pro- and consistency--which differ significantly in the
+
+duces false positives for terminology mismatch er- intended focus on the hypothesis and in their im-
+
+rors, sometimes flagging even exact matches as plementation. In this section, we analyze how dif-
+
+errors. As a result, we place greater reliance on ferently or similarly those metrics rank the partici-
+
+the GPT-5 results for these outcomes. For future pating systems alone. This will give insights into
+
+shared tasks, it may be beneficial to combine au- the optimal choice of metric(s) in the future.
+
+tomated MQM with targeted manual review, or to The comparison of the system ranking by dif-
+
+further refine judge prompts to better accommodate ferent metrics was conducted using Kendall's 
+
+acceptable variation in terminology use.                    (Kendall, 1938). We ran the correlation study only
+
+                                                       565
+             BLEU                                      nologies, focusing on the medical domain (includ-
+                      ChrF++
+                              Cons                     ing COVID-19 terminology) across five language
+                                 (Freq)
+                                        Cons           pairs: English to French, Chinese, Russian, and
+                                           (Dict)      Korean, as well as Czech to German. This pioneer-
+                                                       ing effort established the foundation for system-
+ChrF++       0.81*    ­      ­      ­                  atic evaluation of terminology translation quality
+Cons (Freq)  0.26   0.39*  0.54*  0.96*
+Cons (Dict)  0.20   0.36*  0.49*
+Term Acc     0.22   0.39*
+
+                                                       and consistency, with terminologies mined semi-
+
+Figure 5: Kendall's  correlation between various met-  automatically from parallel corpora. Building on
+rics used in the analysis, Track 1. Comparisons with   this, Semenov et al. (2023) organized the second
+p < 0.05 are marked with *.                            iteration in 2023, which expanded the range of do-
+
+                                                       mains (apart from medical texts, it included CL ab-
+
+for Track 1, since for Track 2, there are only 4       stracts and web novels), while narrowing down the
+data points, so the  scores will never surpass the     scope of translation directions: ChineseEnglish,
+thresholds of statistical significance. We visualize   EnglishCzech, and GermanEnglish. Similar
+the correlation scores in Figure 5.                    to the previous edition, their terminologies were
+                                                       mined semi-automatically, and they extended this
+   We can see two areas of high correlation. The       line of work by contrasting random and proper
+first is well-known, between BLEU and ChrF++.          terminologies. Their findings revealed that while
+Moreover, terminology accuracy and terminol-           incorporating terminology dictionaries led to im-
+ogy consistency with dictionary-based pseudo-          provements in translation quality, incorporating
+references display a near-perfect correlation. The     equivalent amounts of information from reference
+reasons for this are clear: both metrics rely heav-    translations yielded similar results, challenging the
+ily on terminology dictionaries; therefore, they are   prevailing assumption about terminologies being
+aimed at finding and grouping the proper term oc-      the crux of meaning in translation. Complemen-
+currences in the system outputs. A surface-level       tarily, Conia et al. (2025) organized the SemEval-
+(although lemmatized) match of translated terms        2025 Task 2 on Entity-Aware Machine Transla-
+is a good approximation of a more tailored system      tion, which focused on translating text containing
+of term alignment between the input and output se-     complex named entities such as culture-specific ti-
+quences. Therefore, considering the computational      tles, location names, and food names across 10 lan-
+cost of running terminology consistency, future re-    guage pairs, introducing the XC-Translate bench-
+search could rely more on terminology accuracy, as     mark with over 50K manually-translated sentences
+it does not require any external alignment method.     with entities that can deviate significantly from
+                                                       word-to-word translations.
+   The rest of the metrics show considerably weak
+positive correlation, in descending order: different
+
+types of consistency against term accuracy; and Terminology translation test release. To the
+
+chrF++ against consistency and term accuracy. Al- best of our knowledge, this shared task is among
+
+though the correlation between the general quality the few that release a high-quality terminology for
+
+and term-specific metrics is statistically significant, translation in high-stakes domains such as IT and
+
+we still conclude that, as shown in Figures 1 and 2, finance, with the exception of past shared tasks and
+
+the three types of metrics show different trends. For a contemporary work (Oncevay et al., 2025a).
+
+example, there is a 10 chrF++ gap between the best
+
+and second best system in terminology accuracy         9 Conclusions
+(Figure 1); top-ranking systems by chrF++ and
+
+terminology accuracy do not achieve the best termi-    We now conclude the third iteration of the WMT
+nology consistency. Therefore, using term-specific     Terminology Translation Task. In comparison to
+metrics is an important aspect of the evaluation of    the 2021 and 2023 editions, this time we featured
+terminology-aware machine translation.                 both sentence and document translation tracks with
+
+                                                       brand new data and domains. The former track en-
+
+8 Related Work                                         sured continuity, while the latter approximated real-
+                                                       life use cases better. We introduced an LLM-based
+
+Past shared tasks. Alam et al. (2021) introduced document-level AutoMQM and used Pareto opti-
+
+the first WMT shared task on MT using termi- mality to rank participants, but we kept the three
+
+                                                    566
+inference modes from 2023 for a causal analysis.           In terms of evaluation, while we have used sev-
+   We attracted more than 20 submissions, three         eral best metrics we can design, there could be
+                                                        some room for considerations and improvements:
+times more than the previous edition. The over-         1) document-level AutoMQM, especially with ter-
+whelming majority used LLM-based solutions with         minologies, has not been validated against human
+different types of training techniques. This goes       judgment; 2) although our terminology match runs
+in line with a general trend in the machine transla-    lowercasing and lemmatization before string match-
+tion field towards LLM-based solutions highlighted      ing, it may not capture all occurrences of an in-
+by Kocmi et al. (2024). Top-scoring systems in          tended word; and 3) certain correlation exists be-
+the sentence-level track reached good overall trans-    tween metrics, e.g. surface string match and termi-
+lation quality and nearly perfect term accuracy;        nology match, so they are not fully orthogonal.
+the document track remains a more challenging
+task with respect to both metrics. The term con-           Finally, we used a quality-terminology tradeoff
+sistency, on the contrary, shows a more stable be-      to rank participating systems, but as LLMs are
+havior in both tracks, with overall higher scores       more often deployed in practice, cost-effectiveness
+for document-level MT. In terms of the inference        has become another important aspect.
+modes, better systems benefit more from proper ter-
+minologies, while lower-scoring systems are less        Acknowledgments
+sensitive to dictionaries. Finally, we see high cor-
+relations between term-based metrics, but not be-       We thank all participants for their submissions.
+tween them and the overall quality, which high-            The document-level finance data used in this
+lights the necessity to keep at least one terminology-
+specific metric for this task.                          shared task is derived from the publicly available
+                                                        annual reports on the Hong Kong Monetary Author-
+Outlook. The lessons from the shared task also          ity (HKMA)'s website. We acknowledge HKMA
+hint at the possible directions for its future itera-   as the source and owner of the reports, and we are
+tions:                                                  grateful for the availability of these materials for
+                                                        research purposes.
+· Data: continue with document-level terminology
+  translation evaluation                                   Pinzhen Chen is supported by UK Research and
+                                                        Innovation (UKRI) under the UK government's
+· Metrics: investigate suitable ranking measures        Horizon Europe funding guarantee [grant number
+  and the trade-off between informativeness and         10052546].
+  computational costs of term-oriented metrics.
+                                                           Vilém Zouhar gratefully acknowledges the sup-
+· Human evaluation: run human judgment on ter-          port of the Google PhD Fellowship.
+  minology translations and analyse its correlation
+  with automatic scores. This, to our knowledge,
+  has not been explored before.
+
+· Language: extend the task to more, especially
+  lower-resourced languages, while preventing con-
+  tamination.
+
+We are open to collaborations, and we especially
+welcome resources that can be used towards test
+sets or human evaluation. Stay tuned!
+
+Limitations
+
+The sentence-level test sets have been used in line
+with their original translation directions; for the
+document track, we are unsure of the original trans-
+lation direction, so one of the two directions has
+the potential problem of translating translated/post-
+edited text back to its original language.
+
+                                                             567
+References                                                 Fangxiaoyu Feng, Yinfei Yang, Daniel Cer, Naveen Ari-
+                                                              vazhagan, and Wei Wang. 2022. Language-agnostic
+Md Mahfuz Ibn Alam, Ivana Kvapilíková, Antonios               BERT sentence embedding. In Proceedings of the
+   Anastasopoulos, Laurent Besacier, Georgiana Dinu,          60th Annual Meeting of the Association for Compu-
+   Marcello Federico, Matthias Gallé, Kweonwoo Jung,          tational Linguistics (Volume 1: Long Papers).
+   Philipp Koehn, and Vassilina Nikoulina. 2021. Find-
+   ings of the WMT shared task on machine translation      Markus Freitag, Nitika Mathur, Daniel Deutsch, Chi-
+   using terminologies. In Proceedings of the Sixth           Kiu Lo, Eleftherios Avramidis, Ricardo Rei, Brian
+   Conference on Machine Translation.                         Thompson, Frederic Blain, Tom Kocmi, Jiayi Wang,
+                                                              and others. 2024. Are LLMs breaking MT metrics?
+Mihael Arcan, Marco Turchi, Sara Tonelli, and Paul            results of the WMT24 metrics shared task. In Pro-
+   Buitelaar. 2017. Leveraging bilingual terminology to       ceedings of the Ninth Conference on Machine Trans-
+   improve machine translation in a CAT environment.          lation.
+   Natural Language Engineering, 23(5):763­788.
+                                                           Markus Freitag, Nitika Mathur, Chi-kiu Lo, Elefthe-
+Nathaniel Berger, Johannes Eschbach-Dymanus,                  rios Avramidis, Ricardo Rei, Brian Thompson, Tom
+   Miriam Exel, Matthias Huck, and Stefan Riezler.            Kocmi, Frederic Blain, Daniel Deutsch, Craig Stew-
+   2025. Learning to translate ambiguous terminology          art, and others. 2023. Results of WMT23 metrics
+   by preference optimization on post-edits. arXiv            shared task: Metrics might be guilty but references
+   preprint arXiv:2507.03580.                                 are not innocent. In Proceedings of the Eighth Con-
+                                                              ference on Machine Translation.
+Simone Conia, Min Li, Roberto Navigli, and Saloni Pot-
+   dar. 2025. SemEval-2025 task 2: Entity-aware ma-        Javier Garcia Gilabert, Carlos Escolano, Xixian Liao,
+   chine translation. In Proceedings of the 19th Interna-     and Maite Melero. 2025. Terminology-Constrained
+   tional Workshop on Semantic Evaluation (SemEval-           Translation from Monolingual Data using GRPO. In
+   2025).                                                     Proceedings of the Tenth Conference on Machine
+                                                              Translation.
+
+Marta R Costa-Jussà, James Cross, Onur Çelebi, Maha        Aitor Gonzalez-Agirre, Marc Pàmies, Joan Llop,
+   Elbayad, Kenneth Heafield, Kevin Heffernan, Elahe          Irene Baucells, Severino Da Dalt, Daniel Tamayo,
+   Kalbassi, Janice Lam, Daniel Licht, Jean Maillard,         José Javier Saiz, Ferran Espuña, Jaume Prats, Javier
+   and others. 2022. No language left behind: Scaling         Aula-Blasco, and others. 2025. Salamandra technical
+   human-centered machine translation. arXiv preprint         report. arXiv preprint arXiv:2502.08489.
+   arXiv:2207.04672.
+                                                           Mariano Gonzalez-Gomez. 2025. CurTermNLLB: Au-
+John Dang, Shivalika Singh, Daniel D'souza, Arash             tomatic Data Curation and Terminology-Aware Fine-
+   Ahmadian, Alejandro Salamanca, Madeline Smith,             Tuning of NLLB-600M. In Proceedings of the Tenth
+   Aidan Peppin, Sungjin Hong, Manoj Govindassamy,            Conference on Machine Translation.
+   Terrence Zhao, and others. 2024. Aya expanse: Com-
+   bining research breakthroughs for a new multilingual    Aaron Grattafiori, Abhimanyu Dubey, Abhinav Jauhri,
+   frontier. arXiv preprint arXiv:2412.04261.                 Abhinav Pandey, Abhishek Kadian, Ahmad Al-
+                                                              Dahle, Aiesha Letman, Akhil Mathur, Alan Schelten,
+Georgiana Dinu, Prashant Mathur, Marcello Federico,           Alex Vaughan, and others. 2024. The Llama 3 herd
+   and Yaser Al-Onaizan. 2019. Training neural ma-            of models. arXiv preprint arXiv:2407.21783.
+   chine translation to apply terminology constraints.
+   In Proceedings of the 57th Annual Meeting of the        Kamil Guttmann, Adrian Charkiewicz, Zofia Rostek,
+   Association for Computational Linguistics.                 Mikolaj Pokrywka, and Artur Nowakowski. 2025.
+                                                              Laniqo at WMT25 Terminology Translation Task: A
+Tobias Domhan and Dawei Zhu. 2025. Same evalua-               Multi-Objective Reranking Strategy for Terminology-
+   tion, more tokens: On the effect of input length for       Aware Translation via Pareto-Optimal Decoding. In
+   machine translation evaluation using large language        Proceedings of the Tenth Conference on Machine
+   models. arXiv preprint arXiv:2505.01761.                   Translation.
+
+Zi-Yi Dou and Graham Neubig. 2021. Word alignment          Eva Hasler, Adrià de Gispert, Gonzalo Iglesias, and
+   by fine-tuning embeddings on parallel corpora. In          Bill Byrne. 2018. Neural machine translation decod-
+   Proceedings of the 16th Conference of the European         ing with terminology constraints. In Proceedings of
+   Chapter of the Association for Computational Lin-          the 2018 Conference of the North American Chap-
+   guistics: Main Volume.                                     ter of the Association for Computational Linguistics:
+                                                              Human Language Technologies, Volume 2 (Short Pa-
+Chris Dyer, Victor Chahuneau, and Noah A. Smith.              pers).
+   2013. A simple, fast, and effective reparameteriza-
+   tion of IBM model 2. In Proceedings of the 2013         Edward J Hu, Yelong Shen, Phillip Wallis, Zeyuan
+   Conference of the North American Chapter of the            Allen-Zhu, Yuanzhi Li, Shean Wang, Lu Wang, and
+   Association for Computational Linguistics: Human           Weizhu Chen. 2022. LoRA: Low-Rank adaptation of
+   Language Technologies.                                     large language models. In International Conference
+                                                              on Learning Representations.
+
+568
+Svanhvít Lilja Ingólfsdóttir, Haukur Páll Jónsson,          Andis Lagzdin, s, Uldis Silin, s, Toms Bergmanis, Ma¯rcis
+   Kári Steinn Aðalsteinsson, Róbert Fjölnir Birkisson,        Pinnis, Artu¯rs Vasil,evskis, and Andrejs Vasil,jevs.
+   Sveinbjörn Þórðarson, and Þorvaldur Páll Helgason.          2022. Open terminology management and sharing
+   2025. Miðeind at WMT25 General Machine Trans-               toolkit for federation of terminology databases. In
+   lation Task. In Proceedings of the Tenth Conference         Proceedings of the Thirteenth Language Resources
+   on Machine Translation.                                     and Evaluation Conference.
+
+Akshat Jaswal. 2025. It Takes Two: A Dual Stage             Alon Lavie, Greg Hanneman, Sweta Agrawal, Kanojia
+   Approach for Terminology-Aware Translation. In              Diptesh, Chi-Kiu Lo, Vilém Zouhar, Frederic Blain,
+   Proceedings of the Tenth Conference on Machine              Chrysoula Zerva, Eleftherios Avramidis, Sourabh De-
+   Translation.                                                oghare, and others. 2025. Findings of the WMT25
+                                                               shared task on automated translation evaluation sys-
+Juraj Juraska, Daniel Deutsch, Mara Finkelstein, and           tems: Linguistic diversity is challenging and refer-
+   Markus Freitag. 2024. MetricX-24: The Google                ences still help. In Proceedings of the Tenth Confer-
+   submission to the WMT 2024 metrics shared task.             ence on Machine Translation.
+   In Proceedings of the Ninth Conference on Machine
+   Translation.                                             Xi Victoria Lin, Todor Mihaylov, Mikel Artetxe, Tianlu
+                                                               Wang, Shuohui Chen, Daniel Simig, Myle Ott, Na-
+Juraj Juraska, Mara Finkelstein, Daniel Deutsch, Aditya        man Goyal, Shruti Bhosale, Jingfei Du, and others.
+   Siddhant, Mehdi Mirzazadeh, and Markus Freitag.             2022. Few-shot learning with multilingual generative
+   2023. MetricX-23: The Google submission to the              language models. In Proceedings of the 2022 Con-
+   WMT 2023 metrics shared task. In Proceedings of             ference on Empirical Methods in Natural Language
+   the Eighth Conference on Machine Translation.               Processing.
+
+Maurice G. Kendall. 1938. A new measure of rank             Jingshu Liu, Mariam Nakhlé, Gaëtan Caillout, and Ra-
+   correlation. Biometrika, 30:81­93.                          heel Qadar. 2023. Lingua custodia's participation at
+                                                               the WMT 2023 terminology shared task. In Proceed-
+Sejoon Kim, Mingi Sung, Jeonghwan Lee, Hyunkuk                 ings of the Eighth Conference on Machine Transla-
+   Lim, and Jorge Gimenez Perez. 2024. Efficient ter-          tion.
+   minology integration for LLM-based translation in
+   specialized domains. In Proceedings of the Ninth         Jingshu Liu, Mariam Nakhlé, Gaëtan Caillaut, and Ra-
+   Conference on Machine Translation.                          heel Qader. 2025. Lingua Custodia's participation at
+                                                               the WMT 2025 Terminology shared task. In Proceed-
+Tom Kocmi, Arkady Arkhangorodsky, Alexandre Be-                ings of the Tenth Conference on Machine Translation.
+   rard, Phil Blunsom, Samuel Cahyawijaya, Théo De-
+   haze, Marzieh Fadaee, Nicholas Frosst, Matthias          Pedro Henrique Martins, João Alves, Patrick Fernandes,
+   Galle, Aidan Gomez, and others. 2025a. Command-             Nuno M Guerreiro, Ricardo Rei, Amin Farajian, Ma-
+   a-translate: Raising the bar of machine translation         teusz Klimaszewski, Duarte M Alves, José Pombal,
+   with difficulty filtering. In Proceedings of the Tenth      Nicolas Boizard, and others. 2025. EuroLLM-9B:
+   Conference on Machine Translation.                          Technical report. arXiv preprint arXiv:2506.04079.
+
+Tom Kocmi, Ekaterina Artemova, Eleftherios                  Jiyoon Myung, Jihyeon Park, Jungki Son, Kyungro Lee,
+   Avramidis, Rachel Bawden, Ondrej Bojar, Kon-                and Joohyung Han. 2024. Efficient technical term
+   stantin Dranch, Anton Dvorkovich, Sergey Dukanov,           translation: A knowledge distillation approach for
+   Mark Fishel, Markus Freitag, and others. 2025b.             parenthetical terminology translation. In Proceed-
+   Findings of the WMT25 general machine translation           ings of the Ninth Conference on Machine Transla-
+   shared task: Time to stop evaluating on easy test sets.     tion.
+   In Proceedings of the Tenth Conference on Machine
+   Translation.                                             Dayyán O'Brien, Bhavitvya Malik, Ona de Gibert,
+                                                               Pinzhen Chen, Barry Haddow, and Jörg Tiede-
+Tom Kocmi, Eleftherios Avramidis, Rachel Bawden,               mann. 2025. DocHPLT: A massively multilingual
+   Ondrej Bojar, Anton Dvorkovich, Christian Feder-            document-level translation dataset. In Proceedings
+   mann, Mark Fishel, Markus Freitag, Thamme Gowda,            of the Tenth Conference on Machine Translation.
+   Roman Grundkiewicz, and others. 2024. Findings
+   of the WMT24 general machine translation shared          Arturo Oncevay, Elena Kochkina, Keshav Ramani,
+   task: The LLM era is here but MT is not solved yet.         Toyin Aguda, Simerjot Kaur, and Charese Smiley.
+   In Proceedings of the Ninth Conference on Machine           2025a. Translating domain-specific terminology in
+   Translation.                                                typologically-diverse languages: A study in tax and
+                                                               financial education. In Proceedings of the 2025 Con-
+                                                               ference on Empirical Methods in Natural Language
+                                                               Processing.
+
+Tom Kocmi and Christian Federmann. 2023. GEMBA-             Arturo Oncevay, Charese Smiley, and Xiaomo Liu.
+   MQM: Detecting translation quality error spans with         2025b. The impact of domain-specific terminology
+   GPT-4. In Proceedings of the Eighth Conference on           on machine translation for finance in European lan-
+   Machine Translation.                                        guages. In Proceedings of the 2025 Conference of the
+
+569
+   Nations of the Americas Chapter of the Association    Hugo Touvron, Louis Martin, Kevin Stone, Peter Al-
+   for Computational Linguistics: Human Language            bert, Amjad Almahairi, Yasmine Babaei, Nikolay
+   Technologies (Volume 1: Long Papers).                    Bashlykov, Soumya Batra, Prajjwal Bhargava, Shruti
+                                                            Bhosale, and others. 2023. Llama 2: Open foun-
+Kishore Papineni, Salim Roukos, Todd Ward, and Wei-         dation and fine-tuned chat models. arXiv preprint
+   Jing Zhu. 2002. Bleu: a method for automatic evalu-      arXiv:2307.09288.
+   ation of machine translation. In Proceedings of the
+   40th Annual Meeting of the Association for Compu-     Chelo Vargas-Sierra. 2011. Translation-oriented termi-
+   tational Linguistics.                                    nology management and ICTs: Present and future.
+                                                            Interdisciplinarity and languages: Current Issues in
+Benjamin Pong. 2025. UW-BENMT at WMT25 Ter-                 Research, Teaching, Professional Applications and
+   minology Translation Task: Contextually Selected         ICT, pages 45­64.
+   Pseudo-Terminology Constraints for Terminology-
+   Aware Neural Machine Translation in the IT Domain.    Bin Wang, Chao Xu, Xiaomeng Zhao, Linke Ouyang,
+   In Proceedings of the Tenth Conference on Machine        Fan Wu, Zhiyuan Zhao, Rui Xu, Kaiwen Liu, Yuan
+   Translation.                                             Qu, Fukai Shang, and others. 2024. MinerU: An
+                                                            open-source solution for precise document content
+Maja Popovic´. 2017. chrF++: words helping character        extraction. arXiv preprint arXiv:2409.18839.
+   n-grams. In Proceedings of the Second Conference
+   on Machine Translation.                               An Yang, Anfeng Li, Baosong Yang, Beichen Zhang,
+                                                            Binyuan Hui, Bo Zheng, Bowen Yu, Chang
+Matt Post. 2018. A call for clarity in reporting BLEU       Gao, Chengen Huang, Chenxu Lv, and others.
+   scores. In Proceedings of the Third Conference on        2025. Qwen3 technical report. arXiv preprint
+   Machine Translation: Research Papers.                    arXiv:2505.09388.
+
+Nils Reimers and Iryna Gurevych. 2019. Sentence-         Vilém Zouhar, Pinzhen Chen, Tsz Kin Lam, Nikita
+   BERT: Sentence embeddings using siamese BERT-            Moghe, and Barry Haddow. 2024a. Pitfalls and out-
+   Networks. In Proceedings of the 2019 Conference on       looks in using COMET. In Proceedings of the Ninth
+   Empirical Methods in Natural Language Processing.        Conference on Machine Translation.
+
+Kirill Semenov and Ondrej Bojar. 2022. Automated         Vilém Zouhar, Shuoyang Ding, Anna Currey, Tatyana
+   evaluation metric for terminology consistency in MT.     Badeka, Jenyuan Wang, and Brian Thompson. 2024b.
+   In Proceedings of the Seventh Conference on Ma-          Fine-tuned machine translation metrics struggle in
+   chine Translation (WMT).                                 unseen domains. In Proceedings of the 62nd An-
+                                                            nual Meeting of the Association for Computational
+Kirill Semenov, Vilém Zouhar, Tom Kocmi, Dongdong           Linguistics (Volume 2: Short Papers).
+   Zhang, Wangchunshu Zhou, and Yuchen Eleanor
+   Jiang. 2023. Findings of the WMT 2023 shared          Vilém Zouhar, Tereza Vojtechová, and Ondrej Bojar.
+   task on machine translation with terminologies. In       2020. WMT20 document-level markable error ex-
+   Proceedings of the Eighth Conference on Machine          ploration. In Proceedings of the Fifth Conference on
+   Translation.                                             Machine Translation.
+
+Zhihong Shao, Peiyi Wang, Qihao Zhu, Runxin Xu,          Vilém Zouhar. 2023. Machine translation that peeks at
+   Junxiao Song, Xiao Bi, Haowei Zhang, Mingchuan           the reference. Report.
+   Zhang, YK Li, Yang Wu, and others. 2024.
+   Deepseekmath: Pushing the limits of mathematical
+   reasoning in open language models. arXiv preprint
+   arXiv:2402.03300.
+
+Steinthor Steingrimsson, Hrafn Loftsson, and Andy
+   Way. 2023. SentAlign: Accurate and scalable sen-
+   tence alignment. In Proceedings of the 2023 Con-
+   ference on Empirical Methods in Natural Language
+   Processing: System Demonstrations.
+
+Gemma Team, Aishwarya Kamath, Johan Ferret, Shreya
+   Pathak, Nino Vieillard, Ramona Merhej, Sarah Perrin,
+   Tatiana Matejovicova, Alexandre Ramé, Morgane
+   Rivière, and others. 2025. Gemma 3 technical report.
+   arXiv preprint arXiv:2503.19786.
+
+Jörg Tiedemann and Lars Nygaard. 2004. The OPUS
+   corpus - parallel and free: http://logos.uio.no/
+   opus. In Proceedings of the Fourth International
+   Conference on Language Resources and Evaluation
+   (LREC'04).
+
+                                                             570
+A Automatic Terminology Extraction                   know the correct translations of certain terms. To
+
+We prompt GPT-4.1 (gpt-4.1-2025-04-14) to au-        address this, we provide the judge with a ground-
+tomatically extract terminology from the source      truth terminology mapping for reference. Recall
+text and align it with the terminology used in the   that our original mapping was report-level and in-
+reference translation. Our prompt is shown in Ta-    cluded many terms that might not appear in the
+ble 5. Extraction and mapping are performed at       segment under evaluation. To avoid unnecessary
+the document level. The mappings of documents        distraction for the judge, we tailor the mapping
+from the same annual report are then merged into     so that it only retains terms present in the source
+a single terminology mapping for the entire report.  segment. Furthermore, the judge is explicitly in-
+In the data release, each source document is accom-  structed to evaluate terminology usage. Note that
+panied by this report-level terminology mapping,     providing the mapping means our metric is not en-
+simulating realistic scenarios in which terminology  tirely reference-free and may correlate more with
+mappings are predefined for a specific domain or     other terminology-focused metrics. To study this
+task. In such cases, the predefined terms may or     effect, we also tested a standard FSP prompt with-
+may not appear in the source document requiring      out access to the terminology mapping across all
+translation.                                         submissions and settings. We found that the sys-
+                                                     tem rankings remained unchanged with the stan-
+
+B Automatic Random Terminology                       dard FSP prompt, suggesting that the inclusion of
+     Alignment                                       the terminology mapping primarily improves the
+                                                     interpretability and focus of the evaluation without
+The random terms were aligned with the help of       fundamentally altering its outcomes.
+GPT-4o. First, we randomly sample the words
+from the sentence that are not in the set of the        Our terminology-aware FSP prompt is presented
+proper terms, then we prompt GPT-4o with the text    in Table 6.
+
+demonstrated in Table 7. To avoid hallucinations,    D MQM Error Count
+we post-check the target sentence on whether it
+contains a highlighted word.                         The output of the MQM judges using the FSP
+                                                     prompt is a list of errors. Each error is assigned a
+C Focus-Segments Prompting (FSP)                     severity of minor, major, or critical. Table 8 reports
+
+Focus-Sentence Prompting (FSP) was originally        the number and severity of errors produced by each
+proposed by Domhan and Zhu (2025) as a method        submitted system, averaged across all documents
+for using LLMs as judges in long-form translation    in Track 2.
+
+evaluation while mitigating length bias, which is    E Automatic Term Alignment in the
+the tendency of LLMs to underreport errors when           Output Texts
+evaluating an entire long translation in a single
+
+pass. Their approach evaluates one sentence at The initial edition of the consistency metric (Se-
+
+a time while still providing the entire source and menov and Bojar, 2022) suggested that for term
+
+target documents as context. Although effective, translation, specialized word alignment methods
+
+the original FSP is costly because it requires many would be used. However, our preliminary analy-
+
+inference calls. To reduce this cost, we introduce sis shows that both popular solutions, FastAlign
+
+Focus-Segments Prompting, in which a segment by Dyer et al. (2013) and AwesomeAlign by Dou
+
+of three sentences is evaluated at once. This mod- and Neubig (2021) show a lack of robustness with
+
+ification reduces the computational cost of FSP respect to morphological variation of the words,
+
+by approximately a factor of three. In our meta- as well as casing and punctuation. Therefore, we
+
+evaluation on the WMT'24 Metrics Shared Task used GPT-4o to retrieve the aligned terms from the
+
+data, Focus-Segments Prompting performed com- system outputs. Our experiments showed that few-
+
+parably to the original FSP.                         shot prompting was helpful for the quality of the
+
+Another modification we introduced is adapting term retrieval; therefore, we used 20-shot prompts.
+
+FSP to better suit our terminology-focused task. An example of the alignment prompt can be found
+
+We consider accurate terminology translation a key in Table 9. For Track 2, we first split the documents
+
+quality dimension that the LLM judge should eval- into smaller paragraphs and retrieved the subsets of
+
+uate. However, even an LLM judge may not always the terms for each segment, i.e., applied the same
+
+                                                   571
+TASK:
+You are an expert linguist and terminologist.
+
+Your job is to:
+1. Analyze the source document and identify all domain-specific terminology and key terms (e.g. technical terms, product names,
+named entities, etc.).
+2. Find the corresponding translations in the translated document.
+3. Output the result as a Python dictionary in the format:
+{
+
+      "source_term_1": "translated_term_1",
+      "source_term_2": "translated_term_2",
+      ...
+}
+
+RULES:
+- Both source and translated documents are in Markdown format and may include image paths (e.g. ![image](path/to/image.png)) or
+links. Ignore such elements.
+- Only extract relevant terminology -- avoid common words, function words, and markdown/control elements.
+- If a translation is ambiguous or missing, set the value to null.
+- Follow Python dict syntax strictly.
+- Do NOT include explanations or extra text -- only output the Python dictionary.
+
+{{'-'*40}}
+SOURCE DOCUMENT:
+{{ source_document }}
+{{'-'*40}}
+TRANSLATED DOCUMENT:
+{{ translated_document }}
+{{'-'*40}}
+
+OUTPUT:
+(Please provide only the Python dictionary below)
+
+Table 5: Prompt used for automatic terminology extraction in Track 2.
+
+preprocessing schema as described in Section 4.3.     on the other side, is significantly larger than in
+To avoid hallucinations, every output is compared     case of most frequent pseudoreference initializa-
+to a system output (by simple substring search).      tion. We also observe the increasing deltas between
+                                                      the proper terminology mode and two other modes
+   We noticed that, while being able to correctly     in the best scoring systems.
+identify the part of the sentence containing a
+term translation, GPT-4o tends to return an overly
+long string (for example, if the ground truth term
+correspondence for English-Spanish sentence is
+"predefined"-"predeterminado", GPT, given a sen-
+tence "Es el valor predeterminado." would return
+the phrase "valor predeterminado" (lit. "predefined
+value". To overcome this, we used the following
+post-processing schema: each GPT output is com-
+pared against the reference term translation. If
+the number of words in the aligned term is more
+than it is in the reference translation, we run Awe-
+someAlign (Dou and Neubig, 2021) on the sen-
+tence pair and retrieve the word mappings of each
+word. Then, we check if the words selected by
+GPT (lemmatized) indeed correspond to the (lem-
+matized) source sentence tokens. If not, we cut
+these words out and leave only the part that corre-
+sponds to the exact term translation.
+
+F Consistency Scores with
+    Dictionary-Defined Pseudo-References
+
+Figures 7 and 8 show the term consistency scores
+of the submitted systems with respect to pseudoref-
+erence initialization based on terminology dictio-
+naries. We see that, firstly, the difference between
+the proper terminology mode, on one side, and
+random terminology and no terminology modes,
+
+                                                             572
+                                                                          denotes awkward phrasing.     types with fewer than 50 occurrences across all severity     made on the complete Task 2 test sets, comprising 10     Term and Proper settings using GPT-4o as a judge. Total  Figure 6: Distribution of error types and severities in No                                                                                                                 Total Number of Errors                                                                                                                                            Total Number of Errors                                                                                                                                                    Total Number of Errors
+                                                                                                     levels and systems are omitted for clarity. "awk. phr."      annual reports across two translation directions. Error  error counts indicate the number of errors each system
+                                                                                                                                                                                                                                                                                                                                                   untmrianitpsncetuosrrlnnamaaaocaswnctmifltidescnskuuddiluto.saaseeirlstttpttonnaiiiieyhoooogcccxlrnnnneyyyyt.            50  100  150 NoTerm - Critical Severity  untmrianitpsncetuosrrlnnamaaaocaswnctmifltidescnskuuddiluto.saaseeirlstttpttonnaiiiieyhoooogcccxlrnnnneyyyyt.                              2000                           untmrianitpsncetuosrrlnnamaaaocaswnctmifltidescnskuuddiluto.saaseeirlstttpttonnaiiiieyhoooogcccxlrnnnneyyyyt.  0  1000  2000
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         1500
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                  0.7                                                                                                                                                                             1000
+
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                  0                                                                                                                                                                        500
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    0
+
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      NoTerm - Major Severity                                                                                                                                NoTerm - Minor Severity  Erlendur
+
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      CommandAWMT
+
+                                                                                                                                                                                                                                                                                                                                                   untmrianitpsncetuosrrlnnamaaaocaswnctmifltidescnskuuddiluto.saaseeirlstttpttonnaiiiieyhoooogcccxlrnnnneyyyyt.                     Proper - Critical Severity      untmrianitpsncetuosrrlnnamaaaocaswnctmifltidescnskuuddiluto.saaseeirlstttpttonnaiiiieyhoooogcccxlrnnnneyyyyt.                                    Proper - Major Severity  untmrianitpsncetuosrrlnnamaaaocaswnctmifltidescnskuuddiluto.saaseeirlstttpttonnaiiiieyhoooogcccxlrnnnneyyyyt.                 Proper - Minor Severity  STITCH
+
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      MeGuMa
+
+                     Figure 8: Effect of terminology mode on performance                                  (Pseudo-RefeCroennsciestsefnrcoym Dictionary)                                                                                                                                                                                                                                                                                                                                                                            Figure 7: Effect of terminology mode on performance                                                                                                                                                                                                                        (Pseudo-RefeCroennsciestsefnrcoym Dictionary)
+                 (measured by consistency score with dictionary-defined                                                                                                                                                                                                                                                                                                                                                                                                                                                        (measured by consistency score with dictionary-defined
+              pseudo-references); Track 2. The legend is identical to                                0.1                                                          0.2                                                      0.3                                                         0.4                                                         0.5  0.6                                                                                                                     0.8  0.9                                    pseudo-references); Track 1. Legend: × denotes No                                                                                                                                      0.5                                                                                                                                             0.6  0.7  0.8  0.9
+          that of the Figure 7.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         Term, R denotes Random Term, and  denotes Proper                                                                                                                                      0.4
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     Term.                                                                                                                                                                               0.3
+573                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 0.2
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               0.1
+
+                                                                                Erlendur                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       BIT
+                                                                          CommandAWMT                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                o3-term-guide
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     salamandrata
+                                                                               MeGuMa
+                                                                                 STITCH                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  MeGuMa
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           duterm
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             tower
+
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          Erlendur
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            laniqo
+
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       TiUTermV1
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    CommandAWMT
+
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       TiUTermV0
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              LC-3
+
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       LC-primary
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              LC-2
+
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    CurTermNLLB
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       ContexTerm
+You are an annotator for the quality of machine translation. Your task is to identify errors and assess the quality of the
+translation using MQM. Based on the source text (in <source></source> tags) and the machine translation (surrounded by
+<translation></translation> tags), identify error types in the translation and classify them.
+The categories of errors are:
+- accuracy (addition, mistranslation, omission, untranslated text, wrong language)
+- fluency (character encoding, grammar, inconsistency, punctuation, register, spelling)
+- style (awkward phrasing)
+- terminology (see subcategories below)
+- other
+Each error, including omissions or untranslated content, is classified as one of three categories:
+- Critical: Errors that make the text incomprehensible or misleading.
+- Major: Errors that disrupt flow or distort meaning, but the text is still understandable.
+- Minor: Errors that do not affect comprehension but are grammatically, stylistically, or formally incorrect.
+The source text must be fully covered, and any omissions should be annotated as errors.
+If the error is an omission (missing translation), set "error_span": "" and describe the missing content in "explanation".
+Only include spans with errors; exclude correct text.
+You will be given a full document and its translations. Only score the sentence in <target_segment></target_segment>, but use the
+rest of the document for context. Consistency issues may be flagged per segment, even if similar issues are repeated in other
+segments.
+Terminology use (if <terminology> is provided; it will be a dictionary and may be empty `{}`):
+- Treat <terminology> as a useful reference, not an absolute rule. Prefer its entries when appropriate, but do not penalize
+natural, domain-correct alternatives.
+- Ignore very minor variations such as capitalization, plural/singular, or the presence/absence of articles (``a,'' ``the'')
+unless they clearly change the meaning and/or cause translation errors.
+- If an entry in <terminology> seems implausible or clearly incorrect in context, do not enforce it.
+- Terminology error subcategories:
+
+   · terminology_mismatch: a correct entry exists in <terminology> for the context, but the translation uses a meaningfully
+   different wording that diverges from the provided or established term.
+   · terminology_omitted: a source term with a required translation is left untranslated.
+
+Please respond in JSON following this schema:
+{
+
+   "type": "object",
+   "properties": {
+
+      "errors": {
+         "type": "array",
+         "items": {
+            "type": "object",
+            "properties": {
+               "error_span": {
+                  "type": "string",
+                "description": "The portion of the translation containing the error. If the error is an omission, use an empty string."
+               },
+               "explanation": {
+                  "type": "string",
+                 "description": "A brief explanation of the error and its impact; reference document context and/or <terminology> only
+                  if necessary."
+               },
+               "error_category": {
+                  "type": "string",
+                  "enum": ["accuracy", "fluency", "style", "terminology", "other"],
+                  "description": "The main category of the error."
+               },
+               "error_type": {
+                  "type": "string",
+                  "description": "The specific type of error (e.g., omission, mistranslation, punctuation, terminology_mismatch,
+                  terminology_omitted)."
+               },
+               "severity": {
+                  "type": "string",
+                  "enum": ["critical", "major", "minor"],
+                  "description": "Critical: incomprehensible or misleading. Major: distorts meaning but is understandable. Minor: does
+                  not affect comprehension but is incorrect."
+               }
+            },
+            "required": ["error_span", "explanation", "error_category", "error_type", "severity"]
+         }
+
+      },
+      "quality_score": {
+
+         "type": "integer",
+         "description": "Overall quality score of the translation for the target segment. Use any integer between 0 and 100.
+         Guidance: 0 = No meaning preserved, nearly all information is lost. 33 = Some meaning preserved but significant parts are
+         missing or garbled; hard to follow. 66 = Most meaning preserved, with only minor grammar/fluency issues; understandable
+         overall. 100 = Perfect meaning and grammar, fluent and natural."
+      }
+   },
+   "required": ["errors", "quality_score"]
+}
+Please score the following input: <input>
+<source_language>{{ src_lang }}</source_language>
+<source>{{ src }}</source>
+<target_language>{{ tgt_lang }}</target_language>
+<translation>{{ output_seq }}</translation>
+<target_segment>{{ target_segment }}</target_segment>
+<terminology>{{ terminology_dict }}</terminology>
+</input>
+Output requirements:
+- Respond with valid JSON only (no text before or after the JSON).
+- Produce strings as plain text without Markdown formatting.
+
+                       Table 6: The FSP prompt used to identify MQM errors in the translation.
+
+                                                            574
+You are a professional translator from {{ source_language }} to {{ target_language }}. You need to help the user with finding the
+corresponding words in the {{ target_language }} sentence translated from {{ source_language }}.
+Below you are given the {{ source_language }} sentence and its translation, and a list of words to which you need to find the
+corresponding words.
+You need to return the words and their translations in the form of the Python dictionary, where keys are {{ source_language }}
+words and values are their translations, for example, {{ 4-shot example dictionary }}.
+DO NOT PRETTIFY THE DICTIONARY, return the raw dictionary in one string.
+Source sentence: {{ source sentence }}
+Target sentence: {{ target sentence }}
+Words that need correspondence: {{ randomly selected words }}
+Dictionary of correspondences:
+
+   Table 7: Prompt for automatically mapping randomly selected words from the source text to the target text.
+
+                   MQM Judge: GPT-4o                       MQM Judge: GPT-5
+
+          # Minor  # Major            # Critical  # Minor  # Major           # Critical
+
+System    Avg EnZh ZhEn Avg EnZh ZhEn Avg EnZh ZhEn Avg EnZh ZhEn Avg EnZh ZhEn Avg EnZh ZhEn
+
+Proper
+
+Erlendur  21.1 19.0 23.1 10.2 10.9 9.5 0.4 0.2 0.6 7.9 7.9 8.0 3.8 5.2 2.1 0.2 0.3 0.1
+
+CommandAWMT 19.8 20.9 18.8 11.6 10.8 12.3 0.4 0.3 0.4 7.8 10.8 5.0 3.9 5.4 2.4 1.1 0.3 1.8
+
+STITCH    37.1 37.4 36.8 25.0 28.1 21.9 1.2 0.8 1.7 9.2 10.3 8.2 6.7 8.6 4.8 1.5 1.3 1.7
+
+MeGuMa    29.6 28.3 30.8 24.7 22.2 27.1 1.4 1.2 1.6 10.8 9.2 12.3 9.5 8.3 10.7 2.7 1.9 3.5
+
+Random
+
+Erlendur  24.7 26.0 23.4 10.0 10.8 9.1 0.1 0.1 0.2 11.1 13.9 8.3 4.5 6.7 2.4 0.1 0.2 0.1
+
+CommandAWMT 26.4 27.8 25.1 10.6 11.2 10.0 0.6 0.5 0.6 13.0 16.0 10.0 6.8 9.1 4.5 0.9 0.6 1.2
+
+STITCH    25.7 25.2 26.1 11.5 11.8 11.2 0.7 0.5 0.9 14.2 14.6 13.9 9.2 11.2 7.3 1.4 1.3 1.5
+
+MeGuMa    27.4 31.2 23.2 22.3 24.0 20.4 7.9 0.9 15.4 14.9 15.4 14.3 18.9 20.8 17.0 7.7 4.5 10.9
+
+NoTerm
+
+Erlendur  24.5 25.8 23.3 9.5 9.5 9.5 0.2 0.1 0.3 11.0 13.3 8.8 4.1 5.7 2.5 0.2 0.2 0.1
+
+CommandAWMT 27.9 31.2 24.5 10.1 10.4 9.8 0.7 0.3 1.0 13.8 17.4 10.3 6.6 8.4 4.8 0.9 0.3 1.5
+
+STITCH    27.2 30.4 24.1 14.2 15.3 13.1 0.7 0.4 1.0 14.7 16.4 13.1 11.4 14.1 8.9 1.9 1.6 2.0
+
+MeGuMa    25.4 26.9 24.0 20.0 18.9 21.0 0.8 0.4 1.2 13.7 13.8 13.7 13.4 14.6 12.2 3.5 3.0 4.0
+
+Table 8: Mean number of errors at each severity level (lower is better). Systems are sorted in ascending order,
+consistent with Table 4. Results are shown overall across 111 documents (Avg) and separately for the EnZh and
+ZhEn subsets.
+
+You are a professional {{ source_language }}-{{ target_language }} translator, teaching the students the course on technical
+translation. You are checking a student's translation of a sentence that contains a technical term. You are given an {{
+source_language }} term (it can be a word or an expression), a source {{ source_language }} sentence containing this term (it may
+be cased differently or contain additional punctuation), and a student's {{ target_language }} translation. You need to find how
+the student has translated the term in question in {{ target_language }}, and return only that term.
+Important: do not change the translated term anyhow, copy it straight from the sentence! For example, keep the casing and the
+grammar form of the translated term as is.
+When completing the task, follow the examples below:
+
+            {{ source_language }} sentence: {{ sentence in source language }}
+            {{ source_language }} term: {{ source language term }}
+            {{ target_language }} translation: {{ reference translation }}
+            Translated term: {{ reference term translation }}
+
+                        .
+                        .
+                        .
+            {{ source_language }} sentence: {{ sentence in source language }}
+            {{ source_language }} term: {{ source language term }}
+            {{ target_language }} translation: {{ reference translation }}
+            Translated term:
+
+Table 9: Prompt used for automatic terminology alignment. Only one shot of 20 examples was shown explicitly.
+
+                                                            575
+     System         Proper, ChrF Proper, Acc. Proper, Cons. Random, ChrF Random, Acc. Random, Cons. NoTerm, ChrF NoTerm, Acc. NoTerm, Cons.
+                    Avg Es De Ru Avg Es De Ru Avg Es De Ru Avg Es De Ru Avg Es De Ru Avg Es De Ru Avg Es De Ru Avg Es De Ru Avg Es De Ru
+
+     o3-term-guide  71.0 75.9 71.6 65.6            99.1 99.1 99.1 99.0            87.7 86.7 86.1 90.4            68.1 72.4 69.4 62.4  49.2 50.7 52.3 44.6  88.3 89.1 87.1 88.5  63.6 69.5 64.7 56.6  44.4 46.9 47.5 38.9  89.5 88.8 88.3 91.3
+     duterm         70.1 76.1 70.7 63.6            98.2 98.7 98.2 97.6            87.3 86.0 86.3 89.5            66.4 72.1 67.2 59.8  46.6 48.8 48.4 42.4  86.6 88.7 84.9 86.3  61.6 67.0 62.6 55.3  42.9 46.9 42.5 39.1  86.9 86.7 86.8 87.0
+     Erlendur       69.3 74.8 69.9 63.3            92.9 94.4 93.2 91.2            86.7 83.8 86.3 90.0            66.4 71.6 67.6 59.8  44.4 47.1 47.1 38.9  86.2 86.5 84.5 87.5  62.6 68.1 64.0 55.6  42.3 44.9 42.5 39.5  87.1 87.2 86.0 88.0
+     TiUTermV1      68.9 77.1 65.7 63.8            87.6 89.4 87.3 86.1            86.7 85.7 85.9 88.5            66.8 74.2 64.4 61.8  54.6 59.2 56.7 47.9  85.1 86.4 84.0 84.9  64.4 72.4 61.9 58.9  52.1 54.6 54.1 47.7  85.2 87.9 84.4 83.2
+     GPT-4.1-nano   67.4 72.4 67.4 62.3            90.7 95.2 89.0 88.0            87.5 86.3 86.3 90.0
+576  salamandrata   67.3 72.0 69.6 60.4            91.3 92.7 91.7 89.4            87.4 87.3 86.4 88.6            64.7 69.3 66.2 58.5  48.2 53.1 48.1 43.4  87.4 87.9 86.3 88.2  62.0 67.2 64.0 54.7  44.4 49.9 42.7 40.7  87.9 88.5 86.9 88.2
+     MeGuMa         67.2 72.0 67.7 61.9            97.4 97.0 96.3 98.8            88.6 86.9 88.6 90.2            64.5 70.3 64.2 59.0  46.7 53.1 46.4 40.5  87.1 88.4 84.7 88.1  58.9 65.2 59.4 52.1  40.1 46.9 38.5 34.8  86.3 85.6 85.3 87.9
+     tower          66.0 74.0 65.9 58.1            93.7 95.0 94.8 91.2            88.4 87.6 86.8 90.7            63.8 71.2 63.0 57.1  44.3 48.6 45.7 38.5  87.4 87.7 85.9 88.5  60.9 68.6 61.2 53.0  40.9 46.7 39.6 36.3  88.3 87.9 87.0 90.0
+     CommandAWMT    65.9 70.7 67.6 59.3            79.9 81.9 86.9 70.7            86.6 84.5 87.5 87.8            63.7 68.4 65.0 57.6  45.8 49.3 48.1 40.1  88.3 87.5 86.2 91.3  60.7 65.5 62.2 54.4  43.0 47.3 42.7 38.9  87.7 85.5 86.4 91.3
+     BIT            63.7 69.8 62.4 58.9            97.0 96.3 98.0 96.7            87.8 86.8 86.9 89.8            65.7 67.2 66.3 63.5  80.5 47.5 97.4 96.5  87.9 87.6 86.8 89.3  66.5 69.8 66.3 63.5  96.7 96.3 97.4 96.5  87.9 87.4 86.9 89.3
+     TiUTermV0      62.7 69.0 61.0 58.3            74.4 75.2 71.1 76.8            86.4 85.0 85.6 88.6            61.0 68.1 59.1 55.8  49.6 54.2 49.9 44.8  84.9 85.1 84.7 84.9  60.2 68.0 57.9 54.6  49.1 53.6 49.4 44.2  85.2 85.4 84.9 85.4
+     laniqo         61.7 68.5 59.8 56.9            99.3 98.7 99.4 99.6            87.6 85.6 89.3 87.9            60.2 66.3 59.5 54.8  42.7 46.9 43.5 37.7  82.3 82.9 82.8 81.4  55.0 60.3 55.5 49.4  36.9 41.5 35.2 34.0  82.2 81.0 83.2 82.4
+     LC-primary     61.4 68.9 61.2 54.2            70.2 74.1 70.7 65.8            85.4 83.6 85.8 87.0            61.0 68.1 59.7 55.2  38.6 43.8 37.4 34.6  85.4 85.8 83.1 87.2  57.5 65.0 56.9 50.5  36.5 41.2 35.5 32.8  84.7 85.3 84.2 84.6
+     LC-2           60.8 67.7 61.0 53.7            70.0 73.6 70.7 65.6            85.8 85.4 85.7 86.2            60.5 67.1 59.5 54.9  38.5 43.4 37.4 34.6  85.7 86.5 83.7 86.9  56.9 64.1 56.8 49.9  36.3 40.8 35.5 32.6  85.0 85.8 84.3 85.0
+     LC-3           60.8 67.7 61.0 53.7            70.0 73.6 70.7 65.6            86.0 85.6 85.7 86.7            60.5 67.1 59.5 54.9  38.5 43.4 37.4 34.6  84.9 85.0 83.2 86.5  56.9 64.1 56.8 49.9  36.3 40.8 35.5 32.6  85.3 85.7 84.4 85.7
+     CurTermNLLB    60.1 69.1 60.3 51.0            63.4 76.5 79.0 34.6            88.0 87.5 87.6 88.8            58.8 67.4 58.0 50.8  36.1 44.1 31.7 32.6  84.1 85.3 82.0 84.9  55.6 65.6 52.8 48.4  34.2 41.7 27.1 33.8  85.7 86.1 84.7 86.2
+     ContexTerm     48.5 53.7 40.2 51.5            72.0 68.5 79.9 67.6            81.9 75.6 85.8 84.4            48.2 52.0 40.7 51.7  24.6 20.5 18.6 34.8  80.0 75.0 78.3 86.7  45.7 50.2 37.4 49.4  22.4 18.6 13.8 34.8  79.2 72.3 80.8 84.5
+     Systran-ft
+     MarianMT-ft              71.1                           44.1                           88.1                 71.1                 44.1                 88.6                 71.1                 44.1                 88.2
+     EuroLLM-ft
+     TranssionMT              65.6                           17.5                           54.1                 68.9                 48.8                 85.1                 68.9                 48.8                 86.4
+
+                              63.5                           38.9                           82.5                 63.5                 38.9                 83.1                 63.5                 38.9                 82.8
+
+                                             47.8                           33.2                           90.1        47.8                 33.2                 88.3                 47.8                 33.2                 88.4
+
+               Table 10: Extended results for Track 1: sentence-level IT documentation terminology-informed translation. See Table 2 for a subset.
+
+     System         Proper, ChrF Proper, Acc. Proper, Cons. Random, ChrF Random, Acc. Random, Cons. NoTerm, ChrF NoTerm, Acc. NoTerm, Cons.
+                    Avg EnZh ZhEn Avg EnZh ZhEn Avg EnZh ZhEn Avg EnZh ZhEn Avg EnZh ZhEn Avg EnZh ZhEn Avg EnZh ZhEn Avg EnZh ZhEn Avg EnZh ZhEn
+
+     Erlendur       60.2 46.1 74.2 78.7 85.4 71.9 92.0 91.6 92.3 57.9 41.8 74.0 64.9 60.1 69.6 90.6 89.2 91.9                                                                   57.4 40.8 74.0 65.0 60.3 69.6 90.7 89.2 92.1
+                                                                                                                                                                                54.9 36.9 72.9 56.6 49.1 64.1 90.6 89.0 92.1
+     CommandAWMT 59.6 43.6 75.5 83.6 78.9 88.3 91.5 90.1 93.0 56.7 39.8 73.7 58.8 52.1 65.4 90.6 89.1 92.2                                                                      51.0 33.7 68.3 48.3 44.6 51.9 85.1 83.2 87.0
+                                                                                                                                                                                47.5 31.8 63.1 44.8 41.2 48.5 84.9 82.7 87.1
+     MeGuMa         54.3 39.1 69.4 79.5 96.6 62.4 90.8 93.3 88.3 48.4 31.6 65.2 47.7 43.9 51.5 85.8 84.1 87.4                                                                   46.1 28.6 63.7 43.5 37.2 49.8
+
+     STITCH         53.4 37.5 69.3 72.8 70.9 74.8 87.4 87.2 87.6 49.9 31.1 68.8 46.9 39.5 54.4 84.3 76.9 91.7
+
+     GPT-4.1-nano 47.9 31.6 64.1 54.7 51.6 57.9 81.9 80.3 83.5 46.5 29.1 63.9 43.8 37.6 50.0
+
+                    Table 11: Extended results for Track 2: document-level finance terminology-informed translation. See Table 3 for a subset.
+

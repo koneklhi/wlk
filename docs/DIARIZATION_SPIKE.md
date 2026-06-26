@@ -19,14 +19,14 @@ whisperlivekit은 화자 분할 인프라를 **코드로 완비**했으나 4가�
 |---|---|---|
 | 출력 분리(speaker별 라인) | `--diarization`만 켜면 동작 — 화자 다르면 라인 미병합 | `tokens_alignment.py:184` get_lines_diarization |
 | 메시지 스키마 | `speaker` 필드 이미 존재 → **React 변경 불필요** | `timed_objects.py:161` Segment.to_dict |
-| 디코더 분리(화자전환→새문장) | 뼈대(`new_speaker()`→`refresh_segment`)는 있으나 **트리거(`ChangeSpeaker` enqueue) 미연결 = 죽은 경로** | `backend.py:111` / `audio_processor.py:360` |
+| 디코더 분리(화자전환→새문장) | 뼈대(`new_speaker()`→`refresh_segment`)는 있으나 **트리거(`ChangeSpeaker` enqueue) 미연결 = 죽은 경로** (→ §8에서 **활성화 완료**, 단 `finalized` 미설정은 약한 연결로 남음) | `backend.py:111` / `audio_processor.py:360` |
 | 폐쇄망 오프라인 적재 | `from_pretrained()` HF 다운로드, 로컬 경로 미지원 | `sortformer_backend.py:59`, `diart_backend.py:166` |
 
 ## 3. 환경 / 방법
 
 - 개발 PC, RTX 3080, `torch 2.8.0+cu128`, Python 3.12
 - 경로 A(`test_client` PCM 주입), `--speed 1.0`(실시간 재생 — Sortformer는 실시간 청크 가정)
-- 데이터: **ytn1**(83s, EN↔KO 순차통역 2화자), **ytn2**(109s, held-out, EN→KO)
+- 데이터: **ytn1**(83s, EN↔KO 순차통역 2화자), **ytn2**(109s, **테스트**, EN↔KO 순차통역; 스파이크 당시 "held-out" 표기는 구 regime — 현재 테스트 세트에 포함됨). 신규 테스트 = **bong1**(영어 2명+한국어 2명, 다화자·긴 발화 — 현행 측정 대상).
 
 ## 4. Sortformer 결과 ✅ (완전 동작)
 

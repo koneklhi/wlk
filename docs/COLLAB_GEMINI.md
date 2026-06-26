@@ -75,9 +75,9 @@ antigravity 쪽 역할·금지사항의 정본은 [../AGENTS.md](../AGENTS.md) �
 실행 *전* 방향을 독립 점검할 때.
 
 1. **Claude**: plan/실험 가설을 `docs/`에 쓰고, 요청 파일에 구체적 질문을 담는다.
-   예: "이 방향이 §3.8 과적합(sbs1/ytn1 특화) 아닌가? 후처리 말고 더 단순한 백엔드(디코더 파라미터) 대안은?
-   ytn2 일반화에 악영향 가능성은?"
-2. **antigravity(`agy`)**: AGENTS.md 자동 로드 → `ROADMAP.md`·`PHASE2_EXPERIMENTS.md`·요청 파일을 읽고,
+   예: "이 방향이 §3.8 과적합(bong1/ytn2/sbs1 특화) 아닌가? 후처리 말고 더 단순한 백엔드(디코더 파라미터) 대안은?
+   ytn1/eng1 held-out 일반화에 악영향 가능성은?"
+2. **antigravity(`agy`)**: AGENTS.md 자동 로드 → `ROADMAP.md`·`EXPERIMENTS.md`·요청 파일을 읽고,
    필요 시 읽기 전용(`research`) 서브에이전트로 독립 비판 → 회신 파일 작성.
 3. **Claude**: 회신을 읽고 plan에 반영하거나 근거 있는 기각.
 

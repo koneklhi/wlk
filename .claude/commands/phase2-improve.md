@@ -13,7 +13,7 @@ description: Phase 2 STT 성능 개선 반자율 루프 — 한 이터레이션�
 
 다음 순서로 현황을 파악한다. **파악 없이 구현으로 건너뛰지 않는다.**
 
-1. `PHASE2_EXPERIMENTS.md`의 최신 Exp 항목을 읽어 현재 채택 베이스라인 수치(WER median/max, F1 median)와 "다음 가설" 항목을 추출한다.
+1. `EXPERIMENTS.md`의 최신 Exp 항목을 읽어 현재 채택 베이스라인 수치(WER median/max, F1 median)와 "다음 가설" 항목을 추출한다.
 2. `.omc/benchmarks/` 디렉토리에서 가장 최근 JSON을 찾아 파일별 수치를 확인한다:
    ```powershell
    Get-ChildItem .omc\benchmarks\eval_*.json | Sort-Object Name | Select-Object -Last 3
@@ -53,13 +53,13 @@ description: Phase 2 STT 성능 개선 반자율 루프 — 한 이터레이션�
 ### 가설 형식
 ```
 가설: [무엇이 문제인가] → [어떤 변경을 하면 어떻게 개선될 것이라 예측하는가]
-근거: [PHASE2_EXPERIMENTS.md 이전 결과 또는 코드 분석 근거]
+근거: [EXPERIMENTS.md 이전 결과 또는 코드 분석 근거]
 대상 파일: [수정할 파일 경로]
 예상 효과: [bong1/ytn2/sbs1 중 어디에서 WER↓ 또는 F1↑]
 ```
 
 **가설 결정 전 금지 사항**:
-- 동일 이벤트 동일 이유로 이미 기각된 실험을 재시도하지 않는다 (PHASE2_EXPERIMENTS.md 확인).
+- 동일 이벤트 동일 이유로 이미 기각된 실험을 재시도하지 않는다 (EXPERIMENTS.md + PHASE2_EXPERIMENTS.md 아카이브 확인).
 - 데이터 특화 하드코딩(특정 단어·구절 암기)은 일반화가 아니므로 금지.
 - 변경 범위가 너무 크면 → 더 작게 쪼개서 하나씩.
 
@@ -224,7 +224,7 @@ held-out에서 catastrophic 회귀 없으면 → 채택 후보 확정.
 
 사용자가 채택 확인 시:
 
-1. `/log-experiment` 실행 → `PHASE2_EXPERIMENTS.md`에 Exp-N 항목 추가
+1. `/log-experiment` 실행 → `EXPERIMENTS.md`에 Exp-N 항목 추가
 2. 워크트리 브랜치를 main에 PR 또는 merge (사용자 지시에 따름)
 3. 목표 달성 여부 재확인 → **미달성이면 루프 재진입**
 
@@ -234,7 +234,7 @@ held-out에서 catastrophic 회귀 없으면 → 채택 후보 확정.
 
 기각 시:
 
-1. 기각 이유와 관찰 사실을 `PHASE2_EXPERIMENTS.md`에 Exp-N(기각)으로 간략 기록 요청 (실패도 기록)
+1. 기각 이유와 관찰 사실을 `EXPERIMENTS.md`에 Exp-N(기각)으로 간략 기록 요청 (실패도 기록)
 2. 워크트리 변경 롤백 또는 브랜치 삭제
 3. 기각 원인을 감안해 다음 가설을 재수립 → **루프 재진입**
 
@@ -246,14 +246,14 @@ held-out에서 catastrophic 회귀 없으면 → 채택 후보 확정.
 
 - **목표 달성**: 테스트 3종 모두 WER<15% AND F1≥80% (0단계에서 확인)
 - **사용자 명시적 중단**: "이 방향은 그만"·"다른 Phase로 이동" 등 명시
-- **3회 연속 기각 + 신규 가설 없음**: PHASE2_EXPERIMENTS.md에서 시도 가능한 접근이 소진됨 → 사용자에게 방향 재설정 요청 후 종료
+- **3회 연속 기각 + 신규 가설 없음**: EXPERIMENTS.md(+PHASE2_EXPERIMENTS.md 아카이브)에서 시도 가능한 접근이 소진됨 → 사용자에게 방향 재설정 요청 후 종료
 
 ---
 
 ## 참조 파일
 
 - [ROADMAP.md](../ROADMAP.md) — Phase 2 완료 기준·채택 규칙 상세
-- [PHASE2_EXPERIMENTS.md](../PHASE2_EXPERIMENTS.md) — 실험 기록 및 최신 베이스라인
+- [EXPERIMENTS.md](../EXPERIMENTS.md) — 실험 기록 및 최신 베이스라인 (Exp-001~130은 [PHASE2_EXPERIMENTS.md](../PHASE2_EXPERIMENTS.md) 아카이브)
 - [docs/TESTING.md](../docs/TESTING.md) — 경로별 실행 명령 상세
 - [.claude/commands/eval.md](eval.md) — eval.py 옵션 레퍼런스
 - [.claude/commands/log-experiment.md](log-experiment.md) — 실험 기록 형식

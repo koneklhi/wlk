@@ -8,18 +8,22 @@
         "hooks": [
           {
             "type": "command",
-            "command": "echo '[리마인더] 계획에서 벗어난 변경이 있었는지 확인하고, 있다면 사용자에게 보고하세요.' && echo '[Phase 2] whisperlivekit/ 코드를 수정했다면 /log-experiment 로 PHASE2_EXPERIMENTS.md를 업데이트하세요.'"
+            "command": "echo '[리마인더] 계획에서 벗어난 변경이 있었는지 확인하고, 있다면 사용자에게 보고하세요.' && echo '[Phase 2] whisperlivekit/ 코드를 수정했다면 /log-experiment 로 EXPERIMENTS.md를 업데이트하세요.' && echo '[master 머지] 채택 실험을 master에 머지했다면 /update-master-changes 로 docs/MASTER_CHANGES.md를 갱신하세요.'"
           }
         ]
       }
     ]
   },
   "enabledPlugins": {
-    "python-development@claude-code-workflows": true
+    "python-development@claude-code-workflows": true,
+    "andrej-karpathy-skills@karpathy-skills": true
   },
   "extraKnownMarketplaces": {
     "claude-code-workflows": {
       "source": { "source": "github", "repo": "wshobson/agents" }
+    },
+    "karpathy-skills": {
+      "source": { "source": "github", "repo": "forrestchang/andrej-karpathy-skills" }
     }
   }
 }
