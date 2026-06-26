@@ -136,7 +136,7 @@ def load_audio_pcm(audio_path: str, sample_rate: int = SAMPLE_RATE) -> bytes:
 
 async def transcribe_audio(
     audio_path: str,
-    url: str = "ws://localhost:8000/asr",
+    url: str = "ws://localhost:8900/asr",
     chunk_duration: float = 0.5,
     speed: float = 1.0,
     timeout: float = 60.0,
@@ -309,8 +309,8 @@ def main():
     )
     parser.add_argument("audio", help="Path to audio file (wav, mp3, flac, ...)")
     parser.add_argument(
-        "--url", default="ws://localhost:8000/asr",
-        help="WebSocket endpoint URL (default: ws://localhost:8000/asr)",
+        "--url", default="ws://localhost:8900/asr",
+        help="WebSocket endpoint URL (default: ws://localhost:8900/asr)",
     )
     parser.add_argument(
         "--speed", type=float, default=1.0,
