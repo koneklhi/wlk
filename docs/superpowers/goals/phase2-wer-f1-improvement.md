@@ -8,7 +8,7 @@
 ## 초기 상태 (2026-06-05 — 역사적, Phase 2 착수 시점)
 
 > ⚠️ 아래는 문장 확정 로직 도입 **이전**의 출발 베이스라인이다. Phase 3/4가 머지된 **현재 수치는
-> [EXPERIMENTS.md](../../../EXPERIMENTS.md)(활성 로그)의 최신 Exp 항목**을 참조한다.
+> [EXPERIMENTS.md](../../../EXPERIMENTS.md)(STATE)의 "현재 베이스라인"·빠른참조**를 참조한다(개별 Exp 상세는 [EXPERIMENTS_LOG.md](../../../EXPERIMENTS_LOG.md)).
 
 - 브랜치: `master`
 - 기준 베이스라인 (경로 C, 1회 측정):

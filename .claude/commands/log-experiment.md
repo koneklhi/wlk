@@ -2,9 +2,13 @@
 description: 현재 세션의 Phase 2 실험 내용을 EXPERIMENTS.md에 기록한다
 ---
 
-이번 세션에서 수행한 Phase 2 실험을 EXPERIMENTS.md에 정리해줘.
+이번 세션에서 수행한 실험을 **3계층 구조(STATE/LOG/ARCHIVE)**에 맞게 정리해줘.
 
-1. EXPERIMENTS.md를 읽어 "빠른 참조" 표의 마지막 Exp 번호를 확인하고 다음 번호를 부여한다(Exp-001~130은 PHASE2_EXPERIMENTS.md 아카이브, 신규는 Exp-131부터 이어간다).
+> **기록 위치 (중요)**: 개별 실험의 **전체 서술**은 `EXPERIMENTS_LOG.md`(LOG)에 추가한다. `EXPERIMENTS.md`(STATE)에는 **빠른참조 표에 1행만**(Epoch 열 포함) 추가하고, 확정 결론이 바뀐 경우에만 "이월 핵심사실"을 갱신한다. STATE는 ~150줄 상한을 유지하므로 전체 서술을 STATE에 쓰지 않는다.
+
+1. `EXPERIMENTS.md`(STATE)의 "빠른 참조" 표에서 마지막 Exp 번호를 확인하고 다음 번호를 부여한다(Exp-001~130은 PHASE2_EXPERIMENTS.md 아카이브, Exp-131~은 `EXPERIMENTS_LOG.md`, 신규는 그다음 번호로 이어간다).
+
+1-b. **이번 실험의 코드 세대(Epoch)를 판정한다.** STATE 상단 "코드 세대(Epoch)" 절을 기준으로, *측정 대상 코드(브랜치)*가 어느 epoch인지 결정해 빠른참조 행의 Epoch 열에 적는다(현재 master=E1, `exp/meta-token-suppress`=E2 후보). 이번 변경이 **실패 모드를 바꾸는 구조적 변경(언어고정·비음성억제·디코더/VAD 파이프라인 등)을 master에 머지**한 것이면, STATE의 epoch 마커를 +1 올리고 이전 세대 파라미터 결론에 `[E?·재검증]`을 부여한다(major 방향 전환이므로 사용자에게 보고).
 
 2. 이번 세션에서 수정한 코드 파일, 변경 이유, 벤치마크 결과를 바탕으로 아래 필드를 채운다:
    - 날짜 (오늘 날짜)
@@ -17,9 +21,11 @@ description: 현재 세션의 Phase 2 실험 내용을 EXPERIMENTS.md에 기록�
    - 결론 (채택 / 기각 / 수정 예정)
    - 다음 가설
 
-3. 빠른 참조 표 상단에도 한 줄 추가한다.
+   위 §2의 전체 서술(가설·변경·테스트설정·결과표·`### 분석` 정성분석·채택 판정·다음 가설·JSON 경로)은 **`EXPERIMENTS_LOG.md`의 맨 아래에 `## Exp-N` 블록으로 추가**한다(앞에 `---` 구분선). LOG 상단의 작성 형식·Exp↔Epoch 안내를 따른다.
 
-4. 작성한 내용을 출력하고 수정할 부분이 있는지 확인을 구한다.
+3. `EXPERIMENTS.md`(STATE)의 "빠른 참조" 표 **상단에 한 줄 추가**한다 — `| Exp-N | <Epoch> | 날짜 | 변경 | bong1 med | ytn2 med | sbs1 med | 판정 |` 형식. 확정 결론(파라미터 트레이드오프·구조 사실)이 바뀌었으면 STATE "이월 핵심사실"의 해당 항목도 epoch 태그와 함께 갱신한다.
+
+4. 작성한 내용(LOG 블록 + STATE 빠른참조 행)을 출력하고 수정할 부분이 있는지 확인을 구한다.
 
 벤치마크 결과 파일이 있으면 (`.omc/benchmarks/` 디렉토리) 해당 파일을 읽어 정량 수치를 정확히 옮긴다.
 

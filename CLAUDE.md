@@ -69,8 +69,9 @@
 - **Python**: `pyproject.toml` 기준 Python `>=3.11, <3.14`, FastAPI 기반. 린트 `ruff check`(line-length 120, target `py311`).
   테스트 `pytest`(`tests/`). 패키지 매니저 `uv`(`uv.lock` 존재).
 - **Git Worktree 환경 관리**: 디스크 용량 절약을 위해 실험/기능 개발용 워크트리 생성 시, 기본적으로 메인 저장소의 `.venv`를 공유(Windows 교차점/Junction 연결)하여 사용한다. 워크트리에서 패키지 추가나 버전 변경이 명시적으로 필요한 경우에만 예외적으로 독립된 `.venv`를 구성한다.
-- **실험 기록**: STT 성능 분석/개선 작업 시 [EXPERIMENTS.md](EXPERIMENTS.md)(활성 로그)를 먼저 확인해 이전 시도와
-  결론을 파악한다. 코드 변경 + 벤치마크 완료 후 새 항목(Exp-N, 131부터 이어감)을 추가하며, 작성은 `/log-experiment` 슬래시 커맨드로 수행한다. (Exp-001~130은 [PHASE2_EXPERIMENTS.md](PHASE2_EXPERIMENTS.md) 아카이브.)
+- **실험 기록 (3계층 STATE/LOG/ARCHIVE + epoch 게이트)**: STT 성능 분석/개선 작업 시 **[EXPERIMENTS.md](EXPERIMENTS.md)(STATE)만 먼저 읽는다** — 현행 regime·베이스라인·이월 핵심사실·빠른참조·**코드 세대(epoch) 게이트**를 담은 요약본이다. 개별 실험 상세가 필요할 때만 [EXPERIMENTS_LOG.md](EXPERIMENTS_LOG.md)(LOG)에서 `grep "Exp-NNN"`으로 해당 블록만 읽고, [PHASE2_EXPERIMENTS.md](PHASE2_EXPERIMENTS.md)(ARCHIVE, Exp-001~130 동결)는 아주 오래된 결론 추적 시에만 본다. **LOG/ARCHIVE를 통째로 읽지 않는다**(토큰 절약).
+  - **epoch 게이트 (stale 결론 차단)**: 과거 Exp 결론(특히 디코더 파라미터)을 현재 작업의 채택/기각 근거로 인용하기 전, 그 Exp의 코드 세대(epoch)가 *지금 측정 대상 코드*의 세대와 같은지 확인한다. 다르면 확정 사실이 아니라 **'방향 신호'로만** 쓰고 재검증한다. 세대 경계 정의·현재 epoch는 STATE 상단 "코드 세대(Epoch)" 절 참조. (현재 master=E1, `exp/meta-token-suppress`=E2 후보.)
+  - **기록**: 코드 변경 + 벤치마크 완료 후 새 항목(Exp-N, 131부터 이어감) 전체 서술은 **LOG에 추가**하고 STATE 빠른참조 표엔 1행(Epoch 열 포함)만 추가한다. 작성은 `/log-experiment` 슬래시 커맨드로 수행한다. 구조적 변경(언어고정·비음성억제·디코더/VAD 파이프라인 등)이 master에 머지되면 STATE의 epoch 마커를 올리고 이전 세대 파라미터 결론에 `[E?·재검증]`을 부여한다.
 - **구현 → 측정 → 기록 자율 루프**: STT 개선 코드 구현이 끝나면 **사용자 지시를 기다리지 않고** 자율적으로 eval.py를 실행한다. VBCable 상태 확인(`vbcable=ok`) → 경로 C 측정 → 결과 분석 → `/log-experiment` 기록 → 채택/기각 자율 결정 → 다음 단계 진행. **major 방향 전환**(Stage 변경, 실험 방향 변경, 루프 종료)은 사용자에게 보고 후 진행한다. (근거: §4 경로 C 측정 규칙과 동일한 자율 루프 원칙.)
 - **목표 필수 기능 채택은 사용자 질의 (자율 기각 금지)**: 어떤 변경이 정량 채택 게이트(WER/F1·worst-case 미회귀)를 충족하지 못하더라도, 그것이 핵심 불변 제약(§3.1 폐쇄망·§3.2 한/영 두 언어 고정)을 달성·보전하는 데 필요한 **기반 기능**이라고 판단되면 "정량 개선 없음/회귀"만을 근거로 **자율 기각하지 않는다**. 목표·측정 결과(회귀 위치 포함)·대안 구현 여지를 함께 보고하고 **사용자에게 채택 여부를 묻는다**. 이는 worst-case 게이트를 무력화하는 게 아니라 자동 기각을 사용자 판단으로 이관하는 것이다(자율 루프 'major 방향 전환 보고'의 연장). 남용 방지: 일반 점진 개선은 해당 없고, 불변 제약 직결 기능이 게이트에서 탈락하는 좁은 경우만. 예: 일본어·중국어 환각을 막는 한/영 출력 고정(§3.2)은 정량 개선이 작거나 특정 데이터(bong1)에서 회귀할 수 있으나(Exp-136) §3.2상 필수이므로 자율 기각 대신 사용자 확인.
 - **경로 C 측정 — 2계층(스크리닝 / 채택 확정)**: 실시간 STT 특성 상 동일 조건에서도 매 실행마다 성능 편차가 크다(±30~120%p 관측 — 분산이 미세 개선폭 5~15%p를 압도). 현재는 전사 성능이 불완전한 **탐색 단계**이므로 측정을 두 계층으로 나눈다.
@@ -93,6 +94,8 @@
 | `pyproject.toml` extras 추가/제거 | `docs/DEPLOYMENT_OFFLINE.md` §2.1 기능별 extra 표 및 §2.2 export 명령 |
 | 번역 파이프라인 변경 (`translator.py`, config 번역 필드) | `docs/DEPLOYMENT_OFFLINE.md` §5, `docs/FRONTEND_HANDOFF.md` |
 | `test_data/` 파일 추가 또는 정답 .txt 추가 | `docs/TESTING.md` 파일 목록, `CLAUDE.md` §4 측정 기본 설정(테스트셋 변경 시) |
+| 실패 모드를 바꾸는 **구조적** 코드 변경의 master 머지 (언어고정·비음성억제·디코더/VAD 파이프라인 등) | `EXPERIMENTS.md`(STATE) "코드 세대(Epoch)" 절 — epoch 마커 +1, 이전 세대 파라미터 결론에 `[E?·재검증]` 부여 |
+| 신규 실험(Exp-N) 기록 | `EXPERIMENTS_LOG.md`(전체 서술) + `EXPERIMENTS.md` 빠른참조 1행(Epoch 열) — `/log-experiment` |
 | WhisperLiveKit 본체 대규모 변경 | `docs/MASTER_CHANGES.md` — `/update-master-changes` 슬래시 커맨드 실행 |
 
 > 확인 방법: 변경한 플래그·포트·경로 값을 `grep`으로 docs 전체에 검색해 stale 참조가 남아있으면 제거.
@@ -117,7 +120,7 @@
 - 실행 명령어·검증 순서·test_data 구조·모델 경로 상세 → [docs/TESTING.md](docs/TESTING.md)
 - 작업 시 우선 참조 파일 색인 → [docs/FILE_INDEX.md](docs/FILE_INDEX.md)
 - 미정 설계 사항(문장 확정 알고리즘, 메시지 스키마, Code-Switching, 폐쇄망 패키징) → [docs/OPEN_QUESTIONS.md](docs/OPEN_QUESTIONS.md)
-- Phase 정의·태스크·완료 기준 → [ROADMAP.md](ROADMAP.md) / 실험 기록(활성) → [EXPERIMENTS.md](EXPERIMENTS.md) (Exp-001~130 아카이브 → [PHASE2_EXPERIMENTS.md](PHASE2_EXPERIMENTS.md))
+- Phase 정의·태스크·완료 기준 → [ROADMAP.md](ROADMAP.md) / 실험 기록 3계층 → [EXPERIMENTS.md](EXPERIMENTS.md)(STATE·항상읽음) · [EXPERIMENTS_LOG.md](EXPERIMENTS_LOG.md)(LOG·온디맨드 Exp-131~) · [PHASE2_EXPERIMENTS.md](PHASE2_EXPERIMENTS.md)(ARCHIVE·Exp-001~130 동결)
 - master 최종본 upstream 대비 전체 변경 + 향후 개선 → [docs/MASTER_CHANGES.md](docs/MASTER_CHANGES.md)
 
 <!-- memorize:ground-rule v=1 start -->

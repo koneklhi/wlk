@@ -1,7 +1,7 @@
 # master 최종본 — upstream 대비 전체 변경 요약
 
 > **이 문서의 목적**: `whisperlivekit` upstream 0.2.20 대비 **현재 master 브랜치에 반영된 모든 변경**을
-> 도메인별로 증류해 설명한다. 실험 시행착오는 [../EXPERIMENTS.md](../EXPERIMENTS.md)(활성; Exp-001~130은 [../PHASE2_EXPERIMENTS.md](../PHASE2_EXPERIMENTS.md) 아카이브)에 있다.
+> 도메인별로 증류해 설명한다. 실험 시행착오는 3계층에 있다 — [../EXPERIMENTS.md](../EXPERIMENTS.md)(STATE·요약/epoch), [../EXPERIMENTS_LOG.md](../EXPERIMENTS_LOG.md)(LOG·Exp-131~ 서술), [../PHASE2_EXPERIMENTS.md](../PHASE2_EXPERIMENTS.md)(ARCHIVE·Exp-001~130).
 > 이 문서는 master의 **최종 상태만** 담는다.
 >
 > **갱신 주기**: 채택 실험을 master에 머지한 직후 `/update-master-changes` 슬래시 커맨드로 갱신한다.
