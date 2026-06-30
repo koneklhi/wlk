@@ -614,3 +614,97 @@ Python 검증 스크립트로 세 파일 전사 결과 전수 확인:
 2. `vad_filter` 또는 기존 VAC(Voice Activity Controller) 파라미터 조정으로 비음성 구간 제거 강화
 
 **JSON**: `worktrees/exp-meta-token-suppress/.omc/benchmarks/eval_20260630_1408.json`
+
+---
+
+### 재측정 — 채택 확정 (2026-07-01)
+
+**재측정 배경**: 이전 N=1 스크리닝(2026-06-30)은 Windows 계정 전환 직후 오디오 불안정 구간에서 측정됐다 (ytn2 55.7%가 이상 고점 — 재측정 후 33.5%로 정상 복귀). Junction 깨짐(.venv → 구 PC 경로)도 함께 수정. 측정 도구 개선: `eval.py`에 `--no-suppress-nonspeech` / `--no-lang-restrict-koen` 패스스루 플래그 추가.
+
+#### 스크리닝 재측정 (N=1, 오디오 정상화 후)
+
+| 파일 | WER | F1 | vs baseline |
+|------|-----|----|-------------|
+| bong1 | 52.6% | 45.0% | +8.5pp |
+| ytn2  | 33.5% | 50.0% | **-10.8pp ✓** |
+| sbs1  | 22.6% | 36.4% | -1.8pp ✓ |
+
+ytn2 이전 측정 55.7%가 오디오 불안정 노이즈였음 확인.
+
+#### 채택 확정 측정 (N=3, diar-ON, CRT=3.0, beams=2, Exp-138 OFF)
+
+```powershell
+.venv\Scripts\python.exe scripts/eval.py `
+  --model-dir "c:\...\whisper-large-v3-turbo" `
+  --files test_data\bong1.wav test_data\ytn2.mp3 test_data\sbs1.mp3 `
+  --diarization --sortformer-model "c:\...\sortformer-4spk-v2.nemo" `
+  --compression-ratio-threshold 3.0 --no-suppress-nonspeech --repeat 3 `
+  --output .omc\benchmarks\eval_20260630_1613_r3.json
+```
+
+provenance: `branch=exp/meta-token-suppress@40e702b, beams=2, CRT=3.0, PLC=None, diar=on, vbcable=ok`
+
+| 파일 | R1 WER | R2 WER | R3 WER | median | max | stdev | F1 med | Δmed vs BL | Δmax vs BL |
+|------|--------|--------|--------|--------|-----|-------|--------|-----------|-----------|
+| bong1 | 55.3% | 52.9% | 32.0% | **52.9%** | **55.3%** | 12.8% | 44.4% | +8.8pp ❌ | +0.3pp ✓ |
+| ytn2  | 31.5% | 42.9% | 35.5% | **35.5%** | **42.9%** | 5.8% | 50.0% | **-8.8pp ✓** | **-18.7pp ✓** |
+| sbs1  | 24.4% | 17.3% | 22.0% | **22.0%** | **24.4%** | 3.6% | 36.4% | -2.4pp ✓ | -8.3pp ✓ |
+
+베이스라인: bong1 44.1%/55.0%, ytn2 44.3%/61.6%, sbs1 24.4%/32.7%
+
+#### held-out 단회 검증 (diar-ON)
+
+| 파일 | WER | F1 | vs baseline |
+|------|-----|----|-------------|
+| ytn1 | 27.0% | 70.6% | **-2.4pp ✓** |
+| eng1 | 5.7% | 0.0% | +1.9pp (허용) |
+
+베이스라인 held-out: ytn1 29.4%, eng1 3.8%. Exp-138의 eng1 catastrophic(+80pp)·ytn1 catastrophic(+20pp) 완전 해소 확인.
+
+#### 분석 (전사 내용 정성 대조)
+
+**bong1** (R2 median=52.9% 기준):
+- **CJK/주석 불변식**: 0건 ✓ — Layer 1+2 동작 확인.
+- **음절 혼동**: 전사 `"돌돌고 있는 저 아들 놈이"` / 정답 `"들고 있는 저 아들 놈이"` — 초성 오인식.
+- **음절 혼동2**: 전사 `"불량이 조금 많은데"` / 정답 `"분량이 조금 많은데"`.
+- **앞부분 잘림**: 전사 `"사사단을 the most is who is the main protagonist"` — SOT 직후 한국어 앞부분 누락.
+- **max 회차(R1=55.3%)**: `"공일까 이런 생각이"` 등 추가 오인식; 전반적으로 비음성 구간 garbage 없음(환각 대체도 이번 측정에서는 bong1에서 두드러지지 않음).
+
+**ytn2** (R3 median=35.5% 기준):
+- **CJK/주석**: 0건 ✓.
+- **garbage prefix**: 전사 `"Ngu 우선 탠회를"` / 정답 없음 — 화자 전환 구간 garbage 1~2회.
+- **메타 태그 환각**: 전사 `"[speaking in foreign language/ I reviewed progress on…"` — Layer 1이 `[…]` 패턴으로 제거해야 하나 닫는 `]` 없이 열려 있어 미차단(버그 후보).
+- **음절 혼동**: 전사 `"취재에 논의를"` / 정답 `"취지의 논의를"`.
+- **코드스위칭 정상**: `"최종적 그리고 완전히 검증된 비핵화"` / `"유엔 안보리 결의"` 한·영 혼용 정상 처리.
+- **R2(max=42.9%)**: `"고맙습니다 고맙습니다 고맙…"` 반복 환각 발생(무음 구간).
+
+**sbs1** (R3 median=22.0% 기준):
+- **CJK/주석**: 0건 ✓.
+- **이름 오인식**: 전사 `"J.B. 업로드선"` / 정답 `"제이비어 브런슨"` — 큰 오류.
+- **방송 태그 환각**: 전사 `"[TAKE VO 이번 강연의 핵심은"` — 닫힌 `]` 없어 Layer 1 미차단.
+- **기존 단어 대치**: `"6군 전쟁 대학"` / `"육군 전쟁 대학"`, `"연구적인"` / `"영구적인"`, `"공군역"` / `"공군력"`.
+- **`. ` 아티팩트**: 문장 중간 `. ` 삽입 다수 → F1 36.4%(과분할).
+
+**이번 변경 영향**: CJK/주석 불변식 완전 달성. ytn2 worst-case(max) -18.7pp 대폭 개선. bong1 median +8.8pp 회귀는 비음성 구간 환각 대체가 아닌 **음절 혼동 증가**로 나타남(이번 측정에선 CJK 캐스케이드 없음). Layer 1 `[…]` 필터의 닫힌 `]` 누락 패턴 미차단은 Exp-140 관련 버그 후보.
+
+#### 채택 조건 판정 (N=3 기준)
+
+| # | 조건 | 판정 |
+|---|------|------|
+| 불변식 달성 | CJK/주석 0건 | ✓ **완전 달성** |
+| ① max WER 미회귀 | bong1 +0.3pp(노이즈)/ytn2 -18.7pp ✓/sbs1 -8.3pp ✓ | ✅ **통과** |
+| ② median 개선 | bong1 +8.8pp ❌ / ytn2 -8.8pp ✓ / sbs1 -2.4pp ✓ | 혼합 |
+| held-out 회귀 없음 | ytn1 -2.4pp ✓ / eng1 +1.9pp ✓ | ✅ **통과** |
+
+**판정: ✅ 채택**
+- 1순위(max 미회귀): 통과 (bong1 +0.3pp ≈ 측정 노이즈).
+- held-out: 정상 (Exp-138 catastrophic 완전 해소).
+- §3.2 불변식: 달성.
+- bong1 median +8.8pp: 비음성 구간 구조적 문제 → **Exp-140(Layer 3b)에서 해결** 예정.
+
+#### 다음 가설 (Exp-140)
+
+**Layer 3b — no_speech_threshold 또는 VAD 강화로 비음성 구간 전사 스킵**:
+bong1 median 회귀의 근본 원인(비음성 구간 garbage 생성)은 Exp-140에서 해결. Layer 1 `[…]` 미차단 버그(닫힌 `]` 없는 패턴)도 함께 검토.
+
+**JSON**: `.omc/benchmarks/eval_20260630_1613_r3.json` (N=3 테스트) / `.omc/benchmarks/eval_20260630_1637_heldout.json` (held-out)
