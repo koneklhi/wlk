@@ -400,6 +400,7 @@ class SimulStreamingASR:
                 static_init_prompt=self.static_init_prompt,
                 logprob_threshold=self.logprob_threshold,
                 compression_ratio_threshold=self.compression_ratio_threshold,
+                lang_restrict_koen=getattr(self, 'lang_restrict_koen', True),
         )
 
         # Set up tokenizer for translation if needed

@@ -3,6 +3,27 @@ import json
 import re
 from pathlib import Path
 
+# 배포 환경 불변식: 한국어·영어만 존재.
+# CJK 한자·히라가나·가타카나 포함 세그먼트는 정의상 오언어 환각 → 통째 드롭.
+# 한글(U+AC00-D7A3)은 이 범위에 포함되지 않으므로 한국어 전사는 절대 안 걸린다.
+_CJK_KANA_RE = re.compile(
+    "[一-鿿"   # CJK 한자 기본
+    "㐀-䶿"    # CJK 확장 A
+    "⺀-⻿"    # CJK 부수 보충
+    "⼀-⿟"    # 강희자전 부수
+    "豈-﫿"    # CJK 호환 한자
+    "぀-ゟ"    # 히라가나
+    "゠-ヿ]"   # 가타카나
+)
+
+# 비음성 주석 스팬 제거: (웃음) [구독] ♪...♪ 등.
+# 제거 후 공백만 남으면 기존 empty-drop 로직이 드롭한다.
+_ANNOTATION_RE = re.compile(
+    r"\([^)]*\)"      # (웃음) (laughter) 등
+    r"|\[[^\]]*\]"    # [구독] [MUSIC] 등
+    r"|[♪♩♫♬]"       # 음표 기호
+)
+
 from .manager import WordCorrectionManager
 
 _FILTERING_DIR = Path(__file__).resolve().parent
@@ -93,6 +114,14 @@ def filter_segments(segments: list) -> list:
             continue
 
         text = seg.text
+
+        # 불변식 1: 비음성 주석 스팬 제거 ((웃음), [구독], 음표 등)
+        text = _ANNOTATION_RE.sub("", text).strip()
+
+        # 불변식 2: CJK 한자/히라가나/가타카나 포함 세그먼트 → 오언어 환각, 통째 드롭
+        if _CJK_KANA_RE.search(text):
+            continue
+
         for bad in _HALLUCINATIONS:
             if bad in text:
                 text = text.replace(bad, "")
