@@ -229,3 +229,125 @@ class TestFilterHallucination:
         result = fn([(1.5, 3.2, "한반도 방어선")])
         assert result[0][0] == 1.5
         assert result[0][1] == 3.2
+
+
+# ─── 불변식 필터 단위 테스트 (Segment 객체 대상) ─────────────────────────────
+
+def _make_seg(text: str, silence: bool = False):
+    """테스트용 최소 Segment 객체 (whisperlivekit 코어 없이)."""
+    from whisperlivekit.timed_objects import Segment
+    return Segment(start=0.0, end=1.0, text=text, speaker=-2 if silence else -1)
+
+
+class TestFilterSegmentsInvariants:
+    """filter_segments()의 언어 불변식 필터(Layer 1) 동작 검증."""
+
+    def test_korean_text_preserved(self, monkeypatch):
+        """한글 정상 문장은 드롭되지 않는다."""
+        import whisperlivekit.filtering as fmod
+        monkeypatch.setattr(fmod, "_HALLUCINATIONS", [])
+        monkeypatch.setattr(fmod, "_word_manager", fmod.get_word_manager())
+
+        seg = _make_seg("한반도 방어선을 논의했습니다.")
+        result = fmod.filter_segments([seg])
+        assert len(result) == 1
+        assert "한반도" in result[0].text
+
+    def test_english_text_preserved(self, monkeypatch):
+        """영어 정상 문장은 드롭되지 않는다."""
+        import whisperlivekit.filtering as fmod
+        monkeypatch.setattr(fmod, "_HALLUCINATIONS", [])
+
+        seg = _make_seg("The alliance is crucial for regional stability.")
+        result = fmod.filter_segments([seg])
+        assert len(result) == 1
+
+    def test_cjk_kanji_segment_dropped(self, monkeypatch):
+        """한자 포함 세그먼트는 통째 드롭된다."""
+        import whisperlivekit.filtering as fmod
+        monkeypatch.setattr(fmod, "_HALLUCINATIONS", [])
+
+        seg = _make_seg("主委員工也沒有打仗")
+        result = fmod.filter_segments([seg])
+        assert result == []
+
+    def test_hiragana_segment_dropped(self, monkeypatch):
+        """히라가나 포함 세그먼트는 통째 드롭된다."""
+        import whisperlivekit.filtering as fmod
+        monkeypatch.setattr(fmod, "_HALLUCINATIONS", [])
+
+        seg = _make_seg("ありがとうございます")
+        result = fmod.filter_segments([seg])
+        assert result == []
+
+    def test_katakana_segment_dropped(self, monkeypatch):
+        """가타카나 포함 세그먼트는 통째 드롭된다."""
+        import whisperlivekit.filtering as fmod
+        monkeypatch.setattr(fmod, "_HALLUCINATIONS", [])
+
+        seg = _make_seg("テレビ放送")
+        result = fmod.filter_segments([seg])
+        assert result == []
+
+    def test_annotation_stripped_embedded(self, monkeypatch):
+        """실발화 + 주석 임베디드 케이스: 주석만 제거하고 실발화는 보존."""
+        import whisperlivekit.filtering as fmod
+        monkeypatch.setattr(fmod, "_HALLUCINATIONS", [])
+
+        seg = _make_seg("안녕하세요 (웃음) 오늘 날씨가 좋네요.")
+        result = fmod.filter_segments([seg])
+        assert len(result) == 1
+        assert "(웃음)" not in result[0].text
+        assert "안녕하세요" in result[0].text
+        assert "오늘 날씨가 좋네요" in result[0].text
+
+    def test_standalone_laughter_annotation_dropped(self, monkeypatch):
+        """단독 (laughter) 세그먼트는 strip 후 공백만 남아 드롭된다."""
+        import whisperlivekit.filtering as fmod
+        monkeypatch.setattr(fmod, "_HALLUCINATIONS", [])
+
+        seg = _make_seg("(laughter)")
+        result = fmod.filter_segments([seg])
+        assert result == []
+
+    def test_bracket_annotation_stripped(self, monkeypatch):
+        """[구독] 같은 대괄호 주석이 제거된다."""
+        import whisperlivekit.filtering as fmod
+        monkeypatch.setattr(fmod, "_HALLUCINATIONS", [])
+
+        seg = _make_seg("[구독] [좋아요] 눌러주세요")
+        result = fmod.filter_segments([seg])
+        assert len(result) == 1
+        assert "[구독]" not in result[0].text
+        assert "눌러주세요" in result[0].text
+
+    def test_music_note_stripped(self, monkeypatch):
+        """음표 기호(♪ 등)가 제거된다."""
+        import whisperlivekit.filtering as fmod
+        monkeypatch.setattr(fmod, "_HALLUCINATIONS", [])
+
+        seg = _make_seg("♪ 노래 가사 ♪")
+        result = fmod.filter_segments([seg])
+        # 음표 제거 후 '노래 가사'만 남거나 빈 세그먼트 드롭
+        if result:
+            assert "♪" not in result[0].text
+
+    def test_silence_segment_passes_through(self, monkeypatch):
+        """침묵 세그먼트는 필터를 그대로 통과한다."""
+        import whisperlivekit.filtering as fmod
+        monkeypatch.setattr(fmod, "_HALLUCINATIONS", [])
+
+        seg = _make_seg("", silence=True)
+        result = fmod.filter_segments([seg])
+        assert len(result) == 1
+
+    def test_korean_english_codeswitching_preserved(self, monkeypatch):
+        """한·영 코드스위칭 문장은 보존된다."""
+        import whisperlivekit.filtering as fmod
+        monkeypatch.setattr(fmod, "_HALLUCINATIONS", [])
+
+        seg = _make_seg("그건 trust 있는 alliance 파트너십이야.")
+        result = fmod.filter_segments([seg])
+        assert len(result) == 1
+        assert "trust" in result[0].text
+        assert "그건" in result[0].text

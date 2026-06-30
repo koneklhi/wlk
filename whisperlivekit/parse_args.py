@@ -372,6 +372,14 @@ def create_parser():
         help="주기적 언어재감지 간격(초). 기본값 4.0(master 설정). diar-off 언어 고착 해소용. None=비활성.",
     )
 
+    simulstreaming_group.add_argument(
+        "--lang-restrict-koen",
+        action=BooleanOptionalAction,
+        default=True,
+        dest="lang_restrict_koen",
+        help="언어 자동감지 후보를 {ko, en}으로 제한. 기본 ON. 끄려면 --no-lang-restrict-koen.",
+    )
+
     # LLM 번역 인자
     parser.add_argument(
         "--llm-translation",

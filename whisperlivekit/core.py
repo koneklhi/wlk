@@ -179,6 +179,7 @@ class TranscriptionEngine:
                     "max_context_tokens": config.max_context_tokens,
                     "logprob_threshold": config.logprob_threshold,
                     "compression_ratio_threshold": config.compression_ratio_threshold,
+                    "lang_restrict_koen": config.lang_restrict_koen,
                 }
 
                 self.tokenizer = None

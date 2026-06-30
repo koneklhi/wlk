@@ -210,7 +210,21 @@ class AlignAtt(AlignAttBase):
         logits = self.model.logits(x, encoder_features)[:, 0]
 
         mask = torch.ones(logits.shape[-1], dtype=torch.bool)
-        mask[list(self.tokenizer.all_language_tokens)] = False
+        if getattr(self.cfg, 'lang_restrict_koen', False):
+            # 배포 환경 불변식: 감지 후보를 {ko, en}로 제한.
+            # 매 디코드 스텝 마스킹(Exp-136, 기각)과 달리 감지 단계만 제한하므로
+            # 코드스위칭·영어 전사 모두 보존된다.
+            allowed = {"ko", "en"}
+            allowed_token_ids = [
+                tok for tok, code in zip(
+                    self.tokenizer.all_language_tokens,
+                    self.tokenizer.all_language_codes,
+                )
+                if code in allowed
+            ]
+            mask[allowed_token_ids] = False
+        else:
+            mask[list(self.tokenizer.all_language_tokens)] = False
         logits[:, mask] = -np.inf
         language_tokens = logits.argmax(dim=-1)
         language_token_probs = logits.softmax(dim=-1).cpu()
