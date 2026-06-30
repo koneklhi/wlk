@@ -1,7 +1,7 @@
 # Phase 2 자율 개선 루프 — WER 감소 우선 → 문장 분리 F1 60%+
 
-> **[2026-06-23 업데이트]** 측정 세트·우선순위는 **CLAUDE.md §3.8 현행 regime**을 따른다:
-> 테스트(채택/기각) = bong1 + ytn2 + sbs1 (화자분할 ON, `--repeat 3`), held-out(일반화) = ytn1 + eng1, **ytn2·bong1 공동 최우선**.
+> **[2026-06-23 업데이트 / 2026-06-30 측정 정책 갱신]** 측정 세트·우선순위는 **CLAUDE.md §3.8 현행 regime**을 따른다:
+> 테스트(채택/기각) = bong1 + ytn2 + sbs1 (화자분할 ON; **평소 스크리닝 `--repeat 1`**, 채택 확정 시 `--repeat 3`), held-out(일반화) = ytn1 + eng1 단회, **ytn2·bong1 공동 최우선**.
 > 문장 분리 F1 기준: 정답 빈 줄 = 화자전환 경계(1순위 필수) + 온점분리 경계(2순위 선택). primary F1=화자전환 경계, secondary F1=온점 경계 — metric 구현 후속.
 > 아래 Phase A/B 목표·측정 프로토콜 구조는 유지하되, 데이터 세트와 측정 명령은 위 regime 적용.
 
@@ -20,7 +20,7 @@
 
 ---
 
-## 목표 수치 (경로 C 기준, N≥3회 반복 측정 — 최악 케이스 미회귀 1순위)
+## 목표 수치 (경로 C 기준, 채택 확정 N≥3회 반복 측정 — 최악 케이스 미회귀 1순위)
 
 | 지표 | 1차 목표 | 상용화 목표 |
 |---|---|---|
@@ -109,7 +109,13 @@ WER이 높으면 F1 평가 자체가 의미 없다. 반복 토큰이 삽입되�
 ### 실행 명령
 
 ```powershell
-# 경로 C 측정 (기본) — N≥3회 반복 + median/분산 자동 집계
+# ① 스크리닝(기본) — 방향 탐색·catastrophic 회귀 감지
+uv run python scripts/eval.py \
+  --model-dir whisperlivekit/model/whisper-large-v3-turbo \
+  --output .omc/benchmarks/eval_YYYYMMDD_HHMM_expN.json
+# ↑ --repeat 생략 = 1회. 수치는 방향 신호로만 해석한다.
+
+# ② 채택 확정(머지 직전에만) — N≥3회 반복 + median/분산 자동 집계
 uv run python scripts/eval.py \
   --model-dir whisperlivekit/model/whisper-large-v3-turbo \
   --repeat 3 \
@@ -121,11 +127,11 @@ uv run python scripts/eval.py \
   --paths A
 ```
 
-### 반복 측정 규칙 (필수)
+### 측정 규칙 — 2계층 (필수)
 
-- 경로 C 채택/기각 판단에 쓰는 수치는 **테스트 세트(bong1·ytn2·sbs1) 각각 N≥3회 측정**(`eval.py --repeat 3 --files test_data/bong1.mp3 test_data/ytn2.mp3 test_data/sbs1.mp3`) 후
-  **median + 분산(min/max/stdev)**. 1회 결과만으로 결론 내리지 말 것.
-- **fail-fast 금지**: 첫 회차가 나빠도 중단하지 않고 N회 전부 측정한다 (분산이 곧 데이터).
+- **① 스크리닝(평소)**: `--repeat 1`(기본값) — 방향 탐색·catastrophic 회귀 감지. 1회 수치는 방향 신호로만 해석하고 채택/기각 결론의 근거로 쓰지 않는다.
+- **② 채택 확정(머지 직전)**: `eval.py --repeat 3 --files test_data/bong1.mp3 test_data/ytn2.mp3 test_data/sbs1.mp3` — **median + 분산(min/max/stdev)**으로 최종 판단.
+- **채택 확정 시 fail-fast 금지**: 첫 회차가 나빠도 중단하지 않고 N회 전부 측정한다 (분산이 곧 데이터).
   단, VBCable 미설정·포트 충돌·무음 캡처 등 *하니스 버그*는 즉시 멈추고 고친다(분산이 아니라 결함).
 - 회차 격리: eval.py가 파일당 서버 1회 기동 후 N회 세션(/asr 연결마다 전사 상태 새로 생성)으로 자동 처리.
 
@@ -133,8 +139,8 @@ uv run python scripts/eval.py \
 
 ## 채택/기각 규칙
 
-**채택 조건** (모두 충족):
-1. 경로 C N≥3회 **median** WER이 이전 베이스라인 대비 감소 (Phase A) 또는 F1이 상승 (Phase B)
+**채택 조건** (모두 충족; 채택 확정 3회 측정 기준):
+1. 경로 C **median** WER이 이전 베이스라인 대비 감소 (Phase A) 또는 F1이 상승 (Phase B)
 2. **최악 케이스(max/p95) 미회귀** — median이 좋아도 catastrophic run이 늘면 기각 (분산 축소가 1급 목표)
 3. WER 회귀 ≤ +5%p (F1 개선 중 WER이 악화되지 않아야 함)
 4. `pytest tests/` 전부 통과
@@ -180,7 +186,7 @@ while avg_WER > 30% or avg_F1 < 60%:
     2. 가설 수립 (위 접근 방향 중 우선순위 순)
     3. 외과적 코드 변경 (최소 범위)
     4. pytest 통과 확인
-    5. 경로 C eval.py 3회 실행 → 중앙값 계산
+    5. 경로 C eval.py 실행 (스크리닝 1회; 채택 후보 확정 시 3회) → 중앙값 계산
     6. 채택/기각 판단
     7. EXPERIMENTS.md 기록 + 채택이면 git commit
     8. 다음 루프

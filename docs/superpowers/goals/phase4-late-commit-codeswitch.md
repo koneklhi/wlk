@@ -48,7 +48,7 @@ Exp-135 provisional buffer는 1-step뿐이라 너무 얕았고, Exp-126 컨텍�
 
 ---
 
-## 3. 목표 수치 (경로 C, N≥3, 최악 케이스 미회귀 1순위)
+## 3. 목표 수치 (경로 C, 채택 확정 N≥3, 최악 케이스 미회귀 1순위)
 
 현재 베이스라인(Exp-130 기준, N=5, diar-ON, CRT=3.0, beams=2):
 
@@ -72,7 +72,7 @@ Exp-135 provisional buffer는 1-step뿐이라 너무 얕았고, Exp-126 컨텍�
 1. **폐쇄망 오프라인**: 런타임 네트워크 호출 금지 (CLAUDE.md §3.1).
 2. **외과적 변경**: `whisperlivekit/` 본체 수정 최소화, 가능하면 새 모듈로 분리 (CLAUDE.md §1).
 3. **데이터 특화 하드코딩 금지**: 개선은 일반화돼야 함. 특정 단어·구절 암기 금지 (CLAUDE.md §3.8).
-4. **측정 기준**: 경로 C(VBCable)만. 화자분할 ON(Sortformer), `--repeat 3` (CLAUDE.md §4).
+4. **측정 기준**: 경로 C(VBCable)만. 화자분할 ON(Sortformer). **① 스크리닝 = `--repeat 1`** (평소), **② 채택 확정 = `--repeat 3`** (머지 직전, CLAUDE.md §4).
 5. **채택 우선순위**: 1순위 = 최악 케이스(max) 미회귀, 2순위 = median 개선.
 6. **main 코드 편집 금지**: 구현은 feature 브랜치 + 워크트리(subagent)에서. main 세션은 검토·디스패치.
 
@@ -127,12 +127,21 @@ Exp-135 provisional buffer는 1-step뿐이라 너무 얕았고, Exp-126 컨텍�
 
 ---
 
-## 6. 측정 프로토콜 (CLAUDE.md §4 준수)
+## 6. 측정 프로토콜 (CLAUDE.md §4 — 2계층)
 
 ```powershell
-# 테스트(채택/기각) — bong1 + ytn2 + sbs1, 화자분할 ON, N≥3
+# ① 스크리닝(기본) — bong1 + ytn2 + sbs1, 화자분할 ON, 방향 탐색용
 $env:PYTHONIOENCODING = "utf-8"
 $ts = Get-Date -Format "yyyyMMdd_HHmm"
+.venv\Scripts\python.exe scripts/eval.py `
+  --model-dir whisperlivekit/model/whisper-large-v3-turbo `
+  --files test_data/bong1.wav test_data/ytn2.mp3 test_data/sbs1.mp3 `
+  --diarization --sortformer-model whisperlivekit/model/sortformer-4spk-v2.nemo `
+  --compression-ratio-threshold 3.0 `
+  --output ".omc/benchmarks/eval_$ts.json"
+# ↑ --repeat 생략 = 1회, 방향 신호로만 해석
+
+# ② 채택 확정(머지 직전에만) — N≥3회, median+분산 판단
 .venv\Scripts\python.exe scripts/eval.py `
   --model-dir whisperlivekit/model/whisper-large-v3-turbo `
   --files test_data/bong1.wav test_data/ytn2.mp3 test_data/sbs1.mp3 `
@@ -140,11 +149,11 @@ $ts = Get-Date -Format "yyyyMMdd_HHmm"
   --compression-ratio-threshold 3.0 --repeat 3 `
   --output ".omc/benchmarks/eval_$ts.json"
 
-# held-out(채택 후보에 한해) — ytn1 + eng1
-# (위와 동일 + --files test_data/ytn1.mp3 test_data/eng1.mp3)
+# held-out(채택 후보에 한해, 단회) — ytn1 + eng1
+# (② 명령과 동일 + --files test_data/ytn1.mp3 test_data/eng1.mp3, --repeat 제거)
 ```
 
-- **fail-fast 금지**: 첫 회차가 나빠도 N회 전부 측정(분산이 곧 데이터). 단 VBCable 미설정·무음 캡처 등
+- **채택 확정 시 fail-fast 금지**: 첫 회차가 나빠도 N회 전부 측정(분산이 곧 데이터, ② 단계 한정). 단 VBCable 미설정·무음 캡처 등
   *하니스 버그*는 즉시 중단·수정.
 - 각 실험은 `--output` JSON 저장 → `/log-experiment`에서 `files[].transcription`/`reference`로
   **`### 분석`(전사 내용 정성 대조)** 섹션까지 작성.

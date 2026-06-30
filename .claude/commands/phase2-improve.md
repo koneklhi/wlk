@@ -98,7 +98,7 @@ if (-not (Test-Path "worktrees\$branch\.venv")) {
 
 ---
 
-## 3. MEASURE — 측정 (경로 C, --repeat 3)
+## 3. MEASURE — 측정 (경로 C, 2계층: 스크리닝 1회 / 채택 확정 3회)
 
 **측정 기준 경로 = 경로 C (VBCable 루프백) 전용.** 경로 A는 개발 스모크용일 뿐 채택 판단에 사용하지 않는다.
 
@@ -106,7 +106,23 @@ if (-not (Test-Path "worktrees\$branch\.venv")) {
 
 **provenance 게이트 (필수)**: 측정 시작 직후 출력되는 `[provenance]` 줄에서 `code=<워크트리명>`, `branch=<해당 브랜치>`, 변경한 디코더 설정(beams/CRT 등)이 의도한 값으로 찍히는지 반드시 눈으로 확인한다. 기대 경로와 다르면 eval이 즉시 중단(fail-fast)된다 — 그 경우 cwd를 점검하고 재실행.
 
-### 테스트 세트 측정 (채택/기각 기준 — bong1+ytn2+sbs1)
+### ① 스크리닝 측정 (평소 기본 — 방향 탐색·catastrophic 회귀 감지)
+
+```powershell
+$env:PYTHONIOENCODING = "utf-8"
+$ts = Get-Date -Format "yyyyMMdd_HHmm"
+Set-Location worktrees\[branch]
+.venv\Scripts\python.exe scripts/eval.py `
+  --model-dir whisperlivekit/model/whisper-large-v3-turbo `
+  --files test_data/bong1.wav test_data/ytn2.mp3 test_data/sbs1.mp3 `
+  --diarization --sortformer-model whisperlivekit/model/sortformer-4spk-v2.nemo `
+  --compression-ratio-threshold 3.0 `
+  --output ".omc/benchmarks/eval_exp_screen_$ts.json"
+Set-Location ..\..\  # main으로 복귀
+```
+# ↑ --repeat 생략 = 1회. 수치는 '방향 신호'로만 해석, 미세 채택/기각 결론의 근거로 쓰지 않는다.
+
+### ② 채택 확정 측정 (master 머지 직전에만 — N≥3회 반복)
 
 ```powershell
 $env:PYTHONIOENCODING = "utf-8"
@@ -122,11 +138,12 @@ Set-Location worktrees\[branch]
 Set-Location ..\..\  # main으로 복귀
 ```
 
-- **측정 도중 fail-fast 금지** — N=3회 전부 실행한다. 단 VBCable 무음 캡처(WER 100%)·포트 충돌 등 하니스 버그는 즉시 중단하고 수정 후 재시작.
+- **채택 확정 측정 도중 fail-fast 금지** — N=3회 전부 실행한다(② 단계 한정). 단 VBCable 무음 캡처(WER 100%)·포트 충돌 등 하니스 버그는 즉시 중단하고 수정 후 재시작.
 - VBCable 루프백 불안정 의심 시: `scripts/vbcable_test.py` 실행 후 이상 있으면 Audiosrv 재시작 / PC 재부팅.
 
-### 측정 소요 시간 예시 (bong1+ytn2+sbs1, diar-ON, --repeat 3)
-약 18분 이상 — 백그라운드 실행 권장 (`run_in_background: true`).
+### 측정 소요 시간 예시
+- 스크리닝 1회 (bong1+ytn2+sbs1, diar-ON): 약 6분 이상
+- 채택 확정 3회 (동일): 약 18분 이상 — 백그라운드 실행 권장 (`run_in_background: true`).
 
 ---
 
@@ -161,6 +178,7 @@ Set-Location ..\..\  # main으로 복귀
 ## 5. HELD-OUT 검증 (채택 후보만)
 
 조건 ①~④ 모두 충족 시에만 held-out을 측정한다. (매번 돌리면 불필요한 시간 낭비)
+held-out은 **단회(--repeat 생략)** 검증 — 일반화 catastrophic 회귀 여부만 확인하므로 3회 반복 불필요.
 
 ```powershell
 $env:PYTHONIOENCODING = "utf-8"
@@ -169,8 +187,7 @@ Set-Location worktrees\[branch]
   --model-dir whisperlivekit/model/whisper-large-v3-turbo `
   --files test_data/ytn1.mp3 test_data/eng1.mp3 `
   --diarization --sortformer-model whisperlivekit/model/sortformer-4spk-v2.nemo `
-  --compression-ratio-threshold 3.0 `
-  --repeat 3
+  --compression-ratio-threshold 3.0
 Set-Location ..\..\
 ```
 

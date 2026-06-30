@@ -44,9 +44,7 @@
   - **상용화 worst-case 우선** — worst 케이스 감소 최우선. 개선 검토 시 median보다 최악 케이스 축소를 먼저.
   - **범용 개선만 + 테스트/held-out 분리** — 테스트(채택/기각) = bong1+ytn2+sbs1, **held-out = ytn1+eng1**(일반화 검증). "이 변경이 bong1/ytn2/sbs1 특화인가?"를 항상 점검.
   - **하드코딩·백엔드 우선, 탈출구 허용** — backend 레벨 개선 우선. **정 방법 없으면 하드코딩·후처리 필터도 가능**(남용 금지, 근거 기록 필수). 특정 언어 특화 패턴은 backend 대안 먼저.
-- **§4 경로 C 분산 규약**: 동일 조건에서도 실행마다 편차가 크다(±30~120%p). **측정 기본 = 화자분할 ON**(Sortformer + `--compression-ratio-threshold 3.0`; 테스트 = bong1+ytn2+sbs1, held-out = ytn1+eng1). 채택 판단은 **N≥3 반복 median +
-  분산(min/max/stdev)** 으로 본다. **fail-fast 금지**(분산 자체가 데이터). **채택 우선순위: 1순위 = 최악
-  케이스(max) 미회귀, 2순위 = median 개선.** 1회 결과로 결론 내리는 비판/제안을 하지 않는다.
+- **§4 경로 C 분산 규약 (2계층)**: 동일 조건에서도 실행마다 편차가 크다(±30~120%p). **측정 기본 = 화자분할 ON**(Sortformer + `--compression-ratio-threshold 3.0`; 테스트 = bong1+ytn2+sbs1, held-out = ytn1+eng1). **① 스크리닝(평소) = `--repeat 1`** — 방향 신호용. **② 채택 확정(머지 직전)만 N≥3 반복 → median + 분산(min/max/stdev)**으로 판단. **채택 확정 시 fail-fast 금지**(분산 자체가 데이터). **채택 우선순위: 1순위 = 최악 케이스(max) 미회귀, 2순위 = median 개선.** 스크리닝(1회) 수치만으로 채택 결론을 내리는 비판/제안을 하지 않는다.
 
 ## 3. main 브랜치 규약
 

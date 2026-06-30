@@ -8,14 +8,15 @@ STT 성능 개선 실험을 기록한다. 각 실험은 **가설 → 변경 → 
 
 ---
 
-## 현행 측정 regime (2026-06-25 확정)
+## 현행 측정 regime (2026-06-30 갱신 — 2계층 스크리닝/확정)
 
-- **테스트 세트(채택/기각)**: `bong1` + `ytn2` + `sbs1` — `eval.py --repeat 3`
-- **held-out(일반화 검증)**: `ytn1` + `eng1` — 채택 후보에 한해 회귀 감시 (ytn1 = ytn2 동일 이벤트 쌍둥이 코드스위칭, eng1 = 영어 회귀 감시)
+- **테스트 세트(채택/기각)**: `bong1` + `ytn2` + `sbs1`
+  - **① 스크리닝(평소)**: `eval.py --repeat 1` — 빠른 방향 탐색·catastrophic 회귀 감지. 1회 수치는 방향 신호로만 해석한다.
+  - **② 채택 확정(머지 직전)**: `eval.py --repeat 3` — N≥3회 **median + min/max/stdev** 함께 본다. 이 단계에서만 **fail-fast 금지**(분산 자체가 데이터).
+- **held-out(일반화 검증)**: `ytn1` + `eng1` — 채택 후보에 한해 회귀 감시, **단회** 검증. (ytn1 = ytn2 동일 이벤트 쌍둥이 코드스위칭, eng1 = 영어 회귀 감시)
 - **측정 경로**: 경로 C(VBCable 루프백)만. provenance 게이트 필수 — 매 측정 첫 줄 `[provenance] code=wlk branch=master@… vbcable=ok …` 육안 확인.
 - **측정 기본 설정**: 화자분할 ON (Sortformer + `--compression-ratio-threshold 3.0`).
-- **판단**: 동일 파일·설정 N≥3 반복 → **median + min/max/stdev** 함께 본다. 1회 결론 금지. **fail-fast 금지**(분산 자체가 데이터).
-- **채택 우선순위**: ① 최악 케이스(max WER) 미회귀 ② median 개선. max가 catastrophic하면 median이 좋아도 기각.
+- **채택 우선순위(② 단계 기준)**: ① 최악 케이스(max WER) 미회귀 ② median 개선. max가 catastrophic하면 median이 좋아도 기각.
 - **개선 1순위**: `ytn2`(짧은 텀 코드스위칭) + `bong1`(다화자 장시간) 공동 최우선. **데이터 특화 하드코딩 금지 — 개선은 일반화돼야 한다.**
 
 ## 현재 베이스라인
@@ -68,6 +69,7 @@ Exp-106~129는 신뢰 불가 판정으로 기각됐으나 **방향성은 참고*
 | Exp-135 | 2026-06-25 | Stage 3 provisional buffer 추가 (N=1 탐색) | 34.7% (-9.4pp) | 26.1% (-18.2pp) | 20.8% (-3.6pp) | ❌ 기각 (Stage 1 단독 대비 bong1+ytn2 소폭 악화, 지연 리스크) |
 | Exp-136 | 2026-06-25 | lang-set ko,en Stage 1+2 공식 채택 측정 (N=3) | **55.0% (+10.9pp) ⚠️** | 46.8% (+2.5pp) | **20.8% (-3.6pp)** | ❌ 기각 (bong1 max +4.2pp, median +10.9pp 대폭 회귀) |
 | Exp-137 | 2026-06-26 | frame_threshold=50+PLC=4.0 (Spike 1, Phase 4) | 36.0% (-8.1pp) | **29.1% (-15.2pp) ✓** | 25.0% (+0.6pp) | ❌ 기각 (bong1 max 55→67.1% +12.1pp, 환각 폭주 확인) |
+| Exp-138 | 2026-06-30 | SimulStreaming non_speech_tokens 억제 추가 (suppress_nonspeech=True) | 44.7% (+0.6pp) | **34.0% (-10.3pp) ✓** | **20.2% (-4.2pp) ✓** | ❌ 기각 (eng1 WER 3.8%→83.8%, `" '"` 억제로 영어 축약형 파괴) |
 
 ---
 
@@ -453,3 +455,121 @@ provenance: `code=spike1-frame-threshold, branch=exp/spike1-frame-threshold@7cb0
 - 게이트: 단독 RTF<0.5 + 동시 live 안정 + 언어 해결가능 → 2-pass 구축(분기 2). 불가 → AlignAtt 보강(분기 4, 사용자 보고).
 
 **JSON**: `worktrees/exp/spike1-frame-threshold/.omc/benchmarks/eval_exp137_ft50_20260626_1114.json`
+
+---
+
+## Exp-138 — SimulStreaming non_speech_tokens 억제 추가 (`suppress_nonspeech=True`)
+
+**날짜**: 2026-06-30
+**브랜치**: `exp/meta-token-suppress` (SHA: 627f52f)
+
+### 가설
+
+표준 Whisper 디코더는 기본적으로 `non_speech_tokens`(음악 기호 ♪·괄호·대괄호·따옴표 기호·`--`·`---` 등 비음성 주석 기호)를 억제하지만, SimulStreaming(AlignAtt/CIF) 경로의 `_init_state()`는 이 목록을 적용하지 않고 있었다. Exp-137 bong1 max(67.1%)에서 `[구독][좋아요]` 같은 YouTube 메타 토큰 연쇄 환각이 관측됐으며, `[`·`]` 등 비음성 기호 토큰을 억제하면 bong1 worst-case를 개선할 수 있다는 가설.
+
+### 변경 내용
+
+| 파일 | 변경 |
+|------|------|
+| `whisperlivekit/simul_whisper/simul_whisper.py` (lines 104-116) | `_init_state()`의 suppress_tokens 목록에 `non_speech_tokens` 조건부 추가 |
+| `whisperlivekit/simul_whisper/config.py` | `AlignAttConfig`에 `suppress_nonspeech: bool = True` 필드 추가 |
+| `whisperlivekit/simul_whisper/backend.py` (~line 402) | `AlignAttConfig` 생성자 호출 시 `suppress_nonspeech` 전달 |
+| `whisperlivekit/parse_args.py` (simulstreaming group) | `--suppress-nonspeech` / `--no-suppress-nonspeech` 플래그 추가 (default=True) |
+| `whisperlivekit/config.py` | `WhisperLiveKitConfig`에 `suppress_nonspeech: bool = True` 필드 추가 |
+| `whisperlivekit/core.py` (simulstreaming_params) | `"suppress_nonspeech": config.suppress_nonspeech` 전달 |
+
+### 테스트 설정
+
+```bash
+# 테스트 세트 (bong1 / ytn2 / sbs1)
+python scripts/eval.py `
+  --files test_data/bong1.wav test_data/ytn2.mp3 test_data/sbs1.mp3 `
+  --server-model-dir "c:/Users/A040-000-0001/Desktop/260605wlk/wlk/whisperlivekit/model/whisper-large-v3-turbo" `
+  --diarization `
+  --sortformer-model "c:/Users/A040-000-0001/Desktop/260605wlk/wlk/whisperlivekit/model/sortformer-4spk-v2.nemo" `
+  --compression-ratio-threshold 3.0 `
+  --repeat 3 `
+  --output "worktrees/exp-meta-token-suppress/eval_exp138_test_r3.json"
+```
+
+provenance: `branch=exp/meta-token-suppress@627f52f, beams=2, CRT=3.0, PLC=None(eval.py 미전달→서버 PLC 버그로 실질 PLC=None), diar=on, vbcable=ok`
+
+> **PLC 주의**: `periodic_lang_check_secs`는 `backend.py`의 `AlignAttConfig` 생성자에 전달되지 않는 버그가 있어 서버도 실질적으로 PLC=None으로 동작한다.
+
+### 테스트 세트 결과 (N=3, diar-ON, CRT=3.0, beams=2, PLC=None)
+
+| 파일 | R1 WER | R2 WER | R3 WER | median | max | stdev | F1 med | vs baseline Δmed | vs baseline Δmax |
+|------|--------|--------|--------|--------|-----|-------|--------|-----------------|-----------------|
+| bong1 | 44.7% | 34.1% | 55.0% | **44.7%** | **55.0%** | 10.4% | 34.0% | **+0.6pp** | **0.0pp** |
+| ytn2  | 34.0% | 20.2% | 49.8% | **34.0%** | **49.8%** | 14.8% | 58.3% | **-10.3pp ✓** | **-11.8pp ✓** |
+| sbs1  | 19.6% | 26.2% | 20.2% | **20.2%** | **26.2%** | 3.6% | 18.2% | **-4.2pp ✓** | **-6.5pp ✓** |
+
+베이스라인 (N=5, 2026-06-25): bong1 44.1%/55.0%, ytn2 44.3%/61.6%, sbs1 24.4%/32.7%
+
+### 분석 (전사 내용 정성 대조)
+
+**bong1** (R_median=R1=44.7% 기준):
+- **환각 폭주 — 웃음 캐스케이드**: 전사 `"네하하하! 하하하! 하하하! 하하하! 하하! 하하하! 하하하, 하하하! ..."` 28회 이상 연속 / 정답: 해당 구간에 웃음 텍스트 없음. 웃음·박수 오디오 구간에서 `하하하` 텍스트 연쇄. `non_speech_tokens` 억제 후에도 **텍스트 형태 웃음(`하하하`)은 차단되지 않음** — 이 토큰은 일반 언어 어휘라 억제 대상이 아님.
+- **음절 혼동**: 전사 `"멀ang 멀ang한 곧 도만들의 소리가"` / 정답 `"플라스틱 말랑말랑한 것도 만들었죠"` — 웃음 직후 구간에서 음절 혼동·환각 삽입.
+- hyp_sentences=34 / ref_sentences=15 (over-segmented x2.3) → F1 34.0%
+
+**bong1** (R_max=R3=55.0% — catastrophic 확인):
+- **환각 폭주 — 일본어·중국어 캐스케이드**: 전사 `"Ha ha何もとんぐ いるんすでん えみわん"` (일본어) 이후 `"主委員工也沒有打仗 主委員工仗. 阿滋勒咪啊..."` → `"你一句話說的,他們是什麼東西,什麼東西都是說的..."` 수백 글자의 중국어 환각 폭주 / 정답: 정상 영어·한국어 대화.
+- **가설 수정**: Exp-137 bong1 max(67.1%)에서 `[구독][좋아요]` 연쇄가 원인이라 추정했으나, Exp-138에서 `[`·`]` 억제 후에도 bong1 max=55.0% 유지 → **실제 bong1 worst-case 원인은 웃음·박수 구간 트리거 중국어·일본어 환각 캐스케이드**임이 새로 확인됨. 이 패턴은 억제 목록으로 해결 불가(중국어 자체는 정상 언어 토큰).
+
+**ytn2** (R_median=R1=34.0% 기준):
+- **코드스위칭 처리 양호**: 전사 `"where our efforts"` / 정답 `"were our efforts"` — 동음이의어 수준 미세 오류. 한↔영 전환 구간 전반은 정상.
+- **단어 대치**: 전사 `"취재에 논의를"` / 정답 `"취지의 논의를"` — 음절 혼동. `"Ngu MBC 뉴스 우선입니다"` — 방송국 태그 형태 환각 삽입.
+
+**ytn2** (R_max=R3=49.8% — 환각 캐스케이드 확인):
+- **정중어 반복 환각**: 전사 `"고맙습니다. 고맙습니다. 고맙겠습니다. ..."` 10회 이상 + `"Thank you, Mr. Kim. Thank you, Mr. Lee. Thank you, Mr. Park..."` 연쇄 / 정답: 정상 대화. 무음·화자 전환 구간에서 bong1과 유사한 환각 트리거 패턴.
+
+**sbs1** (R_median=R3=20.2% 기준):
+- **환각 접두사**: 전사 `"JBR 브런스는 주한미군 사령관"` / 정답 `"제이비어 브런슨 주한미군 사령관"` — `JBR` 접두사 환각.
+- **`. ` 아티팩트**: 전사 내 여러 위치에 `. ` 삽입 → hyp_sentences=11 / ref_sentences=3 (x3.7 over-segmented) → F1 16.7%.
+- **단어 대치**: `"연구적인 지상 플랫폼"` / 정답 `"영구적인 지상 플랫폼"`, `"6군 전쟁 대학"` / `"육군 전쟁 대학"` — 기존부터 있는 숫자·한자 혼동.
+
+**이번 변경 영향**:
+- **ytn2 WER 개선**: baseline 44.3%→34.0% (-10.3pp), sbs1 24.4%→20.2% (-4.2pp). non_speech_tokens 억제가 일부 비정상 토큰을 차단했을 가능성 있으나 N=3 분산(ytn2 min 20.2%/max 49.8%)이 커 단정 불가.
+- **bong1 max 미변화**: 이번 억제로 괄호·특수기호 토큰은 차단됐지만 bong1 max WER를 야기하는 **중국어·일본어 환각 캐스케이드는 억제 목록과 무관한 실패 모드**임 확인.
+- **sbs1 F1 저하**: `. ` 아티팩트 기인 over-segmentation(hyp >> ref)이 F1을 낮게 유지시킴. 이 패턴 자체는 이번 변경과 직접 관계 불분명.
+
+### held-out 결과 (N=3, diar-ON, CRT=3.0, beams=2)
+
+| 파일 | R1 WER | R2 WER | R3 WER | median | max | stdev | F1 med | vs baseline Δmed | vs baseline Δmax |
+|------|--------|--------|--------|--------|-----|-------|--------|-----------------|-----------------|
+| ytn1 | 35.6% | 49.7% | 74.8% | **49.7%** | **74.8%** | 19.9% | 55.6% | **+20.3pp ❌** | **+25.7pp ❌** |
+| eng1 | 86.7% | 83.8% | 41.0% | **83.8%** | **86.7%** | 25.6% | 100.0% | **+80.0pp ❌** | **+81.0pp ❌** |
+
+베이스라인 held-out (N=5, 2026-06-25): ytn1 29.4%/49.1%, eng1 3.8%/5.7%
+
+> **eng1 catastrophic**: 2/3 회차(R1=86.7%, R2=83.8%)에서 극단적 실패. R3=41.0%는 측정 분산에 의한 일시적 호전으로 판단.
+
+### 채택 조건 판정
+
+| # | 조건 | 판정 |
+|---|------|------|
+| ① max WER 미회귀 (테스트) | bong1 max 0pp / ytn2 max -11.8pp ✓ / sbs1 max -6.5pp ✓ | △ 테스트만 보면 통과 |
+| ② median 개선 | ytn2 -10.3pp ✓ / sbs1 -4.2pp ✓ / bong1 +0.6pp 중립 | △ 혼합 (ytn2·sbs1 개선) |
+| ③ held-out 회귀 없음 | eng1 median +80.0pp ❌ / ytn1 median +20.3pp ❌ | ❌ **치명적 위반** |
+
+**판정: ❌ 기각**
+- **eng1 catastrophic**: baseline 3.8%→83.8% (+80pp). 2/3 회차에서 극단 실패.
+- **ytn1 회귀**: median +20.3pp, max +25.7pp. 코드스위칭 일반화 역행.
+- **근본 원인**: `non_speech_tokens` 목록 내 `" '"` (공백+아포스트로피) 토큰이 `don't`, `it's`, `they've` 등 영어 축약형 핵심 토큰 경로를 차단. 이 토큰을 억제하면 영어 디코더가 축약형을 정상 출력할 수 없게 됨.
+
+### 원인 분석
+
+1. **`" '"` 토큰 문제**: `tokenizer.non_speech_tokens`는 영어 축약형에 필수적인 `" '"` (공백+아포스트로피) 토큰을 포함한다. 이를 억제하면 `don't`→`dont`, `it's`→`its` 식으로 모든 축약형이 붕괴된다.
+2. **선택적 억제 필요**: 음악 기호(♪·♩·♫ 등) 및 한·영 발화와 무관한 기호류만 억제해야 한다. 아포스트로피·하이픈 계열 토큰은 제외해야 한다.
+3. **bong1 환각 원인 갱신**: 중국어·일본어 환각 캐스케이드는 suppress_tokens가 아닌 별도 접근(CRT 조정·언어 감지 기반 조기 종료·후처리 필터 등)이 필요하다.
+
+### 다음 가설
+
+**Exp-139 — 음악 기호 전용 억제 (`suppress_music_symbols`)**:
+- `non_speech_tokens` 전체 대신 **음악 기호 토큰만** 억제: `♪`, `♩`, `♫`, `♬`, `♭`, `♮`, `♯`, tokenizer 인코딩 기준 `♪♪`·`♪♪♪` ID 목록.
+- `" '"` (아포스트로피)·`" -"` (하이픈) 토큰은 **포함하지 않는다**.
+- 기대: 음악 구간 환각 일부 억제 + 영어 축약형 정상 유지 → eng1 회귀 없음.
+- **병행 방향**: bong1 max 중국어 환각 캐스케이드는 `compression_ratio_threshold` 조정 또는 언어 감지 기반 early-exit 탐색이 더 적합할 수 있음.
+
+**JSON**: `worktrees/exp-meta-token-suppress/eval_exp138_test_r3.json` (timestamp 10:43) / `eval_exp138_heldout_r3.json` (held-out terminal 결과 기준 11:07; JSON 파일은 이후 덮어씌워짐)

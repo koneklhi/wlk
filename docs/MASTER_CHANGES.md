@@ -37,7 +37,7 @@ upstream 기본값만으로는 반복 아티팩트(`바 바 바`), 언어 고착
 ## 2. 현재 채택 베이스라인 수치 (Exp-105 — 2026-06-22)
 
 > **채택 기준** (CLAUDE.md §4): **1순위 = max(최악 케이스) 미회귀, 2순위 = median 개선**.
-> 수치는 경로 C(VBCable 루프백) N≥3 반복 측정 결과 — `median / max / stdev`.
+> 수치는 경로 C(VBCable 루프백) **채택 확정(N≥3) 반복 측정 결과** — `median / max / stdev`.
 
 | 파일 | 설정 | WER median | WER max | stdev | 문장분리 F1 |
 |---|---|---|---|---|---|
@@ -253,15 +253,15 @@ upstream에는 정량 평가 도구가 없었다. 아래 모듈을 새로 추가
 
 | 파일 | 역할 |
 |---|---|
-| [`scripts/eval.py`](../scripts/eval.py) | 경로 C(VBCable) / 경로 A(파일) WER + 문장분리 F1 측정. `--repeat N`으로 N≥3 반복, median/min/max/stdev 집계. `--paths`, `--files`, `--diarization`, `--sortformer-model`, `--trace-tokens`, `--periodic-lang-check` 옵션 지원 |
+| [`scripts/eval.py`](../scripts/eval.py) | 경로 C(VBCable) / 경로 A(파일) WER + 문장분리 F1 측정. `--repeat N`(기본 1; 채택 확정 시 3) median/min/max/stdev 집계. `--paths`, `--files`, `--diarization`, `--sortformer-model`, `--trace-tokens`, `--periodic-lang-check` 옵션 지원 |
 | [`whisperlivekit/metrics.py`](../whisperlivekit/metrics.py) | `compute_wer()` (정규화 WER), 문장분리 F1 (`_align_words`, Levenshtein 기반) |
 | [`scripts/vbcable_test.py`](../scripts/vbcable_test.py) | 경로 C 브라우저 자동화 (VBCable 루프백을 브라우저 마이크로 노출, 음원 재생 → 캡처) |
 | [`scripts/audio_device.py`](../scripts/audio_device.py) | VBCable 오디오 장치 자동 설정 / 측정 후 복원 |
 
-**측정 기준** (CLAUDE.md §4):
+**측정 기준** (CLAUDE.md §4 — 2계층):
 - 경로 C만 채택/기각 판정에 사용 (경로 A는 빠른 회귀 체크용)
-- N≥3 반복 → median + min/max/stdev 기준으로 판단
-- **1순위: max(최악 케이스) 미회귀, 2순위: median 개선**
+- **① 스크리닝(평소) = --repeat 1** (방향 신호); **② 채택 확정(머지 직전) = --repeat 3** → median + min/max/stdev 기준으로 판단
+- **1순위: max(최악 케이스) 미회귀, 2순위: median 개선** (② 단계 기준)
 
 ---
 

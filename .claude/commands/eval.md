@@ -3,19 +3,20 @@
 기능 수정 후 경로 C(VBCable 루프백)로 실제 오디오 파이프라인 전체를 통과한 성능을 측정한다.
 **WER(전사 정확도) + 문장 분리 F1(문장 확정 정확도)**를 출력한다.
 서버 기동/종료와 VBCable 장치 설정/복원은 스크립트가 자동으로 처리한다.
-**테스트(채택/기각) 세트 = `bong1.wav` + `ytn2.mp3` + `sbs1.mp3`** (화자분할 ON, `--repeat 3` 루틴; ytn2·bong1 공동 최우선). **held-out 일반화 검증 = `ytn1.mp3` + `eng1.mp3`** (채택 후보에 한해 동일 diar-ON 설정으로 측정). `eval.py`의 기본 `--files`는 코드 상 여전히 sbs1/ytn1/eng1이므로 **루틴은 `--files` 명시 필수**.
+**테스트(채택/기각) 세트 = `bong1.wav` + `ytn2.mp3` + `sbs1.mp3`** (화자분할 ON; ytn2·bong1 공동 최우선). 측정은 **2계층**: ① 평소 스크리닝 = `--repeat 1`(방향 신호), ② master 채택 직전 확정 = `--repeat 3`(median+분산 판단). **held-out 일반화 검증 = `ytn1.mp3` + `eng1.mp3`** (채택 후보에 한해 **단회** diar-ON). `eval.py`의 기본 `--files`는 코드 상 여전히 sbs1/ytn1/eng1이므로 **루틴은 `--files` 명시 필수**.
 
 **성능 판정 기준은 경로 C만** 사용한다. 경로 A(PCM 파일 주입)는 브라우저 오디오 파이프라인을 우회하므로 폐기.
 
-**채택 판단 우선순위**: **1순위 = 최악 케이스(max) 미회귀**, 2순위 = median 개선.
+**채택 판단 우선순위(② 채택 확정 단계)**: **1순위 = 최악 케이스(max) 미회귀**, 2순위 = median 개선.
 최악 케이스가 발생하면 median 개선보다 원인 파악과 해결이 먼저다.
-채택/기각 측정 시 `--repeat 3`으로 돌려 median + 분산(min/max/stdev)으로 판단. **fail-fast 금지.**
+스크리닝(1회) 수치는 방향 신호로만 해석 — 미세 채택/기각 결론의 근거로 쓰지 않는다.
+채택 확정(머지 직전)에만 `--repeat 3`으로 돌려 median + 분산(min/max/stdev)으로 판단. **채택 확정 시 fail-fast 금지.**
 단 VBCable 미설정·무음 캡처 등 *하니스 버그*는 즉시 중단·수정.
 
 ## 기본 사용법
 
 ```powershell
-# 테스트(채택/기각) — bong1 + ytn2 + sbs1, 화자분할 ON, 빠른 현황 확인
+# ① 스크리닝(기본) — bong1 + ytn2 + sbs1, 화자분할 ON, 방향 탐색·catastrophic 회귀 감지용
 $env:PYTHONIOENCODING = "utf-8"
 $ts = Get-Date -Format "yyyyMMdd_HHmm"
 .venv\Scripts\python.exe scripts/eval.py `
@@ -24,8 +25,9 @@ $ts = Get-Date -Format "yyyyMMdd_HHmm"
   --diarization --sortformer-model whisperlivekit/model/sortformer-4spk-v2.nemo `
   --compression-ratio-threshold 3.0 `
   --output ".omc/benchmarks/eval_$ts.json"
+# ↑ --repeat 생략 = 기본값 1회. 수치는 '방향 신호'로만 해석한다.
 
-# 채택/기각 결정용 (N≥3회 반복 — Claude가 실험 비교 시 사용)
+# ② 채택 확정용 (master 머지 직전에만 — N≥3회 반복, median+분산 판단)
 $ts = Get-Date -Format "yyyyMMdd_HHmm"
 .venv\Scripts\python.exe scripts/eval.py `
   --model-dir whisperlivekit/model/whisper-large-v3-turbo `
@@ -34,14 +36,15 @@ $ts = Get-Date -Format "yyyyMMdd_HHmm"
   --compression-ratio-threshold 3.0 --repeat 3 `
   --output ".omc/benchmarks/eval_$ts.json"
 
-# held-out 일반화 검증 — 채택 후보에 한해 ytn1 + eng1 (동일 diar-ON 설정)
+# held-out 일반화 검증 — 채택 후보에 한해 ytn1 + eng1 (단회, diar-ON)
 $ts = Get-Date -Format "yyyyMMdd_HHmm"
 .venv\Scripts\python.exe scripts/eval.py `
   --model-dir whisperlivekit/model/whisper-large-v3-turbo `
   --files test_data/ytn1.mp3 test_data/eng1.mp3 `
   --diarization --sortformer-model whisperlivekit/model/sortformer-4spk-v2.nemo `
-  --compression-ratio-threshold 3.0 --repeat 3 `
+  --compression-ratio-threshold 3.0 `
   --output ".omc/benchmarks/eval_$ts.json"
+# ↑ held-out은 단회 검증(채택 확정이라도 --repeat 3 불필요)
 ```
 
 ## 실행 절차 (Claude가 따를 순서)

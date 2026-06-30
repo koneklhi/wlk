@@ -32,7 +32,7 @@ description: 현재 세션의 Phase 2 실험 내용을 EXPERIMENTS.md에 기록�
 ### 입력 데이터
 `.omc/benchmarks/` 에서 이번 실험의 eval JSON 파일을 읽는다.
 - `files[]` 배열: 각 항목에 `audio_file`, `transcription`(전사 전문), `reference`(정답 전문) 포함.
-- `--repeat 3` 측정 시 파일당 3개 항목 존재: **median WER 회차를 대표로 대조**하고, **max WER 회차는 catastrophic 패턴 확인**용으로 훑는다.
+- 채택 확정(3회) 측정 시 파일당 3개 항목 존재: **median WER 회차를 대표로 대조**하고, **max WER 회차는 catastrophic 패턴 확인**용으로 훑는다. 스크리닝(1회)은 단일 수치를 방향 신호로 기록한다.
 - JSON이 없으면(저장 누락) 사용자에게 재측정 또는 전사 텍스트 제공을 요청한다.
 
 ### 분석 방법

@@ -75,6 +75,7 @@ Phase 2 성능 개선 우선순위 (반자율 개선 루프 기준)
 - **1순위 = ytn2·bong1 공동 최우선**: ytn2(짧은 텀 코드스위칭) + bong1(영어 2명+한국어 2명, 다화자·긴 발화). 일반 역량 향상이 목표 — 데이터 특화 하드코딩 금지.
 - 측정 세트: **테스트(채택/기각) = bong1 + ytn2 + sbs1**, **held-out(일반화 검증) = ytn1 + eng1**.
 - 측정 설정: 화자분할 ON (`--diarization --sortformer-model whisperlivekit/model/sortformer-4spk-v2.nemo --compression-ratio-threshold 3.0`).
+- 측정 2계층: **① 스크리닝 = `--repeat 1`** (평소 기본, 방향 신호), **② 채택 확정(머지 직전) = `--repeat 3`** (median+분산, worst-case 1순위 — CLAUDE.md §4).
 
 개선 대상 우선순위
 - 1순위 — 코드스위칭 신뢰성 (적극 개선):

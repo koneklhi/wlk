@@ -237,7 +237,7 @@ python scripts/closed_test.py test_data/sbs1.mp3
 # 폴더 일괄 (폴더 내 모든 mp3/wav/m4a/flac/ogg)
 python scripts/closed_test.py test_data/
 
-# 반복 측정(분산 확인, 채택판단=3) + 결과 폴더 지정
+# 채택 확정용 반복 측정(분산 확인, 채택판단=3) + 결과 폴더 지정
 python scripts/closed_test.py my_audio.wav --repeat 3 --out-dir transcripts
 
 # 화자분할 끄기(예: 번역까지 보고 싶을 때 — §5 제약 참조)
@@ -259,7 +259,7 @@ python scripts/closed_test.py my_audio.wav --no-diarization
   ```
 
 > `closed_test.py`는 검증된 `scripts/eval.py`의 서버 기동·VBCable 재생·metric 함수를 재사용한다.
-> 채택/기각 정량 비교가 목적이면 기존 `scripts/eval.py --repeat 3 --diarization --sortformer-model ... --compression-ratio-threshold 3.0 --periodic-lang-check 4.0`도 그대로 쓸 수 있다(고정 테스트셋 기준).
+> 채택 확정 정량 비교가 목적이면 기존 `scripts/eval.py --repeat 3 --diarization --sortformer-model ... --compression-ratio-threshold 3.0 --periodic-lang-check 4.0`도 그대로 쓸 수 있다(고정 테스트셋, 채택 확정 N≥3 기준).
 
 ### 4.2 경로 B — 마이크 직접 (정성 평가)
 
