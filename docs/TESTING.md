@@ -50,7 +50,7 @@
 ```
 whisperlivekit-server
 ```
-모든 인자가 `parse_args.py` 기본값(포트 8900, `--lan auto`, 화자분할 ON, `--compression-ratio-threshold 3.0` 등)이라
+모든 인자가 `parse_args.py` 기본값(포트 8900, `--lan auto`, 화자분할 ON, `--compression-ratio-threshold 3.0`, `--logprob-threshold -2.0` 등)이라
 인자 없이 기동해도 eval.py/closed_test.py 자동 기동 설정과 동일하다.
 단, eval/closed_test는 서버를 **8901**로 자동 기동한다(수동 서버 8900과 포트 충돌 없이 병행 가능).
 

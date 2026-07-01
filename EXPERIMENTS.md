@@ -22,8 +22,8 @@
 > **왜**: 실패 모드를 바꾸는 구조적 코드 변경 전후로 디코더 파라미터의 트레이드오프가 달라진다.
 > 다른 세대에서 나온 결론을 현재 코드의 **확정 근거**로 쓰면 오판한다(예: 초기 파라미터 튜닝 ↔ 언어고정·비음성억제 도입 후).
 
-- **현재 master = Epoch 1 (E1)**: SimulStreaming + diar-ON. **언어고정·비음성억제 없음.** 베이스라인 = Exp-105.
-- **Epoch 2 (E2) 후보** = `exp/meta-token-suppress` 브랜치: `suppress_nonspeech=True` + `lang_restrict_koen=True` 추가(Exp-138·139). **아직 master 미머지(hold)**.
+- **현재 master = Epoch 2 (E2)**: SimulStreaming + diar-ON + `lang_restrict_koen=True`(후처리 CJK/주석 필터 포함). **Exp-139 master 머지 완료 (2026-07-01).** 베이스라인 = Exp-105(E1 기준; E2 클린 베이스라인은 Exp-140에서 N=3 재측정).
+- ~~Epoch 2 후보~~ → **E2 = master 확정** (feat/lang-invariant-koen 머지 완료).
 - **세대 경계 규칙**: 파라미터 값 변경(PLC·beam·frame_threshold·CRT 등)은 epoch를 **올리지 않는다**(같은 세대 내 실험). 언어고정·비음성억제·디코더 교체·VAD 파이프라인 변경 등 **실패 모드를 바꾸는 구조 변경**만 세대를 올린다.
 
 **▶ epoch 게이트 (필수)**: 과거 Exp 결론(특히 파라미터)을 현재 작업의 채택/기각 근거로 인용하기 전, 그 Exp의 epoch가 *지금 측정 대상 코드*의 epoch와 같은지 확인한다. **다르면 확정 사실이 아니라 '방향 신호'로만** 쓰고 재검증한다.
@@ -79,7 +79,7 @@ Exp-106~129는 신뢰 불가 판정으로 기각됐으나 **방향성은 참고*
 
 ## 빠른 참조
 
-> **Epoch 열**: E1 = 언어고정·비음성억제 없음(master 계열) / E2 = `exp/meta-token-suppress`(suppress_nonspeech + lang_restrict_koen).
+> **Epoch 열**: E1 = 언어고정 없음(master 이전) / E2 = `lang_restrict_koen=True` + 후처리 CJK/주석 필터 포함(현재 master, 2026-07-01 머지). suppress_nonspeech(Exp-138)는 E2에 **미포함** — 기각.
 > **E1 파라미터 기각(131·132·133·137)은 E2 코드에서 재검증 대상** — 위 epoch 게이트 적용.
 
 | Exp | Epoch | 날짜 | 변경 | bong1 WER med | ytn2 WER med | sbs1 WER med | 판정 |
