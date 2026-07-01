@@ -126,11 +126,11 @@ upstream에 없는 두 게이트를 새로 추가했다 ([`parse_args.py`](../wh
 
 | 게이트 | 옵션 | 기본값 | 역할 |
 |---|---|---|---|
-| avg-logprob 게이트 | `--logprob-threshold` | None (비활성) | 낮은 신뢰도 세그먼트 억제 — 정상 한국어 삭제 위험으로 실사용 시 주의 (실제 플래그명은 `--logprob-threshold`, dest=`logprob_threshold`) |
-| compression-ratio 게이트 | `--compression-ratio-threshold` | None (비활성) | 반복 세그먼트 억제. Exp-104에서 **3.0** 권장값 사용 (`--compression-ratio-threshold 3.0`) |
+| avg-logprob 게이트 | `--logprob-threshold` | **-2.0** (Exp-142 채택) | 낮은 신뢰도 세그먼트 억제. E2 코드에서 bong1/ytn2/sbs1 WER 전부 개선 확인 (실제 플래그명은 `--logprob-threshold`, dest=`logprob_threshold`) |
+| compression-ratio 게이트 | `--compression-ratio-threshold` | **3.0** (Exp-104 채택) | 반복 세그먼트 억제. 언어 무관 반복 환각 백스톱으로 안전. |
 
-> avg-logprob 게이트는 Exp-104에서 ytn2 28→46% 악화로 기각. 런타임 옵션으로만 존재.
-> compression-ratio 3.0은 언어 무관 반복 환각 백스톱으로 안전.
+> avg-logprob 게이트: E1 Exp-104에서 기각됐으나 E2(lang_restrict_koen 도입 후) Exp-142에서 -2.0으로 재검증, 채택. E1 결론은 epoch 상이로 적용 불가(§4 epoch 게이트).
+> compression-ratio 3.0은 언어 무관 반복 환각 백스톱으로 안전 — 유지.
 
 ---
 

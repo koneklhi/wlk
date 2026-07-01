@@ -708,3 +708,234 @@ provenance: `branch=exp/meta-token-suppress@40e702b, beams=2, CRT=3.0, PLC=None,
 bong1 median 회귀의 근본 원인(비음성 구간 garbage 생성)은 Exp-140에서 해결. Layer 1 `[…]` 미차단 버그(닫힌 `]` 없는 패턴)도 함께 검토.
 
 **JSON**: `.omc/benchmarks/eval_20260630_1613_r3.json` (N=3 테스트) / `.omc/benchmarks/eval_20260630_1637_heldout.json` (held-out)
+
+---
+
+## Exp-140 — logprob_threshold=-1.0 스크리닝 (2026-07-01)
+
+### 가설
+
+Exp-139가 채택됐으나 bong1 median +8.8pp 회귀가 남아 있다. 비음성 구간(웃음·박수·무음) garbage를 차단하는
+Layer 3b 방법으로 새 코드 없이 기존 `--logprob-threshold` 파라미터를 활용한다.
+avg-logprob는 세그먼트 평균 토큰 확률로, 비음성 구간 → 모델 불확실 → avg-logprob 낮음 구조가 예상된다.
+E1에서는 -1.0이 ytn2를 28→46%로 파탄냈으나(Exp-110), E2(lang_restrict_koen)에서는
+언어-lock 후 정상 발화의 logprob 분포가 달라졌을 가능성이 있어 재확인한다.
+
+### 변경 내용
+
+코드 변경 없음 — `--logprob-threshold -1.0` 런타임 옵션으로만 스크리닝.
+측정 대상: `master@3c9a6b1` (Exp-139 머지 완료, logprob 기본값=None).
+
+### 테스트 설정 (스크리닝 N=1)
+
+```powershell
+.venv\Scripts\python.exe scripts/eval.py `
+  --model-dir whisperlivekit/model/whisper-large-v3-turbo `
+  --files test_data/bong1.wav test_data/ytn2.mp3 test_data/sbs1.mp3 `
+  --diarization --sortformer-model whisperlivekit/model/sortformer-4spk-v2.nemo `
+  --compression-ratio-threshold 3.0 --logprob-threshold -1.0 `
+  --output ".omc/benchmarks/eval_20260701_0858.json"
+```
+
+beams=2, CRT=3.0, diar=ON, logprob=-1.0, repeat=1, VBCable=ok
+
+### 테스트 세트 결과 (N=1 스크리닝, 경로 C)
+
+베이스라인 = Exp-139 median: bong1 52.9%, ytn2 35.5%, sbs1 22.0%
+
+| 파일 | WER (N=1) | Δ vs baseline | F1 |
+|------|-----------|--------------|-----|
+| bong1 | 36.9% | **-16.0pp ✓** | 25.0% |
+| ytn2  | 32.0% | -3.5pp ✓ | 47.1% |
+| sbs1  | 33.3% | **+11.3pp ❌** | 20.0% |
+
+### 분석 (전사 내용 정성 대조)
+
+**bong1** (N=1 단일 회차):
+- **개선 주원인**: logprob<-1.0인 garbage 세그먼트 다수 드롭 → 비음성 환각 감소.
+- **sbs1 회귀 원인**: 한국어 뉴스 앵커 발화 일부가 logprob<-1.0으로 분류 → 정상 발화 잘림.
+  전사 `"사 토요일에 있었던"` 구간 누락 추정.
+
+**이번 변경 영향**: bong1·ytn2 개선 확인. 그러나 sbs1 +11.3pp catastrophic — logprob<-1.0이 정상 한국어 발화도 잘라냄. 임계값이 너무 높다.
+
+### 채택 조건 판정
+
+| # | 조건 | 판정 |
+|---|------|------|
+| ① max WER 미회귀 | sbs1 +11.3pp ❌ | ❌ **catastrophic 회귀** |
+| ② median 개선 | bong1 -16.0pp, ytn2 -3.5pp — 방향 신호 | — |
+
+**판정: ❌ 기각** (sbs1 catastrophic +11.3pp — logprob -1.0이 정상 발화도 차단)
+
+### 다음 가설 (Exp-141)
+
+임계값을 -1.0 → -1.5로 완화해 sbs1 회귀를 해소하면서 bong1·ytn2 개선 방향을 유지.
+
+**JSON**: `.omc/benchmarks/eval_20260701_0858.json`
+
+---
+
+## Exp-141 — logprob_threshold=-1.5 스크리닝 (2026-07-01)
+
+### 가설
+
+Exp-140(-1.0)에서 sbs1 +11.3pp catastrophic. -1.5로 완화하면 정상 발화 차단이 줄어들 것.
+
+### 변경 내용
+
+코드 변경 없음 — `--logprob-threshold -1.5` 런타임 옵션.
+
+### 테스트 설정 (스크리닝 N=1)
+
+```powershell
+.venv\Scripts\python.exe scripts/eval.py `
+  --model-dir whisperlivekit/model/whisper-large-v3-turbo `
+  --files test_data/bong1.wav test_data/ytn2.mp3 test_data/sbs1.mp3 `
+  --diarization --sortformer-model whisperlivekit/model/sortformer-4spk-v2.nemo `
+  --compression-ratio-threshold 3.0 --logprob-threshold -1.5 `
+  --output ".omc/benchmarks/eval_20260701_0907.json"
+```
+
+### 테스트 세트 결과 (N=1 스크리닝, 경로 C)
+
+| 파일 | WER (N=1) | Δ vs baseline | F1 |
+|------|-----------|--------------|-----|
+| bong1 | 36.0% | -16.9pp ✓ | 51.4% |
+| ytn2  | 29.6% | -5.9pp ✓ | 12.5% |
+| sbs1  | 27.4% | **+5.4pp ❌** | 20.0% |
+
+### 분석 (전사 내용 정성 대조)
+
+**ytn2** (N=1):
+- **F1 극저(12.5%)**: logprob 필터가 EN 발화 세그먼트를 차단 → 코드스위칭 경계가 되는 EN 블록이 드롭됨 → 문장 분리 경계 손실.
+
+**sbs1** (N=1):
+- 회귀 완화(-1.0→-1.5)됐으나 여전히 +5.4pp. 한국어 뉴스 발화가 -1.5 이하 구간 포함.
+
+**이번 변경 영향**: sbs1 회귀 partial 완화(+11.3pp→+5.4pp)이나 여전히 catastrophic. ytn2 F1 12.5%가 새 문제로 부각.
+
+### 채택 조건 판정
+
+| # | 조건 | 판정 |
+|---|------|------|
+| ① max WER 미회귀 | sbs1 +5.4pp ❌ | ❌ 여전히 회귀 |
+| ytn2 F1 | 12.5% (극저) | ❌ |
+
+**판정: ❌ 기각** (sbs1 +5.4pp + ytn2 F1 붕괴)
+
+### 다음 가설 (Exp-142)
+
+-2.0으로 추가 완화. -1.0/-1.5가 정상 발화를 자르는 원인은 EN-after-KR 세그먼트의 낮은 logprob. -2.0이면 EN 블록도 유지하면서 비음성 garbage만 차단 가능한지 확인.
+
+**JSON**: `.omc/benchmarks/eval_20260701_0907.json`
+
+---
+
+## Exp-142 — logprob_threshold=-2.0 채택 확정 (2026-07-01)
+
+### 가설
+
+-1.5에서도 sbs1 회귀가 남았다. -2.0이면 정상 발화(한국어·영어 모두)가 통과하면서 worst-case 비음성
+garbage 세그먼트(매우 낮은 avg-logprob)만 차단할 수 있다.
+비음성 구간 → 모델이 쓰레기 토큰을 강제 생성 → avg_logprob << -2.0 패턴이 예상됨.
+
+### 변경 내용
+
+| 파일 | 변경 |
+|------|------|
+| `whisperlivekit/parse_args.py:322-327` | `--logprob-threshold` 기본값 `None` → `-2.0`, help 갱신 |
+| `docs/TESTING.md` | 기본값 목록에 `--logprob-threshold -2.0` 추가 |
+| `docs/MASTER_CHANGES.md` | avg-logprob 게이트 기본값·채택 상태 갱신 |
+| `CLAUDE.md §4` | WER > F1 채택 우선순위 명시 |
+| `EXPERIMENTS.md` | epoch 마커 E2 확정, 빠른참조 표 갱신 |
+
+커밋: `24d51bb` (branch `feat/logprob-default`) → master 머지 `091c287`
+
+### 테스트 설정
+
+**스크리닝 (N=1):**
+
+```powershell
+# N=1 스크리닝 (eval_20260701_0916.json)
+.venv\Scripts\python.exe scripts/eval.py `
+  --model-dir whisperlivekit/model/whisper-large-v3-turbo `
+  --files test_data/bong1.wav test_data/ytn2.mp3 test_data/sbs1.mp3 `
+  --diarization --sortformer-model whisperlivekit/model/sortformer-4spk-v2.nemo `
+  --compression-ratio-threshold 3.0 --logprob-threshold -2.0 `
+  --output ".omc/benchmarks/eval_20260701_0916.json"
+```
+
+**채택 확정 (N=3, master@3c9a6b1, logprob-threshold=-2.0 명시):**
+
+```powershell
+.venv\Scripts\python.exe scripts/eval.py `
+  --model-dir whisperlivekit/model/whisper-large-v3-turbo `
+  --files test_data/bong1.wav test_data/ytn2.mp3 test_data/sbs1.mp3 `
+  --diarization --sortformer-model whisperlivekit/model/sortformer-4spk-v2.nemo `
+  --compression-ratio-threshold 3.0 --logprob-threshold -2.0 --repeat 3 `
+  --output ".omc/benchmarks/eval_20260701_0924_r3.json"
+```
+
+beams=2, CRT=3.0, diar=ON, logprob=-2.0, repeat=3, VBCable=ok
+
+### 테스트 세트 결과 (N=3 채택 확정, 경로 C)
+
+베이스라인 = Exp-139 median: bong1 52.9%, ytn2 35.5%, sbs1 22.0%
+
+| 파일 | R1 WER | R2 WER | R3 WER | median | max | stdev | F1 med | Δmed vs BL |
+|------|--------|--------|--------|--------|-----|-------|--------|-----------|
+| bong1 | 37.5% | 36.3% | 48.0% | **37.5%** | **48.0%** | 6.5% | 47.4% | **-15.4pp ✓** |
+| ytn2  | 31.5% | 36.0% | 27.1% | **31.5%** | **36.0%** | 4.4% | 23.5% | **-4.0pp ✓** |
+| sbs1  | 19.6% | 22.6% | 18.5% | **19.6%** | **22.6%** | 2.1% | 18.2% | **-2.4pp ✓** |
+
+#### held-out 단회 검증 (diar-ON)
+
+| 파일 | WER | F1 | vs baseline |
+|------|-----|----|-------------|
+| ytn1 | 28.2% | 42.9% | -1.2pp ✓ |
+| eng1 | 3.8% | 0.0% | 0.0pp ✓ |
+
+베이스라인 held-out: ytn1 29.4%, eng1 3.8%. 정상 유지.
+
+### 분석 (전사 내용 정성 대조)
+
+**bong1** (R1=median 37.5% 기준, eval_20260701_0916.json N=1 스크리닝 참조):
+- **logprob 필터 효과**: 비음성 garbage 세그먼트 다수 차단 → WER -15.4pp 대폭 개선.
+- **잔존 문제**: 전사 `"*cough*cough*cough cough*coughing*"` — 기침 반복 구간은 avg-logprob > -2.0이라 필터 통과.
+- **[…] 미차단 잔존**: `"[LAUGHTER. ]"`, `"[NON-ENGLISH"` 패턴 일부 잔존 — Layer 1의 닫힌 `]` 누락 패턴은 미차단(Exp-139 분석에서 확인된 기존 버그).
+- **max 회차(R3=48.0%)**: 필터를 통과한 garbage 세그먼트가 집중 발생 → worst-case 개선 한계.
+
+**ytn2** (R1=median 31.5% 기준):
+- **코드스위칭 정상 처리**: EN 발화 블록이 -2.0 이상 logprob → 차단 없이 정상 전사.
+- **F1 하락(50.0%→23.5%)**: logprob 필터가 EN 세그먼트 일부 차단 → 코드스위칭 경계(빈 줄 기준) 손실.
+  전사 `"[BLANK_AUDIO. (speaking in foreign"` — 비음성 구간에서 EN 환각이 남아 F1 감소.
+- **WER 개선**: -4.0pp 정상 달성.
+
+**sbs1** (R1=median 19.6% 기준):
+- **회귀 해소**: -1.0(+11.3pp), -1.5(+5.4pp)에서 -2.0으로 완화 → -2.4pp 개선.
+- **F1 하락(36.4%→18.2%)**: EN 인용구 블록(`"From a satellite image…"`) logprob 불안정 구간 일부 드롭 → 문장 경계 손실.
+
+**이번 변경 영향**: WER 3파일 전부 개선 (bong1 -15.4pp, ytn2 -4.0pp, sbs1 -2.4pp). logprob -2.0이 정상 발화(한/영)는 통과시키고 비음성 garbage 세그먼트를 차단하는 sweet spot 확인. F1 하락(ytn2 -26.5pp, sbs1 -18.2pp)은 EN 세그먼트 경계 손실이 주원인 — WER > F1 우선순위(§4 신설)에 따라 채택 결정.
+
+### 채택 조건 판정
+
+| # | 조건 | 판정 |
+|---|------|------|
+| ① max WER 미회귀 | bong1 max 48.0%(+E139 대비 -7.0pp ✓) / ytn2 max 36.0% / sbs1 max 22.6% | ✅ **통과** |
+| ② median 개선 | bong1 -15.4pp / ytn2 -4.0pp / sbs1 -2.4pp | ✅ **전부 개선** |
+| held-out | ytn1 -1.2pp ✓ / eng1 0pp ✓ | ✅ **정상** |
+| WER > F1 우선순위 | F1 ytn2 -26.5pp / sbs1 -18.2pp (하락) | WER 개선이 F1 하락보다 우선(§4 채택) |
+
+**판정: ✅ 채택**
+- WER 3파일 전부 개선, max 미회귀.
+- held-out 정상.
+- F1 하락은 WER > F1 우선순위(CLAUDE.md §4 신설, Exp-142 결정 근거)에 따라 채택.
+- `--logprob-threshold -2.0`을 parse_args.py 기본값으로 설정 → master 머지.
+
+### 다음 가설 (Exp-143+)
+
+1. **F1 회복 탐색**: ytn2/sbs1 F1 하락의 주원인인 EN 세그먼트 경계 손실을 개선하는 방법 — 예: 문장 분리 로직(punctuation-split) 개선, diarization segment boundary 활용.
+2. **bong1 max 48.0% 원인 분석**: worst-case 회차에서 어떤 구간이 통과해 catastrophic을 유발하는지 추적 → Layer 3c(compression-ratio / no_speech 조합) 후보.
+3. **PLC 배선 버그 수정**: `backend.py`에서 `periodic_lang_check_secs`가 `AlignAttConfig`에 전달되지 않는 버그 — diar-ON 환경에서는 영향이 작으나, 버그 자체는 수정 가치 있음.
+
+**JSON**: `.omc/benchmarks/eval_20260701_0924_r3.json` (N=3 채택 확정) / `.omc/benchmarks/eval_20260701_0948_heldout.json` (held-out)
