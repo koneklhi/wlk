@@ -367,9 +367,9 @@ def create_parser():
     simulstreaming_group.add_argument(
         "--periodic-lang-check",
         type=float,
-        default=4.0,
+        default=None,
         dest="periodic_lang_check_secs",
-        help="주기적 언어재감지 간격(초). 기본값 4.0(master 설정). diar-off 언어 고착 해소용. None=비활성.",
+        help="주기적 언어재감지 간격(초). 기본값 None(비활성). diar-off 언어 고착 해소용.",
     )
 
     simulstreaming_group.add_argument(

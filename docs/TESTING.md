@@ -34,7 +34,7 @@
 - 브라우저에서 `http://localhost:8900/` 접속 → 내장 웹 UI
   ([whisperlivekit/web/live_transcription.html](../whisperlivekit/web/live_transcription.html))에서 마이크 직접 녹음
 - 마이크에 직접 말하면서 전사 결과를 실시간 확인 (정성적 평가)
-- 서버 기동: `whisperlivekit-server` (모든 인자가 parse_args.py 기본값 — `--lan auto` + simulstreaming + `--periodic-lang-check 4.0`으로 한·영 코드스위칭 처리. 상세는 [OPEN_QUESTIONS.md](OPEN_QUESTIONS.md) 참조)
+- 서버 기동: `whisperlivekit-server` (모든 인자가 parse_args.py 기본값 — `--lan auto` + simulstreaming. `--periodic-lang-check` 기본 None(비활성); 탐색 시 명시적 값 지정. 상세는 [OPEN_QUESTIONS.md](OPEN_QUESTIONS.md) 참조)
 - 목적: 실제 마이크 입력에 대한 정성적 평가 (경로 C 정량 평가와 병행)
 
 ### 경로 C — 오디오 루프백 (1차 정량 성능 기준, Phase 2 도입)
