@@ -321,9 +321,9 @@ def create_parser():
     simulstreaming_group.add_argument(
         "--logprob-threshold",
         type=float,
-        default=None,
+        default=-2.0,
         dest="logprob_threshold",
-        help="avg-logprob 품질 게이트 임계값 (예: -1.0). 낮은 신뢰도 세그먼트 억제. None=비활성.",
+        help="avg-logprob 품질 게이트 임계값. 낮은 신뢰도 세그먼트 억제. 기본값 -2.0 (Exp-142 채택).",
     )
 
     simulstreaming_group.add_argument(
