@@ -108,9 +108,14 @@ class AlignAttBase(ABC):
 
     def refresh_segment(self, complete=False):
         logger.debug("Refreshing segment:")
+        # 버퍼를 버리기 전에 절대 시간 앵커를 승계한다. global_time_offset은 버퍼 pos 0의
+        # 실제 스트림 시각이므로, 버려지는 오디오 길이만큼 앞으로 밀지 않으면 mid-stream
+        # refresh(QualityGate·환각필터·stall) 후 토큰 타임스탬프가 과소평가돼 문장경계 F1이
+        # 붕괴한다. long_silence/new_speaker 경로는 직후 global을 명시적으로 재설정하므로
+        # 이 승계가 덮어써져 무해하다.
+        old_segments_len = self.segments_len()
         self.init_tokens()
         self.state.last_attend_frame = -self.cfg.rewind_threshold
-        self.state.cumulative_time_offset = 0.0
         self.init_context()
         logger.debug(f"Context: {self.state.context}")
         if not complete and len(self.state.segments) > 2:
@@ -118,6 +123,9 @@ class AlignAttBase(ABC):
         else:
             logger.debug("removing all segments.")
             self.state.segments = []
+        discarded_len = old_segments_len - self.segments_len()
+        self.state.global_time_offset += self.state.cumulative_time_offset + discarded_len
+        self.state.cumulative_time_offset = 0.0
         self.state.log_segments += 1
         self.state.pending_incomplete_tokens = []
         self.state.pending_retries = 0
@@ -402,7 +410,8 @@ class AlignAttBase(ABC):
         )
         self._handle_pending_tokens(split_words, split_tokens)
 
-        self._maybe_periodic_lang_check(self.segments_len())
+        # 절대 스트림 시각 — 버퍼상대(segments_len 단독)는 트림마다 리셋돼 간격 미충족
+        self._maybe_periodic_lang_check(self.state.global_time_offset + self.segments_len())
         return timestamped_words
 
     # === Post-decode shared helpers ===
