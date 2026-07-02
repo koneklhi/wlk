@@ -1462,3 +1462,43 @@ goal `docs/GOAL_CODESWITCH_STRUCTURAL.md` 5단계 루프의 **단계 1**. E2 파
 - **단계2(exp/vad-gated-langid)**: bong1 worst-case — `detect_current_language`에 Silero VAD 게이트를 적용해 웃음/박수 비음성이 lang_id 창을 오염시키는 캐스케이드 차단.
 
 **JSON**: `worktrees/lang-switch-protocol/.omc/benchmarks/eval_diaroff_wt_20260702_1625.json` · `.../eval_diaroff_plc2_wt_20260702_1641.json` · `.omc/benchmarks/eval_diaroff_master_20260702_1633.json` (diar-OFF 대조) / diar-ON N=3는 워크트리 벤치마크 참조.
+
+---
+
+## Exp-151 — 잠복버그 2건 수정: refresh global_time_offset 승계 + PLC 절대클록 (2026-07-02) [E3]
+
+Exp-150(단계1) 채택 중 발견한 master 기존 잠복버그 2건 수정. **단계1과 무관**한 독립 결함이며, 브랜치 `exp/timebase-plc-fix` → master `8b83403` 머지.
+
+### 가설 / 근거
+토큰 절대시각 = `frame*0.02 + cumulative_time_offset + global_time_offset`.
+- **Bug 1**: `refresh_segment(complete=True)`(QualityGate 3연속억제·HallucinationFilter·BatchRepeatFilter·stall recovery 발동)가 `cumulative_time_offset=0`으로 리셋하며 **`global_time_offset`을 승계하지 않음** → 버려진 버퍼 길이만큼 이후 토큰 타임스탬프 과소평가 → 문장경계 오배치 → F1 드리프트. diar-ON은 `new_speaker`가 `global=change_speaker.start`로 재앵커해 대체로 은폐되나 단일화자 구간(sbs1)에선 드러남.
+- **Bug 2**: `_maybe_periodic_lang_check(self.segments_len())`가 버퍼상대시간(트림/refresh마다 리셋)을 시계로 사용 → PLC 간격 영원히 미충족 → PLC 항상 미발동.
+
+### 변경 내용 ([`align_att_base.py`](../whisperlivekit/simul_whisper/align_att_base.py))
+- `refresh_segment`: 절단 전 `old_segments_len` 저장 → 절단 후 `discarded_len = old - new` → `global_time_offset += cumulative_time_offset + discarded_len` 후 `cumulative=0`. (long_silence/new_speaker 경로는 직후 global을 명시 재설정하므로 이 승계가 덮어써져 무해; diar-ON에서도 double-count 없음을 산술 검증.)
+- `_maybe_periodic_lang_check` 호출 인자를 `self.state.global_time_offset + self.segments_len()`(절대 스트림 시각)으로 변경.
+- 단위테스트 `tests/test_timebase_refresh.py` 2종(complete=True/False 오프셋 산술) — 총 20 pass.
+
+### 테스트 세트 결과 (경로 C, diar-ON, CRT=3.0, vbcable=ok)
+
+| 파일 | WER median | WER max | F1 median | 게이트(max) | stdev |
+|------|-----------|---------|-----------|------------|-------|
+| bong1 | 38.1% | 41.4% | 37.5% | ≤48.0 ✓ | 2.5 |
+| ytn2 | 23.2% | 24.1% | 35.3% | ≤36.0 ✓ | 1.2 |
+| sbs1 | 19.0% | 19.0% | 18.2% | ≤22.6 ✓ | 0.0 |
+| **avg** | **26.9%** | — | 32.2% | | |
+
+(N=1 스크리닝은 sbs1 WER 26.2%/F1 0.0% 였으나 콜드스타트 변산; N=3에서 sbs1 WER 19.0/F1 18.2 ×3 bit-안정으로 해소.)
+
+### 분석
+- **WER**: 버그수정은 타임스탬프만 바꾸므로 텍스트 WER에 무관 → 관측 avg 26.9%는 무회귀(변산 내). 전 파일 max 게이트 내.
+- **F1**: bong1 37.5·ytn2 35.3·sbs1 18.2 — 카타스트로픽(≈0% 반복) 없음. N=1의 sbs1 0%는 재현 안 됨(N=3 안정 18.2).
+- **Bug 2(PLC)**: PLC=None 기본이라 diar-ON 운영에 영향 없음. 런타임 발동 검증(diar-OFF+PLC=2.0에서 `[PeriodicLang]` 발생)은 향후 PLC 재평가 시로 이연 — 산술·단위테스트로 정확성 확인.
+
+### 채택 판정
+- ① max WER 미회귀 ✓ (41.4/24.1/19.0 전부 게이트 내) · ② median 무회귀(avg 26.9%, 오늘 최저). **✅ 채택.** Epoch E3 유지(버그수정, 새 실패모드 도입 아님).
+
+### 다음 (단계 2)
+- **단계2(exp/vad-gated-langid)**: bong1 worst-case — `detect_current_language`에 Silero VAD 게이트 적용, 웃음/박수 비음성이 lang_id 창을 오염시키는 캐스케이드 차단. 사전 프로브(오감지율 계측) → B-1 입력 마스킹 → N=1 → N=3.
+
+**JSON**: `worktrees/timebase-plc-fix/.omc/benchmarks/eval_timebasefix_diaron_n3_20260702_1950.json` (N=3) · `.../eval_timebasefix_diaron_20260702_1940.json` (N=1).

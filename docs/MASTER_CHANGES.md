@@ -177,7 +177,10 @@ upstream의 **언어 TRIPLE-LOCK** 문제 해소:
 
 **효과 / 적용 범위**: diar-OFF 대조에서 SOT 수정이 반복루프 폭주(ytn2 135%→53%, avg -24.6pp)를 차단 — §3.2 한/영 강제 catastrophic 방지. **diar-ON(기본 운영)에서는 `new_speaker`가 언어전환을 선점해 트림/마커 경로가 대체로 미발동**(WER 변산 내 중립); 정합 groundwork로 유지. **Epoch E2→E3.**
 
-**주의(기존 잠복 버그, Exp-151에서 수정 예정)**: `refresh_segment(complete=True)`가 `global_time_offset`을 승계하지 않아 mid-stream refresh 후 타임스탬프 드리프트(diar-OFF F1 붕괴); PLC 클록이 버퍼상대시간이라 미발동.
+**연계 잠복버그 수정 (Exp-151, `8b83403`)**: 위 발견에서 드러난 master 기존 결함 2건 수정.
+- `refresh_segment(complete=True)`가 `global_time_offset`을 미승계 → mid-stream refresh(QualityGate·환각필터·stall) 후 타임스탬프 드리프트 → 문장경계 F1 저하. **수정**: 버려진 오디오 길이만큼 `global_time_offset` 승계(`old_segments_len - segments_len()` + `cumulative_time_offset`) 후 cumulative 리셋. WER 무관, F1 정합 회복.
+- `_maybe_periodic_lang_check`가 버퍼상대시간(`segments_len`)을 시계로 써서 PLC 미발동 → 절대 스트림 시각(`global_time_offset + segments_len()`)으로 수정. PLC=None 기본이라 운영 무영향.
+- diar-ON N=3 무회귀(avg 26.9%, 전 파일 max 게이트 내). 단위테스트 `tests/test_timebase_refresh.py`.
 
 ---
 
