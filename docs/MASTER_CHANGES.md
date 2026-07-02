@@ -228,6 +228,7 @@ upstream whisperlivekit에는 `new_speaker()` → `refresh_segment()` 뼈대가 
 | 모듈 | 파일 | 동작 |
 |---|---|---|
 | 환각 문장·단어 제거 | [`filtering/__init__.py`](../whisperlivekit/filtering/__init__.py) | `hallucination.json` 목록에 매칭되는 문장·단어를 전사 결과에서 제거 |
+| 비음성 주석 제거 (`_ANNOTATION_RE`) | `filtering/__init__.py` | `(웃음)` `[MUSIC]` 등 닫힌 주석 + **안 닫힌** 비음성 주석(`(speaking…`, `[LAUGHTER`)까지 제거. 키워드 시작·ASCII 영문까지만 매칭해 뒤 한글 보존(과잉제거 방지). (Exp-152, `6df4416`) |
 | 단어 교정 사전 | [`filtering/manager.py`](../whisperlivekit/filtering/manager.py) `WordCorrectionManager` | `admin_replacement.json` (기본 사전) + SQLite DB (`user_replacement.db`) 동적 갱신. 갱신 즉시 반영 |
 | 기본 사전 파일 | [`filtering/hallucination.json`](../whisperlivekit/filtering/hallucination.json), [`filtering/admin_replacement.json`](../whisperlivekit/filtering/admin_replacement.json) | 환각 목록 / 기본 단어 교정 테이블 |
 

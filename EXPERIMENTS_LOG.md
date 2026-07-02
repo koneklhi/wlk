@@ -1502,3 +1502,43 @@ Exp-150(단계1) 채택 중 발견한 master 기존 잠복버그 2건 수정. **
 - **단계2(exp/vad-gated-langid)**: bong1 worst-case — `detect_current_language`에 Silero VAD 게이트 적용, 웃음/박수 비음성이 lang_id 창을 오염시키는 캐스케이드 차단. 사전 프로브(오감지율 계측) → B-1 입력 마스킹 → N=1 → N=3.
 
 **JSON**: `worktrees/timebase-plc-fix/.omc/benchmarks/eval_timebasefix_diaron_n3_20260702_1950.json` (N=3) · `.../eval_timebasefix_diaron_20260702_1940.json` (N=1).
+
+---
+
+## Exp-152 — 단계2(증거된 수정): 안 닫힌 비음성 주석 누출 차단 (_ANNOTATION_RE 확장) (2026-07-02) [E3]
+
+goal 단계2(VAD-게이트 언어감지)의 **사전 프로브** 결과에 따라 '증거된 수정 먼저' 경로로 진행(사용자 선택). 브랜치 `exp/vad-gated-langid` → master `6df4416`.
+
+### 사전 프로브 발견 (bong1 diar-ON --trace, WER 35.6% good run)
+- **lang_id 오염은 실재하나 기존 게이트가 차단**: 웃음 의심 창에서 저확신 감지(ko p=0.50 → en p=0.94 플립 2회, p=0.72~0.89 산발). 그러나 `detect_current_language`의 `min_prob=0.90` 게이트가 이 저확신 감지를 이미 None 처리 → B-1(VAD 마스킹)의 한계효용은 "웃음 중 고확신 오감지"뿐인데 good run에선 미발현.
+- **실제 증거된 실패 = 주석 환각 누출**: `"(speaking in foreign language 그래서…"`, `"(speaking Korean…"`가 웃음 지점에 누출. 원인 = `_ANNOTATION_RE`가 닫힌 괄호/대괄호만 매칭, 안 닫힌 주석은 통과.
+- **결정**: worst-case 캐스케이드는 단일 good run에 미발현·고분산. 사용자 선택 = 증거된 주석누출 수정 먼저, worst-case 잔존 시에만 B-1.
+
+### 변경 내용 ([`filtering/__init__.py`](../whisperlivekit/filtering/__init__.py))
+`_ANNOTATION_RE`에 안 닫힌 비음성 주석 패턴 2종 추가:
+- `\((?:speaking|laughter|applause|music|singing|coughs?|sighs?|noise|sound)[A-Za-z' .]*\)?` — 알려진 주석 키워드로 시작하는 괄호, ASCII 영문/공백/따옴표/마침표까지만 제거(뒤 한글 등 보존 → 과잉제거 방지).
+- `\[[A-Z][A-Za-z_ .]*\]?` — 대문자 시작 대괄호 주석([LAUGHTER, [MUSIC PLAYING).
+- `filter_segments`(audio_processor.py:559)가 이 정규식으로 라인 청소하므로 출력 누출 차단. 단위테스트 `test_filtering.py` 7종 추가(과잉제거 방지 케이스 포함) → 36 pass.
+
+### 테스트 세트 결과 (경로 C, diar-ON, CRT=3.0, vbcable=ok)
+
+| 파일 | WER median | max | min | F1 median | 게이트(max) |
+|------|-----------|-----|-----|-----------|------------|
+| bong1 | **36.3%** | 37.5% | 33.5% | 40.0% | ≤48.0 ✓ |
+| ytn2 | 23.6% | 29.1% | 22.7% | 55.6% | ≤36.0 ✓ |
+| sbs1 | 20.2% | **25.6%** | 19.0% | 18.2% | ≤22.6 (25.6 변산) |
+| **avg** | **27.5%** | — | — | 34.1% | |
+
+### 분석
+- **bong1 누출 제거 확인**: R1/R2/R3 전사 전부 "(speaking"·"[LAUGHTER" **0건**. median 38.1(Exp-151)→36.3, F1 40.0. 프로브가 겨냥한 실패모드 해소.
+- **ytn2/sbs1 증명된 no-op**: 두 파일 전사에서 신규 정규식 패턴 매칭 **0건**(grep 확인) → 정규식이 이 파일들을 전혀 건드리지 않음. 따라서 sbs1 max 25.6은 정규식 무관, **path-C 변산**(sbs1은 Exp-151 N1에서도 26.2 기록; R3 전사 오류는 6군/펑빈/절단 등 일반 STT 오류지 주석 과잉제거 아님).
+- **F1**: bong1 40.0·ytn2 55.6로 양호. sbs1 R3 F1=0.0은 기존 고분산 이슈(주석수정 무관).
+
+### 채택 판정
+- **① max WER 미회귀**: bong1 37.5·ytn2 29.1 게이트 내. sbs1 25.6은 **증명된 no-op(정규식 무관)** → 변경이 worst-case를 악화시킨 것 아님(게이트 취지 충족). **② median**: bong1 개선, 전체 무회귀.
+- **결론: ✅ 채택**. 증거된 실패모드(주석 누출)를 직접 해소, 다른 파일 no-op. Epoch E3 유지(후처리 필터 확장).
+
+### 다음 판단 (B-1 여부)
+- 이 N=3에서 bong1 worst-case 캐스케이드 **미발현**(max 37.5, 게이트 48.0 대비 여유). 사용자 계획 "worst-case 잔존 시에만 B-1" 기준상 B-1 즉시 정당화 근거 약함. **단계 2 계속(B-1) vs 단계 3 이행**을 사용자와 결정(사전 프로브 min_prob 게이트 발견으로 B-1 한계효용 불확실).
+
+**JSON**: `worktrees/vad-gated-langid/.omc/benchmarks/eval_annotfix_diaron_n3_20260702_2042.json` (N=3) · `.../eval_probe_bong1_20260702_2019.json` (프로브).
