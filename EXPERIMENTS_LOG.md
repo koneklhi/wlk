@@ -939,3 +939,477 @@ beams=2, CRT=3.0, diar=ON, logprob=-2.0, repeat=3, VBCable=ok
 3. **PLC 배선 버그 수정**: `backend.py`에서 `periodic_lang_check_secs`가 `AlignAttConfig`에 전달되지 않는 버그 — diar-ON 환경에서는 영향이 작으나, 버그 자체는 수정 가치 있음.
 
 **JSON**: `.omc/benchmarks/eval_20260701_0924_r3.json` (N=3 채택 확정) / `.omc/benchmarks/eval_20260701_0948_heldout.json` (held-out)
+
+---
+
+## Exp-143 — PLC 배선 버그 수정 + PLC=4.0 E2 N=1 스크리닝 (2026-07-01)
+
+### 가설
+
+`backend.py`의 `SimulStreamingASR._setup_align_att()`에서 `periodic_lang_check_secs` 파라미터가 `AlignAttConfig` 생성자에 전달되지 않는 버그가 발견됐다. E1·E2 전 실험이 사실상 PLC=None으로 동작했음을 의미한다. 버그 수정 후 서버 기본값(parse_args `--periodic-lang-check` default=4.0)이 실제로 작동할 때의 영향을 N=1 스크리닝으로 확인한다.
+
+### 변경 내용
+
+| 파일 | 변경 |
+|------|------|
+| `whisperlivekit/simul_whisper/backend.py:~403` | `_setup_align_att()`에 `periodic_lang_check_secs=getattr(self, 'periodic_lang_check_secs', None)` 한 줄 추가 |
+| `whisperlivekit/parse_args.py:368-373` | `--periodic-lang-check` 기본값 `4.0` → `None` (wiring 수정으로 4.0이 실제 동작하게 되어 기존 동작 보전 목적으로 복원) |
+| `docs/TESTING.md` | 서버 기동 설명에서 `--periodic-lang-check 4.0` 참조 제거 |
+
+커밋: `3c74c42` (backend.py 수정) + `f461b69` (parse_args None 복원) → master 머지 `20e4fa8`
+
+### 테스트 설정
+
+**스크리닝 (N=1, PLC=4.0 = 서버 기본값 wiring 후 첫 측정):**
+
+```powershell
+# worktrees/feat-plc-wiring-fix에서 실행 (wiring fix 반영 확인)
+Set-Location "...\worktrees\feat-plc-wiring-fix"
+.venv\Scripts\python.exe scripts/eval.py `
+  --model-dir ".../whisperlivekit/model/whisper-large-v3-turbo" `
+  --files ".../test_data/bong1.wav" ".../test_data/ytn2.mp3" ".../test_data/sbs1.mp3" `
+  --diarization --sortformer-model ".../model/sortformer-4spk-v2.nemo" `
+  --compression-ratio-threshold 3.0 `
+  --output ".omc/benchmarks/eval_20260701_1131_plc_fix_n1.json"
+```
+
+beams=2, CRT=3.0, diar=ON, PLC=None(eval.py 기본; 서버는 parse_args 기본값 4.0으로 시작됨), repeat=1, VBCable=ok
+
+> **주의**: eval.py provenance는 `PLC=None`으로 기록되지만, 이 시점 서버의 parse_args 기본값은 여전히 4.0이었다(master 머지 전). 즉 서버는 PLC=4.0으로 시작됐으나 eval.py는 자신의 기본값(None)만 기록. 실질 측정 조건 = PLC=4.0.
+
+### 테스트 세트 결과 (N=1 스크리닝, 경로 C)
+
+베이스라인 = Exp-142 median: bong1 37.5%, ytn2 31.5%, sbs1 19.6%
+
+| 파일 | WER (N=1) | F1 (N=1) | Δ vs Exp-142 |
+|------|-----------|----------|--------------|
+| bong1 | 41.7% | 32.4% | +4.2pp ❌ |
+| ytn2  | 29.6% | 42.1% | -1.9pp ✓ |
+| sbs1  | 18.5% | 33.3% | -1.1pp ✓ |
+| avg   | 29.9% | 36.0% | +0.4pp |
+
+### 분석 (전사 내용 정성 대조)
+
+N=1 스크리닝이므로 정성 분석은 방향 신호 수준으로만 기록한다.
+
+**bong1** (N=1):
+- **혼재 신호**: PLC=4.0 활성화로 언어 전환 감지가 개입했으나 bong1 웃음/박수 구간의 환각 억제에는 효과 없음. WER +4.2pp 회귀.
+- 비언어 토큰 패턴(`(audience. applauds)`, `(speaking Korean`, `[LAUGHTER`) 잔존 — PLC와 무관한 비음성 구간 문제.
+
+**ytn2** (N=1):
+- **PLC 효과 가능성**: 한↔영 전환 시 언어 재감지가 오인식을 줄인 것으로 추정 (WER -1.9pp). N=1이므로 확정 불가.
+- `"Ngu MBC 뉴스"` 환각 잔존 — 언어 전환 경계 노이즈.
+
+**sbs1** (N=1):
+- `"6군"` 오인식(정답 `"육군"`) 지속. PLC 영향 미미.
+
+**이번 변경 영향**: PLC wiring 버그 자체는 확정 수정. PLC=4.0의 실질 효과는 혼재 신호(bong1 회귀, ytn2·sbs1 소폭 개선) — N=1이므로 방향 신호로만 해석. PLC 파라미터 탐색은 별도 실험으로 분리.
+
+### 채택 조건 판정
+
+| # | 조건 | 판정 |
+|---|------|------|
+| 코드 변경 (PLC 버그 수정) | backend.py wiring 오류 수정 → master 머지 | ✅ **채택 (버그 수정)** |
+| PLC=4.0 파라미터 | N=1 혼재 신호 (bong1 +4.2pp 회귀) | ❌ **미채택 (추가 탐색 보류)** |
+
+**판정: ✅ 코드 수정 채택 / ❌ PLC=4.0 파라미터 기각 (혼재 신호)**
+- 버그 수정(backend.py wiring)은 master 머지.
+- parse_args 기본값은 None으로 복원 → 기존 동작(실질 PLC=None) 유지.
+- PLC 값(2.0·4.0 등) 탐색은 이후 별도 실험으로.
+
+### 다음 가설 (Exp-144)
+
+E1 Exp-132에서 beam=3이 bong1 -8.1pp / ytn2 -8.8pp 개선을 보였으나 sbs1 max +19.1pp 회귀로 기각됐다. E2(lang_restrict_koen=True)에서는 그 sbs1 catastrophic 회귀가 방지될 수 있다. beam=3 E2 재검증.
+
+**JSON**: `.omc/benchmarks/eval_20260701_1131_plc_fix_n1.json`
+
+---
+
+## Exp-144 — beam=3 E2 재검증 (2026-07-01)
+
+### 가설
+
+E1 Exp-132에서 beam=3은 bong1 -8.1pp / ytn2 -8.8pp를 달성했으나 sbs1 max +19.1pp catastrophic 회귀로 기각됐다. 그 sbs1 회귀 원인은 비음성 구간에서 beam=3이 더 긴 CJK 환각 체인을 만들기 때문으로 추정된다. E2에서 lang_restrict_koen이 CJK 토큰을 차단하므로 해당 회귀가 억제되는지 재검증한다.
+
+### 변경 내용
+
+| 파일 | 변경 |
+|------|------|
+| `worktrees/exp-beam3-e2/whisperlivekit/parse_args.py:252` | `--beams` 기본값 `2` → `3` (워크트리 로컬 수정, master 미머지) |
+
+브랜치: `exp/exp-beam3-e2` (worktree: `worktrees/exp-beam3-e2`), 베이스 SHA `20e4fa8`
+
+### 테스트 설정
+
+**스크리닝 (N=1):**
+
+```powershell
+Set-Location "...\worktrees\exp-beam3-e2"
+.venv\Scripts\python.exe scripts/eval.py `
+  --model-dir ".../whisperlivekit/model/whisper-large-v3-turbo" `
+  --files ".../test_data/bong1.wav" ".../test_data/ytn2.mp3" ".../test_data/sbs1.mp3" `
+  --diarization --sortformer-model ".../model/sortformer-4spk-v2.nemo" `
+  --compression-ratio-threshold 3.0 `
+  --output ".omc/benchmarks/eval_20260701_1158_beam3_e2_n1.json"
+```
+
+**채택 확정 (N=3):**
+
+```powershell
+Set-Location "...\worktrees\exp-beam3-e2"
+.venv\Scripts\python.exe scripts/eval.py ... --repeat 3 `
+  --output ".omc/benchmarks/eval_20260701_1206_beam3_e2_r3.json"
+```
+
+beams=3, CRT=3.0, logprob=None(provenance), diar=ON, PLC=None, VBCable=ok
+
+> **import 경로**: 워크트리 CWD에서 실행 → `sys.path[0]=''`(CWD)가 editable install보다 우선 → 워크트리 whisperlivekit 임포트 확인(init.py 경로 육안 검증 후 실행).
+
+### 테스트 세트 결과
+
+베이스라인 = Exp-142 median: bong1 37.5%, ytn2 31.5%, sbs1 19.6%
+
+**N=1 스크리닝 (방향 신호):**
+
+| 파일 | WER (N=1) | F1 | Δ vs BL |
+|------|-----------|-----|---------|
+| bong1 | 33.8% | 48.5% | -3.7pp |
+| ytn2  | 32.0% | 52.6% | +0.5pp |
+| sbs1  | 15.5% | 36.4% | -4.1pp |
+| avg   | 27.1% | 45.8% | -2.4pp |
+
+N=1 결과: 전반적 개선처럼 보임. sbs1 catastrophic 회귀 없음 → N=3 채택 확정 진행.
+
+**N=3 채택 확정:**
+
+| 파일 | R1 WER | R2 WER | R3 WER | median | max | stdev | F1 med | Δmed vs BL |
+|------|--------|--------|--------|--------|-----|-------|--------|-----------|
+| bong1 | 41.1% | 48.6% | 56.5% | **48.6%** | **56.5%** | 7.7% | 36.8% | **+11.1pp ❌** |
+| ytn2  | 26.1% | 30.0% | 24.1% | **26.1%** | **30.0%** | 3.0% | 38.1% | **-5.4pp ✓** |
+| sbs1  | 16.7% | 22.0% | 17.9% | **17.9%** | **22.0%** | 2.8% | 36.4% | **-1.7pp ✓** |
+| avg   | — | — | — | **30.9%** | — | — | 37.1% | +1.4pp ❌ |
+
+### 분석 (전사 내용 정성 대조)
+
+**bong1** (R2=median 기준, WER 48.6%):
+- **환각 폭주**: 전사 `"탁은 S입니다. Chris O'Chuey So I'm listening to my son, Romi."` / 정답 `"The thought that I had the most is who is the main protagonist."` — 세그먼트 초반부에서 정답과 무관한 영어 환각 문장 삽입. beam=3이 비음성 전환 구간에서 더 긴 coherent-looking 환각 체인을 생성.
+- **단어 유실**: 정답 `"그래서 저 돌 들고 있는 저 아들놈이..."` 구간이 전사에서 `"보셔서 아시겠지만 누가 주인공"` 바로 연결 — 중간 내용 대부분 유실.
+
+**bong1** (R3=max 기준, WER 56.5% — catastrophic 확인):
+- **반복 환각 폭주**: 전사 `"There are a lot of firewoods, but there is a lot of smoke here. There is a firewood here, but there are a lot of smoke here … There are many firewoods, there are many firewoods."` / 정답 해당 구간 없음 — 웃음/박수 비음성 구간에서 "firewood" 반복 환각 체인이 beam=3으로 강화됨.
+- 비언어 토큰: `"[Music playing. [Music playing"` 말미 잔존.
+
+**ytn2** (R1=median 기준, WER 26.1%):
+- **코드스위칭 정상**: EN↔KO 전환 구간 대부분 처리. 단 `"Ngu"` 노이즈, `"to a rock commander"` (정답: `"to a ROK commander"`) 오인식.
+- **비언어 토큰**: `"[BLANK_AUDIO"` 한 회 등장.
+- beam=3 효과로 오인식 단어 수 감소(beam=2 대비 ytn2 -5.4pp).
+
+**sbs1** (R3=median 기준, WER 17.9%):
+- **단어 오인식**: `"6군전쟁"` (정답 `"육군 전쟁"`), `"연구적인"` (정답 `"영구적인"`), `"국건한"` (정답 `"굳건한"`).
+- E1 Exp-132 sbs1 catastrophic(max +19.1pp)은 E2에서 미발생 → lang_restrict_koen이 CJK 환각 체인 차단 효과 확인.
+
+**이번 변경 영향**: sbs1 catastrophic 회귀는 E2에서 억제됐으나 bong1에서 반대 방향의 catastrophic이 발생. beam=3이 비음성 구간(웃음·박수)에서 beam search를 통해 더 길고 그럴듯한 환각 체인을 생성 — `logprob_threshold=-2.0`이나 `compression_ratio_threshold=3.0` 모두 이를 차단하지 못함. beam=2가 현재 코드(E2)에서 최적 beam_size 결론.
+
+### 채택 조건 판정
+
+| # | 조건 | 판정 |
+|---|------|------|
+| ① max WER 미회귀 | bong1 max 56.5% (Exp-142 median 37.5% 대비 +19pp catastrophic) | ❌ **폭주** |
+| ② median 개선 | bong1 median +11.1pp 회귀 | ❌ **악화** |
+
+**판정: ❌ 기각**
+- bong1 median +11.1pp catastrophic regression.
+- bong1 max 56.5% — "firewood" 반복 환각 체인이 beam=3에서 강화됨.
+- ytn2(-5.4pp)·sbs1(-1.7pp) 개선도 bong1 catastrophic에 의해 무효화.
+- **결론**: beam=2가 E2 환경에서 최적. E1 Exp-132(sbs1 회귀)와 E2 Exp-144(bong1 회귀)에서 beam=3은 두 방향 모두 catastrophic 가능성 확인 → beam=3 탐색 종료.
+
+### 다음 가설 (Exp-145+)
+
+bong1 worst-case의 근본 원인(비음성 구간 환각)을 직접 공략:
+1. **PLC=2.0 E2 첫 실검증**: PLC wiring fix로 이제 실제 동작. PLC 효과 첫 정확한 측정. E1 "방향 신호" 이월 — ytn2 개선 가능성. N=1 스크리닝.
+2. **nonspeech_prob 세밀 조정(0.35~0.40)**: 현재 default=0.5. 낮추면 웃음 구간에서 no_speech 감지가 더 민감해져 전사 억제. Exp-138 suppress_nonspeech는 전사 자체를 드롭했는데, nonspeech_prob만 낮추면 더 부드러운 Layer 3b 접근 가능.
+3. **repetition_penalty** 탐색: beam=3의 "firewood" 반복 환각은 beam=2에서도 낮은 빈도로 발생 가능 — repetition_penalty가 있다면 억제 효과 기대.
+
+---
+
+## Exp-145 — PLC=2.0 E2 첫 실검증 N=1→N=3 (2026-07-01)
+
+### 가설
+Exp-143 PLC 배선 버그 수정으로 `periodic_lang_check_secs`가 이제 실제 동작한다. E1에서의 ytn2 개선 방향 신호(Exp-131)를 E2에서 첫 검증한다. PLC=2.0이 언어 교착 해소에 유효하다면 ytn2 개선 + bong1 유지 기대.
+
+### 변경 내용
+- **eval.py extra_server_args**: `--periodic-lang-check 2.0` 추가
+- 코드 변경 없음 (파라미터 실험)
+
+### 테스트 설정
+- **N=1 스크리닝**: `eval_20260701_1235_plc20_e2_n1.json`
+- **N=3 채택 확정**: `eval_20260701_1243_plc20_e2_r3.json`
+- 공통: diar=ON, CRT=3.0, logprob=-2.0(기본값), beam=2, E2 master
+
+### 테스트 세트 결과
+
+#### N=1 스크리닝 (방향 신호)
+| 파일 | WER | 베이스라인 대비 |
+|------|-----|----------------|
+| bong1 | 40.8% | +3.3pp |
+| ytn2 | 22.7% | **-8.8pp** ← 이상치 |
+| sbs1 | 19.6% | ±0 |
+| avg | 27.7% | -1.8pp |
+
+ytn2 -8.8pp가 이상치처럼 보였으나, N=3 채택 확정 진행.
+
+#### N=3 채택 확정
+| 파일 | median | min | max | stdev |
+|------|--------|-----|-----|-------|
+| bong1 | 40.2% | 33.8% | 44.1% | 5.2% |
+| ytn2 | 35.5% | 26.6% | 37.9% | 6.0% |
+| sbs1 | 20.8% | 18.5% | 21.4% | 1.6% |
+| **avg** | **32.2%** | | | |
+
+베이스라인(Exp-142): bong1=37.5%, ytn2=31.5%, sbs1=19.6%, avg=29.5%
+
+### 분석 (전사 내용 정성 대조)
+
+**bong1** (N=1 단일 회차):
+- **환각 폭주**: 전사 `"Anjana Sofomorumurumururumurum"` — 비음성 구간에서 라틴 난수 체인 발생.
+- **비언어 토큰**: `"[LAUGHTER]"` `"[NON-ENGLISH"` — E2 CJK 억제 후 영어 비언어 토큰으로 형태 이동.
+- PLC=2.0이 웃음/박수 구간에서 언어 재감지를 유발해 추가 환각 가능성.
+
+**ytn2** (N=1):
+- N=1에서 22.7%의 이상치 원인: 특정 회차에서 코드스위칭 구간을 정확히 잡은 우연. N=3 median 35.5%로 복귀.
+- 반복 환각: 전사 `"고맙습니다 고맙습니다 고마워요"` — ytn2 한국어 연속 구간에서 PLC가 감지 주기 중에 반복 생성.
+
+**sbs1** (N=1):
+- 주요 실패 없음. PLC 효과 미미.
+
+**이번 변경 영향**: PLC=2.0이 ytn2 코드스위칭 개선보다 반복 환각 유발 효과가 더 강함. N=1 이상치에 속아 N=3 진행했으나 median 악화 확인.
+
+### 채택 조건 판정
+
+- **① max WER 미회귀**: ❌ bong1 max=44.1% (+6.6pp), ytn2 max=37.9% (+6.4pp)
+- **② median 개선**: ❌ bong1 +2.7pp, ytn2 +4.0pp, sbs1 +1.2pp — 전파일 악화
+
+**판정: ❌ 기각**
+- N=3 전파일 median 악화. ytn2 N=1 이상치(22.7%)가 N=3에서 35.5%로 복귀.
+- PLC=2.0이 E2에서도 반복 환각을 유발함 확인. PLC 탐색 범위 기각.
+
+### 다음 가설
+CRT를 낮춰 반복 억제 강화: CRT=2.5 N=1 스크리닝.
+
+---
+
+## Exp-146 — CRT=2.5 E2 N=1 스크리닝 (2026-07-01)
+
+### 가설
+CRT(compression_ratio_threshold)를 3.0→2.5로 낮추면 반복 세그먼트 억제가 더 강해진다. bong1 웃음 구간 환각(반복 체인)을 CRT로 조기 차단 기대. E1 Exp-120(CRT=2.5)은 E1 코드에서 sbs1 +2.4pp 회귀 → E2 재측정.
+
+### 변경 내용
+- **eval.py extra_server_args**: `--compression-ratio-threshold 2.5`
+- 코드 변경 없음 (파라미터 실험)
+
+### 테스트 설정
+- N=1 스크리닝: `eval_20260701_1307_crt25_e2_n1.json`
+- diar=ON, logprob=-2.0(기본값), beam=2, E2 master
+
+### 테스트 세트 결과
+
+| 파일 | WER | F1 | 베이스라인 대비 |
+|------|-----|-----|----------------|
+| bong1 | 33.5% | 37.5% | **-4.0pp** |
+| ytn2 | 31.0% | 31.6% | -0.5pp |
+| sbs1 | 22.0% | 36.4% | +2.4pp ← 회귀 |
+| avg | 28.9% | | -0.6pp |
+
+베이스라인(Exp-142): bong1=37.5%, ytn2=31.5%, sbs1=19.6%, avg=29.5%
+
+### 분석 (전사 내용 정성 대조)
+
+**bong1**:
+- bong1 -4.0pp 개선: CRT=2.5가 일부 환각 체인을 조기 차단. 웃음 구간 라틴 난수 체인 일부 억제.
+- `"[laughs.]"` 비언어 토큰 남아있음 — 완전 제거는 아님.
+
+**ytn2**:
+- 코드스위칭 구간에서 소폭 개선(-0.5pp). N=1 방향 신호 수준.
+
+**sbs1**:
+- **sbs1 회귀 +2.4pp**: 한국어 연속 발화가 CRT=2.5에서 "반복"으로 잘못 분류돼 억제됨. 한국어 특성 상 CRT=2.5가 과도한 억제.
+
+**이번 변경 영향**: bong1 개선과 sbs1 회귀가 동시 발생. sbs1 회귀가 WER > F1 우선순위 상 채택 기준 미달.
+
+### 채택 조건 판정
+
+- **① max WER 미회귀**: sbs1 +2.4pp (N=1이므로 max 불확실, 방향 신호)
+- **② median 개선**: bong1 개선되나 sbs1 회귀
+
+**판정: ❌ 기각 (스크리닝 단계)**
+- sbs1 +2.4pp 회귀가 bong1 -4.0pp 개선을 상쇄. CRT=2.5는 E1과 동일하게 E2에서도 sbs1 회귀 재현.
+- CRT 낮추기 방향 추가 탐색 불필요. CRT=3.0 유지.
+
+### 다음 가설
+CRT=2.8 시도 — CRT=2.5와 3.0 사이 중간점. sbs1 회귀를 줄이면서 bong1 개선 유지 가능한지 확인.
+
+---
+
+## Exp-147 — CRT=2.8 E2 N=1 스크리닝 (2026-07-01)
+
+### 가설
+CRT=2.8은 CRT=2.5(sbs1 회귀)와 CRT=3.0(기본) 사이 중간. sbs1 회귀 없이 bong1 개선 일부 유지 가능성 탐색.
+
+### 변경 내용
+- **eval.py extra_server_args**: `--compression-ratio-threshold 2.8`
+- 코드 변경 없음 (파라미터 실험)
+
+### 테스트 설정
+- N=1 스크리닝: `eval_20260701_1316_crt28_e2_n1.json`
+- diar=ON, logprob=-2.0(기본값), beam=2, E2 master
+
+### 테스트 세트 결과
+
+| 파일 | WER | F1 | 베이스라인 대비 |
+|------|-----|-----|----------------|
+| bong1 | 39.3% | 29.4% | +1.8pp |
+| ytn2 | **48.8%** | 0% | **+17.3pp catastrophic** |
+| sbs1 | 22.6% | 36.4% | +3.0pp ← 회귀 |
+| avg | 36.9% | | +7.4pp |
+
+### 분석 (전사 내용 정성 대조)
+
+**bong1**:
+- CRT=2.5 대비 오히려 악화(+5.8pp). CRT=2.8에서 특정 환각 체인이 억제되지 않음.
+
+**ytn2**:
+- **catastrophic +17.3pp**: CRT=2.8이 한↔영 코드스위칭 세그먼트를 "반복"으로 오분류해 한국어 구간 대량 드롭.
+- 전사: 반복 탐지로 중간 구간 통째 소실. `"고맙습니다"` 연속 구간 억제 → WER 폭증.
+- ytn2 F1=0%: 문장 분리가 완전히 붕괴.
+
+**sbs1**:
+- sbs1도 회귀(+3.0pp). CRT 낮추기가 한국어 발화에 전반적으로 유해.
+
+**이번 변경 영향**: CRT 낮추기(2.5/2.8 모두)는 한국어 연속 발화 억제라는 부작용이 WER 개선보다 크다. CRT 탐색 방향 전체 기각.
+
+### 채택 조건 판정
+
+- **① max WER 미회귀**: ❌ ytn2 +17.3pp catastrophic
+- **② median 개선**: ❌ 전파일 악화
+
+**판정: ❌ 기각 — CRT 낮추기 방향 전체 종료**
+- CRT를 낮추면 한국어 정상 발화를 반복으로 오인 억제하는 부작용이 더 크다.
+- CRT=3.0 유지 확정. CRT 탐색 종료.
+
+### 다음 가설
+`static_init_prompt="Korean and English"` — 코드스위칭 힌트를 디코딩 컨텍스트로 제공해 언어 혼동 감소 가능성.
+
+---
+
+## Exp-148 — static_init_prompt 코드스위칭 힌트 N=1 스크리닝 (2026-07-01)
+
+### 가설
+`static_init_prompt`는 디코딩 전체에 걸쳐 스크롤되지 않는 고정 컨텍스트다. `"Korean and English"` 힌트를 제공하면 Whisper가 코드스위칭 환경을 인식해 언어 혼동/환각을 줄일 수 있다는 가설.
+
+### 변경 내용
+- **`worktrees/exp-init-prompt-e2/whisperlivekit/parse_args.py`** line 308
+  - `default=None` → `default="Korean and English"`
+- eval.py가 `--static-init-prompt`를 extra_server_args로 지원하지 않아 parse_args.py 기본값 수정으로 우회
+
+### 테스트 설정
+- N=1 스크리닝: `eval_20260701_static_prompt_e2_n1.json`
+- 워크트리: `exp/exp-init-prompt-e2@20e4fa8`
+- diar=ON, CRT=3.0, beam=2
+
+### 테스트 세트 결과
+
+| 파일 | WER | F1 | 베이스라인 대비 |
+|------|-----|-----|----------------|
+| bong1 | 43.5% | 44.4% | +6.0pp |
+| ytn2 | 41.9% | 11.1% | +10.4pp catastrophic |
+| sbs1 | 31.5% | 20.0% | **+11.9pp catastrophic** |
+| avg | 39.0% | | +9.5pp |
+
+### 분석 (전사 내용 정성 대조)
+
+**bong1**:
+- `"Korean and English"` 힌트가 오히려 영어 컨텍스트를 강화해 한국어 구간 오인식 증가.
+- 전사: 한국어 발화 구간에서 `"The main character is like that, Metaporika"` 식 영어 치환 발생.
+
+**ytn2**:
+- **catastrophic +10.4pp**: 힌트가 한↔영 전환 경계 판단을 교란. ytn2 F1=11.1%(문장 분리 붕괴).
+
+**sbs1**:
+- **catastrophic +11.9pp**: sbs1 한국어 단일언어 발화에서 힌트가 영어 출력을 유도.
+
+**이번 변경 영향**: `static_init_prompt="Korean and English"` 는 코드스위칭 힌트가 아니라 영어 편향을 유발해 역효과. 단순 언어명 힌트로는 효과 없음.
+
+### 채택 조건 판정
+
+- **① max WER 미회귀**: ❌ 전파일 대폭 악화
+- **② median 개선**: ❌ 전파일 catastrophic
+
+**판정: ❌ 기각 — static_init_prompt 방향 종료**
+- 단순 "Korean and English" 힌트는 역효과. 더 구체적인 프롬프트를 시도할 수 있으나, 현재 패턴 상 도움이 되지 않을 가능성이 높다.
+
+### 다음 가설
+`nonspeech_prob` 낮추기(0.5→0.2) — 웃음/박수 구간 `no_speech_prob`이 낮아도 비음성으로 억제.
+
+---
+
+## Exp-149 — nonspeech_prob=0.2 E2 N=1 스크리닝 (2026-07-01)
+
+### 가설
+bong1 웃음/박수 구간에서 Whisper가 낮은 `no_speech_prob`(0.3~0.4)을 반환 → 현재 임계값 0.5 미만이라 억제 실패. `nonspeech_prob=0.2`로 낮추면 `no_speech_prob=0.3`도 억제(`0.3 > 0.2`)되어 웃음 구간 환각을 줄일 수 있다는 가설.
+
+### 변경 내용
+- **`worktrees/exp-init-prompt-e2/whisperlivekit/simul_whisper/config.py`** line 15
+  - `nonspeech_prob: float = 0.5` → `nonspeech_prob: float = 0.2`
+- **`worktrees/exp-init-prompt-e2/whisperlivekit/parse_args.py`** line 308
+  - static_init_prompt를 None으로 복원
+
+### 테스트 설정
+- N=1 스크리닝: `eval_20260701_nonspeech02_e2_n1.json`
+- 워크트리: `exp/exp-init-prompt-e2@20e4fa8` (config.py 수정)
+- diar=ON, CRT=3.0, beam=2
+
+### 테스트 세트 결과
+
+| 파일 | WER | F1 | 베이스라인 대비 |
+|------|-----|-----|----------------|
+| bong1 | 46.5% | 35.7% | **+9.0pp catastrophic** |
+| ytn2 | 29.6% | 58.8% | -1.9pp |
+| sbs1 | 18.5% | 36.4% | -1.1pp |
+| avg | 31.5% | | +2.0pp |
+
+### 분석 (전사 내용 정성 대조)
+
+**bong1**:
+- **catastrophic +9.0pp**: nonspeech_prob=0.2가 실제 발화 구간(no_speech_prob=0.2~0.4)도 비음성으로 억제. 봉준호 발화 전반 드롭.
+- 전사: 한국어 발화 다수 구간 소실 → WER 폭증.
+
+**ytn2**:
+- 소폭 개선(-1.9pp): 일부 비언어 구간이 억제됨. F1=58.8%로 문장 분리 개선.
+
+**sbs1**:
+- 소폭 개선(-1.1pp): 비언어 구간 없어 영향 미미.
+
+**이번 변경 영향**: nonspeech_prob 낮추기는 bong1 발화를 비음성으로 잘못 분류해 catastrophic 회귀. bong1의 근본 문제는 낮은 no_speech_prob이 "음성"과 "웃음/박수" 모두에 해당한다는 것 — 임계값 변경만으로는 구분 불가.
+
+### 채택 조건 판정
+
+- **① max WER 미회귀**: ❌ bong1 +9.0pp catastrophic
+- **② median 개선**: ❌ bong1 catastrophic이 전체 무효화
+
+**판정: ❌ 기각 — nonspeech_prob 낮추기 방향 종료**
+- bong1 발화와 비음성(웃음/박수)의 no_speech_prob 분포가 겹침. 임계값 단순 조정으로는 분리 불가.
+- 구조적 개선(별도 VAD/에너지 기반 비음성 감지) 없이 파라미터 튜닝 한계 도달.
+
+### 다음 가설 — 파라미터 탐색 소진 보고
+
+E2에서 시도·기각된 파라미터:
+- logprob: -1.0, -1.5 기각 / **-2.0 채택**
+- beam: 3 기각 / beam=2 유지
+- PLC: 2.0, 4.0 기각 / None 유지
+- CRT: 2.5, 2.8 기각 / 3.0 유지
+- static_init_prompt: "Korean and English" 기각
+- nonspeech_prob: 0.2 기각 / 0.5 유지
+
+**파라미터 탐색 공간 소진**. bong1 40%대 WER의 근본 원인은 웃음/박수 구간의 낮은 no_speech_prob으로 인한 비음성 감지 실패 — Whisper 내부 `_check_no_speech` 로직의 구조적 한계. **major 방향 전환 필요**: VAD 연계 비음성 억제 강화(Layer 3b 구조 변경).
+
+**JSON**: `.omc/benchmarks/eval_20260701_1158_beam3_e2_n1.json` (N=1) / `.omc/benchmarks/eval_20260701_1206_beam3_e2_r3.json` (N=3 기각)
