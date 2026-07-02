@@ -351,3 +351,46 @@ class TestFilterSegmentsInvariants:
         assert len(result) == 1
         assert "trust" in result[0].text
         assert "그건" in result[0].text
+
+
+# ─── 안 닫힌 비음성 주석 누출 차단 (_ANNOTATION_RE 직접 검증) ───────────────────
+
+class TestUnclosedAnnotation:
+    """_ANNOTATION_RE가 닫는 괄호를 잃은 비음성 주석을 제거하되,
+    키워드가 아닌 정상 괄호는 보존(과잉 제거 방지)하는지 검증한다.
+
+    검증 대상: _ANNOTATION_RE.sub("", s).strip()
+    (filter_segments의 '불변식 1' 청소 단계와 동일 연산)
+    """
+
+    def _clean(self, s: str) -> str:
+        from whisperlivekit.filtering import _ANNOTATION_RE
+        return _ANNOTATION_RE.sub("", s).strip()
+
+    def test_unclosed_speaking_foreign(self):
+        # 1) 안 닫힌 괄호 주석 제거
+        assert self._clean("(speaking in foreign language") == ""
+
+    def test_unclosed_speaking_korean(self):
+        # 2) 안 닫힌 괄호 주석 제거
+        assert self._clean("(speaking Korean") == ""
+
+    def test_unclosed_bracket_laughter(self):
+        # 3) 안 닫힌 대괄호 주석 제거
+        assert self._clean("[LAUGHTER") == ""
+
+    def test_unclosed_annotation_preserves_trailing_korean(self):
+        # 4) 주석만 제거, 뒤 한글 보존 (과잉 제거 방지 핵심)
+        assert self._clean("(speaking in foreign language 그래서 저 돌") == "그래서 저 돌"
+
+    def test_closed_annotation_still_stripped(self):
+        # 5) 닫힌 괄호 기존 동작 유지
+        assert self._clean("(웃음) 안녕하세요") == "안녕하세요"
+
+    def test_non_keyword_unclosed_paren_preserved(self):
+        # 6) 키워드 아닌 안 닫힌 괄호는 보존 (과잉 제거 없음)
+        assert self._clean("비용은 (약 3천") == "비용은 (약 3천"
+
+    def test_plain_text_unchanged(self):
+        # 7) 무관 텍스트 불변
+        assert self._clean("정상 문장입니다") == "정상 문장입니다"
