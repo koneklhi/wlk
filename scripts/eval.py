@@ -135,6 +135,23 @@ class EvalResult:
         return self._avg("seg_f1", "C")
 
 
+def _save_transcript(transcript_dir: Path, file_result: "FileResult", rep: int = 1) -> None:
+    """전사 결과를 정답과 나란히 텍스트 파일로 저장한다 (LLM 비교 평가용)."""
+    audio_name = Path(file_result.audio_file).stem
+    filename = f"{audio_name}_{file_result.path}_R{rep}.txt"
+    wer_str = f"{file_result.wer * 100:.1f}%" if file_result.wer is not None else "N/A"
+    f1_str = f"{file_result.seg_f1 * 100:.1f}%" if file_result.seg_f1 is not None else "N/A"
+    content = (
+        f"파일: {file_result.audio_file}\n"
+        f"경로: {file_result.path} | 회차: R{rep}\n"
+        f"WER: {wer_str} | F1: {f1_str}\n"
+        f"\n[전사]\n{file_result.transcription}\n"
+        f"\n[정답]\n{file_result.reference or '(정답 없음)'}\n"
+    )
+    transcript_dir.mkdir(parents=True, exist_ok=True)
+    (transcript_dir / filename).write_text(content, encoding="utf-8")
+
+
 def _aggregate_runs(runs: list) -> dict:
     """runs(FileResult 리스트)에서 wer, seg_f1의 median/min/max/stdev를 계산한다."""
 
@@ -405,6 +422,13 @@ def main() -> None:
             "프로브 결과가 이 경로 하위가 아니면 즉시 중단."
         ),
     )
+    parser.add_argument(
+        "--transcript-dir",
+        type=Path,
+        default=Path(".omc/transcripts"),
+        dest="transcript_dir",
+        help="전사 결과 텍스트 저장 디렉터리 (기본: .omc/transcripts). LLM 비교 평가용.",
+    )
     args = parser.parse_args()
 
     # --- provenance 프로브 (cwd 기반 코드 버전 검증) ---
@@ -484,6 +508,7 @@ def main() -> None:
                 file_result = asyncio.run(eval_path_a(audio_path, base_url))
                 if file_result is not None:
                     result.files.append(file_result)
+                    _save_transcript(args.transcript_dir, file_result)
             finally:
                 stop_server(proc)
                 print("[eval] 경로 A 서버 종료.")
@@ -529,6 +554,7 @@ def main() -> None:
                             file_result = asyncio.run(eval_path_c(audio_path, base_url, args.wait))
                             result.files.append(file_result)
                             runs.append(file_result)
+                            _save_transcript(args.transcript_dir, file_result, rep + 1)
                         finally:
                             stop_server(proc)
                             print("[eval] 경로 C 서버 종료.")
@@ -542,6 +568,8 @@ def main() -> None:
                         })
 
     print_summary(result, repeat=args.repeat, file_summaries=file_summaries if args.repeat > 1 else None)
+    if result.files:
+        print(f"\n[eval] 전사 결과 저장: {args.transcript_dir.resolve()}")
 
     # repeat > 1일 때 파일별 집계를 JSON에 추가
     json_file_summaries = []
