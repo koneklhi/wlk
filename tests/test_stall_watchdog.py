@@ -26,9 +26,11 @@ def _make_processor(infer_return, end, language="ko"):
     proc.end = end
     proc._consecutive_char_repeat = 0
     proc._short_silence_check_at = 0.0
+    proc._recent_emitted_words = []
 
     model = MagicMock()
     model.cfg.language = language
+    model.state.pending_language_switch = None  # 실제 DecoderState 기본값 반영(마커 오발동 방지)
     model.infer.return_value = infer_return
     proc.model = model
     return proc

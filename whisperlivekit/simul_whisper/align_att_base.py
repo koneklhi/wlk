@@ -8,6 +8,7 @@ from whisperlivekit.whisper import DecodingOptions, tokenizer
 from .config import AlignAttConfig
 
 DEC_PAD = 50257
+LANG_SWITCH_KEEP_SECS = 2.5  # 언어 전환 시 유지할 최근 오디오(초): 감지창 2.0s + 완충 0.5s
 logger = logging.getLogger(__name__)
 
 
@@ -140,40 +141,52 @@ class AlignAttBase(ABC):
 
     # === Language detection ===
 
-    def _apply_detected_language(self, lang: str):
-        """Switch tokenizer to lang and reset decoder state. Shared by normal and eager detection."""
+    def _trim_segments_to_recent(self, keep_secs: float) -> float:
+        """버퍼 앞쪽의 옛 오디오를 제거하고 최근 ~keep_secs 초만 남긴다.
+
+        insert_audio()의 audio_max_len 트리밍(simul_whisper.py)과 동일 방식 — 언어 전환 후
+        다음 infer()가 버퍼 전체가 아니라 **전환 경계 오디오만** 재디코딩하도록 해 이미 방출된
+        구(phrase)의 재방출(전환 세금)을 원천 차단한다. 제거한 만큼 cumulative_time_offset을
+        누적해 남은 프레임의 절대 타임스탬프 정합성을 유지한다. 제거한 총 초를 반환.
+        """
+        removed_total = 0.0
+        segments_len = self.segments_len()
+        while len(self.state.segments) > 1 and segments_len > keep_secs:
+            removed_len = self.state.segments[0].shape[0] / 16000
+            segments_len -= removed_len
+            removed_total += removed_len
+            self.state.cumulative_time_offset += removed_len
+            self.state.segments = self.state.segments[1:]
+        if removed_total > 0:
+            logger.debug("[LangSwitch] 전환 전 오디오 %.2fs 절단 (유지 %.2fs)",
+                         removed_total, self.segments_len())
+        return removed_total
+
+    def _apply_detected_language(self, lang: str, skip_trim: bool = False):
+        """토크나이저를 lang으로 교체하고 디코더 상태를 리셋. 일반/eager/주기/짧은침묵 감지 공유.
+
+        진짜 중간 전환(이전 언어가 있고 다를 때)일 때만 버퍼를 경계 구간으로 절단해 재방출을
+        막고, process_iter가 방출할 LanguageSwitch 문장 경계를 arm 한다. 최초 감지(이전 None)나
+        skip_trim=True(예: refresh 직후 버퍼가 이미 짧음)일 때는 절단·경계 arm을 하지 않는다.
+        """
+        prev_lang = self.state.detected_language
+        is_switch = prev_lang is not None and prev_lang != lang
+
+        if is_switch and not skip_trim:
+            self._trim_segments_to_recent(LANG_SWITCH_KEEP_SECS)
+
         self.create_tokenizer(lang)
-        self.state.last_attend_frame = -self.cfg.rewind_threshold
-        self.state.cumulative_time_offset = 0.0
         self.init_tokens()
         self.init_context()
+        self.state.last_attend_frame = -self.cfg.rewind_threshold
         self.state.detected_language = lang
-        logger.info("[EagerLang] applied tokenizer for: %s", lang)
 
-    def detect_current_language(self, window_secs: float = 1.5, min_prob: float = 0.85):
-        """Detect language from current audio buffer without waiting for 2s gate.
+        if is_switch:
+            # 다음 새 언어 토큰 앞에 process_iter가 경계 마커를 삽입하도록 arm.
+            self.state.pending_language_switch = self.state.global_time_offset + self.segments_len()
 
-        Called at speaker-change boundary (before refresh_segment) so the buffer
-        still contains audio that may include the new speaker's voice.
-        Returns language string if confident (>= min_prob), else None.
-        """
-        if not self.state.segments:
-            return None
-        try:
-            input_audio = self._concat_segments()
-            # 최근 window_secs 만 사용 — 경계에서 옛 화자 오디오에 휘둘리지 않도록
-            max_samples = int(window_secs * 16000)
-            if input_audio.shape[0] > max_samples:
-                input_audio = input_audio[-max_samples:]
-            encoder_feature, _ = self._encode(input_audio)
-            _, language_probs = self.lang_id(encoder_feature)
-            top_lan, p = max(language_probs[0].items(), key=lambda x: x[1])
-            logger.info("[EagerLang] candidate %s p=%.4f (min_prob=%.2f)", top_lan, p, min_prob)
-            if p >= min_prob:
-                return top_lan
-        except Exception as e:
-            logger.warning("[EagerLang] detection failed: %s", e)
-        return None
+        logger.info("[LangSwitch] 토크나이저 적용: %s (switch=%s, skip_trim=%s)",
+                    lang, is_switch, skip_trim)
 
     def _detect_language_if_needed(self, encoder_feature):
         if (

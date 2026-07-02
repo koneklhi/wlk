@@ -36,6 +36,7 @@ class DecoderState:
     last_attend_frame: int = 0
     last_periodic_lang_check: float = 0.0
     last_lang_switch_time: float = 0.0
+    pending_language_switch: Optional[float] = None
 
     speaker: int = -1
     log_segments: int = 0

@@ -55,6 +55,9 @@ class ASRToken(TimedText):
     def is_silence(self) -> bool:
         return False
 
+    def is_boundary(self) -> bool:
+        return False
+
 
 @dataclass
 class Sentence(TimedText):
@@ -112,6 +115,27 @@ class Silence():
         return self.duration
 
     def is_silence(self) -> bool:
+        return True
+
+    def is_boundary(self) -> bool:
+        return False
+
+
+@dataclass
+class LanguageSwitch:
+    """디코더가 중간에 언어를 전환할 때(예: 순차통역 한→영) 침묵·화자전환 경계 없이도
+    문장 경계를 만들기 위한 내부 마커. TokensAlignment에서 Silence와 동급으로 세그먼트를
+    분할하되, 눈에 보이는 침묵 구간을 만들지 않고 텍스트도 없다.
+    내부 신호 전용 — FrontData로 직렬화되지 않는다(분할 지점으로 소비될 뿐 세그먼트가 되지 않음)."""
+    start: Optional[float] = None
+    end: Optional[float] = None
+    detected_language: Optional[str] = None  # 전환 후 언어
+    text: str = ''  # 하류의 ''.join(t.text ...) / sep.join 호환용 빈 문자열
+
+    def is_silence(self) -> bool:
+        return False
+
+    def is_boundary(self) -> bool:
         return True
 
 

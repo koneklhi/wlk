@@ -105,16 +105,18 @@ def test_long_silence_clears_short_silence_schedule():
 
 
 def test_check_short_silence_language_triggers_tokenizer_update():
-    """(9) detect_current_language가 다른 언어 반환 시 create_tokenizer + init_context 호출."""
+    """(9) detect_current_language가 다른 언어 반환 시 _apply_detected_language(new_lang) 호출.
+
+    (배선 버그 수정) 기존엔 create_tokenizer+init_context만 직접 호출하고 init_tokens()를 누락해
+    SOT 언어 토큰이 갱신되지 않았다. 이제 _apply_detected_language 경유로 init_tokens까지 실행된다.
+    """
     proc = _make_processor_for_silence(language="auto")
     proc.model.state.detected_language = "en"
     proc.model.detect_current_language = MagicMock(return_value="ko")
 
     proc._check_short_silence_language()
 
-    proc.model.create_tokenizer.assert_called_once_with("ko")
-    proc.model.init_context.assert_called_once()
-    assert proc.model.state.detected_language == "ko"
+    proc.model._apply_detected_language.assert_called_once_with("ko")
 
 
 def test_check_short_silence_language_no_action_if_same():
