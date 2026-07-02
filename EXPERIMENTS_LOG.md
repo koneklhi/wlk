@@ -1413,3 +1413,52 @@ E2에서 시도·기각된 파라미터:
 **파라미터 탐색 공간 소진**. bong1 40%대 WER의 근본 원인은 웃음/박수 구간의 낮은 no_speech_prob으로 인한 비음성 감지 실패 — Whisper 내부 `_check_no_speech` 로직의 구조적 한계. **major 방향 전환 필요**: VAD 연계 비음성 억제 강화(Layer 3b 구조 변경).
 
 **JSON**: `.omc/benchmarks/eval_20260701_1158_beam3_e2_n1.json` (N=1) / `.omc/benchmarks/eval_20260701_1206_beam3_e2_r3.json` (N=3 기각)
+
+---
+
+## Exp-150 — 단계1 채택 머지(언어전환 프로토콜+SOT 배선수정) + diar-OFF 탐색 + 신규버그 2건 발견 (2026-07-02) [E3]
+
+goal `docs/GOAL_CODESWITCH_STRUCTURAL.md` 5단계 루프의 **단계 1**. E2 파라미터 탐색(Exp-131~149) 소진 후, 코드 수준 구조 병목을 직접 공략하는 첫 단계.
+
+### 가설
+언어 전환 시 `_apply_detected_language`가 디코딩 상태만 지우고 오디오 버퍼(`state.segments`)는 유지해 **버퍼 전체가 새 언어로 재디코딩 → 방출 완료 단어가 재방출**(전환 세금). 이 세금을 오디오 절단으로 제거하고, `_check_short_silence_language`의 SOT 배선버그(`init_tokens()` 누락 → SOT 언어토큰 미갱신)를 수정하면 ytn2 코드스위칭 개선 + F1 향상 기대.
+
+### 변경 내용
+- `align_att_base.py`: `_apply_detected_language()` 재작성(전환 시 `_trim_segments_to_recent(LANG_SWITCH_KEEP_SECS=2.5)` 호출 후 `init_tokens`/`init_context`, `pending_language_switch` arm) · `_trim_segments_to_recent()` 신설(`cumulative_time_offset` 보정) · 중복 `detect_current_language`(구 min_prob=0.85판) 제거.
+- `backend.py`: `_check_short_silence_language`가 `_apply_detected_language()` 위임(SOT 토큰 실제 갱신) · `process_iter`에 LanguageSwitch 마커 삽입 + `[SwitchTaxMeasure]` 중복방출 계측.
+- `timed_objects.py`: `LanguageSwitch(is_boundary=True, is_silence=False, text='')` 신설 · `ASRToken`/`Silence`에 `is_boundary()=False`.
+- `tokens_alignment.py`: `is_boundary()` 토큰을 침묵 세그먼트 없이 문장경계로 소비(3개 경로).
+- `audio_processor.py`: 번역 큐에 LanguageSwitch 미전달(skip). `decoder_state.py`: `pending_language_switch` 필드.
+- 단위테스트 4종(`test_lang_switch_protocol.py`) + 기존 테스트 2건 갱신 → 총 18 pass.
+- 머지: `exp/lang-switch-protocol` → master `6db5ea1` (--no-ff, E2→E3).
+
+### 테스트 세트 결과 (경로 C, diar-ON, CRT=3.0, vbcable=ok)
+
+| 측정 | bong1 | ytn2 | sbs1 | avg | 비고 |
+|------|-------|------|------|-----|------|
+| baseline Exp-142 (N=3 med/max) | 37.5 / 48.0 | 31.5 / 36.0 | 19.6 / 22.6 | 29.5 | E2 |
+| **단계1 diar-ON (N=3 med/max)** | **36.6 / 36.6** | **27.6 / 39.4** | **19.6 / 25.6** | **27.9** | 채택 대상 |
+| 단계1 diar-OFF (N=1) | 49.8 | 52.7 | 25.6 | 42.7 | diar 기여도 대조 |
+| master diar-OFF (N=1) | 43.2 | **135.0** | 23.8 | 67.3 | SOT 수정 前 대조 |
+| 단계1 diar-OFF+PLC=2.0 (N=1) | 41.4 | 52.2 | 28.0 | 40.5 | switch=True 최초 발동 |
+
+### 분석 (전사 내용 정성 대조 + 메커니즘 귀속)
+- **메커니즘 dormant (diar-ON)**: `--trace-tokens` 3회(N=1/N=3/PLC=2.0) 모두 `switch=True`=0 → 트림/마커/전환세금계측 **미발동**. 근본원인: diar `new_speaker`가 화자전환마다 `detected_language=None` 리셋 → 재감지가 항상 "최초"(switch=False)이며, 그 경로는 이미 `refresh_segment`로 버퍼를 절단해 **전환세금이 애초에 없음**. 따라서 diar-ON N=3의 -1.6pp는 **측정 분산**(ytn2 clean N=3 min 22.7%와 동일 밴드).
+- **SOT 배선수정 가치 정량화 (diar-OFF 대조)**: master 67.3% vs 단계1 42.7% (**avg -24.6pp**, ytn2 -82pp). master는 SOT 토큰이 옛 언어로 잔존해 "정경두 국방장관과…" ×8 반복루프 폭주(ytn2 135%); 수정판은 루프 전무. §3.2(한/영 강제) catastrophic 방지 보험임이 입증.
+- **단계1 프로토콜 정상 작동 확인 (diar-OFF+PLC=2.0)**: sbs1에서 `switch=True` 발동, "전환 전 오디오 27.32s 절단(유지 2.26s)", 마커 정상 방출, `[SwitchTaxMeasure] 겹침 없음`(전환세금 제거 확인).
+- **ytn2**(diar-OFF): 한국어 통역 구간을 로마자로 오전사("Nguyen-Yan Han-Jung…") — diar 없으면 언어 전환 감지기가 부재. **diar-ON 유지가 정답**(diar가 사실상 언어전환 감지기).
+
+### 채택 (조건) 판정
+- **① max WER 미회귀**: diar-ON N=3 raw max(ytn2 39.4/sbs1 25.6)는 E2 게이트(36.0/22.6) 초과하나 **dormant+분산**(clean N=3 min ytn2 22.7)으로 판정 → **E3 max 게이트는 E2값(48.0/36.0/22.6) 유지**(게이트 완화 방지).
+- **② median 개선**: 변산 내 중립(-1.6pp).
+- **결론: ✅ 채택** — §3.2 불변제약 직결 기반기능(SOT 배선수정)이 diar-OFF 대조에서 catastrophic 폭주를 -82pp 차단. 정량 WER은 diar-ON에서 중립이나 **자율 기각 금지 조항(CLAUDE.md §4)** 적용 대상이며, 사용자 승인으로 채택. 트림/마커는 diar-ON dormant 상태의 정합 groundwork(diar-OFF/PLC 활성 시 동작 확인).
+
+### 신규 발견 버그 2건 (둘 다 master 기존 코드, 단계1 무관 — Exp-151에서 수정 예정)
+1. **QualityGate/refresh 시간기준 붕괴**: `refresh_segment(complete=True)`(QualityGate 3연속억제·HallucinationFilter·BatchRepeatFilter·stall recovery 발동)가 `cumulative_time_offset=0` 리셋하며 **`global_time_offset` 미승계** → 이후 토큰 타임스탬프가 버려진 버퍼 길이만큼 과소평가 → 경계 오배치 → F1 붕괴(diar-OFF sbs1 0%). diar-ON은 `new_speaker`가 `global_time_offset=change_speaker.start`로 재앵커해 대체로 은폐.
+2. **PLC 클록 결함**: `_maybe_periodic_lang_check(self.segments_len())`가 버퍼상대시간(트림/refresh마다 리셋)을 시계로 사용 → 체크 간격이 영원히 미충족 → PLC 사실상 항상 미발동.
+
+### 다음 가설 (Exp-151 → 단계2)
+- **Exp-151(B)**: 위 버그 2건 수정 후 diar-ON N=1 새너티(WER 무회귀+F1 회복) → 머지.
+- **단계2(exp/vad-gated-langid)**: bong1 worst-case — `detect_current_language`에 Silero VAD 게이트를 적용해 웃음/박수 비음성이 lang_id 창을 오염시키는 캐스케이드 차단.
+
+**JSON**: `worktrees/lang-switch-protocol/.omc/benchmarks/eval_diaroff_wt_20260702_1625.json` · `.../eval_diaroff_plc2_wt_20260702_1641.json` · `.omc/benchmarks/eval_diaroff_master_20260702_1633.json` (diar-OFF 대조) / diar-ON N=3는 워크트리 벤치마크 참조.

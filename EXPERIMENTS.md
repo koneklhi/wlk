@@ -22,8 +22,8 @@
 > **왜**: 실패 모드를 바꾸는 구조적 코드 변경 전후로 디코더 파라미터의 트레이드오프가 달라진다.
 > 다른 세대에서 나온 결론을 현재 코드의 **확정 근거**로 쓰면 오판한다(예: 초기 파라미터 튜닝 ↔ 언어고정·비음성억제 도입 후).
 
-- **현재 master = Epoch 2 (E2)**: SimulStreaming + diar-ON + `lang_restrict_koen=True`(후처리 CJK/주석 필터 포함). **Exp-139 master 머지 완료 (2026-07-01).** 베이스라인 = Exp-105(E1 기준; E2 클린 베이스라인은 Exp-140에서 N=3 재측정).
-- ~~Epoch 2 후보~~ → **E2 = master 확정** (feat/lang-invariant-koen 머지 완료).
+- **현재 master = Epoch 3 (E3)**: E2 + **언어 전환 프로토콜 재설계**(전환 시 오디오 절단으로 재디코딩 세금 제거 · `_check_short_silence_language` SOT 배선버그 수정 · LanguageSwitch 문장경계 마커). **단계1 머지 완료 (6db5ea1, 2026-07-02).** E2 파라미터 결론(PLC·beam·CRT·nonspeech; Exp-131~149)은 이제 **[E2·재검증]** — 특히 PLC는 전환세금 제거로 거동이 달라질 수 있어 재검증 대상.
+- **Epoch 2 (E2, 이력)**: SimulStreaming + diar-ON + `lang_restrict_koen=True`(후처리 CJK/주석 필터). Exp-139 머지(2026-07-01), Exp-142에서 logprob=-2.0 N=3 베이스라인 확정(bong1 37.5 / ytn2 31.5 / sbs1 19.6).
 - **세대 경계 규칙**: 파라미터 값 변경(PLC·beam·frame_threshold·CRT 등)은 epoch를 **올리지 않는다**(같은 세대 내 실험). 언어고정·비음성억제·디코더 교체·VAD 파이프라인 변경 등 **실패 모드를 바꾸는 구조 변경**만 세대를 올린다.
 
 **▶ epoch 게이트 (필수)**: 과거 Exp 결론(특히 파라미터)을 현재 작업의 채택/기각 근거로 인용하기 전, 그 Exp의 epoch가 *지금 측정 대상 코드*의 epoch와 같은지 확인한다. **다르면 확정 사실이 아니라 '방향 신호'로만** 쓰고 재검증한다.
@@ -103,6 +103,7 @@ Exp-106~129는 신뢰 불가 판정으로 기각됐으나 **방향성은 참고*
 | Exp-147 | **E2** | 2026-07-01 | CRT=2.8 N=1 스크리닝 | 39.3% (+1.8pp ❌) | 48.8% (+17.3pp ❌ catastrophic) | 22.6% (+3.0pp ❌) | ❌ 기각 (ytn2 catastrophic; CRT 낮추기 방향 전체 종료) |
 | Exp-148 | **E2** | 2026-07-01 | static_init_prompt="Korean and English" N=1 | 43.5% (+6.0pp ❌) | 41.9% (+10.4pp ❌) | 31.5% (+11.9pp ❌) | ❌ 기각 (전파일 대폭 악화; 영어 편향 유발) |
 | Exp-149 | **E2** | 2026-07-01 | nonspeech_prob=0.2 N=1 | 46.5% (+9.0pp ❌) | 29.6% (-1.9pp) | 18.5% (-1.1pp) | ❌ 기각 (bong1 catastrophic; 발화와 비음성 no_speech_prob 분포 겹침; 파라미터 탐색 소진) |
+| Exp-150 | **E3** | 2026-07-02 | 단계1 머지: 언어전환 프로토콜 재설계+SOT 배선수정 [E2→E3] | 36.6% (-0.9pp) | 27.6% (-3.9pp) | 19.6% (0pp) | ✅ 채택 (§3.2 SOT 보험: diar-OFF 대조 avg -24.6pp/ytn2 -82pp; diar-ON WER 변산 내 중립·max 게이트 E2 유지; 트림/마커는 diar-ON dormant) |
 
 ---
 

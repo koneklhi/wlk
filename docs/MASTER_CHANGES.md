@@ -163,6 +163,24 @@ upstream의 **언어 TRIPLE-LOCK** 문제 해소:
 
 ---
 
+### 3-6b. 언어 전환 프로토콜 재설계 + SOT 배선버그 수정 (Exp-150, E3)
+
+3-6의 재감지가 **감지**는 하되 전환 실행에 두 결함이 있었다:
+- **전환 세금**: `_apply_detected_language`가 디코딩 상태만 리셋하고 오디오 버퍼는 유지 → 버퍼 전체가 새 언어로 재디코딩되어 방출 완료 단어가 재방출.
+- **SOT 배선버그**: `_check_short_silence_language`가 `create_tokenizer`+`init_context`만 호출하고 `init_tokens()`를 누락 → SOT 언어 토큰이 옛 언어로 잔존, 감지만 되고 디코딩 미적용.
+
+**변경** ([`align_att_base.py`](../whisperlivekit/simul_whisper/align_att_base.py), [`backend.py`](../whisperlivekit/simul_whisper/backend.py), [`timed_objects.py`](../whisperlivekit/timed_objects.py), [`tokens_alignment.py`](../whisperlivekit/tokens_alignment.py)):
+- `_apply_detected_language(lang, skip_trim)`: 진짜 전환(prev≠new) 시 `_trim_segments_to_recent(LANG_SWITCH_KEEP_SECS=2.5)`로 전환 경계 오디오만 남기고 절단(`cumulative_time_offset` 보정) → 재디코딩 대상 최소화(전환 세금 제거). 이어 `init_tokens()`(SOT 갱신)/`init_context()`.
+- `_check_short_silence_language`가 위 메서드로 위임 → SOT 언어토큰 실제 갱신.
+- `LanguageSwitch` 마커(`timed_objects.py`, `is_boundary()=True`, `text=''`): 전환 시 `process_iter`가 삽입 → `tokens_alignment`가 침묵 세그먼트 없이 문장 경계로 소비. 번역 큐 미전달, FrontData 직렬화 제외(**스키마 무변**).
+- 중복 `detect_current_language`(dead code) 제거. `decoder_state.pending_language_switch` 필드 추가.
+
+**효과 / 적용 범위**: diar-OFF 대조에서 SOT 수정이 반복루프 폭주(ytn2 135%→53%, avg -24.6pp)를 차단 — §3.2 한/영 강제 catastrophic 방지. **diar-ON(기본 운영)에서는 `new_speaker`가 언어전환을 선점해 트림/마커 경로가 대체로 미발동**(WER 변산 내 중립); 정합 groundwork로 유지. **Epoch E2→E3.**
+
+**주의(기존 잠복 버그, Exp-151에서 수정 예정)**: `refresh_segment(complete=True)`가 `global_time_offset`을 승계하지 않아 mid-stream refresh 후 타임스탬프 드리프트(diar-OFF F1 붕괴); PLC 클록이 버퍼상대시간이라 미발동.
+
+---
+
 ### 3-7. 문장 확정 + 종료 부호 (Exp-104)
 
 | 항목 | 파일 | 동작 |
