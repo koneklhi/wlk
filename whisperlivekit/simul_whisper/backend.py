@@ -98,6 +98,7 @@ class SimulStreamingOnlineProcessor:
         if long_silence:
             self.model.refresh_segment(complete=True)
             self.model.state.detected_language = None   # 재감지 허용
+            self.model.state.lang_before_reset = None   # 긴 침묵 = 문장 경계, 전환 판정 불필요
             self.model.state.first_timestamp = None     # 재감지 조건 충족
             self.model.global_time_offset = silence_duration + offset
             self._last_emitted_word = None
@@ -147,6 +148,7 @@ class SimulStreamingOnlineProcessor:
         # 2. flush 생략 + 경계 오디오 유지(complete=False) + 미확정 음역 폐기
         self.model.refresh_segment(complete=False)
         self.buffer = []
+        self.model.state.lang_before_reset = self.model.state.detected_language or self.model.state.lang_before_reset
         self.model.state.detected_language = None
         self.model.state.first_timestamp = None
         self.model.state.eager_lang_detect = True
