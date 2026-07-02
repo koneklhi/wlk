@@ -19,8 +19,13 @@ _CJK_KANA_RE = re.compile(
 # 비음성 주석 스팬 제거: (웃음) [구독] ♪...♪ 등.
 # 제거 후 공백만 남으면 기존 empty-drop 로직이 드롭한다.
 _ANNOTATION_RE = re.compile(
-    r"\([^)]*\)"      # (웃음) (laughter) 등
-    r"|\[[^\]]*\]"    # [구독] [MUSIC] 등
+    r"\([^)]*\)"      # (웃음) (laughter) — 닫힌 괄호 주석
+    r"|\[[^\]]*\]"    # [구독] [MUSIC] — 닫힌 대괄호 주석
+    # 안 닫힌 비음성 주석(Whisper가 웃음/외국어 구간에서 방출, 닫는 괄호 유실):
+    # 알려진 주석 키워드로 시작하는 경우만, ASCII 영문/공백/따옴표/마침표까지만 제거해
+    # 뒤따르는 정상(한글 등) 텍스트는 보존한다(과잉 제거 방지).
+    r"|\((?:speaking|laughter|applause|music|singing|coughs?|sighs?|noise|sound)[A-Za-z' .]*\)?"
+    r"|\[[A-Z][A-Za-z_ .]*\]?"   # 안 닫힌 대괄호 주석([LAUGHTER, [MUSIC PLAYING) — 대문자 시작
     r"|[♪♩♫♬]"       # 음표 기호
 )
 
