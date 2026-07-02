@@ -81,6 +81,7 @@
   - **지표 우선순위 — WER > F1**: WER(전사 정확도)이 1차 개선 목표이며, 문장 분리 F1은 2차 지표다. WER max 미회귀 + WER median 개선이 F1 변동보다 우선하여 채택을 결정한다. F1 하락이 동반되더라도 WER 개선이 명확하면 채택 가능 — 단, F1이 catastrophic(≈0% 반복)하게 폭주하면 원인 파악 후 결정한다(Exp-142 결정 근거).
   - **측정 기본 설정 = 화자분할 ON**(Sortformer; `--diarization --sortformer-model whisperlivekit/model/sortformer-4spk-v2.nemo --compression-ratio-threshold 3.0`; 테스트·held-out 분리는 §3.8). held-out(ytn1+eng1)은 채택 후보에 한해 **단회** 검증(기존과 동일).
   - **안정화 단계 전환**: 테스트 3종 WER이 catastrophic worst-case 없이 일정 밴드로 수렴해 스크리닝 1회만으로 후보 우열을 가리기 어려워지면, **평소 측정 기본을 `--repeat 3`(상시 안정화 테스트)으로 되돌린다**. 이 전환은 **major 방향 전환**이므로 사용자에게 보고·확인 후 적용한다.
+  - **정성 평가 통합**: eval.py 완료 후 `.omc/transcripts/` 전사 파일을 읽어 **목표 달성 여부·신규 이슈 발생 여부**를 정성 판정한다. 정량 수치만으로 채택/기각하지 않고 정성 분석을 반드시 함께 고려한다. WER이 악화돼도 목표 구간이 개선됐다면 자율 기각하지 않고 사용자 확인으로 에스컬레이션한다. 판정 기준 상세는 `.claude/commands/eval.md §정성 평가 절차` 참조.
 
 ### 코드 변경 시 연동 갱신 문서
 
