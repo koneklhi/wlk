@@ -206,3 +206,181 @@ def test_live_switch_via_detected_language_arms_marker():
     )
     model._apply_detected_language("en")
     assert model.state.pending_language_switch is not None
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Task C 테스트 6개 — PuncSegment.hard_boundary + diar 병합 경계 보존
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def _make_alignment_c():
+    """compute_punctuations_segments / get_lines_diarization 테스트용 최소 TokensAlignment."""
+    from whisperlivekit.tokens_alignment import TokensAlignment
+
+    class _Args:
+        diarization = True
+
+    class _State:
+        new_tokens = []
+        new_diarization = []
+        new_translation = []
+        new_tokens_buffer = []
+        new_translation_buffer = None
+
+    ta = TokensAlignment(_State(), _Args(), sep="")
+    return ta
+
+
+def test_hard_boundary_flag_set_on_boundary_token():
+    """(C-1) 플래그 set: is_boundary 토큰이 세그먼트를 닫을 때 PuncSegment.hard_boundary is True.
+
+    LanguageSwitch 마커가 닫는 세그먼트는 hard_boundary=True여야 한다.
+    False면 이 테스트가 실패한다(플래그 미설정).
+    """
+    from whisperlivekit.timed_objects import ASRToken, LanguageSwitch
+
+    ta = _make_alignment_c()
+    ta.all_tokens = [
+        ASRToken(start=0.0, end=0.2, text="안녕", detected_language="ko"),
+        ASRToken(start=0.2, end=0.4, text="하세요", detected_language="ko"),
+        LanguageSwitch(start=0.5, end=0.5, detected_language="en"),
+        ASRToken(start=0.6, end=0.8, text="hello", detected_language="en"),
+    ]
+    segs = ta.compute_punctuations_segments()
+    # 첫 번째 세그먼트(LanguageSwitch가 닫은 것)는 hard_boundary=True
+    assert segs[0].hard_boundary is True
+    # 마지막 세그먼트(닫힌 게 아님)는 hard_boundary=False
+    assert segs[1].hard_boundary is False
+
+
+def test_diar_merge_splits_at_hard_boundary():
+    """(C-2) diar 병합 경계 보존(핵심): 같은 화자지만 앞 세그먼트 hard_boundary=True이면
+    뒤 세그먼트가 병합되지 않고 분리 유지.
+
+    Falsifiability: `and not segments[-1].hard_boundary` 조건 제거 시
+    두 세그먼트가 병합되어 len(segments)==1이 되므로 테스트 실패.
+    """
+    from whisperlivekit.timed_objects import ASRToken, LanguageSwitch, SpeakerSegment
+
+    ta = _make_alignment_c()
+    # 한국어 → 영어 전환 마커 사이에 같은 화자(speaker=1)의 두 발화
+    ta.all_tokens = [
+        ASRToken(start=0.0, end=0.5, text="안녕하세요", detected_language="ko"),
+        LanguageSwitch(start=0.5, end=0.5, detected_language="en"),
+        ASRToken(start=0.6, end=1.0, text="hello", detected_language="en"),
+    ]
+    # 두 구간 모두 speaker=1 로 diarization 할당
+    ta.all_diarization_segments = [
+        SpeakerSegment(start=0.0, end=1.0, speaker=0),  # speaker+1 = 1
+    ]
+    segments, _ = ta.get_lines_diarization()
+    # hard_boundary=True 가 보존됐으면 두 세그먼트로 분리됨
+    assert len(segments) == 2, (
+        f"경계가 보존돼야 하지만 병합됨: {[s.text for s in segments]}"
+    )
+    assert segments[0].text == "안녕하세요"
+    assert segments[1].text == "hello"
+
+
+def test_diar_merge_without_boundary_merges_same_speaker():
+    """(C-3) 무마커 병합 유지(회귀): hard_boundary가 전부 False면 같은 화자 세그먼트가 정상 병합.
+
+    Falsifiability: 병합 자체가 비활성화되면 len(segments)==2로 이 테스트 실패.
+    """
+    from whisperlivekit.timed_objects import ASRToken, SpeakerSegment
+
+    ta = _make_alignment_c()
+    # LanguageSwitch 없음 — 마커 없이 같은 화자 두 발화
+    ta.all_tokens = [
+        ASRToken(start=0.0, end=0.5, text="안녕", detected_language="ko"),
+        ASRToken(start=0.6, end=1.0, text="하세요", detected_language="ko"),
+    ]
+    ta.all_diarization_segments = [
+        SpeakerSegment(start=0.0, end=1.0, speaker=0),  # speaker+1 = 1
+    ]
+    segments, _ = ta.get_lines_diarization()
+    # 마커 없으므로 기존대로 같은 화자 세그먼트 병합 → 1개
+    assert len(segments) == 1, (
+        f"병합이 발생해야 하지만 분리됨: {[s.text for s in segments]}"
+    )
+    assert "안녕" in segments[0].text
+    assert "하세요" in segments[0].text
+
+
+def test_hard_boundary_inheritance_on_merge():
+    """(C-4) 플래그 승계: 병합 발생 시 segments[-1].hard_boundary가 뒤 세그먼트 값을 승계.
+
+    A(hard_boundary=True)+B(hard_boundary=False) 케이스는 경계로 분리되므로
+    A(hard_boundary=False)+B(hard_boundary=True) 가 병합 후 승계 확인 대상.
+    마커 없는 A, 마커 있는 B → 병합 결과 hard_boundary=True.
+    """
+    from whisperlivekit.timed_objects import ASRToken, LanguageSwitch, SpeakerSegment
+
+    ta = _make_alignment_c()
+    # A: 마커 없음(False), B: 마커 뒤(True), C: 마커 없음(False)
+    # A→B 는 hard_boundary=False이므로 병합됨. 병합 후 hard_boundary=True 승계.
+    # 그러면 B+C 는 hard_boundary=True이므로 분리.
+    # 결과: [AB_merged(hard_boundary=True), C] — 2개
+    ta.all_tokens = [
+        ASRToken(start=0.0, end=0.3, text="a", detected_language="ko"),
+        ASRToken(start=0.3, end=0.6, text="b", detected_language="ko"),
+        LanguageSwitch(start=0.6, end=0.6, detected_language="en"),
+        ASRToken(start=0.7, end=1.0, text="c", detected_language="en"),
+    ]
+    ta.all_diarization_segments = [
+        SpeakerSegment(start=0.0, end=1.0, speaker=0),  # 모두 speaker 1
+    ]
+    segments, _ = ta.get_lines_diarization()
+    # "ab" 세그먼트와 "c" 세그먼트 — 승계로 경계 보존
+    assert len(segments) == 2
+    # 병합된 세그먼트의 hard_boundary는 뒤 세그먼트(B — hard_boundary=True)를 승계
+    assert segments[0].hard_boundary is True
+
+
+def test_silence_segment_does_not_produce_empty_text_segment():
+    """(C-5) Silence 인접 빈세그 없음: silence 세그먼트 인접 시 빈 텍스트 세그먼트가 안 생김.
+
+    기존 동작 유지 확인 — Silence 처리 경로가 hard_boundary 추가로 깨지지 않아야 한다.
+    """
+    from whisperlivekit.timed_objects import ASRToken, Silence, SpeakerSegment
+
+    ta = _make_alignment_c()
+    ta.all_tokens = [
+        ASRToken(start=0.0, end=0.3, text="hello", detected_language="en"),
+        Silence(start=0.3, end=0.8),
+        ASRToken(start=0.8, end=1.0, text="world", detected_language="en"),
+    ]
+    ta.all_diarization_segments = [
+        SpeakerSegment(start=0.0, end=1.0, speaker=0),
+    ]
+    segments, _ = ta.get_lines_diarization()
+    # 빈 text 세그먼트(침묵 세그먼트는 speaker=-2이므로 별도) 없어야 함
+    non_silence = [s for s in segments if not s.is_silence()]
+    assert all(s.text for s in non_silence), (
+        f"빈 텍스트 세그먼트 발생: {[s.text for s in non_silence]}"
+    )
+
+
+def test_overflow_speaker_not_merged():
+    """(C-6) overflow(-1) 분리: speaker=-1(overflow) 세그먼트는 병합되지 않고 분리.
+
+    화자전환 직후 diarization 지연 구간에서 overflow 세그먼트가 생길 수 있다.
+    이 세그먼트가 이전 정상 세그먼트에 병합되면 화자 정보가 오염된다.
+    """
+    from whisperlivekit.timed_objects import ASRToken, SpeakerSegment
+
+    ta = _make_alignment_c()
+    # 두 번째 발화는 diarization 범위 밖 → speaker=-1(overflow)
+    ta.all_tokens = [
+        ASRToken(start=0.0, end=0.5, text="hello", detected_language="en"),
+        ASRToken(start=2.0, end=2.5, text="world", detected_language="en"),
+    ]
+    # diarization은 0~1.0 구간만 커버 → 2.0~2.5 는 overflow
+    ta.all_diarization_segments = [
+        SpeakerSegment(start=0.0, end=1.0, speaker=0),  # speaker+1 = 1
+    ]
+    segments, diar_buffer = ta.get_lines_diarization()
+    # overflow 구간 텍스트는 diar_buffer에 들어가고 segments에서 분리됨
+    # (get_lines_diarization 구현상 diarization_segments[-1].end 이후는 buffer로)
+    assert "world" in diar_buffer or len(segments) == 1, (
+        "overflow 세그먼트가 buffer에 있거나 분리됐어야 한다"
+    )

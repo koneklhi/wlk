@@ -122,6 +122,7 @@ class TokensAlignment:
                     tokens=self.all_tokens[segment_start_idx: i],
                 )
                 if previous_segment:
+                    previous_segment.hard_boundary = True
                     segments.append(previous_segment)
                 segment_start_idx = i+1
             else:
@@ -219,10 +220,11 @@ class TokensAlignment:
         if punctuation_segments:
             segments = [punctuation_segments[0]]
             for segment in punctuation_segments[1:]:
-                if segment.speaker == segments[-1].speaker:
+                if segment.speaker == segments[-1].speaker and not segments[-1].hard_boundary:
                     if segments[-1].text:
                         segments[-1].text += segment.text
                     segments[-1].end = segment.end
+                    segments[-1].hard_boundary = segment.hard_boundary
                 else:
                     segments.append(segment)
 
