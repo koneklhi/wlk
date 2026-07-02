@@ -309,19 +309,26 @@ def test_diar_merge_without_boundary_merges_same_speaker():
 def test_hard_boundary_inheritance_on_merge():
     """(C-4) 플래그 승계: 병합 발생 시 segments[-1].hard_boundary가 뒤 세그먼트 값을 승계.
 
-    A(hard_boundary=True)+B(hard_boundary=False) 케이스는 경계로 분리되므로
-    A(hard_boundary=False)+B(hard_boundary=True) 가 병합 후 승계 확인 대상.
-    마커 없는 A, 마커 있는 B → 병합 결과 hard_boundary=True.
+    Falsifiable 설계:
+    - A("a."): 마지막 문자가 구두점 → has_punctuation() 경로로 닫힘 → PuncSegment(hard_boundary=False)
+    - B("b"): LanguageSwitch가 닫음 → PuncSegment(hard_boundary=True)
+    - A와 B는 같은 화자(speaker=1) → merge loop if-분기에서 병합
+      → 병합 시 `segments[-1].hard_boundary = segment.hard_boundary` 실행 → True 승계
+    - 이 줄을 삭제하면 병합 후에도 hard_boundary=False가 유지 → C가 merge에 들어가지 않아
+      segments[0].hard_boundary is True 어서션이 실패한다 (falsifiable 확인됨).
+
+    결과: [AB_merged(hard_boundary=True), C] — 2개, segments[0].hard_boundary is True.
     """
     from whisperlivekit.timed_objects import ASRToken, LanguageSwitch, SpeakerSegment
 
     ta = _make_alignment_c()
-    # A: 마커 없음(False), B: 마커 뒤(True), C: 마커 없음(False)
-    # A→B 는 hard_boundary=False이므로 병합됨. 병합 후 hard_boundary=True 승계.
-    # 그러면 B+C 는 hard_boundary=True이므로 분리.
+    # A: "a." — 구두점으로 끝나므로 has_punctuation() 경로에서 독립 PuncSegment(hard_boundary=False) 생성
+    # B: "b"  — LanguageSwitch가 닫으므로 PuncSegment(hard_boundary=True) 생성
+    # A→B: 같은 화자, A.hard_boundary=False → merge loop if-분기 진입 → 병합 + True 승계
+    # C: "c"  — 별도 PuncSegment(hard_boundary=False), 앞이 True이므로 else-분기 → 분리
     # 결과: [AB_merged(hard_boundary=True), C] — 2개
     ta.all_tokens = [
-        ASRToken(start=0.0, end=0.3, text="a", detected_language="ko"),
+        ASRToken(start=0.0, end=0.3, text="a.", detected_language="ko"),
         ASRToken(start=0.3, end=0.6, text="b", detected_language="ko"),
         LanguageSwitch(start=0.6, end=0.6, detected_language="en"),
         ASRToken(start=0.7, end=1.0, text="c", detected_language="en"),
@@ -330,10 +337,15 @@ def test_hard_boundary_inheritance_on_merge():
         SpeakerSegment(start=0.0, end=1.0, speaker=0),  # 모두 speaker 1
     ]
     segments, _ = ta.get_lines_diarization()
-    # "ab" 세그먼트와 "c" 세그먼트 — 승계로 경계 보존
-    assert len(segments) == 2
-    # 병합된 세그먼트의 hard_boundary는 뒤 세그먼트(B — hard_boundary=True)를 승계
-    assert segments[0].hard_boundary is True
+    # "a.b" 병합 세그먼트와 "c" 세그먼트 — 승계로 경계 보존
+    assert len(segments) == 2, (
+        f"병합+분리 결과 2개여야 하지만 {len(segments)}개: {[s.text for s in segments]}"
+    )
+    # 병합된 세그먼트의 hard_boundary는 B(hard_boundary=True)를 승계해야 함
+    assert segments[0].hard_boundary is True, (
+        "propagation 줄 `segments[-1].hard_boundary = segment.hard_boundary`이 "
+        "실행되지 않으면 hard_boundary=False가 유지되어 이 어서션이 실패함"
+    )
 
 
 def test_silence_segment_does_not_produce_empty_text_segment():
