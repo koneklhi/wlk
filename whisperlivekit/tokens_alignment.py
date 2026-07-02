@@ -116,6 +116,14 @@ class TokensAlignment:
                 )
                 segments.append(segment)
                 segment_start_idx = i+1
+            elif token.is_boundary():
+                # 언어 전환 경계: 이전 세그먼트를 닫되 침묵 세그먼트는 만들지 않는다.
+                previous_segment = PuncSegment.from_tokens(
+                    tokens=self.all_tokens[segment_start_idx: i],
+                )
+                if previous_segment:
+                    segments.append(previous_segment)
+                segment_start_idx = i+1
             else:
                 if token.has_punctuation():
                     segment = PuncSegment.from_tokens(
@@ -147,6 +155,13 @@ class TokensAlignment:
                     is_silence=True
                 )
                 new_punc_segments.append(segment)
+                segment_start_idx = i+1
+            elif token.is_boundary():
+                previous_segment = PuncSegment.from_tokens(
+                    tokens=self.unvalidated_tokens[segment_start_idx: i],
+                )
+                if previous_segment:
+                    new_punc_segments.append(previous_segment)
                 segment_start_idx = i+1
             else:
                 if token.has_punctuation():
@@ -256,6 +271,14 @@ class TokensAlignment:
                             start=token.start,
                             end=end_silence
                         ))
+                elif token.is_boundary():
+                    # 언어 전환 경계: 현재 줄을 확정해 닫되 침묵 세그먼트는 만들지 않는다.
+                    if self.current_line_tokens:
+                        seg = Segment.from_tokens(self.current_line_tokens)
+                        if seg is not None:
+                            seg.finalized = True
+                            self.validated_segments.append(seg)
+                        self.current_line_tokens = []
                 else:
                     self.current_line_tokens.append(token)
 

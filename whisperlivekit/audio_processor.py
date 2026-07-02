@@ -18,7 +18,7 @@ from whisperlivekit.llm_translation.manager import TranslationManager
 from whisperlivekit.llm_translation.translator import create_translator
 from whisperlivekit.metrics_collector import SessionMetrics
 from whisperlivekit.silero_vad_iterator import FixedVADIterator, OnnxWrapper, load_jit_vad
-from whisperlivekit.timed_objects import PUNCTUATION_MARKS, ChangeSpeaker, FrontData, Silence, State
+from whisperlivekit.timed_objects import PUNCTUATION_MARKS, ChangeSpeaker, FrontData, LanguageSwitch, Silence, State
 from whisperlivekit.tokens_alignment import TokensAlignment
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -418,6 +418,8 @@ class AudioProcessor:
 
                 if self.translation_queue:
                     for token in new_tokens:
+                        if isinstance(token, LanguageSwitch):
+                            continue  # 내부 경계 신호 — 번역 파이프라인에 미전달
                         await self.translation_queue.put(token)
             except Exception as e:
                 logger.warning(f"Exception in transcription_processor: {e}")

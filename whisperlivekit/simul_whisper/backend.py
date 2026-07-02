@@ -13,7 +13,7 @@ from whisperlivekit.backend_support import faster_backend_available, mlx_backend
 from whisperlivekit.model_paths import detect_model_format, resolve_model_path
 from whisperlivekit.simul_whisper.config import AlignAttConfig
 from whisperlivekit.simul_whisper.simul_whisper import AlignAtt
-from whisperlivekit.timed_objects import ASRToken, ChangeSpeaker, Transcript
+from whisperlivekit.timed_objects import ASRToken, ChangeSpeaker, LanguageSwitch, Transcript
 from whisperlivekit.warmup import load_file
 from whisperlivekit.whisper import load_model, tokenizer
 
@@ -61,6 +61,7 @@ class SimulStreamingOnlineProcessor:
         self._last_emit_end: float = 0.0  # 마지막으로 토큰을 방출한 시점의 audio end (stall 복구 baseline)
         self._consecutive_char_repeat: int = 0
         self._short_silence_check_at: float = 0.0
+        self._recent_emitted_words: List[str] = []  # 중복 방출 계측용 최근 방출 단어(정규화) tail
 
         if asr.tokenizer:
             self.model.tokenizer = asr.tokenizer
@@ -111,16 +112,19 @@ class SimulStreamingOnlineProcessor:
             self._short_silence_check_at = self.end + 1.5
 
     def _check_short_silence_language(self):
-        """짧은 pause 후 1.5s 오디오 누적 시점에 언어 재감지. 전환 확인 시 경량 리셋."""
+        """짧은 pause 후 1.5s 오디오 누적 시점에 언어 재감지. 전환 확인 시 전환 프로토콜 적용.
+
+        (버그 수정) 기존엔 create_tokenizer+init_context만 호출하고 init_tokens()를 누락해
+        state.tokens[0]의 SOT 언어 토큰이 옛 언어로 잔존했다 → 감지만 되고 디코딩에 미적용.
+        재작성된 _apply_detected_language 호출로 SOT 토큰 갱신 + 경계 절단 + 문장 경계 arm.
+        """
         new_lang = self.model.detect_current_language(window_secs=1.5, min_prob=0.90)
         if new_lang is not None and new_lang != self.model.state.detected_language:
             logger.info(
                 "[ShortSilenceLangCheck] 언어 전환 감지: %s → %s",
                 self.model.state.detected_language, new_lang,
             )
-            self.model.create_tokenizer(new_lang)
-            self.model.init_context()
-            self.model.state.detected_language = new_lang
+            self.model._apply_detected_language(new_lang)
 
     def insert_audio_chunk(self, audio: np.ndarray, audio_stream_end_time):
         """Append an audio chunk to be processed by SimulStreaming."""
@@ -289,9 +293,41 @@ class SimulStreamingOnlineProcessor:
                 return [], self.end
 
             timestamped_words = self._filter_cross_batch_repetitions(timestamped_words)
+
+            # 언어 전환 경계 마커 삽입 (_apply_detected_language가 진짜 전환 시 arm).
+            pending = getattr(self.model.state, "pending_language_switch", None)
+            if pending is not None and timestamped_words:
+                # 중복 방출 계측: 전환 직후 첫 배치가 직전 방출 tail(최근 5개)과 겹치는지
+                tail = self._recent_emitted_words[-5:]
+                new_words = [self._normalize(t.text) for t in timestamped_words]
+                new_words = [w for w in new_words if w]
+                overlap = sum(1 for w in new_words if w in tail)
+                if overlap:
+                    logger.warning(
+                        "[SwitchTaxMeasure] 전환 직후 배치 %d/%d 단어가 직전 tail과 겹침 (tail=%s)",
+                        overlap, len(new_words), tail,
+                    )
+                else:
+                    logger.info("[SwitchTaxMeasure] 전환 직후 배치 겹침 없음 (tail=%s)", tail)
+                boundary_t = timestamped_words[0].start
+                marker = LanguageSwitch(
+                    start=boundary_t, end=boundary_t,
+                    detected_language=self.model.state.detected_language,
+                )
+                timestamped_words = [marker] + timestamped_words
+                self.model.state.pending_language_switch = None
+                logger.info("[LangSwitch] 문장 경계 마커 방출 @ %.2fs (lang=%s)",
+                            boundary_t, self.model.state.detected_language)
+
             if timestamped_words:
                 logger.debug("[TokenTrace] emit→%d tokens: %s", len(timestamped_words),
                              " ".join(t.text for t in timestamped_words[:20]))
+                # 계측용 최근 방출 단어 tail 갱신 (마커 제외, 최근 10개 유지)
+                emitted = [self._normalize(t.text) for t in timestamped_words
+                           if not getattr(t, "is_boundary", None) or not t.is_boundary()]
+                emitted = [w for w in emitted if w]
+                if emitted:
+                    self._recent_emitted_words = (self._recent_emitted_words + emitted)[-10:]
             self.buffer = []
             self._last_emit_end = self.end
             return timestamped_words, self.end
