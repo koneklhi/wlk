@@ -36,6 +36,7 @@ class MLXDecoderState:
     global_time_offset: float = 0.0
     cumulative_time_offset: float = 0.0
     first_timestamp: Optional[float] = None
+    lang_before_reset: Optional[str] = None
     last_attend_frame: int = 0
 
     speaker: int = -1

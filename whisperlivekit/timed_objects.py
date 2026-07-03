@@ -202,7 +202,7 @@ class Segment(TimedText):
 
 @dataclass
 class PuncSegment(Segment):
-    pass
+    hard_boundary: bool = False
 
 class SilentSegment(Segment):
     def __init__(self, *args: Any, **kwargs: Any) -> None:

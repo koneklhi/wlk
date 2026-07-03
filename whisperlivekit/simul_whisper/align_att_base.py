@@ -177,7 +177,8 @@ class AlignAttBase(ABC):
         막고, process_iter가 방출할 LanguageSwitch 문장 경계를 arm 한다. 최초 감지(이전 None)나
         skip_trim=True(예: refresh 직후 버퍼가 이미 짧음)일 때는 절단·경계 arm을 하지 않는다.
         """
-        prev_lang = self.state.detected_language
+        prev_lang = self.state.detected_language or self.state.lang_before_reset
+        self.state.lang_before_reset = None  # consume-once
         is_switch = prev_lang is not None and prev_lang != lang
 
         if is_switch and not skip_trim:
@@ -193,8 +194,8 @@ class AlignAttBase(ABC):
             # 다음 새 언어 토큰 앞에 process_iter가 경계 마커를 삽입하도록 arm.
             self.state.pending_language_switch = self.state.global_time_offset + self.segments_len()
 
-        logger.info("[LangSwitch] 토크나이저 적용: %s (switch=%s, skip_trim=%s)",
-                    lang, is_switch, skip_trim)
+        logger.info("[LangSwitch] 토크나이저 적용: %s (prev=%s, switch=%s, skip_trim=%s)",
+                    lang, prev_lang, is_switch, skip_trim)
 
     def _detect_language_if_needed(self, encoder_feature):
         if (

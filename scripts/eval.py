@@ -15,6 +15,7 @@
 import argparse
 import asyncio
 import json
+import os
 import re
 import statistics
 import subprocess
@@ -177,6 +178,20 @@ def parse_reference_sentences(ref_text: str) -> list:
     return [b.strip() for b in re.split(r"\n\s*\n", ref_text) if b.strip()]
 
 
+def _server_log_path(audio_path: Path, path_type: str, rep: int) -> str:
+    """회차별 서버 로그 파일 경로를 생성한다.
+
+    명명 규칙: .omc/server_logs/server_<stem>_<path>_R<rep>_<ts>.log
+    예: .omc/server_logs/server_bong1_C_R1_20240101_120000.log
+    """
+    log_dir = Path(".omc/server_logs")
+    log_dir.mkdir(parents=True, exist_ok=True)
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    stem = audio_path.stem
+    filename = f"server_{stem}_{path_type}_R{rep}_{ts}.log"
+    return str(log_dir / filename)
+
+
 def start_server(
     model_dir: str,
     pcm_input: bool,
@@ -207,10 +222,14 @@ def start_server(
         cmd.append("--no-diarization")
     if extra_server_args:
         cmd.extend(extra_server_args)
+    env = os.environ.copy()
+    env["PYTHONIOENCODING"] = "utf-8"
     if server_log_file:
         log_fh = open(server_log_file, "w", encoding="utf-8")
-        return subprocess.Popen(cmd, stdout=log_fh, stderr=log_fh)
-    return subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        proc = subprocess.Popen(cmd, stdout=log_fh, stderr=log_fh, env=env)
+        log_fh.close()
+        return proc
+    return subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env)
 
 
 def wait_for_ready(url: str, proc: subprocess.Popen, timeout: int = SERVER_READY_TIMEOUT) -> bool:
@@ -491,15 +510,13 @@ def main() -> None:
         model_dir=args.model_dir,
     )
 
-    server_log = "server_trace.log" if args.trace_tokens else None
-    if server_log:
-        print(f"[eval] --trace-tokens 활성: 서버 로그 → {server_log}")
-
     if "A" in paths:
-        print(f"\n[eval] 경로 A 테스트 시작 (파일별 서버 재시작)...")
+        print("\n[eval] 경로 A 테스트 시작 (파일별 서버 재시작)...")
         for audio_path in args.files:
+            a_log = _server_log_path(audio_path, "A", 1)
+            print(f"[eval] 서버 로그 → {a_log}")
             print(f"[eval] 경로 A 서버 기동 중 (포트 {SERVER_PORT})...")
-            proc = start_server(args.model_dir, pcm_input=True, port=SERVER_PORT, warmup=warmup, lan=args.lan, diarization=args.diarization, sortformer_model=args.sortformer_model, extra_server_args=extra_server_args, server_log_file=server_log)
+            proc = start_server(args.model_dir, pcm_input=True, port=SERVER_PORT, warmup=warmup, lan=args.lan, diarization=args.diarization, sortformer_model=args.sortformer_model, extra_server_args=extra_server_args, server_log_file=a_log)
             try:
                 if not wait_for_ready(base_url, proc):
                     print("[오류] 서버 ready 대기 시간 초과", file=sys.stderr)
@@ -542,8 +559,10 @@ def main() -> None:
                     runs: list = []
                     for rep in range(args.repeat):
                         rep_label = f"회차 {rep + 1}/{args.repeat}" if args.repeat > 1 else ""
+                        c_log = _server_log_path(audio_path, "C", rep + 1)
+                        print(f"[eval] 서버 로그 → {c_log}")
                         print(f"[eval] 경로 C 서버 기동 중 (포트 {SERVER_PORT}) {rep_label}...")
-                        proc = start_server(args.model_dir, pcm_input=False, port=SERVER_PORT, warmup=warmup, lan=args.lan, diarization=args.diarization, sortformer_model=args.sortformer_model, extra_server_args=extra_server_args, server_log_file=server_log)
+                        proc = start_server(args.model_dir, pcm_input=False, port=SERVER_PORT, warmup=warmup, lan=args.lan, diarization=args.diarization, sortformer_model=args.sortformer_model, extra_server_args=extra_server_args, server_log_file=c_log)
                         try:
                             if not wait_for_ready(base_url, proc):
                                 print("[오류] 서버 ready 대기 시간 초과", file=sys.stderr)
