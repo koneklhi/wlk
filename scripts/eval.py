@@ -427,9 +427,9 @@ def main() -> None:
     parser.add_argument(
         "--periodic-lang-check",
         type=float,
-        default=None,
+        default=4.0,
         dest="periodic_lang_check_secs",
-        help="주기적 언어재감지 간격(초). None=비활성(기본). 서버에 --periodic-lang-check 전달.",
+        help="주기적 언어재감지 간격(초). 기본값 4.0(Exp-154 채택). None=비활성. 서버에 --periodic-lang-check 전달.",
     )
     parser.add_argument(
         "--expect-code-root",
