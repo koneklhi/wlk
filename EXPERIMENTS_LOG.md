@@ -1665,3 +1665,34 @@ PLC로 재감지 증가: `switch=True` bong1 14 · ytn2 9 · sbs1 2(Exp-153 smok
 - **단계 E**: 원 로드맵 3(조건부 화자리셋)→4(token-logprob)→5(프로브) 복귀.
 
 **JSON**: `.omc/benchmarks/eval_20260703_1051_plc4_screen.json`(N=1) · `eval_20260703_1101_plc4_confirm_n3.json`(N=3 pre-sync) · `eval_20260703_1314_plc4_ytn2clean3_n3.json`(ytn2 클린) · `eval_20260703_1314_plc4_heldout3.json`(held-out) · 서버로그 `.omc/server_logs/server_*_20260703_*.log`.
+
+---
+
+## Exp-155 — 단계3: 화자전환 리셋 조건부화(동일언어 시 refresh 생략) (2026-07-03) [E4] ❌ 기각
+
+원 로드맵 단계 3(제안 E). Sortformer 과분할로 sbs1 문장분리 F1 급락 → **동일언어 화자전환이면 new_speaker 리셋(refresh_segment·detected_language=None·_apply)을 생략**해 문맥 연속성 보존 가설. 브랜치 `exp/conditional-speaker-reset`(d0e0172, 미머지).
+
+### 변경 내용
+- `backend.py` `new_speaker`: 진입 시 `prev_lang=detected_language` 캡처 → `eager is not None and eager==prev_lang`이면 리셋 블록 생략(speaker·global_time_offset만 갱신), 아니면(언어 다름/None) 기존 리셋 경로 유지(Exp-153 lang_before_reset 승계 보존). `tests/test_conditional_speaker_reset.py` 6개(mock/spy, falsifiable) 통과, 기존 스위트 회귀 0.
+
+### 테스트 세트 결과 (경로 C, diar-ON, PLC=4.0, N=1 스크리닝)
+
+| 파일 | WER | Δ E4base | F1 | ΔF1 | 리셋 생략 / new_speaker 발동 |
+|------|-----|----------|-----|-----|------------------------------|
+| bong1 | 38.1% | +1.8 | 35.9% | -4.1 | 15 / **15**(100% 생략) |
+| ytn2 | 28.1% | +2.5 | 45.5% | -14.5 | 3 / — |
+| sbs1 | 19.0% | -1.2 | 30.8% | +12.6 | **0 / 0**(무발동) |
+
+### 분석 (메커니즘 규명 — 기각 근거)
+- **sbs1(타겟) 완전 무효**: Sortformer가 sbs1에 **ChangeSpeaker 이벤트를 0회** 생성 → new_speaker 자체가 안 불림 → stage3 코드 경로 미진입. sbs1 F1 +12.6은 **순수 N=1 변산**(변경 무관). **⇒ sbs1 F1 급락의 근원은 화자전환 리셋이 아니라 문장경계 과분할(`tokens_alignment`)로 재규명** — 단계 3 전제(§3 제안 E)가 오진단.
+- **bong1(발동처) 악화**: new_speaker 15회 전부(15/15) 동일언어 → 전부 생략 → **진짜 다른 화자(영어2·한국어2)를 같은 언어라는 이유로 블렌딩** → WER+1.8·F1-4.1. "same language" ≠ "spurious over-segmentation" — 이 둘을 언어일치만으로 구분 불가(Exp-106 디바운스가 진짜 전환도 늦춘 것과 동형 함정).
+
+### 채택 판정
+- **① max**: bong1/ytn2 median 회귀(N=1 방향신호). **② 1차 관찰 실패**: sbs1 F1 회복은 spurious(0 발동), ytn2 회귀(+2.5, F1-14.5).
+- **결론: ❌ 기각**. 타겟(sbs1) 무발동으로 이득 원천 부재 + 발동처(bong1) 화자블렌딩 악화. §3.2 비직결(diar F1 최적화)이라 자율 기각. N=3 불요(메커니즘·전제 반증 확정적).
+
+### 다음
+- **sbs1 F1 재접근(backlog)**: 화자전환이 아니라 문장경계 과분할이 근원 → `tokens_alignment.compute_punctuations_segments` 온점분할 정책이 후보(단, F1은 2차 지표·WER>F1).
+- **단계 4**: token-logprob go/no-go 프로브로 진행.
+
+**JSON**: `.omc/benchmarks/eval_20260703_1403_step3_condreset_screen.json` · 서버로그 `worktrees/conditional-speaker-reset/.omc/server_logs/`.

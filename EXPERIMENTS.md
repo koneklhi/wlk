@@ -73,7 +73,7 @@ Exp-106~129는 신뢰 불가 판정으로 기각됐으나 **방향성은 참고*
 - **[불변][디코더]** SimulStreaming 채택(Exp-001) — LocalAgreement는 영어 코드스위칭을 통째 누락하고 발화 후반 커버리지를 잃음. AlignAtt 실출력 토큰엔 **구두점이 없어** 구두점 기반 확정이 미발동 → 확정 신호는 VAD silence·세그먼트 경계·언어 전환에서 찾는다.
 - **[E1·재검증][디코더]** `beam=4`는 ytn2 catastrophic(Exp-125: beam2 28.1%→beam3 29.6%→beam4 40.4% 단조증가). bong1은 beam=4로 안정화되나 ytn2 손해가 압도. **beam=3은 재검증 대상.**
 - **[E4·채택][언어]** `periodic_lang_check`(PLC) **기본값 4.0 채택(Exp-154)** — 전환세금 제거·배선 완료(Exp-151/153) 후 재평가에서 ytn2 무휴지 en→ko 전환을 잡아 median 개선·filler 소멸. E1/E2 3회기각(Exp-131/143/145)은 전환세금 미제거 상태의 결론이라 무효화. PLC=None이면 언어 고착 후 환각 급증.
-- **[불변][diar]** Sortformer 과분할로 단일화자(sbs1) 문장분리 F1 급락(diar-ON 36.4% vs diar-OFF 76.2%, ref=3 vs hyp=9–11). **[E1]** ChangeSpeaker 2.0s 디바운스는 ytn2 회귀(Exp-106); nonspeech_prob=0.35는 bong1 환각↓이나 ytn2 부작용(Exp-107).
+- **[불변][diar]** Sortformer 과분할로 단일화자(sbs1) 문장분리 F1 급락(diar-ON 36.4% vs diar-OFF 76.2%, ref=3 vs hyp=9–11). **[E4·규명]** 이 과분할 근원은 **화자전환 이벤트가 아니라 문장경계 과분할**(`tokens_alignment` 온점분할) — Exp-155서 sbs1의 `new_speaker`(ChangeSpeaker) 발동이 **0회**로 확인(화자전환 조건부 리셋으론 sbs1 F1 개선 불가). **[E1]** ChangeSpeaker 2.0s 디바운스는 ytn2 회귀(Exp-106); nonspeech_prob=0.35는 bong1 환각↓이나 ytn2 부작용(Exp-107).
 - **[불변][환각]** bong1 웃음 구간에서 Whisper 환각 다발(JSON 분석 확인).
 - **[불변][환각·E2규명]** **bong1 worst-case 근본 원인 = 비음성(웃음·박수) 구간 언어 오감지** → 중국어/일본어 환각 캐스케이드(Exp-138 코드 규명). E2(lang_restrict_koen)가 CJK 언어토큰을 막아도 환각은 **사라지지 않고 라틴/한글 쓰레기로 형태만 바뀜**(Exp-139). → 비음성 구간 자체를 전사에서 배제(VAD/no_speech)하는 **Layer 3b가 미해결 1순위 과제**.
 - **[E4·규명][필터]** **QualityGate(avg_logprob<-2.0) 부당드롭 = 0%**(Q1 규명, Exp-154 하니스). 억제 텍스트 전수 분류(bong1 46·ytn2 33·sbs1 14) 결과 전부 ① 비음성 마커(laughter/applause/speaking/AUDIO) ② 문장부호·단일문자 ③ **최종 전사에 이미 존재하는 중복 재디코딩 조각** ④ 환각조각뿐 — 정상 한국어 유실 없음. → **언어별 logprob 임계·드롭→재디코딩 수정 불필요**(사용자 확인). ytn2 회차분산은 QualityGate가 아닌 다른 원인(ForeignLang 혼란/재디코딩 churn/실오인식).
@@ -110,6 +110,7 @@ Exp-106~129는 신뢰 불가 판정으로 기각됐으나 **방향성은 참고*
 | Exp-152 | **E3** | 2026-07-02 | 단계2(증거된수정): _ANNOTATION_RE 확장 — 안 닫힌 비음성 주석 누출 차단 | 36.3% | 23.6% | 20.2% | ✅ 채택 (bong1 "(speaking…" 누출 0건·median 38.1→36.3·F1 40.0↑; ytn2/sbs1 신규패턴 매칭 0=증명된 no-op; sbs1 max 25.6은 변산) |
 | Exp-153 | **E4** | 2026-07-03 | diar-ON 언어전환 배선(prev_lang fallback + hard_boundary) + 회차별 서버로그 [E3→E4] | 36.3% | 25.6% | 20.2% | ✅ 채택 (사용자결정; dormant→active 증명·WER게이트통과·ytn2 max 29.1→26.1·eng1 무회귀; F1 과분할하락·재디코딩 filler 신규→Exp-154 튜닝) |
 | Exp-154 | **E4** | 2026-07-03 | PLC 기본값 None→4.0 채택(전환세금 제거 후 재평가) + 위생(단계C 드롭텍스트 로깅·D-1·D-2) | 34.4% (-1.9) | 22.9% (-2.7, pooled) | 21.4% (+1.2) | ✅ 채택 (사용자결정; §3.2 무휴지 코드스위칭·median개선·F1 전파일↑·filler소멸·eng1 무회귀 2.9%. ytn2 max 27.6=실변산; PLC E1/E2 3회기각→E4 채택전환) |
+| Exp-155 | **E4** | 2026-07-03 | 단계3: 화자전환 리셋 조건부화(동일언어 시 refresh 생략) | 38.1% (+1.8) | 28.1% (+2.5) | 19.0% (-1.2) | ❌ 기각 (N=1; 타겟 sbs1은 new_speaker 0회 발동=무효·F1+12.6은 변산, 발동처 bong1 15/15 생략이 진짜 다화자 블렌딩→악화. sbs1 F1근원=문장과분할로 재규명) |
 
 ---
 
