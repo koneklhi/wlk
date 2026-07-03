@@ -267,10 +267,22 @@ class SimulStreamingOnlineProcessor:
                 decoded_text = ''.join(t.text for t in timestamped_words)
                 if _FOREIGN_LANG_PATTERN.search(decoded_text):
                     logger.warning("[ForeignLang] '(speaking in foreign language)' 감지 → 즉시 언어재감지 트리거")
+                    # new_speaker와 일관되게 현재 언어를 전환 판정 기준으로 승계한다.
+                    # ForeignLang은 방금 방출이 언어혼란(garbage)임을 뜻하므로, 재감지 후 언어가
+                    # 달라지면 정당한 전환 → _apply_detected_language의 prev_lang 폴백이 경계
+                    # 마커/트림을 발동해야 한다. 미승계 시 prev_lang이 stale해 전환이 누락된다.
+                    self.model.state.lang_before_reset = (
+                        self.model.state.detected_language or self.model.state.lang_before_reset
+                    )
                     self.model.state.detected_language = None
                     self.model.state.first_timestamp = None
                     self.model.state.eager_lang_detect = True
                     self.model.state.last_lang_switch_time = 0.0
+                    # 버려지는 세그먼트 텍스트를 로깅 (단계 C 계측: 정상 텍스트가 함께 유실되는지 감시).
+                    dropped = [t for t in timestamped_words if _FOREIGN_LANG_PATTERN.search(t.text)]
+                    if dropped:
+                        logger.warning("[ForeignLang] 드롭 텍스트: %.200s",
+                                       " ".join(t.text for t in dropped))
                     timestamped_words = [t for t in timestamped_words
                                          if not _FOREIGN_LANG_PATTERN.search(t.text)]
 
