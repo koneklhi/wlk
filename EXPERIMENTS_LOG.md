@@ -1542,3 +1542,64 @@ goal 단계2(VAD-게이트 언어감지)의 **사전 프로브** 결과에 따�
 - 이 N=3에서 bong1 worst-case 캐스케이드 **미발현**(max 37.5, 게이트 48.0 대비 여유). 사용자 계획 "worst-case 잔존 시에만 B-1" 기준상 B-1 즉시 정당화 근거 약함. **단계 2 계속(B-1) vs 단계 3 이행**을 사용자와 결정(사전 프로브 min_prob 게이트 발견으로 B-1 한계효용 불확실).
 
 **JSON**: `worktrees/vad-gated-langid/.omc/benchmarks/eval_annotfix_diaron_n3_20260702_2042.json` (N=3) · `.../eval_probe_bong1_20260702_2019.json` (프로브).
+
+---
+
+## Exp-153 — diar-ON 언어전환 경로 배선(prev_lang fallback + hard_boundary) + 회차별 서버 로그 하니스 (2026-07-03) [E3→E4]
+
+goal 단계1(E3, Exp-150)이 만든 언어전환 메커니즘(마커 + 2.5s 트림 재디코딩)이 **측정 기본 설정(diar-ON)에서 dormant**임을 다른 세션(fable) 분석(`jiggly-sniffing-scone.md` Q3)이 지적. Explore 2회로 현행 master(9ed1ee9)에서 검증 완료 후 배선. 브랜치 `exp/diaron-switch-wiring` → master `dc312bb`(--no-ff 머지). **채택은 게이트 혼합으로 사용자 결정(A: 지금 채택).**
+
+### 가설
+diar-ON 화자전환 시 `new_speaker()`가 `detected_language=None`으로 리셋한 **뒤** eager 감지 언어를 `_apply_detected_language`로 적용 → `prev_lang=self.state.detected_language`(이미 None) → `is_switch = prev_lang is not None and …` 항상 False → 마커 arm·트림 절대 미발동(원인 A). 마커가 생겨도 `get_lines_diarization()` 병합 루프가 같은 화자면 무조건 재병합해 경계 소실(원인 B). 두 원인을 배선하면 diar-ON에서 전환 경계 단어보존(§3.2/Q4) + 문장분리 F1 개선(1차 기대)이 나타날 것.
+
+### 변경 내용
+- **수정1(원인 A)** — `simul_whisper/decoder_state.py:40` + `mlx/decoder_state.py:39`: `lang_before_reset: Optional[str]=None` 필드(MLX 누락 시 AttributeError). `backend.py:151` `new_speaker` 리셋 직전 `lang_before_reset = detected_language or lang_before_reset`(연속 화자전환 or-체이닝). `backend.py:101` `end_silence` long 경로 `lang_before_reset=None`. `align_att_base.py:180-181` `_apply_detected_language`: `prev_lang = detected_language or lang_before_reset` + consume-once `lang_before_reset=None`, 로그에 `prev=%s`.
+- **수정2(원인 B)** — `timed_objects.py:205` `PuncSegment.hard_boundary: bool=False`(to_dict 미직렬화→스키마 불변). `tokens_alignment.py:125` boundary 분기서 닫힌 세그먼트 `hard_boundary=True`. `tokens_alignment.py:223-227` diar 병합 조건 `and not segments[-1].hard_boundary` + 병합 시 승계.
+- **하니스(Q1)** — `scripts/eval.py`: 서버 stdout/stderr를 `.omc/server_logs/server_<stem>_<path>_R<rep>_<ts>.log`로 **항상** 저장(과거: --trace-tokens일 때만 단일 고정파일 덮어씀) + `PYTHONIOENCODING=utf-8`.
+- 단위테스트 `tests/test_lang_switch_wiring.py` 14개(backend 3·base 5·tokens 6; consume-once·no-op·과분할경계보존 falsifiable 검증). 전체 스위트 134 pass(실패 2건 `test_pipeline` silence는 master에도 존재하는 pre-existing). opus whole-branch 리뷰 SHIP.
+
+### 활성화 증명 (smoke: bong1 ×1, --trace-tokens)
+`switch=True` 9회 · 문장경계 마커 방출 7회 · 트림 재디코딩 1회. 최초감지(`prev=None`)·동일언어(`prev=en, en`)는 정확히 `switch=False`(오발동 없음). **master에선 전부 0** → dormant 해제 증명.
+
+### 테스트 세트 결과 (경로 C, diar-ON, CRT=3.0, vbcable=ok, N=3)
+
+| 파일 | WER median | max | min | stdev | F1 median | vs Exp-152 Δmed | Δmax | ΔF1 |
+|------|-----------|-----|-----|-------|-----------|----------------|------|-----|
+| bong1 | 36.3% | 37.5% | 32.0% | 2.9% | 36.8% | 0.0 | 0.0 | -3.2 |
+| ytn2 | 25.6% | **26.1%** | 25.1% | **0.5%** | 47.6% | +2.0 | **-3.0 ✓** | -8.0 |
+| sbs1 | 20.2% | 26.8% | 17.3% | 4.9% | 16.7% | 0.0 | +1.2(변산) | -1.5 |
+| **avg** | **27.4%** | — | — | — | 33.7% | -0.1 | — | — |
+
+**held-out(단회, diar-ON)**: ytn1 33.1%/F1 47.1%(+3.7 vs E1 base 29.4; 변산밴드 27.6-49.1 내) · **eng1 3.8%(=baseline, 영어 회귀 0 ✓)**.
+
+### 분석 (전사 내용 정성 대조)
+
+**ytn2** (R_median 기준):
+- **코드스위칭 단어보존(개선)**: 전사 `"…North Korea. 비한 사은 중에서는…"` — 영어 끝단어·한국어 시작 모두 존재. `"…논의를 했습니다. these ends we remain…"` 한→영 끝단어 보존. §3.2/Q4 전환경계 유실 완화.
+- **재디코딩 filler 환각(신규)**: 전사 `"…Security Council resolutions. You know, in Bukhpil, there. 달성하기…"` — en→ko 전환 직후 `"You know, in Bukhpil, there."` R1/R2/R3 **일관 삽입**(R2 "in Buk.", R3 "I'm Buk."). `">>."`·`"That's--."` 등 경계 잡음. → median WER +2.0 기여.
+- **과분할**: n_hyp 13-14 vs n_ref 10 → precision 0.39-0.54(마커가 경계 추가). recall은 0.56-0.78로 오히려 상승(R3 F1 63.6). F1 정답경계=화자전환+온점이라 언어전환 split 미보상(일부 metric-mismatch).
+
+**bong1** (R_median 기준):
+- **웃음 환각(기존 계열)**: R3 전사 `"…I'm sorry. I'm sorry. Sorry…"` ×9 폭주 / 정답 `"죄송합니다 형님."` — R1은 `"죄송합니다, 형."` 정상. run 편차 큼(웃음+사과 중첩 재디코딩 오버랩 추정). median/max는 불변(36.3/37.5) → 게이트 미파손.
+- 짧은 한국어 삽입 흡수: `"I mean, 보통 to be…"` — 정답 `"보통 그."` 1단어 블록이 영어 스트림에 흡수(기존 패턴).
+
+**sbs1** (R_median 기준):
+- **F1 하락 pre-existing**: 16.7% ≈ Exp-152 18.2%. n_hyp 10-11 vs n_ref 3(온점분할 과분할, 마커 무관). 영어 인용 `"-From a satellite image…"` 정상 전사(허위 영어감지 아님, 실제 자막 음성). 스위치 오발동 없음.
+
+**이번 변경 영향**: 전환경계 단어보존(§3.2/Q4)은 달성, 그러나 (1) 재디코딩 오버랩서 filler 환각 신규 발생, (2) 마커가 경계를 추가해 F1 과분할(precision↓). sbs1 F1은 마커 무관 pre-existing. **1차 기대(F1 개선)는 역방향**, 실제 이득은 ytn2 worst-case WER(29.1→26.1)+분산붕괴(stdev 0.5)와 구조 활성화.
+
+### Q1 계측 (piggyback 집계, N=3 per-run)
+QualityGate 드롭 볼륨: bong1 median 54(52-62) · ytn2 43(39-47) · sbs1 18(12-19). BatchRepeatFilter 0 · CJK≈0. QualityGate(avg_logprob<-2.0)가 압도적 주 드롭장치. **로그가 logprob만 남기고 드롭 텍스트 미기록** → 볼륨 정량화되나 "정상 한국어 vs 환각" 분류 불가. 후속: 드롭 텍스트 로깅 추가 필요(Q1 수정은 사용자 결정 대기).
+
+### 채택 판정 (①max ②median, WER>F1)
+- **① max WER 미회귀**: bong1 37.5(=) · ytn2 26.1(**-3.0 개선**) · sbs1 26.8(+1.2, Exp-152서 이미 변산 인정된 25.6 대). → 실질 통과(worst-case 무회귀·ytn2 개선). eng1 무회귀.
+- **② median**: avg -0.1(중립). ytn2 +2.0은 filler 기여, 단 worst-case는 개선.
+- **F1**: 전파일 하락(2차 지표·과분할·일부 metric-mismatch·non-catastrophic). Exp-142/151 전례상 WER 우선.
+- **결론: ✅ 채택 (사용자 A 결정)**. 플랜 1차 가설(F1 개선) 실패·재디코딩 filler 신규 발생으로 클린 채택 불가 → §3.2 직결 구조기능(자율 기각 금지)·major 전환(epoch)이라 사용자 질의 → "지금 채택(E3→E4), filler/과분할은 Exp-154+ 튜닝". 근거: WER(1차) 게이트 통과·ytn2 worst-case 개선·eng1 무회귀·§3.2 구조보험(Exp-150 dormant→active 실현).
+
+### 다음
+- **Exp-154 — PLC 재평가**(전제조건 충족: Exp-151 클록수정 + Exp-153 배선): `--periodic-lang-check 4.0` N=1→유망시 N=3. ytn2 무휴지 en→ko 직접 겨냥.
+- **재디코딩 filler 튜닝**: `_trim_segments_to_recent` 오버랩(LANG_SWITCH_KEEP_SECS) 축소로 "You know, in Bukhpil" 류 경계 환각 억제.
+- **Q1 수정 방향**(계측 후 사용자 결정): QualityGate 드롭 텍스트 로깅 → legit-Korean vs 환각 분류 → 드롭→재디코딩/언어별 임계.
+
+**JSON**: `worktrees/diaron-switch-wiring/.omc/benchmarks/exp153_n3.json`(N=3) · `exp153_heldout.json`(held-out) · `exp153_n1.json`(스크리닝) · 서버로그 `worktrees/diaron-switch-wiring/.omc/server_logs/`.

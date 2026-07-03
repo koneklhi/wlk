@@ -135,3 +135,4 @@ WER과 문장 분리 F1 모두 주요 지표다. 두 지표를 함께 보아야 
 - 서버 ready까지 최대 120초 대기 (모델 로딩 시간)
 - 경로 C `--repeat 3` 실행 시 (오디오 길이 + `--wait`) × 3 소요 (테스트 3파일 bong1+ytn2+sbs1 기준: 약 18분 이상; 화자분할 서버 로딩 최초 1회 +약 30초 추가). 백그라운드 실행 권장
 - 결과 JSON은 `.omc/benchmarks/` 디렉토리에 저장 권장 (`.gitignore` 적용됨)
+- **서버 로그**(Exp-153~): eval.py가 매 회차 서버 stdout/stderr를 `.omc/server_logs/server_<stem>_<path>_R<rep>_<ts>.log`로 **항상** 저장한다. `[QualityGate]`(avg_logprob 억제)·`[BatchRepeatFilter]` 등 필터 계측은 기본 기록되고, `[LangSwitch]` 전환 트레이스는 `--trace-tokens` 시 기록. Q1(필터 기여도) 분석에 사용

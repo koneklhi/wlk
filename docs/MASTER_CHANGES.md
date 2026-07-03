@@ -175,12 +175,17 @@ upstream의 **언어 TRIPLE-LOCK** 문제 해소:
 - `LanguageSwitch` 마커(`timed_objects.py`, `is_boundary()=True`, `text=''`): 전환 시 `process_iter`가 삽입 → `tokens_alignment`가 침묵 세그먼트 없이 문장 경계로 소비. 번역 큐 미전달, FrontData 직렬화 제외(**스키마 무변**).
 - 중복 `detect_current_language`(dead code) 제거. `decoder_state.pending_language_switch` 필드 추가.
 
-**효과 / 적용 범위**: diar-OFF 대조에서 SOT 수정이 반복루프 폭주(ytn2 135%→53%, avg -24.6pp)를 차단 — §3.2 한/영 강제 catastrophic 방지. **diar-ON(기본 운영)에서는 `new_speaker`가 언어전환을 선점해 트림/마커 경로가 대체로 미발동**(WER 변산 내 중립); 정합 groundwork로 유지. **Epoch E2→E3.**
+**효과 / 적용 범위**: diar-OFF 대조에서 SOT 수정이 반복루프 폭주(ytn2 135%→53%, avg -24.6pp)를 차단 — §3.2 한/영 강제 catastrophic 방지. **diar-ON(기본 운영)에서는 `new_speaker`가 언어전환을 선점해 트림/마커 경로가 미발동(dormant)**했음(WER 변산 내 중립); 정합 groundwork로 유지 → **Exp-153이 배선으로 활성화(아래 E4)**. **Epoch E2→E3.**
 
 **연계 잠복버그 수정 (Exp-151, `8b83403`)**: 위 발견에서 드러난 master 기존 결함 2건 수정.
 - `refresh_segment(complete=True)`가 `global_time_offset`을 미승계 → mid-stream refresh(QualityGate·환각필터·stall) 후 타임스탬프 드리프트 → 문장경계 F1 저하. **수정**: 버려진 오디오 길이만큼 `global_time_offset` 승계(`old_segments_len - segments_len()` + `cumulative_time_offset`) 후 cumulative 리셋. WER 무관, F1 정합 회복.
 - `_maybe_periodic_lang_check`가 버퍼상대시간(`segments_len`)을 시계로 써서 PLC 미발동 → 절대 스트림 시각(`global_time_offset + segments_len()`)으로 수정. PLC=None 기본이라 운영 무영향.
 - diar-ON N=3 무회귀(avg 26.9%, 전 파일 max 게이트 내). 단위테스트 `tests/test_timebase_refresh.py`.
+
+**diar-ON 배선 활성화 (Exp-153, `dc312bb`, E3→E4)**: 위 트림/마커가 diar-ON에서 dormant였던 2원인 배선.
+- **원인 A** — `new_speaker`가 `detected_language=None` 리셋 **후** `_apply_detected_language` 호출 → `prev_lang`이 항상 None → `is_switch` 영구 False. **수정**: `decoder_state`(+`mlx/decoder_state`)에 `lang_before_reset` 필드, 리셋 전 언어 보존(연속 화자전환 or-체이닝), `_apply_detected_language`가 `detected_language or lang_before_reset`로 폴백(consume-once, `end_silence` long서 clear).
+- **원인 B** — `get_lines_diarization` 병합 루프가 같은 화자면 무조건 재병합 → 전환 경계 소실. **수정**: `PuncSegment.hard_boundary`(to_dict 미직렬화 → **스키마 무변**), boundary 세그먼트서 True, 병합 조건 `and not segments[-1].hard_boundary` + 병합 시 승계.
+- **효과(N=3 diar-ON)**: 전환경계 단어보존 획득(§3.2/Q4), ytn2 worst-case WER 29.1→26.1·stdev 0.5로 안정화. 단 재디코딩 오버랩서 filler 환각 신규(ytn2 en→ko "You know, in Bukhpil"류 R1-3 일관·bong1 R3 "sorry"×9)·마커 과분할로 F1 하락(2차 지표). WER(1차) 게이트 통과·eng1 무회귀 → **채택(사용자 결정, 게이트 혼합)**. **Epoch E3→E4.** 단위테스트 `tests/test_lang_switch_wiring.py`(14). 후속: filler 튜닝(`LANG_SWITCH_KEEP_SECS` 오버랩 축소)·Exp-154 PLC 재평가.
 
 ---
 
@@ -275,7 +280,7 @@ upstream에는 정량 평가 도구가 없었다. 아래 모듈을 새로 추가
 
 | 파일 | 역할 |
 |---|---|
-| [`scripts/eval.py`](../scripts/eval.py) | 경로 C(VBCable) / 경로 A(파일) WER + 문장분리 F1 측정. `--repeat N`(기본 1; 채택 확정 시 3) median/min/max/stdev 집계. `--paths`, `--files`, `--diarization`, `--sortformer-model`, `--trace-tokens`, `--periodic-lang-check` 옵션 지원 |
+| [`scripts/eval.py`](../scripts/eval.py) | 경로 C(VBCable) / 경로 A(파일) WER + 문장분리 F1 측정. `--repeat N`(기본 1; 채택 확정 시 3) median/min/max/stdev 집계. `--paths`, `--files`, `--diarization`, `--sortformer-model`, `--trace-tokens`, `--periodic-lang-check` 옵션 지원. **서버 stdout/stderr를 `.omc/server_logs/server_<stem>_<path>_R<rep>_<ts>.log`로 회차별 항상 저장(Exp-153; Q1 필터 기여도 계측용, `PYTHONIOENCODING=utf-8`)** |
 | [`whisperlivekit/metrics.py`](../whisperlivekit/metrics.py) | `compute_wer()` (정규화 WER), 문장분리 F1 (`_align_words`, Levenshtein 기반) |
 | [`scripts/vbcable_test.py`](../scripts/vbcable_test.py) | 경로 C 브라우저 자동화 (VBCable 루프백을 브라우저 마이크로 노출, 음원 재생 → 캡처) |
 | [`scripts/audio_device.py`](../scripts/audio_device.py) | VBCable 오디오 장치 자동 설정 / 측정 후 복원 |

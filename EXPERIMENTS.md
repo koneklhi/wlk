@@ -22,7 +22,8 @@
 > **왜**: 실패 모드를 바꾸는 구조적 코드 변경 전후로 디코더 파라미터의 트레이드오프가 달라진다.
 > 다른 세대에서 나온 결론을 현재 코드의 **확정 근거**로 쓰면 오판한다(예: 초기 파라미터 튜닝 ↔ 언어고정·비음성억제 도입 후).
 
-- **현재 master = Epoch 3 (E3)**: E2 + **언어 전환 프로토콜 재설계**(전환 시 오디오 절단으로 재디코딩 세금 제거 · `_check_short_silence_language` SOT 배선버그 수정 · LanguageSwitch 문장경계 마커). **단계1 머지 완료 (6db5ea1, 2026-07-02).** E2 파라미터 결론(PLC·beam·CRT·nonspeech; Exp-131~149)은 이제 **[E2·재검증]** — 특히 PLC는 전환세금 제거로 거동이 달라질 수 있어 재검증 대상.
+- **현재 master = Epoch 4 (E4)**: E3 + **diar-ON 언어전환 경로 배선 활성화**(`prev_lang fallback`로 마커/2.5s 트림 실발동 + `PuncSegment.hard_boundary`로 diar 병합 경계보존). **Exp-153 머지 (dc312bb, 2026-07-03).** E3에서 **dormant**였던 전환 메커니즘이 측정경로(diar-ON)에서 처음 실동작 → 실패모드 변화: 전환경계 단어보존(§3.2/Q4) 획득 + **신규 재디코딩 filler 환각**("You know, in Bukhpil"류)·**마커 과분할**(F1 precision↓). E2 파라미터 결론(PLC·beam·CRT·nonspeech; Exp-131~149)은 전환 활성화로 거동이 또 달라지므로 **[E2·재검증]** 유지 — 특히 PLC는 Exp-154서 재평가 예정.
+- **Epoch 3 (E3, 이력)**: E2 + **언어 전환 프로토콜 재설계**(전환 시 오디오 절단으로 재디코딩 세금 제거 · `_check_short_silence_language` SOT 배선버그 수정 · LanguageSwitch 문장경계 마커). 단계1 머지 (6db5ea1, 2026-07-02) — **단 diar-ON(측정 기본)에서 dormant**였음(Exp-153이 배선으로 활성화).
 - **Epoch 2 (E2, 이력)**: SimulStreaming + diar-ON + `lang_restrict_koen=True`(후처리 CJK/주석 필터). Exp-139 머지(2026-07-01), Exp-142에서 logprob=-2.0 N=3 베이스라인 확정(bong1 37.5 / ytn2 31.5 / sbs1 19.6).
 - **세대 경계 규칙**: 파라미터 값 변경(PLC·beam·frame_threshold·CRT 등)은 epoch를 **올리지 않는다**(같은 세대 내 실험). 언어고정·비음성억제·디코더 교체·VAD 파이프라인 변경 등 **실패 모드를 바꾸는 구조 변경**만 세대를 올린다.
 
@@ -106,6 +107,7 @@ Exp-106~129는 신뢰 불가 판정으로 기각됐으나 **방향성은 참고*
 | Exp-150 | **E3** | 2026-07-02 | 단계1 머지: 언어전환 프로토콜 재설계+SOT 배선수정 [E2→E3] | 36.6% (-0.9pp) | 27.6% (-3.9pp) | 19.6% (0pp) | ✅ 채택 (§3.2 SOT 보험: diar-OFF 대조 avg -24.6pp/ytn2 -82pp; diar-ON WER 변산 내 중립·max 게이트 E2 유지; 트림/마커는 diar-ON dormant) |
 | Exp-151 | **E3** | 2026-07-02 | 잠복버그 수정: refresh global_time_offset 승계 + PLC 절대클록 (버그1·2) | 38.1% | 23.2% | 19.0% | ✅ 채택 (N=3 max 41.4/24.1/19.0 전부 게이트 내; WER 버그수정상 중립·무회귀; F1 정합 회복—sbs1 N1 0%→N3 18.2 안정; E3 유지) |
 | Exp-152 | **E3** | 2026-07-02 | 단계2(증거된수정): _ANNOTATION_RE 확장 — 안 닫힌 비음성 주석 누출 차단 | 36.3% | 23.6% | 20.2% | ✅ 채택 (bong1 "(speaking…" 누출 0건·median 38.1→36.3·F1 40.0↑; ytn2/sbs1 신규패턴 매칭 0=증명된 no-op; sbs1 max 25.6은 변산) |
+| Exp-153 | **E4** | 2026-07-03 | diar-ON 언어전환 배선(prev_lang fallback + hard_boundary) + 회차별 서버로그 [E3→E4] | 36.3% | 25.6% | 20.2% | ✅ 채택 (사용자결정; dormant→active 증명·WER게이트통과·ytn2 max 29.1→26.1·eng1 무회귀; F1 과분할하락·재디코딩 filler 신규→Exp-154 튜닝) |
 
 ---
 
