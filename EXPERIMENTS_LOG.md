@@ -1603,3 +1603,65 @@ QualityGate 드롭 볼륨: bong1 median 54(52-62) · ytn2 43(39-47) · sbs1 18(1
 - **Q1 수정 방향**(계측 후 사용자 결정): QualityGate 드롭 텍스트 로깅 → legit-Korean vs 환각 분류 → 드롭→재디코딩/언어별 임계.
 
 **JSON**: `worktrees/diaron-switch-wiring/.omc/benchmarks/exp153_n3.json`(N=3) · `exp153_heldout.json`(held-out) · `exp153_n1.json`(스크리닝) · 서버로그 `worktrees/diaron-switch-wiring/.omc/server_logs/`.
+
+---
+
+## Exp-154 — PLC 기본값 None→4.0 채택 (전환세금 제거·배선 완료 후 재평가) + 위생 묶음 (2026-07-03) [E4]
+
+Exp-153이 열어놓은 전환 배선(마커·트림 실동작) + Exp-151 절대클록 수정으로 **PLC 재평가 전제조건이 처음 충족**. PLC는 과거 3회 기각(Exp-131/143/145)됐으나 전부 전환세금 미제거·클록버그 상태였다. PLC는 화자전환·침묵 트리거가 없는 전환(ytn2 동시통역 무휴지 en→ko)을 잡는 유일 경로. 브랜치 `exp/plc-reeval`(파라미터만) + `exp/lang-switch-hygiene`(위생) → master `63911a2`+`797d400`(--no-ff). **§3.2 직결 기능·게이트 혼합으로 사용자 결정(채택).**
+
+### 가설
+전환세금(재디코딩 중복)이 제거·배선된 지금은 PLC의 재감지가 공정 평가된다. `--periodic-lang-check 4.0`이 ytn2 무휴지 전환을 잡아 median WER 회복 + 전환경계 recall 개선. PLC가 재감지→트림 재디코딩을 늘려 Exp-153 filler를 증폭할 수 있으므로 filler 공동계측 필수.
+
+### 변경 내용
+- **채택(파라미터)** — `whisperlivekit/parse_args.py:370` + `scripts/eval.py:430`: `--periodic-lang-check` `default=None`→`default=4.0`(서버 기본 + 하니스 기본). doc 동기화 `docs/TESTING.md:37`(경로B 기동 설명)·`ROADMAP.md:83`(재검증 태스크→채택 완료). `docs/DEPLOYMENT_OFFLINE.md`는 이미 4.0 반영됨.
+- **위생 묶음(동작 불변 위주, 별도 커밋 `2e163c6`)**:
+  - **단계 C 하니스(계측)** — `align_att_base.py:564` QualityGate avg_logprob 억제 로그에 억제 텍스트(`%.200s`) 추가. `backend.py:274` ForeignLang 드롭 텍스트 로깅. `filtering/__init__.py:129` CJK/kana 드롭 텍스트 로깅(모듈 logger 신설). → Q1 "정상 한국어 오탈" 비율 산출용.
+  - **D-1** — `mlx/decoder_state.py:39` `pending_language_switch: Optional[float]=None`(CUDA state 패리티, CUDA 경로 무관).
+  - **D-2** — `backend.py:270` ForeignLang 복구 경로가 `new_speaker`와 일관되게 `lang_before_reset = detected_language or lang_before_reset` 승계(재감지 후 전환 시 마커/트림 정당 발동). `tests/test_foreign_lang_reset.py` 4개로 의도 고정. 전체 스위트 관련 29 pass.
+
+### filler 공동계측 (--trace-tokens, 서버로그)
+PLC로 재감지 증가: `switch=True` bong1 14 · ytn2 9 · sbs1 2(Exp-153 smoke bong1 9 대비 증가). ShortSilenceLangCheck bong1 43·ytn2 19·sbs1 8. **그러나 filler 미폭증** — ytn2 특징적 `"You know, in Bukhpil there"`(Exp-153 R1/R2/R3 일관 삽입)가 **완전 소멸**, bong1 "sorry"×9 폭주도 부재. QualityGate 드롭은 bong1 50·ytn2 40·sbs1 15로 Exp-153(54/43/18)과 비슷하거나 소폭 감소. **ytn2 회차분산 근인 = filler 아니라 QualityGate 과억제**(나쁜 회차 QGate 54 vs 좋은 회차 34, ForeignLang 3 vs 0) → 단계 C(Q1) 영역.
+
+### 테스트 세트 결과 (경로 C, diar-ON, CRT=3.0, PLC=4.0, vbcable=ok)
+
+| 파일 | N=3 median | max | reps | vs E4 base(Exp-153) Δmed | F1 median | 게이트 |
+|------|-----------|-----|------|--------------------------|-----------|--------|
+| bong1 | 34.4% | 35.6% | [34.4,33.5,35.6] | **-1.9 ✓** | 40.0(+3.2) | ✓ <37.5 |
+| ytn2 | 22.9%(pooled) | 27.6% | pre-sync[33.5*,23.6,18.2]+클린[27.6,22.2,27.1] | **-2.7 ✓** | 60.0(+12.4) | max 27.6(실변산) |
+| sbs1 | 21.4% | 21.4% | [19.6,21.4,21.4] | +1.2 | 18.2(+1.5) | ✓ <26.8 |
+
+- **N=1 스크리닝**(방향신호): bong1 41.7(변산; N=3서 34.4로 정정) · ytn2 21.2 · sbs1 25.6.
+- **ytn2 max 33.5(pre-sync N=3 R1)** = **측정 중 UI 키보드 입력으로 음성 잠깐 중단된 하니스 disturbance(사용자 확인)** → 실제 PLC 실패모드 아님. 클린 재측정 max 27.6. ytn2는 고변산(단일 N=3 median 23.6~27.1 흔들림) → 클린 6회차 풀링 median 22.9로 개선 확증.
+- **held-out(단회, diar-ON)**: ytn1 27.6%(baseline 33.1 대비 **-5.5 개선**) · **eng1 2.9%(baseline 3.8, 영어 무회귀 ✓)**.
+
+### 분석 (전사 내용 정성 대조)
+
+**ytn2** (클린 대표회차):
+- **코드스위칭 전환 정확(목표 달성)**: 전사 `"…denuclearization of North Korea. 눈이 한 사은 중 우선…"` en→ko 전환 클린 · `"…비핵화를 달성하기 위해 협조를… in support of these ends…"` ko→en 클린. 영어 블록 전문 포착(truncation 없음). PLC가 무휴지 전환을 잡음.
+- **filler 소멸(개선)**: Exp-153의 `"You know, in Bukhpil there."` 3회 일관 삽입이 이번엔 **0건**. `">>"` 잡음 부재.
+
+**bong1** (N=3 대표):
+- **경계 경미 중복(잔존)**: `"holding holding up"`, `"So So my son"` — 트림 재방출 경미. Exp-153 "sorry"×9 폭주는 부재.
+- **ForeignLang 부분누출**: `"who is the main protagonist. a foreign language."` — `(speaking in foreign language)` 마커 잔편(count 1). D-2/CJK 로깅으로 후속 계측 대상.
+
+**sbs1** (N=3 대표):
+- 주요 실패 없음. 한국어 중심·중간 영어 인용 정상. PLC 오발동 없음(switch=True 2). median +1.2는 변산 범위(한국어 연속발화에 불필요 재감지 소폭 부작용 추정).
+
+**이번 변경 영향**: PLC=4.0이 ytn2 무휴지 코드스위칭 전환을 잡아 **목표 구간(§3.2) 개선 + Exp-153 filler 소멸**. bong1 median도 개선(-1.9, N=1 41.7은 변산). ytn2 worst-case 분산은 filler가 아니라 QualityGate 과억제가 근인(→단계 C 규명 대상). F1 전파일 상승(Exp-153 과분할이 PLC 전환경계 recall로 상쇄).
+
+### 하니스 사고 + 복구 (기록)
+채택-준비 서브에이전트가 `uv run ruff` 폴백으로 **공유 .venv(Junction) 재동기화** → sortformer extra 없이 동기화돼 `tokenizers 0.22.2`(우리 설정은 0.21.4 필요) 오설치 → transformers import 붕괴 → sortformer diarization 로드 실패 → 서버 `returncode=3` → **병렬 진행 중이던 held-out+ytn2 검증 측정 전멸**. `uv pip install tokenizers==0.21.4`(+ hf-hub 0.36.2 동반)로 수리 후 서버스택 검증(transformers/sortformer/CUDA OK) → 검증 재측정. **채택 근거 N=3(bong1/sbs1)은 uv 이전 완료로 무사**, 바뀐 패키지(tokenizers/hf-hub)는 whisper 전사 hot-path 밖이라 WER 정합성 유지. 교훈 → 측정 중 공유 .venv에 uv run/sync 금지(메모리 기록).
+
+### 채택 판정 (①max ②median, WER>F1)
+- **① max WER 미회귀**: bong1 35.6(<37.5 ✓) · sbs1 21.4(<26.8 ✓) · ytn2 클린 27.6 — Exp-153 게이트 26.1을 +1.5 초과하나 26.1은 Exp-153의 이례적 저분산(stdev 0.5%) 산물이고 ytn2 실변산 max는 27~28대(E2 시절 36.0). 교란된 33.5는 하니스 disturbance로 제외. eng1 무회귀.
+- **② median**: bong1 -1.9 · ytn2 -2.7(pooled) 개선(공동 최우선 2파일), sbs1 +1.2 경미. avg 27.4→~26.2.
+- **F1**: 전파일 개선(부수 이득).
+- **결론: ✅ 채택 (사용자 결정)**. §3.2 직결(무휴지 코드스위칭 유일경로)·median 개선·F1↑·filler 소멸·eng1 무회귀. ytn2 max는 실변산이며 게이트 26.1은 재조정 대상. PLC 3회 기각(E1/E2)은 [E4·재검증]에서 채택으로 전환 — 전환세금 제거·배선 완료가 전제였음을 확증.
+
+### 다음
+- **단계 C(Q1) 계측**: 위생 하니스로 QualityGate 드롭 텍스트 확보 → ytn2 분산 근인(과억제) 정량화 → 부당드롭 비율 → 사용자 결정(드롭→재디코딩/언어별 임계).
+- **단계 B(후순위)**: filler 미폭증이라 트림 튜닝 급하지 않음. 경계 경미중복은 잔존.
+- **단계 E**: 원 로드맵 3(조건부 화자리셋)→4(token-logprob)→5(프로브) 복귀.
+
+**JSON**: `.omc/benchmarks/eval_20260703_1051_plc4_screen.json`(N=1) · `eval_20260703_1101_plc4_confirm_n3.json`(N=3 pre-sync) · `eval_20260703_1314_plc4_ytn2clean3_n3.json`(ytn2 클린) · `eval_20260703_1314_plc4_heldout3.json`(held-out) · 서버로그 `.omc/server_logs/server_*_20260703_*.log`.

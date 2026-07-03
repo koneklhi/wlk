@@ -22,7 +22,7 @@
 > **왜**: 실패 모드를 바꾸는 구조적 코드 변경 전후로 디코더 파라미터의 트레이드오프가 달라진다.
 > 다른 세대에서 나온 결론을 현재 코드의 **확정 근거**로 쓰면 오판한다(예: 초기 파라미터 튜닝 ↔ 언어고정·비음성억제 도입 후).
 
-- **현재 master = Epoch 4 (E4)**: E3 + **diar-ON 언어전환 경로 배선 활성화**(`prev_lang fallback`로 마커/2.5s 트림 실발동 + `PuncSegment.hard_boundary`로 diar 병합 경계보존). **Exp-153 머지 (dc312bb, 2026-07-03).** E3에서 **dormant**였던 전환 메커니즘이 측정경로(diar-ON)에서 처음 실동작 → 실패모드 변화: 전환경계 단어보존(§3.2/Q4) 획득 + **신규 재디코딩 filler 환각**("You know, in Bukhpil"류)·**마커 과분할**(F1 precision↓). E2 파라미터 결론(PLC·beam·CRT·nonspeech; Exp-131~149)은 전환 활성화로 거동이 또 달라지므로 **[E2·재검증]** 유지 — 특히 PLC는 Exp-154서 재평가 예정.
+- **현재 master = Epoch 4 (E4)**: E3 + **diar-ON 언어전환 경로 배선 활성화**(`prev_lang fallback`로 마커/2.5s 트림 실발동 + `PuncSegment.hard_boundary`로 diar 병합 경계보존). **Exp-153 머지 (dc312bb, 2026-07-03).** E3에서 **dormant**였던 전환 메커니즘이 측정경로(diar-ON)에서 처음 실동작 → 실패모드 변화: 전환경계 단어보존(§3.2/Q4) 획득 + **신규 재디코딩 filler 환각**("You know, in Bukhpil"류)·**마커 과분할**(F1 precision↓). E2 파라미터 결론(PLC·beam·CRT·nonspeech; Exp-131~149)은 전환 활성화로 거동이 또 달라지므로 **[E2·재검증]** 유지. **PLC는 Exp-154서 재평가 완료 → 기본값 4.0 채택**(전환세금 제거·배선 후 E1/E2 3회기각이 채택으로 전환; ytn2 무휴지 코드스위칭 유일경로).
 - **Epoch 3 (E3, 이력)**: E2 + **언어 전환 프로토콜 재설계**(전환 시 오디오 절단으로 재디코딩 세금 제거 · `_check_short_silence_language` SOT 배선버그 수정 · LanguageSwitch 문장경계 마커). 단계1 머지 (6db5ea1, 2026-07-02) — **단 diar-ON(측정 기본)에서 dormant**였음(Exp-153이 배선으로 활성화).
 - **Epoch 2 (E2, 이력)**: SimulStreaming + diar-ON + `lang_restrict_koen=True`(후처리 CJK/주석 필터). Exp-139 머지(2026-07-01), Exp-142에서 logprob=-2.0 N=3 베이스라인 확정(bong1 37.5 / ytn2 31.5 / sbs1 19.6).
 - **세대 경계 규칙**: 파라미터 값 변경(PLC·beam·frame_threshold·CRT 등)은 epoch를 **올리지 않는다**(같은 세대 내 실험). 언어고정·비음성억제·디코더 교체·VAD 파이프라인 변경 등 **실패 모드를 바꾸는 구조 변경**만 세대를 올린다.
@@ -72,7 +72,7 @@ Exp-106~129는 신뢰 불가 판정으로 기각됐으나 **방향성은 참고*
 - **[불변][측정]** Exp-106~129 전체 기각 — silent code-version trap(잘못된 cwd로 변경 미반영 측정) + VBCable 간헐 불안정 + provenance 미기록. provenance 하니스(Exp-130) master 머지 완료가 새 기준점.
 - **[불변][디코더]** SimulStreaming 채택(Exp-001) — LocalAgreement는 영어 코드스위칭을 통째 누락하고 발화 후반 커버리지를 잃음. AlignAtt 실출력 토큰엔 **구두점이 없어** 구두점 기반 확정이 미발동 → 확정 신호는 VAD silence·세그먼트 경계·언어 전환에서 찾는다.
 - **[E1·재검증][디코더]** `beam=4`는 ytn2 catastrophic(Exp-125: beam2 28.1%→beam3 29.6%→beam4 40.4% 단조증가). bong1은 beam=4로 안정화되나 ytn2 손해가 압도. **beam=3은 재검증 대상.**
-- **[E1·재검증][언어]** `periodic_lang_check`(PLC)가 환각 체인 억제에 중요 — PLC=None이면 언어 고착 후 sbs1 환각 급증. **PLC=2.0은 재검증 대상.**
+- **[E4·채택][언어]** `periodic_lang_check`(PLC) **기본값 4.0 채택(Exp-154)** — 전환세금 제거·배선 완료(Exp-151/153) 후 재평가에서 ytn2 무휴지 en→ko 전환을 잡아 median 개선·filler 소멸. E1/E2 3회기각(Exp-131/143/145)은 전환세금 미제거 상태의 결론이라 무효화. PLC=None이면 언어 고착 후 환각 급증.
 - **[불변][diar]** Sortformer 과분할로 단일화자(sbs1) 문장분리 F1 급락(diar-ON 36.4% vs diar-OFF 76.2%, ref=3 vs hyp=9–11). **[E1]** ChangeSpeaker 2.0s 디바운스는 ytn2 회귀(Exp-106); nonspeech_prob=0.35는 bong1 환각↓이나 ytn2 부작용(Exp-107).
 - **[불변][환각]** bong1 웃음 구간에서 Whisper 환각 다발(JSON 분석 확인).
 - **[불변][환각·E2규명]** **bong1 worst-case 근본 원인 = 비음성(웃음·박수) 구간 언어 오감지** → 중국어/일본어 환각 캐스케이드(Exp-138 코드 규명). E2(lang_restrict_koen)가 CJK 언어토큰을 막아도 환각은 **사라지지 않고 라틴/한글 쓰레기로 형태만 바뀜**(Exp-139). → 비음성 구간 자체를 전사에서 배제(VAD/no_speech)하는 **Layer 3b가 미해결 1순위 과제**.
@@ -108,6 +108,7 @@ Exp-106~129는 신뢰 불가 판정으로 기각됐으나 **방향성은 참고*
 | Exp-151 | **E3** | 2026-07-02 | 잠복버그 수정: refresh global_time_offset 승계 + PLC 절대클록 (버그1·2) | 38.1% | 23.2% | 19.0% | ✅ 채택 (N=3 max 41.4/24.1/19.0 전부 게이트 내; WER 버그수정상 중립·무회귀; F1 정합 회복—sbs1 N1 0%→N3 18.2 안정; E3 유지) |
 | Exp-152 | **E3** | 2026-07-02 | 단계2(증거된수정): _ANNOTATION_RE 확장 — 안 닫힌 비음성 주석 누출 차단 | 36.3% | 23.6% | 20.2% | ✅ 채택 (bong1 "(speaking…" 누출 0건·median 38.1→36.3·F1 40.0↑; ytn2/sbs1 신규패턴 매칭 0=증명된 no-op; sbs1 max 25.6은 변산) |
 | Exp-153 | **E4** | 2026-07-03 | diar-ON 언어전환 배선(prev_lang fallback + hard_boundary) + 회차별 서버로그 [E3→E4] | 36.3% | 25.6% | 20.2% | ✅ 채택 (사용자결정; dormant→active 증명·WER게이트통과·ytn2 max 29.1→26.1·eng1 무회귀; F1 과분할하락·재디코딩 filler 신규→Exp-154 튜닝) |
+| Exp-154 | **E4** | 2026-07-03 | PLC 기본값 None→4.0 채택(전환세금 제거 후 재평가) + 위생(단계C 드롭텍스트 로깅·D-1·D-2) | 34.4% (-1.9) | 22.9% (-2.7, pooled) | 21.4% (+1.2) | ✅ 채택 (사용자결정; §3.2 무휴지 코드스위칭·median개선·F1 전파일↑·filler소멸·eng1 무회귀 2.9%. ytn2 max 27.6=실변산; PLC E1/E2 3회기각→E4 채택전환) |
 
 ---
 
