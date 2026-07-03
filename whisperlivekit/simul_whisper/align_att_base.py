@@ -561,7 +561,10 @@ class AlignAttBase(ABC):
         if lp_thr is not None and num_generated > 0:
             avg_lp = self._sum_logprobs_value(sum_logprobs) / num_generated
             if avg_lp < lp_thr:
-                logger.warning("[QualityGate] avg_logprob %.3f < %.3f — suppressing", avg_lp, lp_thr)
+                # 억제된 텍스트를 함께 로깅 (단계 C 계측: 정상 한국어가 잘못 버려지는 비율 산출용).
+                # 디코드는 warning 경로에서만 수행 → 드묾, 성능 영향 미미.
+                text = self.tokenizer.decode(hypothesis).strip()
+                logger.warning("[QualityGate] avg_logprob %.3f < %.3f — suppressing: %.200s", avg_lp, lp_thr, text)
                 return True
         if cr_thr is not None:
             from whisperlivekit.whisper.utils import compression_ratio

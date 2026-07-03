@@ -36,6 +36,7 @@ class MLXDecoderState:
     global_time_offset: float = 0.0
     cumulative_time_offset: float = 0.0
     first_timestamp: Optional[float] = None
+    pending_language_switch: Optional[float] = None  # CUDA state 패리티: 전환 경계 마커 arm 시각(초)
     lang_before_reset: Optional[str] = None
     last_attend_frame: int = 0
 

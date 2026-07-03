@@ -1,7 +1,10 @@
 # -*- coding: utf-8 -*-
 import json
+import logging
 import re
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 # 배포 환경 불변식: 한국어·영어만 존재.
 # CJK 한자·히라가나·가타카나 포함 세그먼트는 정의상 오언어 환각 → 통째 드롭.
@@ -125,6 +128,8 @@ def filter_segments(segments: list) -> list:
 
         # 불변식 2: CJK 한자/히라가나/가타카나 포함 세그먼트 → 오언어 환각, 통째 드롭
         if _CJK_KANA_RE.search(text):
+            # 버려진 텍스트를 로깅 (단계 C 계측: 오언어 드롭이 정상 한국어를 오탈하는지 감시).
+            logger.warning("[CJKDrop] CJK/kana 포함 세그먼트 드롭: %.200s", text)
             continue
 
         for bad in _HALLUCINATIONS:
