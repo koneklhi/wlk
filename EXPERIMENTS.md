@@ -76,6 +76,7 @@ Exp-106~129는 신뢰 불가 판정으로 기각됐으나 **방향성은 참고*
 - **[불변][diar]** Sortformer 과분할로 단일화자(sbs1) 문장분리 F1 급락(diar-ON 36.4% vs diar-OFF 76.2%, ref=3 vs hyp=9–11). **[E1]** ChangeSpeaker 2.0s 디바운스는 ytn2 회귀(Exp-106); nonspeech_prob=0.35는 bong1 환각↓이나 ytn2 부작용(Exp-107).
 - **[불변][환각]** bong1 웃음 구간에서 Whisper 환각 다발(JSON 분석 확인).
 - **[불변][환각·E2규명]** **bong1 worst-case 근본 원인 = 비음성(웃음·박수) 구간 언어 오감지** → 중국어/일본어 환각 캐스케이드(Exp-138 코드 규명). E2(lang_restrict_koen)가 CJK 언어토큰을 막아도 환각은 **사라지지 않고 라틴/한글 쓰레기로 형태만 바뀜**(Exp-139). → 비음성 구간 자체를 전사에서 배제(VAD/no_speech)하는 **Layer 3b가 미해결 1순위 과제**.
+- **[E4·규명][필터]** **QualityGate(avg_logprob<-2.0) 부당드롭 = 0%**(Q1 규명, Exp-154 하니스). 억제 텍스트 전수 분류(bong1 46·ytn2 33·sbs1 14) 결과 전부 ① 비음성 마커(laughter/applause/speaking/AUDIO) ② 문장부호·단일문자 ③ **최종 전사에 이미 존재하는 중복 재디코딩 조각** ④ 환각조각뿐 — 정상 한국어 유실 없음. → **언어별 logprob 임계·드롭→재디코딩 수정 불필요**(사용자 확인). ytn2 회차분산은 QualityGate가 아닌 다른 원인(ForeignLang 혼란/재디코딩 churn/실오인식).
 - **[불변][필터/반복]** master 유지 베이스라인 필터 = **Exp-002**(cross-batch stateful 반복)/**Exp-028**(단일음절 연속반복 억제+context 리셋)/**Exp-057**(배치 내 4-word 반복 드롭). 신규 언어특화 하드코딩보다 backend 대안 우선. `_filter_repetitions()`는 단일 `update()` 배치 내부만 동작 → cross-batch 반복은 stateful 필터 필요.
 
 ## 빠른 참조
