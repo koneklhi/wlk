@@ -1741,3 +1741,56 @@ PLC로 재감지 증가: `switch=True` bong1 14 · ytn2 9 · sbs1 2(Exp-153 smok
 | 45s | 45.0 | 1.667 | **0.037** | 3.54 |
 
 **게이트 판정: worst RTF 0.128 < 0.5 → 통과.** 단독 오프라인 재전사는 실시간 예산의 ~1/4~1/8, peak VRAM ~3.5GB(길이 무관). RTF은 버퍼 길이 단조비례 아님(30s>45s — whisper 30s-window 내부 토큰루프가 콘텐츠 의존; 길이효과 아님). **2-pass 여지 있음 → 2b(동시경합 VRAM/live RTF)·2c(language=auto 영어recall)는 사용자 합의 후 진행.** 실제 구현 착수는 부모 §7상 합의 필수. 스크립트: scratchpad/`rtf_microbench.py`.
+
+---
+
+## Exp-157 — 입력 볼륨 게인 스윕 측정 인프라 + 레벨 감도 규명 (2026-07-04) [E4] (인프라 채택 / 레벨-불변)
+
+원래 질문: 마이크/파일 볼륨 편차가 전사에 영향을 주는가, 음성 정규화가 필요한가. 파이프라인에 볼륨 보정이 전무(브라우저 `autoGainControl:false`·서버 `convert_pcm_to_float`는 `/32768` 스케일만)해 입력 레벨-WER 감도를 측정할 수단 자체가 없었음. **측정 인프라를 먼저 만들어 감도를 실측**(사용자 결정 "측정 먼저"). 브랜치 `exp/volume-gain-sweep`(beff8e1, 미머지). **whisperlivekit 파이프라인 무변경(scripts 측정 하니스만)이라 epoch 불변 E4**.
+
+**가설**: Whisper log-mel의 창별 자기정규화(`whisper/audio.py:155` `log_spec.max()-8.0`)로 절대 레벨에 둔감할 것 → 정규화 실이득 작음. 레벨이 실제로 무는 곳은 VAD threshold(0.3)·클리핑·저SNR 3곳으로 한정될 것.
+
+**변경 (측정 인프라만, 파이프라인 무변경)**:
+- `scripts/vbcable_test.py`: `apply_gain_db`(dB 게인·float32 재생·클리핑 비율 산출) + `run_browser_test(gain_db=)` + `--gain-db`.
+- `scripts/eval.py`: `--gain-db` 파일별 스윕(`nargs="+"`) + `FileResult.gain_db` + (file,gain) 집계·전사/서버로그 파일명 `_g<±d>dB` 태그. 하위호환(기본 `[0.0]`).
+- `scripts/audio_device.py`: `verify_loopback` 레벨 정량화(−20dBFS 톤 ±1dB **유니티 게인 검증**·`UNITY GAIN FAIL` 시 Windows 볼륨 왜곡 경고) + `last_loopback_measurement`.
+- docs(TESTING/DEPLOYMENT_OFFLINE/eval.md): 배포 마이크 레벨 가이드.
+
+**테스트 설정**: 경로 C, `--gain-db -12 -6 0 6`, 파일 bong1/ytn2/sbs1, diar-ON(sortformer)·CRT 3.0·PLC 4.0·beams 2, `--repeat 1`(스크리닝). preflight `verify_loopback` level −20.8dBFS(편차 −0.8dB) OK. 네이티브 통합레벨(LUFS): bong1 −14.5(TP +0.2 **소스클립**)·ytn2 −25.9·sbs1 −24.6.
+
+### 테스트 세트 결과 (게인 스윕, N=1, WER% / F1)
+
+| 파일 | −12dB | −6dB | 0dB(네이티브) | +6dB | 게인 경향 |
+|------|-------|------|--------------|------|-----------|
+| bong1 | 33.2 / .378 | 34.4 / .316 | 36.6 / .462 | 36.6 / .513 | 감쇠 미세개선(단조 ~3pp) |
+| ytn2 | 23.6 / .571 | **36.5 / .267** ⚠ | 23.6 / .571 | 22.7 / .600 | −12/0/+6 평탄 |
+| sbs1 | 17.3 / .364 | **28.0 / .000** ⚠ | 16.7 / .333 | 21.4 / .400 | −12/0/+6 평탄 |
+
+⚠ −6dB 지점은 **단일 회차 분산 이상치**(게인 효과 아님 — 각 파일 −12/0/+6이 서로 일치, bong1 −6도 단조 범위 내). 클리핑 비율: bong1@+6dB만 1.04%, 나머지 전부 0%. 절대레벨 커버리지: ytn2@−12 = −37.9 LUFS(매우 조용)에서도 VAD 미검출 없이 23.6% 유지 — 레벨-불변의 강한 증거.
+
+### 분석 (전사 내용 정성 대조, 0dB 네이티브 기준)
+
+**bong1** (0dB, WER 36.6%):
+- **환각/gibberish**: 전사 `"Malang, malang, goto, mandra, suuri…"` / 정답 `"말랑말랑한 것도 만들었죠…"` — 한국어 즉흥표현이 로마자 gibberish로.
+- **비언어→환각**: 전사 `"Dr. Bonwell is trying to explain"` / 정답 `"Director Bong…"` — 웃음/비음성 구간 오전사(이월핵심 bong1 웃음 환각 확인). 문말 `"(Music"` 누출.
+- **과분할**: ref 15문장 vs hyp 26 (F1 .462).
+
+**ytn2** (0dB, WER 23.6%):
+- **방송 signoff 환각**: 전사 `"MBC 뉴스 우선입니다 왕성한 연합방 테세를…"` / 정답 `"…우선 왕성한 연합방위태세를…"` — 없는 뉴스 클로징 삽입(−6dB선 `"MBC 뉴스 김정현입니다…고맙습니다 고마워요"` 반복으로 폭주=분산 이상치).
+- **코드스위칭**: en→ko 전환 자체는 대체로 성공. 오인식 `"비핵카"`(비핵화)·`"취재의 논의"`(취지의).
+
+**sbs1** (0dB, WER 16.7%):
+- **단어 오인식**: 전사 `"미국 6군 전쟁 대학"` / 정답 `"미국 육군 전쟁 대학"` — 육군→6군(단어대치 사전 대상). `"연구적인 지상 플랫폼"`/정답 `"영구적인"`.
+- **diar 과분할**: ref 3문장 vs hyp 11 (F1 .333, 이월핵심 sbs1 과분할 확인). 영어 인용 처리 정상.
+
+**이번 변경 영향**: 측정 인프라 추가이며 **파이프라인 무변경** → 실패 모드는 기존 그대로(bong1 웃음/gibberish 환각·과분할, ytn2 방송 signoff 환각·−6dB 분산폭주, sbs1 육군→6군·diar 과분할). **입력 레벨(±12dB)은 이 실패 모드들을 개선·악화시키지 않음** — 게인 무관 동일 패턴 반복. 레벨-불변 확증.
+
+### 판정 (측정 인프라 채택 / 서버 AGC 미착수)
+- **정량**: 게인 감도(~3pp, bong1만 단조) << 회차 변동성(10~14pp, −6dB 이상치). 정상 범위 레벨은 WER 무영향. 가설 확증(Whisper 창별 자기정규화).
+- **인프라 채택**: 커밋 beff8e1. 특히 `verify_loopback` 유니티 게인 검증은 앞으로 모든 경로 C 측정에서 Windows 볼륨 왜곡을 차단 → 측정 신뢰성 상시 향상.
+- **서버측 AGC 미착수**: WER 이득 없음. 플랜 "감도가 분산 이내면 문서화만" 적용. §4 목표필수기능 조항으로 자율기각 대신 사용자 확인 → **"문서화+인프라 커밋"** 선택. 잔여 가치는 WER이 아니라 배포 마이크 극단 오설정(볼륨 10%·심한 클리핑) 절벽에 대한 로버스트니스(§3.2)이며, 이 절벽은 이번 ±12dB 스윕이 측정하지 않음.
+
+### 다음
+- (보류) 극단 구간(정상 범위 밖 −24…+18dB) 스윕 → 레벨 절벽 위치 규명 → 경량 세이프티 클램프 필요성 판단. 배포 마이크 오설정이 실제 우려로 관측될 때만 진행.
+
+**JSON**: `.omc/benchmarks/gain_sweep_screen.json` · 콘솔로그 `.omc/gain_sweep_screen_console.log`(gain/clipped·verify_loopback level) · 서버로그 `.omc/server_logs/server_*_C_g*dB_R1_*.log`.
