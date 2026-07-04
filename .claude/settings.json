@@ -2,7 +2,22 @@
   "permissions": {
     "allow": ["PowerShell"]
   },
+  "env": {
+    "UV_NO_SYNC": "1"
+  },
   "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash|PowerShell",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$d=$env:CLAUDE_PROJECT_DIR; if(-not $d){$d='c:/Users/A040-000-0001/Desktop/260605wlk/wlk'}; & \"$d/.claude/hooks/block-uv-mutate.ps1\"",
+            "shell": "powershell"
+          }
+        ]
+      }
+    ],
     "Stop": [
       {
         "hooks": [
