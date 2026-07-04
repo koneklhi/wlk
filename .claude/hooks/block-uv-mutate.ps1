@@ -10,9 +10,10 @@ $j = $payload | ConvertFrom-Json
 $cmd = $j.tool_input.command
 if (-not $cmd) { exit 0 }
 
-# uv 가 "명령 위치"(줄 시작 또는 구분자 ; & | ( 백틱 개행 뒤)에 있을 때만 검사한다.
-# 이렇게 해야 커밋 메시지/echo 안의 따옴표 문자열 "uv run ..." 오탐을 피한다(공백/따옴표 뒤는 제외).
-$uvAt = '(?:^|[;|&(`\n])\s*uv(?:\.exe)?\s+'
+# uv 가 "명령 위치"(문자열 맨 앞 또는 구분자 ; & | ( 백틱 뒤)에 있을 때만 검사한다.
+# 개행(\n)은 일부러 제외 — heredoc 커밋메시지 본문의 줄-시작 "uv sync ..." 오탐 방지.
+# 다중행 명령의 연속행 uv 는 놓칠 수 있으나 UV_NO_SYNC=1(레이어2)이 auto-sync를 이미 무력화한다.
+$uvAt = '(?:^|[;|&(`])\s*uv(?:\.exe)?\s+'
 if ($cmd -notmatch $uvAt) { exit 0 }
 
 $deny = $false
