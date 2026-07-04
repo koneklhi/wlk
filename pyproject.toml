@@ -76,9 +76,11 @@ diarization-diart = [
 dev = [
     "pytest>=9.0.2",
     "rich>=14.3.3",
+    "ruff>=0.9",
 ]
 
 [tool.uv]
+default-groups = ["dev"]
 conflicts = [
     [
         { extra = "cpu" },
