@@ -1725,3 +1725,19 @@ PLC로 재감지 증가: `switch=True` bong1 14 · ytn2 9 · sbs1 2(Exp-153 smok
 - 단계 5 프로브(2a RTF·2b 동시경합·2c 언어recall)로 진행 — 자율 허용 범위(사전 프로브)까지, 보고 후 정지.
 
 **JSON**: `.omc/benchmarks/eval_20260704_step4_tokenlp_probe.json` · 서버로그 `worktrees/token-logprob-gate/.omc/server_logs/server_*_C_R1_*.log`([TokenLP]).
+
+---
+
+## 단계5 프로브 2a — 2-pass 재전사 RTF 마이크로벤치 (2026-07-04) [E4] (프로브·미채택)
+
+단계 5(2-pass 재전사)는 major 방향 전환이라 **자율 착수 금지, 사전 프로브만 허용**. 사용자 승인 하에 2a(RTF 게이트)만 실행, 보고 후 정지.
+
+**방법**: `whisperlivekit.whisper` 표준 transcribe(simul_whisper 동일 가중치·구현) / `whisper-large-v3-turbo`(로컬 fp16) / beam=2, language=ko / RTX 3080 / ytn2 20s 오프셋 발화 클립 15·30·45s / warmup1+timed3 median / `torch.cuda.max_memory_allocated`.
+
+| 버퍼 | 오디오 s | median decode s | RTF | peak VRAM GB |
+|------|---------|-----------------|-----|--------------|
+| 15s | 15.0 | 0.833 | **0.056** | 3.53 |
+| 30s | 30.0 | 3.828 | **0.128** | 3.54 |
+| 45s | 45.0 | 1.667 | **0.037** | 3.54 |
+
+**게이트 판정: worst RTF 0.128 < 0.5 → 통과.** 단독 오프라인 재전사는 실시간 예산의 ~1/4~1/8, peak VRAM ~3.5GB(길이 무관). RTF은 버퍼 길이 단조비례 아님(30s>45s — whisper 30s-window 내부 토큰루프가 콘텐츠 의존; 길이효과 아님). **2-pass 여지 있음 → 2b(동시경합 VRAM/live RTF)·2c(language=auto 영어recall)는 사용자 합의 후 진행.** 실제 구현 착수는 부모 §7상 합의 필수. 스크립트: scratchpad/`rtf_microbench.py`.
