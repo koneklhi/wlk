@@ -1696,3 +1696,32 @@ PLC로 재감지 증가: `switch=True` bong1 14 · ytn2 9 · sbs1 2(Exp-153 smok
 - **단계 4**: token-logprob go/no-go 프로브로 진행.
 
 **JSON**: `.omc/benchmarks/eval_20260703_1403_step3_condreset_screen.json` · 서버로그 `worktrees/conditional-speaker-reset/.omc/server_logs/`.
+
+---
+
+## Exp-156 — 단계4: token-logprob 게이트 go/no-go 프로브 (2026-07-04) [E4] ⛔ NO-GO (스킵)
+
+원 로드맵 단계 4(제안 D). 세그먼트급 QualityGate 위에 **per-token logprob 게이트**로 bong1 잔존 garbage를 더 잡을 수 있는지 프로브. 부모 §3 단계 4 규정대로 **구현 전 go/no-go 프로브 필수**(배관 大). 브랜치 `exp/token-logprob-gate`(계측 로깅만, 미머지·미채택).
+
+### 프로브 방법
+- `align_att_base.py` `_update_tokens` 직후 read-only 로깅 추가(`[TokenLP] tok lp special`, --trace-tokens DEBUG 게이트, 동작 불변). top-beam 선택토큰의 `log_softmax(logits)[tok]`.
+- 경로 C N=1(diar-ON, PLC=4.0). WER 정합: bong1 34.1·ytn2 28.6·sbs1 19.0(baseline대 — 로깅이 디코드 불변임 확인).
+
+### per-token logprob 분포 (텍스트 토큰만)
+| 파일 | n | median | p5 | p25 | frac<-2.0 | frac<-3.0 | min |
+|------|---|--------|-----|-----|-----------|-----------|-----|
+| bong1 | 1103 | -0.20 | -3.24 | -0.86 | 10.1% | 5.5% | -17.71 |
+| ytn2 | 748 | -0.09 | -2.67 | -0.52 | 8.0% | 4.7% | -13.39 |
+| sbs1 | 829 | -0.07 | -1.88 | -0.30 | 4.7% | 3.4% | -16.57 |
+
+### 판정 (NO-GO — 분포 완전 겹침)
+저-logprob 꼬리(<-2.0)를 정상/환각 분류:
+- **정상 단어가 garbage만큼(혹은 더) 낮음**: bong1 `holding`(-17.4)·`protagonist`(-15.5/-8.3)·`was`(-12.7)·`제가`(-10.4)·`많이`(-9.3)·`thousand`(-8.3)·`trying`(-4.0)·`I`(다수) — 전부 정답에 존재하는 정상 토큰인데 clear garbage(`LAUGHS`-17.5·`웃음`-10.3·`�`)와 동일 logprob 구간.
+- **분리 가능 garbage는 이미 처리됨**: 비음성 주석(`[`·`]`·`(`·`LAUGHS`·`웃음`·`speaking`)은 기존 `_ANNOTATION_RE`(Exp-152)·CJK 필터·QualityGate가 이미 억제.
+- **근본 이유**: 코드스위칭·다화자 환경에서 정상 토큰이 **언어경계·난이도로 저신뢰**라 환각과 logprob로 구분 불가. bong1 잔존 garbage는 웃음 캐스케이드(Exp-138, **정상 신뢰도** 오전사)라 logprob 무력.
+- **결론: ⛔ NO-GO**. 어떤 per-token logprob 임계도 §3.2 핵심 전환경계 정상단어(`holding`·`protagonist`)를 드롭 → 코드스위칭 파손 위험. 단계 C(QualityGate 부당드롭 0%)와 정합. 부모 doc대로 **단계 4 전체 스킵**, 배관 미착수. token logprob 방향은 이 환경(코드스위칭)에 부적합으로 종료.
+
+### 다음
+- 단계 5 프로브(2a RTF·2b 동시경합·2c 언어recall)로 진행 — 자율 허용 범위(사전 프로브)까지, 보고 후 정지.
+
+**JSON**: `.omc/benchmarks/eval_20260704_step4_tokenlp_probe.json` · 서버로그 `worktrees/token-logprob-gate/.omc/server_logs/server_*_C_R1_*.log`([TokenLP]).
