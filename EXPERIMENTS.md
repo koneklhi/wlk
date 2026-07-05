@@ -48,25 +48,27 @@
 
 ## 현재 베이스라인 (Epoch 5 — turbo, 확정)
 
-> **turbo 기질 baseline (2026-07-05, Exp-160 최신)** — PLC 기본값 4.0→None(비활성) 전환(Exp-160) 이후 수치가 **현재 master 기본 설정 기준**. diar-ON, CRT=3.0, **PLC=None(기본)**, beams=2.
-> **확정 게이트(max)**: bong1≤33.5% / ytn2≤38.4% / sbs1≤30.4% (Exp-160 N=3, PLC=None 기준으로 갱신).
-> JSON: `.omc/benchmarks/eval_20260705_2255_plcdisabled_N3.json`(테스트 N=3) · `eval_20260705_2318_plcdisabled_heldout.json`(held-out)
+> **turbo 기질 baseline (2026-07-06, Exp-161 최신)** — PLC 기본값 None 전환(Exp-160) + `audio_max_len` 30.0→15.0 전환(Exp-161) 이후 수치가 **현재 master 기본 설정 기준**. diar-ON, CRT=3.0, **PLC=None**, **audio_max_len=15.0(기본)**, beams=2.
+> **확정 게이트(max)**: bong1≤30.5% / ytn2≤34.5% / sbs1≤16.1% (Exp-161 N=3로 갱신 — 3파일 모두 개선).
+> JSON: `.omc/benchmarks/eval_20260705_2338_audiomax15_N3.json`(테스트 N=3) · `eval_20260706_0002_audiomax15_heldout.json`(held-out)
 
 | 파일 | WER median | WER max | WER min | WER stdev | F1 median | 측정 N |
 |------|-----------|---------|---------|-----------|-----------|--------|
-| bong1 | 30.5% | 33.5% | 27.5% | 3.0% | 51.3% | 3 |
-| ytn2  | **30.0%** | 38.4% | 24.1% | 7.2% | 50.0% | 3 |
-| sbs1  | 23.2% | 30.4% | 9.5% | 10.6% | 33.3% | 3 |
-| ytn1(held-out) | 22.7% | — | — | — | 54.5% | 1 |
-| eng1(held-out) | 7.6% | — | — | — | 0.0% | 1 |
+| bong1 | 30.5% | 30.5% | 29.3% | 0.7% | 50.0% | 3 |
+| ytn2  | **28.1%** | 34.5% | 24.6% | 5.0% | 38.5% | 3 |
+| sbs1  | **14.9%** | 16.1% | 13.1% | 1.5% | 16.7% | 3 |
+| ytn1(held-out) | 21.5% | — | — | — | 38.1% | 1 |
+| eng1(held-out) | 4.8% | — | — | — | 0.0% | 1 |
 
-**테스트 평균(median)**: WER 27.9% (PLC=4.0 시절 28.7%에서 소폭 개선, ytn2가 주도)
+**테스트 평균(median)**: WER 24.5% (Exp-160 직후 27.9%에서 대폭 개선, sbs1이 주도) · **분산 대폭 감소**(전 파일 stdev 1~5%대 — worst-case 안정성 확보, §3.8 최우선 원칙과 정합). **sbs1 실시간 lag**: 41s → **2s대**로 안정화(Exp-161).
+
+**참고(audio_max_len=30.0 시절, PLC=None만 적용 — Exp-160, `audio_max_len` 변경으로 대체됨)**: bong1 30.5%/max33.5%/stdev3.0 · ytn2 30.0%/max38.4%/stdev7.2 · sbs1 23.2%/max30.4%/stdev10.6 · ytn1(held-out) 22.7% · eng1(held-out) 7.6%.
 
 **참고(PLC=4.0 시절 E5 baseline, Exp-158/159 — PLC 기본값 변경으로 대체됨)**: bong1 28.1%/max34.7% · ytn2 41.9%/max47.3% · sbs1 16.1%/max31.0% · ytn1(held-out) 33.1% · eng1(held-out) 3.8%. PLC=None 대비 bong1·sbs1은 median이 더 좋았으나(단 sbs1은 고분산 파일), **ytn2는 PLC=4.0의 스퓨리어스 전환이 방송클로징 환각을 유발**해 크게 나빴다(Exp-160 규명).
 
 **참고(base 기질 E4 baseline, 무효화됨 — Exp-153 N=3)**: bong1 36.3%/max37.5 · ytn2 25.6%/max26.1 · sbs1 20.2%/max26.8. turbo 대비 bong1·sbs1은 개선, **ytn2는 대폭 회귀**(코드스위칭 스캐폴딩이 base 거동에 맞춰 튜닝됐던 게 원인 추정 — 재조사 필요).
 
-**⚠️ 실시간 lag 주의**: sbs1은 밀집 발화 구간에서 lag 최대 41s 누적 관측(RTX 3080, 3회 재현: 41/11/20s). timeout은 없었으나 실사용 지연 부담 — 배포(RTX 5090) 성능으로 재확인 필요.
+**✅ 실시간 lag 해결(Exp-161)**: sbs1 lag 41s(Exp-158, RTX 3080) → `audio_max_len` 30.0→15.0 전환으로 **2s대 안정화**(3회 재현: 2.04/2.03/2.17s). 배포(RTX 5090)는 더 여유 있을 것으로 예상되나 재확인 권장.
 
 ## 이월 핵심사실 (distilled — 상세는 LOG / [PHASE2_EXPERIMENTS.md])
 
@@ -87,6 +89,7 @@
 - **[E5·신규][모델무관·유지]** `SimulStreamingASR.__init__`의 `model_dir` 배선 버그(Exp-158) 수정 후, 다른 백엔드(qwen3/voxtral)와 동일하게 `model_dir or model_path` 폴백 패턴 적용됨 — 향후 SimulStreaming 관련 모델 경로 변경 시 이 패턴 유지.
 - **[E5·규명][base전용·재검증]** turbo 전환으로 코드스위칭 실패모드 자체가 변함: ytn2에서 방송 클로징류(Exp-157서 "MBC 뉴스…") 대신 **"Thank you" 연쇄 필러 환각**이 우세하게 관측(Exp-158) — turbo가 불확실 구간에서 "더 그럴듯하게" 필러를 생성하는 경향으로 추정. base용으로 튜닝된 코드스위칭 스캐폴딩(언어전환 프로토콜·PLC)이 이 신규 실패모드에 적절한지 재검증 필요.
 - **[E5·규명][모델무관·유지]** "Thank you" 필러 폭주가 **bong1·ytn2에 이어 ytn1(held-out)에서도 재현**(Exp-159) — turbo 전반의 일반적 실패모드로 확정(3개 파일 공통). 단 ytn2의 **catastrophic 콘텐츠 대체(방송클로징 환각)는 쌍둥이 ytn1에서 재현되지 않음** — 코드스위칭 일반의 문제가 아니라 ytn2 파일 고유의 음향/정렬 난이도(`audio-feature-analysis` 미머지 도구의 앵커율 46% 발견과 정합)가 만든 최악 사례로 추정.
+- **[E5·채택][성능][모델무관·유지]** `audio_max_len` 기본값 **30.0→15.0 채택(Exp-161)** — sbs1 lag 41s(Exp-158)의 원인은 매 infer() 호출마다 버퍼 전체를 재인코딩하는 비용 누적으로 규명. 15.0으로 낮춰 lag 2s대 안정화 + 3파일 모두 WER median·max·stdev 개선(특히 sbs1 23.2%→14.9%, stdev 10.6→1.5). 원인이 "인코딩 비용 대 버퍼 크기"라는 압축가능한 계산량 문제이므로 모델(base/turbo) 무관하게 유효할 가능성 높음(단 base에선 미검증).
 
 ## 빠른 참조
 
@@ -95,6 +98,7 @@
 
 | Exp | Epoch | 날짜 | 변경 | bong1 WER med | ytn2 WER med | sbs1 WER med | 판정 |
 |-----|-------|------|------|--------------|-------------|-------------|------|
+| Exp-161 | **E5** | 2026-07-06 | audio_max_len 기본값 30.0→15.0 — sbs1 실시간 lag(41s) 해결 | 30.5% (동일, stdev 3.0→0.7 안정화) | **28.1%** (30.0%에서 추가개선) | **14.9%** (23.2%에서 대폭개선) | ✅ 채택 (3파일 모두 max·median·stdev 전부 개선 — 가장 명확한 채택; lag 41s→2s대) |
 | Exp-160 | **E5** | 2026-07-05 | PLC 기본값 4.0→None(비활성) — ytn2 스퓨리어스 전환→방송클로징 환각 근본원인 규명 | 30.5% (28.1%에서 소폭악화) | **30.0%** (41.9%에서 -11.9pp 개선) | 23.2% (16.1%에서 악화, max는 개선) | ✅ 채택 (①max 3파일 모두 미회귀 ②ytn2 median·max 확실개선; PLC=2.0은 N=3서 재현실패해 기각) |
 | Exp-159 | **E5** | 2026-07-05 | held-out(ytn1/eng1) 확정 측정, 코드변경 없음 — P0 완료 | — | — | — | ℹ️ baseline 확정 (ytn1 33.1%로 ytn2보다 8.8pp 양호 → ytn2 회귀는 파일고유 난이도 쪽; eng1 3.8%로 영어 회귀 없음; 게이트 max 변경 없음) |
 | Exp-158 | **E5** | 2026-07-05 | model_dir 배선버그 수정 + no_grad stall 수정 — turbo 기질 전환 [E4→E5] | 28.1% (base 대비 -8.2) | 41.9% (base 대비 +16.3 ❌) | 16.1% (base 대비 -4.1) | ✅ 채택 (correctness 버그 — WER 게이트 무관 필수, 폐쇄망 배포 블로커였음; ytn2 회귀는 코드스위칭 스캐폴딩 base종속 추정, 별도 재조사 필요; held-out 미측정) |

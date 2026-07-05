@@ -2023,3 +2023,45 @@ held-out(ytn1/eng1) **미측정** — 다음 세션 1순위.
 3. P2(sbs1 lag, `audio_max_len` 우선 용의자), P3(beam/CRT 등 잔여 파라미터 재검증) 착수.
 
 **JSON**: `.omc/benchmarks/eval_20260705_2135_plc_disabled.json`(PLC=999 N=1) · `eval_20260705_2144_plc_2s.json`(PLC=2.0 N=1) · `eval_20260705_2152_plc_8s.json`(PLC=8.0 N=1) · `eval_20260705_2202_repeatfilter_langagnostic.json`/`_r2.json` · `eval_20260705_2221_confraise.json` · `eval_20260705_2231_plc2s_N3.json`(PLC=2.0 N=3, 기각) · `eval_20260705_2255_plcdisabled_N3.json`(PLC=None N=3, 채택) · `eval_20260705_2318_plcdisabled_heldout.json`. 워크트리 `worktrees/repeat-filter-langagnostic`(exp/repeat-filter-langagnostic@1a66eab)·`worktrees/langswitch-confidence-raise`(exp/langswitch-confidence-raise@db800ce) 보존(미결정/보류).
+
+---
+
+## Exp-161 — sbs1 실시간 lag 해결: audio_max_len 30.0→15.0 전환 [E5, 코드변경 있음] (2026-07-06)
+
+**가설**: Exp-158에서 관측된 sbs1 실시간 lag(RTX 3080, 최대 41s)의 원인은 turbo 인코더가 매 `infer()` 호출마다 버퍼 전체(최대 `audio_max_len`=30.0s)를 재인코딩하는 데서 오는 처리시간 누적으로 추정(§GOAL_TURBO_AUTONOMOUS.md P2). `audio_max_len`을 낮춰 호출당 재인코딩 비용을 줄이면 lag가 완화되는지 검증한다.
+
+**도구 준비**: `scripts/eval.py`가 `--audio-max-len`/`--frame-threshold`를 지원하지 않아 `--periodic-lang-check`와 동일한 패턴으로 패스스루 플래그 추가(브랜치 `exp/eval-add-lag-flags` → master 머지, 커밋 `16ecca5`).
+
+### 스크리닝 (N=1, sbs1 단독) — `audio_max_len=15.0`
+
+sbs1 WER 19.0%(정상 범위, 회귀 없음). 서버로그 lag가 시종 0.00s(1회 0.05s 블립) — 기존 관측된 2.32→31.15s 누적 패턴과 대조적으로 **사실상 lag 소멸**.
+
+### 채택 확정 (N=3, 3파일 전체) — `audio_max_len=15.0` vs baseline(30.0, PLC=None 공통)
+
+| 파일 | baseline median/max/stdev | 15.0 median/max/stdev |
+|------|---------------------------|------------------------|
+| bong1 | 30.5% / 33.5% / 3.0% | 30.5% / **30.5%** / **0.7%** |
+| ytn2 | 30.0% / 38.4% / 7.2% | **28.1%** / **34.5%** / 5.0% |
+| sbs1 | 23.2% / 30.4% / 10.6% | **14.9%** / **16.1%** / **1.5%** |
+
+**lag 재확인(3회차 서버로그 최대값)**: 2.04s / 2.03s / 2.17s — 기존(최대 41s, Exp-158) 대비 약 15~20배 감소, 3회 모두 일관되게 안정.
+
+**held-out(단회)**: ytn1 22.7%→**21.5%**(개선) / eng1 7.6%→**4.8%**(개선, base 참고치 3.8%에 근접).
+
+### 분석 (정성)
+
+정량 결과가 전 파일·전 지표(median·max·stdev)에서 일관되게 개선되거나 동일 수준이라 정성 대조로 확인할 회귀 패턴이 없음. sbs1 F1은 다소 낮게 유지되나(15~18%대) 이는 diar-ON 문장경계 과분할이라는 기존에 규명된 별개 이슈([불변][diar] 이월 핵심사실)이지 이번 변경의 부작용이 아님 — WER 개선과 무관하게 유지되는 수치임을 확인.
+
+### 채택 (조건) 판정
+
+**`audio_max_len` 기본값 30.0→15.0 채택**. ①max 미회귀 — 3파일 모두 통과(오히려 전부 개선). ②median — bong1 동일, ytn2·sbs1 개선(sbs1 대폭). **분산도 3파일 모두 대폭 감소**(worst-case 안정성 — §3.8 최우선 원칙과 직접 정합) — 이번 세션 중 가장 명확한(ambiguous하지 않은) 채택 사례.
+
+**구현**: `whisperlivekit/parse_args.py` `--audio-max-len` 기본값 `30.0`→`15.0`. 브랜치 `exp/audiomax-lag-fix` → master 머지(`--no-ff`, 커밋 `cbdc562`). 연동 문서 확인 결과 `docs/TESTING.md`·`DEPLOYMENT_OFFLINE.md`·`ROADMAP.md`에 `audio-max-len` 언급 없어 추가 갱신 불필요.
+
+### 다음 가설
+
+1. `langswitch-confidence-raise`(Exp-160에서 보류)의 sbs1 lag 급증(17→31s)이 이번 `audio_max_len=15.0`으로도 해소되는지 재확인 가치 있음(원인이 buffer 크기였다면 해소될 것).
+2. P3 — 잔여 파라미터(beam/CRT/logprob) 재검증 착수.
+3. `repeat-filter-langagnostic`(Exp-160 미결정) cross-batch phrase-level 재설계 시도.
+
+**JSON**: `.omc/benchmarks/eval_20260705_2335_sbs1_audiomax15.json`(N=1 스크리닝) · `eval_20260705_2338_audiomax15_N3.json`(N=3 확정) · `eval_20260706_0002_audiomax15_heldout.json`(held-out). 서버로그 `.omc/server_logs/server_sbs1_C_R{1,2,3}_20260705_23*.log`.
