@@ -2012,6 +2012,8 @@ held-out(ytn1/eng1) **미측정** — 다음 세션 1순위.
 
 **구현**: `whisperlivekit/parse_args.py` — `--periodic-lang-check`에 `_optional_float` 커스텀 타입 추가(`'none'` 문자열 파싱 지원, 기존 `type=float`로는 CLI에서 실제 `None` 전달이 불가능했던 결함 수정), 기본값 `4.0`→`None`. 브랜치 `exp/plc-disable-default` → master 머지(`--no-ff`, 커밋 `5715875`). 연동 문서(`docs/TESTING.md`·`docs/DEPLOYMENT_OFFLINE.md`·`ROADMAP.md`·`scripts/closed_test.py` 도움말) 동일 커밋에서 갱신.
 
+**후속 수정(정합성)**: `scripts/eval.py` 자체 argparse의 `--periodic-lang-check` 기본값이 `4.0`으로 별도 하드코딩돼 있어(parse_args.py와 비동기화), 플래그 미지정 시 eval.py가 항상 서버에 `--periodic-lang-check 4.0`을 강제 전달 — 새 서버 기본값(None)이 조용히 무시되는 버그였다. 기본값을 `None`으로 동기화(브랜치 `exp/eval-plc-default-sync` → master 머지, 커밋 `d113fde`). 이 세션의 PLC=999/2.0/8.0 스크리닝·N=3 측정은 전부 `--periodic-lang-check`를 명시적으로 지정했으므로 위 결과 자체는 영향 없음 — 영향 범위는 "향후 플래그 미지정 측정"뿐.
+
 **기각**: PLC=2.0(강화) — N=3 확정에서 N=1 스크리닝 신호 재현 실패. `repeat-filter-langagnostic`(언어무관 반복필터) — 두 스크리닝 모두 필터 미발동으로 효과 검증 불가(기각이 아니라 **미결정** — 워크트리 보존, 후속 재시도 여지). `langswitch-confidence-raise`(확신도 상향) — sbs1 게이트 초과 위험신호로 후순위 보류(워크트리 보존).
 
 ### 다음 가설
