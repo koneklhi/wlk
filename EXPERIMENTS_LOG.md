@@ -1948,3 +1948,76 @@ held-out(ytn1/eng1) **미측정** — 다음 세션 1순위.
 2. P2 — sbs1 lag(`audio_max_len` 우선 용의자), P3 — 파라미터 재검증(P1 이후).
 
 **JSON**: `.omc/benchmarks/eval_20260705_2126_heldout_e5.json` · 서버로그 `.omc/server_logs/server_{ytn1,eng1}_C_R1_20260705_21*.log`.
+
+---
+
+## Exp-160 — ytn2 회귀 원인 규명: PLC(periodic_lang_check) 스퓨리어스 전환이 방송클로징 환각 유발 [E5, 코드변경 있음] (2026-07-05)
+
+**세션 메모**: 이 실험 착수 직전 공유 `.venv`가 손상돼(Lib/pyvenv.cfg 소실) 측정이 일시 불가했다 — 무인 세션 규칙(§4.5)에 따라 자율 복구하지 않고 대기하던 중 사용자가 복귀해 "venv 복구 진행" 지시, `uv sync --extra diarization-sortformer --extra vbcable --extra cu128`로 정상 복구(torch 2.11.0+cu128 확인) 후 재개. 상세는 `docs/GOAL_TURBO_AUTONOMOUS.md` §9 참조.
+
+**가설**: Exp-158에서 확인된 ytn2 대폭회귀(+16.3pp)의 원인이 base용으로 튜닝된 언어전환 프로토콜·PLC(periodic_lang_check_secs, 기본 4.0)가 turbo의 신규 실패모드(필러/방송클로징 환각)와 나쁘게 상호작용하기 때문인지 검증한다. 단순화(PLC 완화/비활성)·강화(반복필터 언어확장·확신도 상향) 두 방향을 대조한다.
+
+### 스크리닝 (N=1, 4건 — 코드변경 없음 3건 + 워크트리 2건)
+
+| 후보 | 방향 | bong1 | ytn2 | sbs1 | 비고 |
+|------|------|-------|------|------|------|
+| PLC=999(사실상 비활성)* | 단순화 | 28.1% | **27.6%** | 24.4% | ytn2 대폭개선 신호 |
+| PLC=2.0 | 강화 | 27.8% | **28.1%** | 26.2% | F1 최고(58.3%), ytn2 대폭개선 신호 |
+| PLC=8.0 | 완화 | 32.3% | 39.9% | 21.4% | 개선 없음(baseline과 유사) |
+| `repeat-filter-langagnostic`(1회차) | 강화 | 31.1% | 29.6% | **80.4%(하니스 버그)** | BatchRepeatFilter 0회 발동 — 필터 미관여 |
+| `repeat-filter-langagnostic`(재측정) | 강화 | 23.6% | 25.1% | 15.5% | BatchRepeatFilter 이번에도 0회 발동 — **순수 변동성, 효과 미입증** |
+| `langswitch-confidence-raise` | 단순화 | 26.3% | 28.1% | **47.0%(게이트 초과)** | sbs1 lag 17→31s 급증 동반 — 원인 불명확(기존 lag 이슈 가능성) |
+
+*CLI `type=float`라 실제 `None` 전달 불가 — 999s(클립 길이 초과)로 근사.
+
+**중요 진단**: `repeat-filter-langagnostic`는 두 스크리닝 모두에서 `[BatchRepeatFilter]` 로그가 **0회** — 언어무관화 변경이 단 한 번도 발동하지 않았다. 즉 이 두 실행의 수치 변화(특히 ytn2 개선)는 **코드 변경과 무관한 순수 실행 변동성**이다. 이는 N=1 스크리닝의 근본적 한계를 재확인시키는 사례.
+
+### 채택 확정 (N=3) — PLC만
+
+**PLC=2.0(강화)**:
+
+| 파일 | R1 | R2 | R3 | median | max | min | stdev |
+|------|-----|-----|-----|--------|-----|-----|-------|
+| bong1 | 23.3% | 29.0% | 31.4% | 29.0% | 31.4% | 23.3% | 4.2% |
+| ytn2 | 46.8% | 40.4% | 46.8% | **46.8%** | 46.8% | 40.4% | 3.7% |
+| sbs1 | 29.8% | 26.2% | 25.6% | 26.2% | 29.8% | 25.6% | 2.3% |
+
+→ **N=1 스크리닝(28.1%)이 완전히 재현 실패**. ytn2 median이 오히려 baseline(41.9%)보다 나쁨. sbs1도 median 일관 악화. **기각.**
+
+**PLC=None(사실상 비활성, 단순화)**:
+
+| 파일 | R1 | R2 | R3 | median | max | min | stdev | vs baseline(PLC=4.0) |
+|------|-----|-----|-----|--------|-----|-----|-------|------------------------|
+| bong1 | 30.5% | 27.5% | 33.5% | 30.5% | 33.5% | 27.5% | 3.0% | median +2.4pp, max **-1.2pp** |
+| ytn2 | 30.0% | 38.4% | 24.1% | **30.0%** | 38.4% | 24.1% | 7.2% | median **-11.9pp**, max **-8.9pp** |
+| sbs1 | 23.2% | 9.5% | 30.4% | 23.2% | 30.4% | 9.5% | 10.6% | median +7.1pp, max **-0.6pp** |
+
+→ **3파일 모두 max 미회귀**(①1순위 기준 통과). ytn2는 median·max 모두 확실히 개선(P1 최우선 목표 직결). bong1은 거의 중립, sbs1은 median 악화하나 max는 오히려 baseline보다 낮음(sbs1은 원래 고분산 파일 — stdev 10.6%).
+
+**held-out(단회)**: ytn1 33.1%→**22.7%**(-10.4pp, ytn2와 동일 개선 방향 재확인) / eng1 3.8%→7.6%(+3.8pp 소폭 악화, 절대값은 여전히 낮음).
+
+### 분석 (전사 내용 정성 대조 — PLC=999 스크리닝 회차, 채택 근거)
+
+**ytn2** (PLC=4.0 baseline, Exp-158 참고): 전사에 `"문의한 사안 중에서는 우선 왕성한 연합 김정은 기자입니다. 김정은 기자, 김정은 기자입니다입니다 감사합니다"` — 정답의 상당 분량이 방송클로징류 환각으로 통째 대체됨.
+
+**ytn2** (PLC=None, 이번 실험): 동일 구간이 `"논의한 사안 중에서는 우. 왕성 왕성한 연합 방위 태세를 유지하기 위한 노력을 경제하자는 것 북한의..."`로 **정답과 거의 일치하게 복원** — 방송클로징 환각이 **완전히 소멸**. 단 `"Thank you. Thank you. very much. Thank you,"` 필러 삽입은 **여전히 잔존**(별도 메커니즘 — `repeat-filter-langagnostic`류 후속 필요, 단 위 스크리닝에서 효과 미입증).
+
+**sbs1** (PLC=None): 후반부 `"그는 한미동맹은 단순한 전력 투사 통로가 아니라..."` 문단이 누락되고 곧바로 마지막 문장으로 건너뜀 — PLC 비활성으로 언어재확인이 sbs1에서 수행하던 순기능(드리프트 방지 등)이 사라지며 발생한 것으로 추정. median 악화의 정성적 근거.
+
+**결론**: PLC=4.0의 주기적 언어 재확인이 ytn2에서 **스퓨리어스 언어전환을 오탐 → `_apply_detected_language`의 트림+재디코딩 발동 → 방송클로징 환각**을 유발하는 인과관계를 정성적으로 확인. PLC 비활성화로 이 인과사슬이 차단됨.
+
+### 채택 (조건) 판정
+
+**PLC 기본값 4.0→None(비활성) 채택**. ①max 미회귀(3파일 모두 통과) ②median: ytn2 대폭개선(P1 최우선 목표) vs sbs1 소폭악화(고분산 파일, max는 오히려 개선) — 순 이득으로 판단. held-out eng1 소폭악화는 절대값이 낮아(7.6%) 우려 수준 아님.
+
+**구현**: `whisperlivekit/parse_args.py` — `--periodic-lang-check`에 `_optional_float` 커스텀 타입 추가(`'none'` 문자열 파싱 지원, 기존 `type=float`로는 CLI에서 실제 `None` 전달이 불가능했던 결함 수정), 기본값 `4.0`→`None`. 브랜치 `exp/plc-disable-default` → master 머지(`--no-ff`, 커밋 `5715875`). 연동 문서(`docs/TESTING.md`·`docs/DEPLOYMENT_OFFLINE.md`·`ROADMAP.md`·`scripts/closed_test.py` 도움말) 동일 커밋에서 갱신.
+
+**기각**: PLC=2.0(강화) — N=3 확정에서 N=1 스크리닝 신호 재현 실패. `repeat-filter-langagnostic`(언어무관 반복필터) — 두 스크리닝 모두 필터 미발동으로 효과 검증 불가(기각이 아니라 **미결정** — 워크트리 보존, 후속 재시도 여지). `langswitch-confidence-raise`(확신도 상향) — sbs1 게이트 초과 위험신호로 후순위 보류(워크트리 보존).
+
+### 다음 가설
+
+1. **ytn2 잔존 이슈**: "Thank you" 필러가 PLC=None에서도 잔존 — cross-batch 구문 반복 탐지(단일단어 정확일치가 아닌 phrase-level) 설계 필요. `repeat-filter-langagnostic`은 재시도하되 반드시 `[BatchRepeatFilter]` 로그로 실제 발동 여부를 먼저 확인할 것.
+2. `langswitch-confidence-raise`의 sbs1 lag 급증 원인 규명 — P2(lag)와 연계 조사 가치.
+3. P2(sbs1 lag, `audio_max_len` 우선 용의자), P3(beam/CRT 등 잔여 파라미터 재검증) 착수.
+
+**JSON**: `.omc/benchmarks/eval_20260705_2135_plc_disabled.json`(PLC=999 N=1) · `eval_20260705_2144_plc_2s.json`(PLC=2.0 N=1) · `eval_20260705_2152_plc_8s.json`(PLC=8.0 N=1) · `eval_20260705_2202_repeatfilter_langagnostic.json`/`_r2.json` · `eval_20260705_2221_confraise.json` · `eval_20260705_2231_plc2s_N3.json`(PLC=2.0 N=3, 기각) · `eval_20260705_2255_plcdisabled_N3.json`(PLC=None N=3, 채택) · `eval_20260705_2318_plcdisabled_heldout.json`. 워크트리 `worktrees/repeat-filter-langagnostic`(exp/repeat-filter-langagnostic@1a66eab)·`worktrees/langswitch-confidence-raise`(exp/langswitch-confidence-raise@db800ce) 보존(미결정/보류).
