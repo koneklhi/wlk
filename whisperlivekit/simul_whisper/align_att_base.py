@@ -2,6 +2,8 @@
 import logging
 from abc import ABC, abstractmethod
 
+import torch
+
 from whisperlivekit.timed_objects import ASRToken
 from whisperlivekit.whisper import DecodingOptions, tokenizer
 
@@ -244,8 +246,16 @@ class AlignAttBase(ABC):
             self._apply_detected_language(new_lang)
             self.state.last_lang_switch_time = audio_end_secs
 
+    @torch.no_grad()
     def detect_current_language(self, window_secs: float = 1.5, min_prob: float = 0.90):
-        """최근 window_secs 초 오디오의 언어를 감지해 반환. 확신도 min_prob 미만이면 None."""
+        """최근 window_secs 초 오디오의 언어를 감지해 반환. 확신도 min_prob 미만이면 None.
+
+        no_grad 필수: 이 경로의 self._encode()는 infer()/lang_id()와 달리 no_grad 밖에서
+        호출된다(process_iter → _check_short_silence_language / new_speaker eager 감지).
+        grad 추적 시 turbo 인코더(807M·32층) forward가 autograd 그래프·활성값을 보존해
+        forward가 ~160배 느려지고(0.2s→32s) VRAM 압박으로 실시간 파이프라인이 멈춘다.
+        base(74M)는 값이 싸 잠복했으나 turbo에서 stall로 표면화됐다.
+        """
         if not self.state.segments:
             return None
         try:
