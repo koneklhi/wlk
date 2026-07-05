@@ -282,7 +282,7 @@ upstream에는 정량 평가 도구가 없었다. 아래 모듈을 새로 추가
 
 | 파일 | 역할 |
 |---|---|
-| [`scripts/eval.py`](../scripts/eval.py) | 경로 C(VBCable) / 경로 A(파일) WER + 문장분리 F1 측정. `--repeat N`(기본 1; 채택 확정 시 3) median/min/max/stdev 집계. `--paths`, `--files`, `--diarization`, `--sortformer-model`, `--trace-tokens`, `--periodic-lang-check` 옵션 지원. **서버 stdout/stderr를 `.omc/server_logs/server_<stem>_<path>_R<rep>_<ts>.log`로 회차별 항상 저장(Exp-153; Q1 필터 기여도 계측용, `PYTHONIOENCODING=utf-8`)** |
+| [`scripts/eval.py`](../scripts/eval.py) | 경로 C(VBCable) / 경로 A(파일) WER + 문장분리 F1 측정. `--repeat N`(기본 1; 채택 확정 시 3) median/min/max/stdev 집계. `--paths`, `--files`, `--diarization`, `--sortformer-model`, `--trace-tokens`, `--periodic-lang-check`, `--audio-max-len`, `--frame-threshold`, `--beams`(Exp-161/162 진단용 패스스루) 옵션 지원. **서버 stdout/stderr를 `.omc/server_logs/server_<stem>_<path>_R<rep>_<ts>.log`로 회차별 항상 저장(Exp-153; Q1 필터 기여도 계측용, `PYTHONIOENCODING=utf-8`)** |
 | [`whisperlivekit/metrics.py`](../whisperlivekit/metrics.py) | `compute_wer()` (정규화 WER), 문장분리 F1 (`_align_words`, Levenshtein 기반) |
 | [`scripts/vbcable_test.py`](../scripts/vbcable_test.py) | 경로 C 브라우저 자동화 (VBCable 루프백을 브라우저 마이크로 노출, 음원 재생 → 캡처) |
 | [`scripts/audio_device.py`](../scripts/audio_device.py) | VBCable 오디오 장치 자동 설정 / 측정 후 복원 |

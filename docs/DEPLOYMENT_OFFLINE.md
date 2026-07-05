@@ -268,8 +268,9 @@ python -c "import whisperlivekit, torch; print('torch', torch.__version__, 'cuda
 
 ## 4. master "최선" 서버 기동 + 테스트
 
-> master 권장 설정(= [MASTER_CHANGES.md](MASTER_CHANGES.md) Exp-105): 백엔드 SimulStreaming(기본), `--beams 2`(기본),
-> `--vac-chunk-size 0.2`(기본), **화자분할 ON**, **`--compression-ratio-threshold 3.0`**, **`--periodic-lang-check` 기본 None(비활성 — Exp-160, turbo에서 PLC=4.0이 ytn2 환각 유발 확인)**.
+> master 권장 설정(= [MASTER_CHANGES.md](MASTER_CHANGES.md) Exp-105, 단 §2 수치 자체는 stale — 위 §7-6 참조): 백엔드 SimulStreaming(기본), `--beams 2`(기본),
+> `--vac-chunk-size 0.2`(기본), **화자분할 ON**, **`--compression-ratio-threshold 3.0`**, **`--periodic-lang-check` 기본 None(비활성 — Exp-160, turbo에서 PLC=4.0이 ytn2 환각 유발 확인)**,
+> **`--audio-max-len` 기본 15.0초(Exp-161 — turbo 인코더가 base보다 무거워 기존 30.0초 버퍼가 sbs1류 밀집발화에서 최대 41초 실시간 지연 유발, 15.0초로 축소해 2초대로 해결)**.
 > **이 설정 전체가 이제 `parse_args.py` 기본값**이라(요청 3) 인자 없이 `whisperlivekit-server`만 쳐도 그대로 켜진다.
 > 기본 포트는 **8900**(과거 8000), 자동측정(`eval.py`/`closed_test.py`)은 **8901**(과거 8001) — 배포 PC의 기존 8000/8001 점유와 충돌 회피(요청 2).
 > 향후 설정 변경은 **CLI를 늘리지 말고 `parse_args.py` 기본값을 고친다**(closed_test도 그 값을 자동 동기화 — 요청 5).
@@ -466,7 +467,7 @@ curl http://localhost:2010/v1/models
 3. **내장 UI 전사**(§4.4 1단계): 브라우저 마이크로 한·영 발화 → 전사·화자 배지 정성 확인.
 4. **React 프론트 연결**(§4.4 2단계): React UI를 `/asr`에 붙여 동일 전사 표시 확인.
 5. **번역**(§4.4 3단계 / §5): `start_oss.bat` 후 번역 + 화자분할 동시 ON 기동 → 한↔영 1문장 스모크(동시 사용 가능, §5.4).
-6. **경로 C 정량**(§4.1): `python scripts/closed_test.py test_data/sbs1.mp3` → WER/F1이 [MASTER_CHANGES §2](MASTER_CHANGES.md) 수치대(sbs1 ≈ WER 20%/F1 76%) 근처인지. (playwright/VBCable 필요)
+6. **경로 C 정량**(§4.1): `python scripts/closed_test.py test_data/sbs1.mp3` → WER/F1이 [EXPERIMENTS.md](../EXPERIMENTS.md) "현재 베이스라인"(turbo, diar-ON, Exp-161 기준: sbs1 ≈ WER 14.9%/F1 16.7% — F1은 diar-ON 문장경계 과분할로 낮게 나오는 게 정상, WER이 1차 지표) 근처인지. (playwright/VBCable 필요) — ⚠️ [MASTER_CHANGES §2](MASTER_CHANGES.md)의 수치(sbs1 19.6%/76.2%)는 Exp-105(2026-06-22, diar-OFF·base 기질) 기준으로 **stale** — 참조하지 말 것.
 7. **단어 교정**(§6.2): `admin_replacement.json`/`hallucination.json`을 배포본으로 채운 뒤 해당 단어가 교정되는지 확인.
 
 ---
