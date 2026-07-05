@@ -432,6 +432,20 @@ def main() -> None:
         help="주기적 언어재감지 간격(초). 기본값 None(비활성 — 서버 기본값과 동일, Exp-160). 지정 시 서버에 --periodic-lang-check 전달.",
     )
     parser.add_argument(
+        "--audio-max-len",
+        type=float,
+        default=None,
+        dest="audio_max_len",
+        help="오디오 버퍼 최대 길이(초, 서버 기본 30.0). P2 sbs1 lag 진단용. 지정 시 서버에 --audio-max-len 전달.",
+    )
+    parser.add_argument(
+        "--frame-threshold",
+        type=int,
+        default=None,
+        dest="frame_threshold",
+        help="AlignAtt 프레임 임계값(서버 기본 25). P2 sbs1 lag 진단용. 지정 시 서버에 --frame-threshold 전달.",
+    )
+    parser.add_argument(
         "--expect-code-root",
         type=Path,
         default=None,
@@ -496,6 +510,10 @@ def main() -> None:
         extra_server_args.append("--trace-tokens")
     if args.periodic_lang_check_secs is not None:
         extra_server_args.extend(["--periodic-lang-check", str(args.periodic_lang_check_secs)])
+    if args.audio_max_len is not None:
+        extra_server_args.extend(["--audio-max-len", str(args.audio_max_len)])
+    if args.frame_threshold is not None:
+        extra_server_args.extend(["--frame-threshold", str(args.frame_threshold)])
 
     for f in args.files:
         if not f.exists():
