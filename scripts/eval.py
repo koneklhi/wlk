@@ -446,6 +446,13 @@ def main() -> None:
         help="AlignAtt 프레임 임계값(서버 기본 25). P2 sbs1 lag 진단용. 지정 시 서버에 --frame-threshold 전달.",
     )
     parser.add_argument(
+        "--beams",
+        type=int,
+        default=None,
+        dest="beams",
+        help="빔서치 빔 개수(서버 기본 2). P3 파라미터 재검증용. 지정 시 서버에 --beams 전달.",
+    )
+    parser.add_argument(
         "--expect-code-root",
         type=Path,
         default=None,
@@ -514,6 +521,8 @@ def main() -> None:
         extra_server_args.extend(["--audio-max-len", str(args.audio_max_len)])
     if args.frame_threshold is not None:
         extra_server_args.extend(["--frame-threshold", str(args.frame_threshold)])
+    if args.beams is not None:
+        extra_server_args.extend(["--beams", str(args.beams)])
 
     for f in args.files:
         if not f.exists():
