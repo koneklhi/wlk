@@ -396,8 +396,9 @@ class SimulStreamingASR:
         preferred_backend = getattr(self, "backend", "auto")
         compatible_whisper_mlx, compatible_faster_whisper = True, True
 
-        if self.model_path:
-            resolved_model_path = resolve_model_path(self.model_path)
+        model_path_or_dir = self.model_path or getattr(self, 'model_dir', None)
+        if model_path_or_dir:
+            resolved_model_path = resolve_model_path(model_path_or_dir)
             self._resolved_model_path = resolved_model_path
             self.model_path = str(resolved_model_path)
 
