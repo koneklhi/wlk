@@ -272,9 +272,10 @@ def create_parser():
     simulstreaming_group.add_argument(
         "--audio-max-len",
         type=float,
-        default=30.0,
+        default=15.0,
         dest="audio_max_len",
-        help="Max length of the audio buffer, in seconds.",
+        help="Max length of the audio buffer, in seconds. 기본값 15.0(turbo 기질 Exp-161 채택 — 30.0에서"
+        " sbs1 실시간 lag 최대 41s 관측, 15.0으로 lag~2s대 안정화 + WER 3파일 모두 개선/분산 대폭 감소).",
     )
 
     simulstreaming_group.add_argument(
