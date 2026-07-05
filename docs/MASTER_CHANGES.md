@@ -6,6 +6,8 @@
 >
 > **갱신 주기**: 채택 실험을 master에 머지한 직후 `/update-master-changes` 슬래시 커맨드로 갱신한다.
 
+> ⚠️ **플래그 (2026-07-05)**: `model_dir` 배선 버그로 이 문서가 서술하는 STT 모델 표기(turbo)와 실측 기준(base, Exp-158 이전 전체)이 불일치했음이 확인됨(Exp-158). 두 수정(model_dir 배선 + no_grad stall)은 master에 머지됨(`9e3217e`) — 이 문서 전체를 `/update-master-changes`로 재실행해 turbo 기질(E5) 기준으로 갱신 필요(후속 작업).
+
 ---
 
 ## 1. 개요

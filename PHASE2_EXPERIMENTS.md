@@ -2,6 +2,7 @@
 
 > 🗄️ **아카이브 — Exp-001~130 (~2026-06-25)**. 활성 실험 로그는 [EXPERIMENTS.md](EXPERIMENTS.md)로 이전했다.
 > 이 파일은 이력 보존용이며 **더 이상 갱신하지 않는다**. 신규 실험(Exp-131+)은 EXPERIMENTS.md에 기록한다.
+> (2026-07-05 추가: 이 아카이브도 `model_dir` 배선 버그로 base 모델 위 측정 — 동일 사유, 구조적 결정(SimulStreaming·Sortformer 채택)만 유효, 수치는 무효. 상세는 [EXPERIMENTS.md](EXPERIMENTS.md) "코드 세대(Epoch)" 절·Exp-158 참조.)
 
 STT 성능 개선 과정에서 수행한 실험을 기록한다.
 각 실험은 **가설 → 변경 → 결과 → 결론** 흐름으로 작성한다.

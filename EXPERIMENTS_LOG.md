@@ -12,6 +12,43 @@
 
 > **Exp ↔ Epoch**: Exp-131~137 = **E1**(언어고정·비음성억제 없음, master 계열). Exp-138~139 = **E2 후보**(`exp/meta-token-suppress`: suppress_nonspeech + lang_restrict_koen). 신규 Exp는 측정 대상 코드의 epoch를 provenance에 함께 적는다.
 
+> ⚠️ **Exp-131~157 = base 기질 시대(2026-07-05 이전)** — `model_dir` 배선 버그로 전부 의도한 turbo가 아니라 `base`(74M) whisper 위에서 측정됨(Exp-158 확인). **구조 변경(Exp-139·143·150·151·152·153)은 master에 코드로 남아있어 유효**, 나머지 파라미터 결론·WER 수치는 전부 재검증 대상. 상세는 [EXPERIMENTS.md](EXPERIMENTS.md) "코드 세대(Epoch)" 절 참조. Exp-158부터 **turbo 기질(E5)**.
+
+### 빠른 참조 — Exp-131~157 (base 기질, STATE에서 이관)
+
+> **Epoch 열**: E1 = 언어고정 없음(master 이전) / E2 = `lang_restrict_koen=True` + 후처리 CJK/주석 필터 포함. suppress_nonspeech(Exp-138)는 E2에 **미포함** — 기각.
+> **E1 파라미터 기각(131·132·133·137)은 E2 코드에서 재검증 대상이었으나, 이제 E1~E4 전체가 base 기질이라 turbo(E5)에서 다시 재검증 대상.**
+
+| Exp | Epoch | 날짜 | 변경 | bong1 WER med | ytn2 WER med | sbs1 WER med | 판정 |
+|-----|-------|------|------|--------------|-------------|-------------|------|
+| Exp-131 | E1 | 2026-06-25 | PLC=2.0 (파라미터만) | 45.3% (+1.2pp) | 36.5% (-7.8pp) | 21.4% (-3.0pp) | ❌ 기각 (bong1 max +9.7pp) |
+| Exp-132 | E1 | 2026-06-25 | beam=3 (harness) | 36.0% (-8.1pp) | 35.5% (-8.8pp) | 27.4% (+3.0pp) | ❌ 기각 (sbs1 max +19.1pp) |
+| Exp-133 | E1 | 2026-06-25 | beam=3+PLC=2.0 콤보 | 55.6% (+11.5pp) | 23.6% (-20.7pp) | 23.2% (-1.2pp) | ❌ 기각 (sbs1 max +7.8pp, bong1 median +11.5pp) |
+| Exp-134 | E1 | 2026-06-25 | lang-set ko,en 로짓 마스킹 (N=1 탐색) | 31.7% (-12.4pp) | 23.6% (-20.7pp) | 23.2% (-1.2pp) | ⚠️ N=1 이상치 — Exp-136 참조 |
+| Exp-135 | E1 | 2026-06-25 | Stage 3 provisional buffer (N=1 탐색) | 34.7% (-9.4pp) | 26.1% (-18.2pp) | 20.8% (-3.6pp) | ❌ 기각 (Stage1 대비 악화, 지연 리스크) |
+| Exp-136 | E1 | 2026-06-25 | lang-set ko,en Stage 1+2 채택측정 (N=3) | 55.0% (+10.9pp) ⚠️ | 46.8% (+2.5pp) | 20.8% (-3.6pp) | ❌ 기각 (bong1 median +10.9pp 대폭 회귀) |
+| Exp-137 | E1 | 2026-06-26 | frame_threshold=50+PLC=4.0 (Spike 1) | 36.0% (-8.1pp) | 29.1% (-15.2pp) ✓ | 25.0% (+0.6pp) | ❌ 기각 (bong1 max 55→67.1%, 환각 폭주) |
+| Exp-138 | **E2** | 2026-06-30 | suppress_nonspeech=True | 44.7% (+0.6pp) | 34.0% (-10.3pp) ✓ | 20.2% (-4.2pp) ✓ | ❌ 기각 (held-out eng1·ytn1 회귀, 원인 미규명) |
+| Exp-139 | **E2** | 2026-06-30 | lang_restrict_koen + 후처리 필터(CJK/주석 드롭) | 52.9% (+8.8pp) | 35.5% (-8.8pp) ✓ | 22.0% (-2.4pp) ✓ | ✅ 채택 (max 미회귀·held-out 정상·§3.2 달성; bong1 median 회귀→Exp-140) |
+| Exp-140 | **E2** | 2026-07-01 | logprob_threshold=-1.0 스크리닝 | 36.9% (N=1) | 32.0% (N=1) | 33.3% (+11.3pp ❌) | ❌ 기각 (sbs1 catastrophic) |
+| Exp-141 | **E2** | 2026-07-01 | logprob_threshold=-1.5 스크리닝 | 36.0% (N=1) | 29.6% (N=1) | 27.4% (+5.4pp ❌) | ❌ 기각 (sbs1 회귀·ytn2 F1=12.5%) |
+| Exp-142 | **E2** | 2026-07-01 | logprob_threshold=-2.0 기본값 채택 (N=3) | **37.5% (-15.4pp ✓)** | **31.5% (-4.0pp ✓)** | **19.6% (-2.4pp ✓)** | ✅ 채택 (WER 전부 개선; F1 하락→WER>F1 우선; parse_args 기본값 적용) |
+| Exp-143 | **E2** | 2026-07-01 | PLC 배선 버그 수정(backend.py) + PLC=4.0 N=1 스크리닝 | 41.7% (+4.2pp ❌) | 29.6% (-1.9pp) | 18.5% (-1.1pp) | ✅ 버그수정 채택 / ❌ PLC=4.0 기각 (bong1 회귀, N=1 혼재 신호; parse_args 기본값 None 복원) |
+| Exp-144 | **E2** | 2026-07-01 | beam=3 E2 재검증 (N=3) | 48.6% (+11.1pp ❌) | 26.1% (-5.4pp ✓) | 17.9% (-1.7pp ✓) | ❌ 기각 (bong1 median catastrophic +11.1pp; max 56.5% firewood 반복 환각; beam=3 탐색 종료) |
+| Exp-145 | **E2** | 2026-07-01 | PLC=2.0 E2 첫 실검증 (N=1→N=3) | 40.2% (+2.7pp ❌) | 35.5% (+4.0pp ❌) | 20.8% (+1.2pp ❌) | ❌ 기각 (N=1 ytn2 이상치 22.7% 유혹했으나 N=3 전파일 median 악화; PLC 탐색 종료) |
+| Exp-146 | **E2** | 2026-07-01 | CRT=2.5 N=1 스크리닝 | 33.5% (-4.0pp) | 31.0% (-0.5pp) | 22.0% (+2.4pp ❌) | ❌ 기각 (sbs1 회귀; 한국어 연속 발화를 반복으로 오분류) |
+| Exp-147 | **E2** | 2026-07-01 | CRT=2.8 N=1 스크리닝 | 39.3% (+1.8pp ❌) | 48.8% (+17.3pp ❌ catastrophic) | 22.6% (+3.0pp ❌) | ❌ 기각 (ytn2 catastrophic; CRT 낮추기 방향 전체 종료) |
+| Exp-148 | **E2** | 2026-07-01 | static_init_prompt="Korean and English" N=1 | 43.5% (+6.0pp ❌) | 41.9% (+10.4pp ❌) | 31.5% (+11.9pp ❌) | ❌ 기각 (전파일 대폭 악화; 영어 편향 유발) |
+| Exp-149 | **E2** | 2026-07-01 | nonspeech_prob=0.2 N=1 | 46.5% (+9.0pp ❌) | 29.6% (-1.9pp) | 18.5% (-1.1pp) | ❌ 기각 (bong1 catastrophic; 발화와 비음성 no_speech_prob 분포 겹침; 파라미터 탐색 소진) |
+| Exp-150 | **E3** | 2026-07-02 | 단계1 머지: 언어전환 프로토콜 재설계+SOT 배선수정 [E2→E3] | 36.6% (-0.9pp) | 27.6% (-3.9pp) | 19.6% (0pp) | ✅ 채택 (§3.2 SOT 보험: diar-OFF 대조 avg -24.6pp/ytn2 -82pp; diar-ON WER 변산 내 중립·max 게이트 E2 유지; 트림/마커는 diar-ON dormant) |
+| Exp-151 | **E3** | 2026-07-02 | 잠복버그 수정: refresh global_time_offset 승계 + PLC 절대클록 (버그1·2) | 38.1% | 23.2% | 19.0% | ✅ 채택 (N=3 max 41.4/24.1/19.0 전부 게이트 내; WER 버그수정상 중립·무회귀; F1 정합 회복—sbs1 N1 0%→N3 18.2 안정; E3 유지) |
+| Exp-152 | **E3** | 2026-07-02 | 단계2(증거된수정): _ANNOTATION_RE 확장 — 안 닫힌 비음성 주석 누출 차단 | 36.3% | 23.6% | 20.2% | ✅ 채택 (bong1 "(speaking…" 누출 0건·median 38.1→36.3·F1 40.0↑; ytn2/sbs1 신규패턴 매칭 0=증명된 no-op; sbs1 max 25.6은 변산) |
+| Exp-153 | **E4** | 2026-07-03 | diar-ON 언어전환 배선(prev_lang fallback + hard_boundary) + 회차별 서버로그 [E3→E4] | 36.3% | 25.6% | 20.2% | ✅ 채택 (사용자결정; dormant→active 증명·WER게이트통과·ytn2 max 29.1→26.1·eng1 무회귀; F1 과분할하락·재디코딩 filler 신규→Exp-154 튜닝) |
+| Exp-154 | **E4** | 2026-07-03 | PLC 기본값 None→4.0 채택(전환세금 제거 후 재평가) + 위생(단계C 드롭텍스트 로깅·D-1·D-2) | 34.4% (-1.9) | 22.9% (-2.7, pooled) | 21.4% (+1.2) | ✅ 채택 (사용자결정; §3.2 무휴지 코드스위칭·median개선·F1 전파일↑·filler소멸·eng1 무회귀 2.9%. ytn2 max 27.6=실변산; PLC E1/E2 3회기각→E4 채택전환) |
+| Exp-155 | **E4** | 2026-07-03 | 단계3: 화자전환 리셋 조건부화(동일언어 시 refresh 생략) | 38.1% (+1.8) | 28.1% (+2.5) | 19.0% (-1.2) | ❌ 기각 (N=1; 타겟 sbs1은 new_speaker 0회 발동=무효·F1+12.6은 변산, 발동처 bong1 15/15 생략이 진짜 다화자 블렌딩→악화. sbs1 F1근원=문장과분할로 재규명) |
+| Exp-156 | **E4** | 2026-07-04 | 단계4: token-logprob 게이트 go/no-go 프로브(계측 로깅만) | 34.1%(프로브) | 28.6%(프로브) | 19.0%(프로브) | ⛔ NO-GO·스킵 (저-logprob 꼬리서 정상단어 holding-17.4·protagonist-15.5가 garbage LAUGHS-17.5와 완전겹침→코드스위칭 정상토큰 드롭 위험. 분리가능 garbage는 기존필터 처리. 단계C 정합) |
+| Exp-157 | **E4** | 2026-07-04 | 입력 볼륨 게인 스윕 측정 인프라(−12/−6/0/+6dB)+레벨 감도 규명 [파이프라인 무변경·`exp/volume-gain-sweep`] | 36.6 (0dB) | 23.6 (0dB) | 16.7 (0dB) | ✅ 인프라 채택 / 레벨-불변(±12dB WER 무영향·회차분산≫레벨효과; 서버 AGC 미착수) |
+
 ---
 
 <!-- 신규 실험(Exp-131+)은 이 아래에 추가.
@@ -1794,3 +1831,69 @@ PLC로 재감지 증가: `switch=True` bong1 14 · ytn2 9 · sbs1 2(Exp-153 smok
 - (보류) 극단 구간(정상 범위 밖 −24…+18dB) 스윕 → 레벨 절벽 위치 규명 → 경량 세이프티 클램프 필요성 판단. 배포 마이크 오설정이 실제 우려로 관측될 때만 진행.
 
 **JSON**: `.omc/benchmarks/gain_sweep_screen.json` · 콘솔로그 `.omc/gain_sweep_screen_console.log`(gain/clipped·verify_loopback level) · 서버로그 `.omc/server_logs/server_*_C_g*dB_R1_*.log`.
+
+---
+
+## Exp-158 — turbo 모델 정상화: model_dir 배선 버그 + no_grad stall 수정 [E4→E5, base 기질→turbo 기질] (2026-07-05)
+
+**가설**: 단계5(2-pass 재전사) 프로브 2b 준비 중, 서버와 동일 config로 `TranscriptionEngine`을 직접 구성해 로드된 모델의 파라미터 차원을 확인한 결과 807M(turbo)가 아니라 71.8M(base)이 나왔다. **지금까지 전체 실험 이력(Exp-001~157)이 의도한 `whisper-large-v3-turbo`가 아니라 `base`(74M) whisper 위에서 측정된 것**이라는 가설을 세우고 근본원인을 규명·수정한다.
+
+**변경 (브랜치 `exp/fix-turbo-model-wiring`, 워크트리 `worktrees/fix-turbo-model-wiring`, 커밋 `d11f8b0`+`415ac39`, master 머지 `9e3217e`)**:
+
+1. **버그 1 — model_dir 배선 (`whisperlivekit/simul_whisper/backend.py:399` 부근, `SimulStreamingASR.__init__`)**: 기존 코드는 `if self.model_path:` 만 확인하고 서버가 `--model_dir`로 항상 전달하는 turbo 경로(`self.model_dir`)를 무시 → `model_path=None`이면 `model_size`(기본값 `"base"`)로 조용히 폴백. `whisper.load_model()`의 자동 다운로드(개발 PC는 인터넷 가능)가 base를 조용히 받아 크래시 없이 넘어감 — `~/.cache/whisper/base.pt` 생성시각(2026-06-05)이 프로젝트 초기 설정 시점과 일치. **폐쇄망 배포에서는 인터넷이 없어 이 폴백 자체가 실패하는 배포 블로커**였다. 수정: `model_path_or_dir = self.model_path or getattr(self, 'model_dir', None)` 로 변경(다른 백엔드 qwen3/voxtral과 동일한 `model_dir or model_path` 패턴).
+2. **버그 2 — no_grad 누락 (`whisperlivekit/simul_whisper/align_att_base.py`, `detect_current_language()`)**: 이 함수는 `process_iter` → `_check_short_silence_language`/`new_speaker` eager 감지 경로에서 호출되는데, `infer()`/`lang_id()`와 달리 `@torch.no_grad()` 밖에서 실행되고 있었다. turbo 인코더(807M·32층) forward가 grad 추적 시 autograd 그래프·활성값을 보존해 forward 자체가 느려지고 VRAM 압박이 발생 — `cuda.synchronize` 계측으로 **forward 0.2s→31.96s(~160배 폭주)** 확정. 이게 이벤트루프를 블로킹해 lag 폭증(bong1 last_end≈9.1s 지점에서 0.2s→143.4s) → `FFmpeg read timeout` → 첫 문장만 전사되고 멈추는 stall. base(74M)는 forward 자체가 싸서 같은 버그가 있어도 잠복해 있었음. 수정: `@torch.no_grad()` 데코레이터 추가(short-silence·new_speaker·periodic 세 감지 경로 모두 커버).
+
+**검증 절차**: (1) 파라미터 차원 검증(base=71.8M/512차원 vs turbo=807.0M/1280차원 — 소수점까지 일치 확인, 이름 문자열이 아니라 실제 로드된 텐서로 확정). (2) bong1 25초 클립 최소 재현으로 beams=1/min-chunk-size=1.0 등 파라미터를 바꿔도 같은 지점(last_end≈9.1s)에서 재현됨을 확인 → 단순 스루풋 문제가 아니라 특정 함수 호출임을 좁힘. (3) no_grad 수정 후 동일 재현 시나리오에서 stall 소멸 확인. (4) 경로 C 전체 파일 확정 측정.
+
+**⚠️ 측정 중 사고 (하니스 교훈, 기록 목적)**: 서브에이전트가 재개(resume)될 때마다 이전 측정을 정지시키지 않고 새 `eval.py`를 또 실행해 **동일 포트(8901)·동일 VBCable 장치에 두 측정이 동시 재생되는 오염**이 발생(sbs1 전사 결과에 ytn2 참조문이 섞여 나옴 — 스모킹건). 사용자 승인 하에 프로세스 정리 후 맨 세션이 직접 단독 감독으로 재측정해 해소. **교훈**: 새 측정 시작 전 반드시 `Get-CimInstance Win32_Process | Where CommandLine -match 'eval.py|basic_server'`로 잔여 프로세스 없음 확인.
+
+### 테스트 세트 결과 (N=3, diar-ON, CRT=3.0, PLC=4.0, beams=2)
+
+| 파일 | R1 WER | R2 WER | R3 WER | median | max | min | stdev | F1 med | vs base E4(Exp-153) med | 완주(timeout) |
+|------|--------|--------|--------|--------|-----|-----|-------|--------|------------------------|----------------|
+| bong1 | 28.1% | 24.8% | 34.7% | **28.1%** | 34.7% | 24.8% | 5.1% | 52.6% | -8.2pp ✓ | 0회, last_end 160s |
+| ytn2 | 38.4% | 41.9% | 47.3% | **41.9%** | 47.3% | 38.4% | 4.5% | 40.0% | +16.3pp ❌ | 0회, last_end ~99s |
+| sbs1 | 31.0% | 14.3% | 16.1% | **16.1%** | 31.0% | 14.3% | 9.2% | 40.0% | -4.1pp ✓ | 0회, last_end ~96s (단 lag 최대 41/11/20s) |
+
+held-out(ytn1/eng1) **미측정** — 다음 세션 1순위.
+
+### 분석 (전사 내용 정성 대조, median 회차 기준)
+
+**bong1** (R1, WER 28.1%):
+- **필러/반복 환각**: 전사 `"Thank you. Thank you. so much. Thank you very"` / 정답 `"This man."`(짧은 대사) — 반복 감사인사 삽입, 무의미 필러 폭주.
+- **환각 삽입**: 전사 `"So I'm going to take my daughter's son."` — 정답에 아예 없는 문장이 통째로 삽입됨.
+- **단어 대치**: 전사 `"보리에요"` / 정답 `"돌이에요"`("rock"), 전사 `"보리카를 하다고"` / 정답 `"메타포리칼하다고"`("metaphorical") — 서로 다른 위치에서 공통으로 "보리" 토큰이 끼어듦(고정 환각 어트랙터 의심).
+- **단어 유실**: 문두 "누가 주인공" 유실("일까 이런 생각을 제가…"로 시작, 정답은 "누가 주인공일까…").
+
+**ytn2** (R2, WER 41.9% — 회귀 주범):
+- **방송 클로징류 환각(재발)**: 전사 `"문의한 사안 중에서는 우선 왕성한 연합 김정은 기자입니다. 김정은 기자, 김정은 기자입니다입니다 감사합니다"` / 정답은 "논의한 사안 중에서는 우선 왕성한 연합방위태세를 유지하기 위한 노력을 경주하자는 것과 북한의 최종적 그리고 완전히 검증된 비핵화를 달성하기 위해 협조를 강화하자는 취지의 논의를 했습니다" — **상당 분량의 실제 내용이 통째로 "김정은 기자입니다" 반복 환각으로 대체됨**. Exp-157(게인스윕)에서 관측된 "MBC 뉴스 signoff 환각"과 같은 계열(방송 클로징 패턴)이나, 이번엔 내용 대체 규모가 더 큼.
+- **필러 폭주(신규 관측)**: 전사 `"Thank you. Thank you Okay. , let's talk about this I think it's important to aviones Thank you. Thank you very much. Thank you, Mr. Chair."` — 정답에 전혀 없는 대규모 필러 삽입. bong1과 같은 "Thank you" 계열 필러가 여기서도 나타남 — **turbo 전반의 공통 실패모드**로 보임.
+- **단어 대치**: 전사 `"변환 없는 입장을 고소하고"` / 정답 `"변함 없는 입장을 고수하고"`.
+
+**sbs1** (R3, WER 16.1% — 최선 회차):
+- **고유명사 유실**: 전사 `"동쪽이 위를"` / 정답 `"한반도 동쪽이 위를"` — "한반도" 유실.
+- **핵심어 유실**: 전사 `"거대한 겁니다"` / 정답 `"거대한 방어선이라는 겁니다"` — "방어선이라는" 유실.
+- **세그먼트 경계 아티팩트**: 전사 `"가. 치였습니다"` — "가치였습니다"가 중간에 분절(diar 과분할 계열 아티팩트로 추정).
+- 영어 인용구(`"From a satellite image…"`) 처리는 base 때와 마찬가지로 정상.
+
+**이번 변경 영향**: turbo는 base 대비 영어 코드스위칭 블록을 더 정확·풍부하게 렌더링하나(예: ytn2의 "Operational Control Transition", "Military Committee meetings assessment…" 등 base보다 정밀), **새로운 필러/반복 환각("Thank you" 연쇄) 경향이 bong1·ytn2 양쪽에서 공통 관측**됨 — 모델이 불확실 구간에서 "더 그럴듯한" 대화체 필러를 강하게 생성하는 것으로 추정. ytn2 회귀는 이 필러 폭주 + 방송 클로징류 환각이 실제 내용을 대체한 것이 주 원인으로 보이며, base용으로 튜닝된 언어전환 프로토콜·PLC 등 코드스위칭 스캐폴딩이 이 신규 실패모드에 최적이 아닐 가능성이 높다.
+
+### 채택 (조건) 판정
+
+이 변경은 **파라미터 트레이드오프가 아니라 correctness 버그 수정**이므로 통상적인 ①max 미회귀 ②median 개선 게이트를 그대로 적용하지 않는다. `model_dir` 배선 버그는 폐쇄망 배포에서 서버가 아예 뜨지 못하는 배포 블로커였고, no_grad 누락은 실시간 stall(첫 문장만 전사)을 일으키는 명백한 결함이었다 — **WER 결과와 무관하게 반드시 수정해야 하는 버그**.
+
+**✅ 채택** (사용자 결정, master 머지 완료 `9e3217e`). 참고 정보로서: bong1·sbs1은 base 대비 개선, **ytn2는 대폭 회귀**(+16.3pp) — 이는 "수정 자체의 실패"가 아니라 **base 기질에서 나온 모든 이전 baseline이 애초에 무효**였고 turbo가 진짜 성능을 처음 드러낸 것으로 해석. ytn2 회귀는 별도 재조사 대상으로 다음 가설에 남긴다.
+
+### 원인 분석 (근본원인, 재확인됨)
+
+1. `SimulStreamingASR.__init__`이 `model_dir`을 읽지 않는 배선 누락 — 다른 백엔드(qwen3/voxtral)는 이미 `model_dir or model_path` 패턴을 쓰고 있었음에도 SimulStreaming만 빠짐.
+2. `detect_current_language()`가 `infer()`/`lang_id()`와 다른 grad 모드로 실행되던 비일관성 — 코드 리뷰에서도 놓치기 쉬운 유형(같은 클래스 내 유사 메서드 간 데코레이터 불일치).
+
+### 다음 가설
+
+1. **held-out(ytn1/eng1) 측정** — turbo baseline을 최종화하고 ytn2 회귀가 일반화되는지(ytn1=쌍둥이 코드스위칭) 확인.
+2. **ytn2 회귀 재조사** — "Thank you" 필러 폭주·방송 클로징 환각이 base용 언어전환 프로토콜·PLC와 어떻게 상호작용하는지. turbo가 base보다 강한 모델이라 기존 스캐폴딩이 오히려 방해가 되는지(단순화 방향) 검토.
+3. **sbs1 실시간 lag(RTX 3080 최대 41s)** — 배포(RTX 5090) 성능으로 재확인 필요. 필요시 turbo용 `frame_threshold`/`audio_max_len` 경량 조정.
+4. E1~E4의 파라미터 결론(beam·CRT·PLC·logprob 등) turbo 기질에서 전면 재검증 — 우선순위는 ytn2 회귀와 직결된 PLC·언어전환 프로토콜부터.
+
+**JSON**: `worktrees/fix-turbo-model-wiring/.omc/benchmarks/eval_turbo_confirm_N3.json`(N=3 확정) · `eval_turbofix_screen_clean.json`(수정 직후 첫 스크리닝, 참고용) · 서버로그 `worktrees/fix-turbo-model-wiring/.omc/server_logs/server_{bong1,ytn2,sbs1}_C_R{1,2,3}_20260705_18*.log`. 워크트리는 머지 후 제거됨 — 진단 산출물(`diag_turbo_stall/`)은 이 서술에 증류돼 원본은 보존하지 않음.
