@@ -46,19 +46,21 @@
 - **채택 우선순위(② 단계 기준)**: ① 최악 케이스(max WER) 미회귀 ② median 개선. max가 catastrophic하면 median이 좋아도 기각.
 - **개선 1순위**: `ytn2`(짧은 텀 코드스위칭) + `bong1`(다화자 장시간) 공동 최우선. **데이터 특화 하드코딩 금지 — 개선은 일반화돼야 한다.**
 
-## 현재 베이스라인 (Epoch 5 — turbo, 1차 확정)
+## 현재 베이스라인 (Epoch 5 — turbo, 확정)
 
-> **turbo 기질 최초 baseline (2026-07-05, Exp-158)** — model_dir 배선 수정 + no_grad stall 수정 후 첫 N=3 측정. diar-ON, CRT=3.0, PLC=4.0, beams=2.
-> **held-out(ytn1/eng1) 미측정** — 다음 세션 1순위. 잠정치이며 held-out 확인 후 최종화.
-> JSON: `worktrees/fix-turbo-model-wiring/.omc/benchmarks/eval_turbo_confirm_N3.json` (머지 전 워크트리에서 측정, 워크트리는 이후 제거됨)
+> **turbo 기질 baseline (2026-07-05, Exp-158 + Exp-159)** — model_dir 배선 수정 + no_grad stall 수정 후 N=3 측정(테스트) + held-out 단회. diar-ON, CRT=3.0, PLC=4.0, beams=2.
+> **확정 게이트(max) — 변경 없음**: bong1≤34.7% / ytn2≤47.3% / sbs1≤31.0% (Exp-158 N=3 max 그대로 유지).
+> JSON: `worktrees/fix-turbo-model-wiring/.omc/benchmarks/eval_turbo_confirm_N3.json`(테스트 N=3, 워크트리는 이후 제거됨) · `.omc/benchmarks/eval_20260705_2126_heldout_e5.json`(held-out)
 
 | 파일 | WER median | WER max | WER min | WER stdev | F1 median | 측정 N |
 |------|-----------|---------|---------|-----------|-----------|--------|
 | bong1 | **28.1%** | 34.7% | 24.8% | 5.1% | 52.6% | 3 |
 | ytn2  | **41.9%** | 47.3% | 38.4% | 4.5% | 40.0% | 3 |
 | sbs1  | **16.1%** | 31.0% | 14.3% | 9.2% | 40.0% | 3 |
+| ytn1(held-out) | 33.1% | — | — | — | 50.0% | 1 |
+| eng1(held-out) | 3.8% | — | — | — | 0.0% | 1 |
 
-**테스트 평균(median)**: WER 28.7%
+**테스트 평균(median)**: WER 28.7% · **held-out 함의**: ytn1이 ytn2보다 8.8pp 양호 → ytn2의 catastrophic 회귀는 코드스위칭 일반이 아니라 **ytn2 파일 고유 난이도**(음향/정렬) 쪽에 무게. eng1은 base 대비 영어 회귀 없음(Exp-159 상세).
 
 **참고(base 기질 E4 baseline, 무효화됨 — Exp-153 N=3)**: bong1 36.3%/max37.5 · ytn2 25.6%/max26.1 · sbs1 20.2%/max26.8. turbo 대비 bong1·sbs1은 개선, **ytn2는 대폭 회귀**(코드스위칭 스캐폴딩이 base 거동에 맞춰 튜닝됐던 게 원인 추정 — 재조사 필요).
 
@@ -82,6 +84,7 @@
 - **[불변][측정·레벨][모델무관·유지]** 입력 볼륨은 정상 범위(±12dB)에서 WER에 유의미한 영향 없음(Exp-157) — Whisper log-mel 창별 자기정규화(audio.py:155)로 절대 레벨 둔감, 회차 변동성(10~14pp) ≫ 레벨 효과(~3pp). ytn2를 −37.9 LUFS까지 낮춰도 VAD 미검출 없이 유지. bong1(핫/소스클립)만 감쇠 미세개선. **서버측 볼륨 정규화(AGC)는 미적용**(측정상 WER 이득 없음; 잔여가치는 배포 마이크 극단 오설정 로버스트니스뿐 — 이번 스윕 미측정). 게인 스윕(`eval.py --gain-db`)·`verify_loopback` 유니티 게인 검증(−20dBFS±1dB)은 진단 인프라로 상비 — 이 인프라 자체는 모델 무관.
 - **[E5·신규][모델무관·유지]** `SimulStreamingASR.__init__`의 `model_dir` 배선 버그(Exp-158) 수정 후, 다른 백엔드(qwen3/voxtral)와 동일하게 `model_dir or model_path` 폴백 패턴 적용됨 — 향후 SimulStreaming 관련 모델 경로 변경 시 이 패턴 유지.
 - **[E5·규명][base전용·재검증]** turbo 전환으로 코드스위칭 실패모드 자체가 변함: ytn2에서 방송 클로징류(Exp-157서 "MBC 뉴스…") 대신 **"Thank you" 연쇄 필러 환각**이 우세하게 관측(Exp-158) — turbo가 불확실 구간에서 "더 그럴듯하게" 필러를 생성하는 경향으로 추정. base용으로 튜닝된 코드스위칭 스캐폴딩(언어전환 프로토콜·PLC)이 이 신규 실패모드에 적절한지 재검증 필요.
+- **[E5·규명][모델무관·유지]** "Thank you" 필러 폭주가 **bong1·ytn2에 이어 ytn1(held-out)에서도 재현**(Exp-159) — turbo 전반의 일반적 실패모드로 확정(3개 파일 공통). 단 ytn2의 **catastrophic 콘텐츠 대체(방송클로징 환각)는 쌍둥이 ytn1에서 재현되지 않음** — 코드스위칭 일반의 문제가 아니라 ytn2 파일 고유의 음향/정렬 난이도(`audio-feature-analysis` 미머지 도구의 앵커율 46% 발견과 정합)가 만든 최악 사례로 추정.
 
 ## 빠른 참조
 
@@ -90,6 +93,7 @@
 
 | Exp | Epoch | 날짜 | 변경 | bong1 WER med | ytn2 WER med | sbs1 WER med | 판정 |
 |-----|-------|------|------|--------------|-------------|-------------|------|
+| Exp-159 | **E5** | 2026-07-05 | held-out(ytn1/eng1) 확정 측정, 코드변경 없음 — P0 완료 | — | — | — | ℹ️ baseline 확정 (ytn1 33.1%로 ytn2보다 8.8pp 양호 → ytn2 회귀는 파일고유 난이도 쪽; eng1 3.8%로 영어 회귀 없음; 게이트 max 변경 없음) |
 | Exp-158 | **E5** | 2026-07-05 | model_dir 배선버그 수정 + no_grad stall 수정 — turbo 기질 전환 [E4→E5] | 28.1% (base 대비 -8.2) | 41.9% (base 대비 +16.3 ❌) | 16.1% (base 대비 -4.1) | ✅ 채택 (correctness 버그 — WER 게이트 무관 필수, 폐쇄망 배포 블로커였음; ytn2 회귀는 코드스위칭 스캐폴딩 base종속 추정, 별도 재조사 필요; held-out 미측정) |
 
 ---

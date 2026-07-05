@@ -1897,3 +1897,54 @@ held-out(ytn1/eng1) **미측정** — 다음 세션 1순위.
 4. E1~E4의 파라미터 결론(beam·CRT·PLC·logprob 등) turbo 기질에서 전면 재검증 — 우선순위는 ytn2 회귀와 직결된 PLC·언어전환 프로토콜부터.
 
 **JSON**: `worktrees/fix-turbo-model-wiring/.omc/benchmarks/eval_turbo_confirm_N3.json`(N=3 확정) · `eval_turbofix_screen_clean.json`(수정 직후 첫 스크리닝, 참고용) · 서버로그 `worktrees/fix-turbo-model-wiring/.omc/server_logs/server_{bong1,ytn2,sbs1}_C_R{1,2,3}_20260705_18*.log`. 워크트리는 머지 후 제거됨 — 진단 산출물(`diag_turbo_stall/`)은 이 서술에 증류돼 원본은 보존하지 않음.
+
+---
+
+## Exp-159 — turbo E5 held-out(ytn1/eng1) 확정 측정 [E5, 코드변경 없음] (2026-07-05)
+
+**가설**: Exp-158에서 미측정으로 남긴 held-out(ytn1/eng1)을 측정해 E5 baseline을 최종 확정한다. ytn1(=ytn2 동일 이벤트 쌍둥이)로 ytn2의 대폭 회귀가 코드스위칭 일반에 걸친 것인지 그 파일 특유인지 확인하고, eng1으로 영어 회귀 여부(base E4 참고치 3.8%)를 점검한다.
+
+**세션 메모(무인 세션 인프라 사고)**: 이 측정 직전 공유 `.venv`가 손상된 상태(Lib/pyvenv.cfg 소실, antigravity IDE Jedi 언어서버 잠금 중 `uv venv --clear`류 실패 추정)를 발견 — §4.5 무인결정 예외(uv sync 계열)에 따라 자율 복구하지 않고 P1 워크트리 2건(`repeat-filter-langagnostic`·`langswitch-confidence-raise`) 구현·문법검증까지 측정 없이 준비한 뒤 사용자 복귀 후 "venv 복구 진행" 지시로 `uv sync --extra diarization-sortformer --extra vbcable --extra cu128` 실행해 복구. 상세는 `docs/GOAL_TURBO_AUTONOMOUS.md` §9 참조.
+
+**변경**: 없음 (master `af4dd36`, 코드 변경 없이 순수 측정).
+
+### 테스트 설정
+
+```
+.venv\Scripts\python.exe scripts/eval.py --model-dir whisperlivekit/model/whisper-large-v3-turbo `
+  --files test_data/ytn1.mp3 test_data/eng1.mp3 `
+  --diarization --sortformer-model whisperlivekit/model/sortformer-4spk-v2.nemo `
+  --compression-ratio-threshold 3.0
+```
+(diar-ON, CRT=3.0, PLC=4.0, beams=2 — Exp-158과 동일 설정. held-out은 단회.)
+
+### 결과 (N=1, held-out 단회)
+
+| 파일 | WER | F1 | 비고 |
+|------|-----|-----|------|
+| ytn1 | **33.1%** | 50.0% | ytn2(41.9%, Exp-158)보다 8.8pp 양호 |
+| eng1 | **3.8%** | 0.0% | base E4 참고치(3.8%)와 정확히 일치 — 영어 회귀 없음 |
+
+### 분석 (전사 내용 정성 대조)
+
+**ytn1**:
+- **필러 폭주(Thank you 연쇄, 재확인)**: 전사 `"Thank you very much. Thank you very much for coming. Thank you. Thank you very much."` — 정답에는 이 필러가 전혀 없음. Exp-158에서 bong1·ytn2 공통으로 관측된 "Thank you" 연쇄 필러 환각이 **ytn1에서도 동일하게 재현** — turbo 전반의 일반적 실패모드임을 3번째 파일에서 재확인.
+- **단어 대치/잡음성 삽입**: `"M.A. M.A. and we appreciate..."` — 정답에 없는 정체불명 토큰 삽입(화자명 오인식 추정). `"The U.S Rock Alliances Ironclad"` / 정답 `"The U.S. ROK Alliance is ironclad"` — "ROK"→"Rock" 오인식.
+- **경계 아티팩트**: `"...defense of the Republic of Korea. do."` — 문장 끝에 정답에 없는 "do." 삽입(경계/재디코딩 아티팩트로 추정).
+- **코드스위칭 자체는 비교적 안정**: 한↔영 전환 구간의 한국어 문장들은 정답과 근접하게 전사됨(예: "안녕하십니까 세 달 만에 두 번째로…") — ytn2처럼 전체 구간이 방송클로징류 환각으로 통째 대체되는 catastrophic 패턴은 **관측되지 않음**.
+
+**eng1**:
+- 주요 실패 없음. 정답과 거의 동일(구두점·띄어쓰기 수준 차이만). 문장 끝부분("...and the measures taken" vs 정답 "...and the measures taken in")이 근소하게 짧게 끊김 — 클립 경계 아티팩트로 추정, 실질적 단어 유실은 아님.
+
+**이번 측정의 함의**: ① "Thank you" 필러 폭주는 bong1·ytn2에 이어 **3번째 파일(ytn1)에서도 재현** — turbo 공통 실패모드라는 Exp-158 가설을 강화, `repeat-filter-langagnostic`(강화 방향) 후보의 타당성을 뒷받침. ② ytn2의 **catastrophic 콘텐츠 대체(방송클로징 환각)는 ytn1에서 재현되지 않음** — 코드스위칭 일반의 문제라기보다 **ytn2 파일 고유의 음향/정렬 난이도**(선행 분석 `audio-feature-analysis`의 앵커율 46% 발견과 정합)가 최악 사례를 만든 것으로 보임. ③ eng1 영어 성능은 base 대비 회귀 없음 — turbo 채택(Exp-158)이 영어 인식을 해치지 않았음을 확인.
+
+### 판정
+
+이 측정은 채택/기각 대상 코드 변경이 아니라 **baseline 확정 측정**이다. P0(§GOAL_TURBO_AUTONOMOUS.md) 완료 — E5 baseline(test 3종 + held-out 2종) 최종 확정, 잠정 게이트를 확정 게이트로 전환(변경 없음: bong1≤34.7%/ytn2≤47.3%/sbs1≤31.0%, Exp-158 N=3 max 그대로 유지).
+
+### 다음 가설
+
+1. **P1 (최우선)**: 준비된 3가지 후보 스크리닝 — ① PLC 플래그 스윕(None/2.0/8.0, 코드변경 없음) ② `repeat-filter-langagnostic`(강화 — 이번 ytn1 재현으로 타당성 보강됨) ③ `langswitch-confidence-raise`(단순화).
+2. P2 — sbs1 lag(`audio_max_len` 우선 용의자), P3 — 파라미터 재검증(P1 이후).
+
+**JSON**: `.omc/benchmarks/eval_20260705_2126_heldout_e5.json` · 서버로그 `.omc/server_logs/server_{ytn1,eng1}_C_R1_20260705_21*.log`.
