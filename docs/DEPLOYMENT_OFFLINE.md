@@ -269,7 +269,7 @@ python -c "import whisperlivekit, torch; print('torch', torch.__version__, 'cuda
 ## 4. master "최선" 서버 기동 + 테스트
 
 > master 권장 설정(= [MASTER_CHANGES.md](MASTER_CHANGES.md) Exp-105): 백엔드 SimulStreaming(기본), `--beams 2`(기본),
-> `--vac-chunk-size 0.2`(기본), **화자분할 ON**, **`--compression-ratio-threshold 3.0`**, **`--periodic-lang-check 4.0`**.
+> `--vac-chunk-size 0.2`(기본), **화자분할 ON**, **`--compression-ratio-threshold 3.0`**, **`--periodic-lang-check` 기본 None(비활성 — Exp-160, turbo에서 PLC=4.0이 ytn2 환각 유발 확인)**.
 > **이 설정 전체가 이제 `parse_args.py` 기본값**이라(요청 3) 인자 없이 `whisperlivekit-server`만 쳐도 그대로 켜진다.
 > 기본 포트는 **8900**(과거 8000), 자동측정(`eval.py`/`closed_test.py`)은 **8901**(과거 8001) — 배포 PC의 기존 8000/8001 점유와 충돌 회피(요청 2).
 > 향후 설정 변경은 **CLI를 늘리지 말고 `parse_args.py` 기본값을 고친다**(closed_test도 그 값을 자동 동기화 — 요청 5).
@@ -300,7 +300,7 @@ python scripts/closed_test.py my_audio.wav --no-diarization
 
 - 기본값이 곧 master 설정이다: `--model-dir whisperlivekit/model/whisper-large-v3-turbo`,
   화자분할 ON + `--sortformer-model whisperlivekit/model/sortformer-4spk-v2.nemo`,
-  `--compression-ratio-threshold 3.0`, `--periodic-lang-check 4.0`. (인자로 덮어쓸 수 있음)
+  `--compression-ratio-threshold 3.0`, `--periodic-lang-check` None(비활성, Exp-160). (인자로 덮어쓸 수 있음)
 - 결과는 `transcripts/<stem>_<타임스탬프>.txt`에 저장. 정답이 있으면 상단에 WER/F1 median/min/max/stdev 헤더 + 회차별 전사가, 없으면 회차별 전사만 들어간다.
 - **전제**: VBCable 드라이버 + playwright(chromium) + comtypes + ffmpeg 설치(§1·§3). VBCable 설정 실패 시 즉시 중단되고 안내가 출력된다.
 - 콘솔 출력 예:
@@ -313,7 +313,7 @@ python scripts/closed_test.py my_audio.wav --no-diarization
   ```
 
 > `closed_test.py`는 검증된 `scripts/eval.py`의 서버 기동·VBCable 재생·metric 함수를 재사용한다.
-> 채택 확정 정량 비교가 목적이면 기존 `scripts/eval.py --repeat 3 --diarization --sortformer-model ... --compression-ratio-threshold 3.0 --periodic-lang-check 4.0`도 그대로 쓸 수 있다(고정 테스트셋, 채택 확정 N≥3 기준).
+> 채택 확정 정량 비교가 목적이면 기존 `scripts/eval.py --repeat 3 --diarization --sortformer-model ... --compression-ratio-threshold 3.0`도 그대로 쓸 수 있다(고정 테스트셋, 채택 확정 N≥3 기준; `--periodic-lang-check`는 기본 None이므로 명시 불필요).
 
 ### 4.2 경로 B — 마이크 직접 (정성 평가)
 

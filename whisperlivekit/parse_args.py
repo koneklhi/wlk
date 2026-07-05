@@ -2,6 +2,13 @@
 from argparse import ArgumentParser, BooleanOptionalAction
 
 
+def _optional_float(value):
+    """'none'/'None' 문자열은 None으로, 그 외는 float로 파싱 (CLI에서 진짜 비활성 전달용)."""
+    if value.lower() == "none":
+        return None
+    return float(value)
+
+
 def create_parser():
     # 아래 경로 기본값(model_dir/warmup/sortformer)은 저장소 루트 기준 상대경로다. 서버를 루트에서 실행할 것.
     parser = ArgumentParser(description="Whisper FastAPI Online Server")
@@ -366,10 +373,11 @@ def create_parser():
 
     simulstreaming_group.add_argument(
         "--periodic-lang-check",
-        type=float,
-        default=4.0,
+        type=_optional_float,
+        default=None,
         dest="periodic_lang_check_secs",
-        help="주기적 언어재감지 간격(초). 기본값 4.0(주기적 언어재감지, Exp-154 채택). None=비활성. 언어 고착 해소용.",
+        help="주기적 언어재감지 간격(초). 기본값 None(비활성 — turbo 기질 Exp-160 채택: PLC=4.0이 ytn2에서"
+        " 스퓨리어스 전환→환각을 유발함을 N=3로 확인). 수치 지정 시 그 간격(초)으로 재감지, 문자열 'none'으로도 비활성 지정 가능.",
     )
 
     simulstreaming_group.add_argument(

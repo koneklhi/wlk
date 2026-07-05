@@ -141,7 +141,7 @@ def main() -> None:
     p.add_argument("--no-diarization", action="store_true", help="화자분할 끄기(기본은 master 설정대로 ON)")
     p.add_argument("--sortformer-model", default=DEFAULT_SORTFORMER, help=f"Sortformer .nemo 로컬 경로. 기본 {DEFAULT_SORTFORMER}")
     p.add_argument("--compression-ratio-threshold", type=float, default=DEFAULT_COMPRESSION_RATIO, help="반복 환각 게이트. 기본 3.0. 0이면 비활성")
-    p.add_argument("--periodic-lang-check", type=float, default=DEFAULT_PERIODIC_LANG_CHECK, help="주기적 언어재감지(초). 기본 4.0. 0이면 비활성")
+    p.add_argument("--periodic-lang-check", type=float, default=DEFAULT_PERIODIC_LANG_CHECK, help="주기적 언어재감지(초). 기본 None(비활성, Exp-160)")
     args = p.parse_args()
 
     diarization = not args.no_diarization
