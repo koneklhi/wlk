@@ -13,6 +13,9 @@
 ## 0. 빠른 경로 (이미 환경이 갖춰진 경우)
 
 ```powershell
+# (0) 가상환경 활성화 — 새 PowerShell 창마다 매번 먼저 실행 (§8 트랩 참조)
+C:\whist\wlk\.venv\Scripts\Activate.ps1
+
 # (1) master 설정으로 경로 C 자동 테스트 — 음성 넣으면 정답 있으면 비교, 없으면 전사 저장
 python scripts/closed_test.py <음성파일_또는_폴더>
 
@@ -24,6 +27,9 @@ whisperlivekit-server
 
 > **⚠️ 항상 저장소 루트에서 실행한다(요청 1).** 기본값의 모델·warmup 경로(`whisperlivekit/model/...`,
 > `test_data/sbs1_10s.mp3`)는 **루트 기준 상대경로**다. 다른 폴더에서 띄우면 모델을 못 찾는다.
+>
+> **⚠️ 가상환경이 활성화된 상태인지 확인한다.** 프롬프트 앞에 `(.venv)`가 안 보이면 위 (0)을 다시 실행 —
+> 활성화 안 된 채로 실행하면 PATH의 다른 Python이 실행돼 `numpy`/`torch` 등을 못 찾는 에러가 난다.
 
 환경 준비가 안 됐다면 아래 §1~§4를 순서대로 따른다. **처음 반입한다면 §1.1(통째 복사 함정)을 먼저 읽고, 검증은 §4.4의 3단계(전사 → React 프론트 → 번역) 순서를 권장한다.**
 
@@ -221,13 +227,20 @@ uv pip install --no-index --find-links C:\whist\wlk\deploy\wheelhouse -r C:\whis
 #    whl 파일명의 버전이 다르면 Get-ChildItem C:\whist\wlk\deploy -Filter "*.whl"로 확인 후 맞춰 쓸 것
 uv pip install --no-index C:\whist\wlk\deploy\whisperlivekit-0.2.20-py3-none-any.whl
 
-# 4) playwright 브라우저 배치: USB의 ms-playwright 폴더를
+# 4) 가상환경 활성화 — ⚠️ 반드시 필요, 빠뜨리면 아래 6)이 시스템/다른 Python으로 실행돼
+#    "numpy를 찾을 수 없다" 등 ModuleNotFoundError가 난다(§8 트랩 참조).
+#    uv venv/uv pip install은 cwd의 .venv를 자동 인식하지만, 일반 python·콘솔스크립트
+#    실행은 PATH에 .venv\Scripts가 있어야 한다 — 활성화는 세션 한정이라 **새 PowerShell
+#    창을 열 때마다(§4 서버 기동 포함) 매번 다시 실행**해야 한다.
+C:\whist\wlk\.venv\Scripts\Activate.ps1
+
+# 5) playwright 브라우저 배치: USB의 ms-playwright 폴더를
 #    %USERPROFILE%\AppData\Local\ms-playwright\ 로 복사
 #    (또는) $env:PLAYWRIGHT_BROWSERS_PATH = "C:\whist\wlk\ms-playwright"
 
-# 5) ffmpeg.exe 를 PATH에 등록, VBCable 드라이버 설치(경로 C용)
+# 6) ffmpeg.exe 를 PATH에 등록, VBCable 드라이버 설치(경로 C용)
 
-# 6) 설치 확인
+# 7) 설치 확인 (4)에서 활성화된 상태에서 실행 — 활성화 안 됐으면 프롬프트 앞에 "(.venv)"가 없다)
 python -c "import whisperlivekit, torch; print('torch', torch.__version__, 'cuda', torch.cuda.is_available())"
 ```
 
@@ -258,6 +271,9 @@ python -c "import whisperlivekit, torch; print('torch', torch.__version__, 'cuda
 > 기본 포트는 **8900**(과거 8000), 자동측정(`eval.py`/`closed_test.py`)은 **8901**(과거 8001) — 배포 PC의 기존 8000/8001 점유와 충돌 회피(요청 2).
 > 향후 설정 변경은 **CLI를 늘리지 말고 `parse_args.py` 기본값을 고친다**(closed_test도 그 값을 자동 동기화 — 요청 5).
 > 서버 진입점은 콘솔 스크립트 `whisperlivekit-server`(= `python -m whisperlivekit.basic_server`)를 쓴다. **저장소 루트에서 실행.**
+>
+> ⚠️ **새 PowerShell 창을 열 때마다 가상환경을 먼저 활성화한다**: `C:\whist\wlk\.venv\Scripts\Activate.ps1`
+> (활성화 안 하면 `whisperlivekit-server`·`python -c ...` 등이 PATH의 다른 Python으로 실행돼 모듈을 못 찾는다 — §8 트랩 참조).
 
 ### 4.1 경로 C — 자동 전사/평가 (`closed_test.py`) ★요청 기능
 
@@ -468,3 +484,4 @@ curl http://localhost:2010/v1/models
 | 포트 충돌 | 수동 서버=8900, eval/closed_test=8901(기본). 배포 PC 기존 점유와 충돌하면 | `--port`로 변경, 또는 `parse_args.py`/`eval.py SERVER_PORT` 기본값 수정. 동시 기동 시 GPU 2배 점유 주의 |
 | 문서 플래그 오타 | `--avg-logprob-threshold`는 없음 | 실제 플래그는 `--logprob-threshold`([parse_args.py:321](../whisperlivekit/parse_args.py#L321)) |
 | **Python 버전 불일치** | `uv pip install -r requirements-deploy.txt` 중 `aiohttp`(또는 soxr·multiprocess 등)가 "Python 버전이 안 맞는다"고 실패 | wheelhouse가 **dev(3.12) 태그로 고정**됨(§2.2). 배포 PC에 `python-installer\python-3.12.10-amd64.exe` 설치(PATH 미등록, 예 `C:\Python312`) 후 `uv venv --python "C:\Python312\python.exe"`로 재생성(§3.0·§3.1). 기존 3.11 프로그램은 PATH를 건드리지 않으므로 영향 없음 |
+| **가상환경 미활성화** | 설치 로그엔 `numpy`·`torch` 등이 분명히 설치됐는데, `python -c "import ..."`나 `whisperlivekit-server` 실행 시 `ModuleNotFoundError: No module named 'numpy'` 등 발생 | `uv venv`/`uv pip install`은 cwd의 `.venv`를 자동 인식하지만 일반 `python`·콘솔스크립트 실행은 PATH에 `.venv\Scripts`가 있어야 한다. **`C:\whist\wlk\.venv\Scripts\Activate.ps1`을 먼저 실행**(§3.1 step 4). 활성화는 세션 한정이라 **새 PowerShell 창마다 매번 재실행** 필요(프롬프트 앞 `(.venv)` 표시로 확인) |
