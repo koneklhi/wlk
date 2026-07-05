@@ -36,8 +36,8 @@ whisperlivekit-server
 | 1 | **소스 코드** | `whisperlivekit/`, `scripts/`, `test_data/`, `docs/`, `pyproject.toml`, `uv.lock` | **`.git/`·`worktrees/`·`.venv/` 제외** — §1.1의 `git archive` 방식 권장 |
 | 2 | **STT 모델** | `whisperlivekit/model/whisper-large-v3-turbo/` (≈1.6GB, `model.safetensors`+토크나이저) | 이미 저장소에 동봉됨 → 코드와 함께 이동 |
 | 3 | **화자분할 모델** | `whisperlivekit/model/sortformer-4spk-v2.nemo` | 이미 저장소에 동봉됨 |
-| 4 | **번역 LLM** | `gpt-oss-20b-F16.gguf` (≈40GB) + `start_oss.bat` | **저장소 외부** — 별도로 USB에 담아 배포 PC에 배치 |
-| 5 | **의존성 + 설치도구** | `deploy/` 전체 — `wheelhouse/`(패키지), `*.whl`(프로젝트), `uv-installer/`(uv), `deploy_source.zip`, `requirements-deploy.txt` (§2에서 생성) | 오프라인 pip·uv 설치용 |
+| 4 | **번역 LLM** | `gpt-oss-20b-F16.gguf` (≈40GB) + `start_oss.bat` | **배포 PC에 기설치** — 별도 반입 불필요 |
+| 5 | **의존성 + 설치도구** | `deploy/` 전체 — `wheelhouse/`(패키지), `*.whl`(프로젝트), `uv-installer/`(uv), `python-installer/`(Python 3.12), `deploy_source.zip`, `requirements-deploy.txt` (§2에서 생성) | 오프라인 pip·uv 설치용. **배포 PC Python은 반드시 3.12** — wheelhouse가 dev(3.12) 태그로 고정됨(§2.2·§3.0) |
 | 6 | **playwright 브라우저** | `%USERPROFILE%\AppData\Local\ms-playwright\` (chromium) | 경로 C 자동화에 필요 |
 | 7 | **시스템 바이너리** | `ffmpeg.exe`(PATH 등록), VBCable 드라이버 설치본 | ffmpeg=WebM/mp3 디코딩, VBCable=경로 C 루프백 |
 
@@ -108,6 +108,8 @@ uv export --frozen --no-dev --no-emit-project `
 # 2) 모든 wheel 다운로드 (torch cu128 인덱스 포함)
 #    uv엔 pip download 서브커맨드가 없다. .venv에 pip를 넣고 그 python으로 받는다
 #    (배포 타깃과 동일한 마커: Windows AMD64 + 동일 파이썬으로 받아야 한다).
+#    ⚠️ 이 명령은 .venv\Scripts\python.exe(= 현재 dev Python 버전, 예: 3.12)의 태그로 wheel을 받는다.
+#    컴파일된 wheel(torch·numpy·aiohttp 등)은 그 버전에 고정되므로 배포 PC Python도 반드시 동일 마이너 버전이어야 한다(§3.0).
 uv pip install pip
 .venv\Scripts\python.exe -m pip download -r deploy\requirements-deploy.txt -d deploy\wheelhouse `
   --extra-index-url https://download.pytorch.org/whl/cu128
@@ -133,13 +135,22 @@ git archive master --output=deploy\deploy_source.zip
 
 # 7) 경로 C 자동화용 브라우저
 python -m playwright install chromium    # → %USERPROFILE%\AppData\Local\ms-playwright\
+
+# 8) 배포 PC용 Python 설치파일 확보 (배포 PC엔 wheelhouse와 같은 마이너 버전 Python이 없을 수 있음)
+New-Item -ItemType Directory -Force deploy\python-installer | Out-Null
+Invoke-WebRequest -Uri "https://www.python.org/ftp/python/3.12.10/python-3.12.10-amd64.exe" `
+  -OutFile "deploy\python-installer\python-3.12.10-amd64.exe" -UseBasicParsing
 ```
 
 > ⚠️ **반드시 개발 PC에서 1회 검증**: `deploy\wheelhouse\`에 torch cu128(`torch-2.x+cu128-...win_amd64.whl`),
 > `nemo-toolkit`과 그 전이 의존성까지 **빠짐없이** 받아졌는지 확인하라(nemo는 의존성이 매우 많다).
 > pip 마지막 줄 `Successfully downloaded ...`에 전체 목록이 나오면 OK. 빠진 wheel이 있으면 폐쇄망 설치가 중단된다.
-> dev/deploy 둘 다 Windows x64 + cu128이므로 wheel 호환은 일반적으로 OK.
+> dev/deploy 둘 다 Windows x64 + cu128이므로 wheel 호환은 일반적으로 OK — **단, Python 마이너 버전은 반드시 일치**시켜야 한다(아래).
 > (실측: 192개·약 3.0GB, torch `2.11.0+cu128` 포함. sdist 5개는 위 setuptools+wheel로 폐쇄망에서 빌드됨.)
+>
+> **wheel 태그 실측 (188개 중)**: `cp312-cp312`(3.12 고정) 46개 + `soxr`(`cp312-abi3`) 1개 + `multiprocess`(`py312-none-any`) 1개
+> = **48개가 Python 3.11에서 설치 거부**된다(`cp311` 전용 wheel은 0개). 배포 PC가 3.11이면 `aiohttp` 등에서
+> "Python 버전이 안 맞는다" 에러가 난다 — **배포 PC Python을 dev와 동일한 3.12로 맞추는 것이 해결책**(§3.0).
 
 ### 2.3 RTX 5090(Blackwell) 주의
 RTX 5090은 Blackwell(sm_120)이라 **CUDA 12.8+ / cu128 torch**가 필수다. 개발 PC(RTX 3080)에서 받은
@@ -149,16 +160,35 @@ cu128 torch wheel의 버전이 **Blackwell 커널을 포함**하는지(torch 2.7
 
 ## 3. 폐쇄망 설치 (배포 PC에서, 오프라인)
 
-> USB에서 **`deploy/` 폴더 전체**를 배포 PC 임의 위치에 복사한 뒤, 아래 명령을 순서대로 실행한다.
-> 아래에서 `D:\deploy\`는 복사한 위치 예시 — 실제 경로로 바꿔 쓴다.
+> 배포 PC의 설치 기준 경로: **`C:\whist\wlk\`**
+> `deploy_source.zip`을 이 경로에 풀고, `deploy/`·`ms-playwright/`·`whisperlivekit/model/` 폴더도 같은 위치에 배치한 뒤 아래 명령을 순서대로 실행한다.
 
-### 3.0 uv 설치 (Python + pip가 없는 상태)
+### 3.0 Python 3.12 설치 + uv 설치
 
-배포 PC에는 uv가 없다. **standalone binary**(권장)로 먼저 uv를 설치한다.
+**Python 버전 정합이 먼저다**: §2.2에서 만든 wheelhouse는 dev PC(3.12)의 wheel 태그로 고정돼 있어, 배포 PC가
+Python 3.11이면 `aiohttp` 등 46개+ wheel이 설치 거부된다(위 §2.2 경고 참조). **배포 PC에 Python 3.12를 설치**한다.
+
+> **배포 PC에 기존 3.11 기반 프로그램이 있어도 안전**: 아래 방식은 시스템 `python`/`PATH`를 건드리지 않고
+> `C:\Python312\`에 독립된 실행파일만 추가한다. wlk venv는 이 경로를 **직접 지정**해서 만들므로 다른 프로그램에 영향 없다.
+
+```powershell
+# USB의 deploy\python-installer\python-3.12.10-amd64.exe 실행
+```
+설치 마법사에서:
+- ⚠️ **"Add python.exe to PATH" 체크 해제** — 기존 3.11 프로그램이 `python` 명령을 쓰는 경우를 보호.
+- **"Customize installation"** → 설치 경로를 **`C:\Python312`**로 지정(기본 경로 대신 명확한 경로 권장).
+- "Install launcher for all users (py)"는 체크해도 무방 — `py.exe`는 버전 선택기라 3.11/3.12 공존을 해치지 않는다.
+
+설치 확인:
+```powershell
+C:\Python312\python.exe --version   # Python 3.12.10
+```
+
+이어서 배포 PC에는 uv가 없다. **standalone binary**(권장)로 uv를 설치한다.
 
 ```powershell
 # USB의 deploy\uv-installer\ 안에 있는 zip을 C:\uv\ 에 압축 해제
-Expand-Archive -Path "D:\deploy\uv-installer\uv-0.9.24-x86_64-pc-windows-msvc.zip" -DestinationPath "C:\uv"
+Expand-Archive -Path "C:\whist\wlk\deploy\uv-installer\uv-0.9.24-x86_64-pc-windows-msvc.zip" -DestinationPath "C:\uv"
 
 # uv.exe를 PATH에 추가 (현재 세션)
 $env:PATH = "C:\uv;" + $env:PATH
@@ -171,7 +201,7 @@ uv --version
 >
 > **대안 — pip 경유 설치** (Python + pip가 이미 있는 경우):
 > ```powershell
-> pip install uv --no-index --find-links D:\deploy\wheelhouse
+> pip install uv --no-index --find-links C:\whist\wlk\deploy\wheelhouse
 > ```
 
 ### 3.1 패키지 설치
@@ -181,18 +211,23 @@ uv --version
 $env:HF_HUB_OFFLINE = "1"
 $env:TRANSFORMERS_OFFLINE = "1"
 
-# 1) 가상환경 + 오프라인 설치 (USB의 deploy\wheelhouse\ + deploy\*.whl 사용)
-uv venv
-uv pip install --no-index --find-links D:\deploy\wheelhouse --find-links D:\deploy `
-  "whisperlivekit[diarization-sortformer,vbcable]"
+# 1) 가상환경 생성 — 반드시 3.12 경로를 명시(PATH의 시스템 python이 3.11이어도 무관하게 wlk만 3.12로 고정)
+uv venv --python "C:\Python312\python.exe"
 
-# 2) playwright 브라우저 배치: USB의 ms-playwright 폴더를
+# 2) 의존성 설치 — requirements-deploy.txt가 extras 포함 전체 목록이므로 wheelhouse에서 설치
+uv pip install --no-index --find-links C:\whist\wlk\deploy\wheelhouse -r C:\whist\wlk\deploy\requirements-deploy.txt
+
+# 3) 프로젝트 whl 설치 (의존성은 이미 위에서 설치됨)
+#    whl 파일명의 버전이 다르면 Get-ChildItem C:\whist\wlk\deploy -Filter "*.whl"로 확인 후 맞춰 쓸 것
+uv pip install --no-index C:\whist\wlk\deploy\whisperlivekit-0.2.20-py3-none-any.whl
+
+# 4) playwright 브라우저 배치: USB의 ms-playwright 폴더를
 #    %USERPROFILE%\AppData\Local\ms-playwright\ 로 복사
-#    (또는) $env:PLAYWRIGHT_BROWSERS_PATH = "D:\ms-playwright"
+#    (또는) $env:PLAYWRIGHT_BROWSERS_PATH = "C:\whist\wlk\ms-playwright"
 
-# 3) ffmpeg.exe 를 PATH에 등록, VBCable 드라이버 설치(경로 C용)
+# 5) ffmpeg.exe 를 PATH에 등록, VBCable 드라이버 설치(경로 C용)
 
-# 4) 설치 확인
+# 6) 설치 확인
 python -c "import whisperlivekit, torch; print('torch', torch.__version__, 'cuda', torch.cuda.is_available())"
 ```
 
@@ -432,3 +467,4 @@ curl http://localhost:2010/v1/models
 | RTX 5090 커널 | torch가 sm_120 미지원 | cu128 + torch 2.7+ 버전 확인 |
 | 포트 충돌 | 수동 서버=8900, eval/closed_test=8901(기본). 배포 PC 기존 점유와 충돌하면 | `--port`로 변경, 또는 `parse_args.py`/`eval.py SERVER_PORT` 기본값 수정. 동시 기동 시 GPU 2배 점유 주의 |
 | 문서 플래그 오타 | `--avg-logprob-threshold`는 없음 | 실제 플래그는 `--logprob-threshold`([parse_args.py:321](../whisperlivekit/parse_args.py#L321)) |
+| **Python 버전 불일치** | `uv pip install -r requirements-deploy.txt` 중 `aiohttp`(또는 soxr·multiprocess 등)가 "Python 버전이 안 맞는다"고 실패 | wheelhouse가 **dev(3.12) 태그로 고정**됨(§2.2). 배포 PC에 `python-installer\python-3.12.10-amd64.exe` 설치(PATH 미등록, 예 `C:\Python312`) 후 `uv venv --python "C:\Python312\python.exe"`로 재생성(§3.0·§3.1). 기존 3.11 프로그램은 PATH를 건드리지 않으므로 영향 없음 |
