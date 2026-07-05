@@ -2064,4 +2064,6 @@ sbs1 WER 19.0%(정상 범위, 회귀 없음). 서버로그 lag가 시종 0.00s(1
 2. P3 — 잔여 파라미터(beam/CRT/logprob) 재검증 착수.
 3. `repeat-filter-langagnostic`(Exp-160 미결정) cross-batch phrase-level 재설계 시도.
 
-**JSON**: `.omc/benchmarks/eval_20260705_2335_sbs1_audiomax15.json`(N=1 스크리닝) · `eval_20260705_2338_audiomax15_N3.json`(N=3 확정) · `eval_20260706_0002_audiomax15_heldout.json`(held-out). 서버로그 `.omc/server_logs/server_sbs1_C_R{1,2,3}_20260705_23*.log`.
+**후속 확인 완료(2026-07-06)**: 1번 재확인 — `exp/langswitch-confidence-raise`에 master 병합(신규 기본값 반영) 후 재측정: bong1 31.7%/ytn2 27.6%/**sbs1 14.9%**(N=1). sbs1이 기존 47.0%(게이트 초과)에서 새 baseline 수준(14.9%, Exp-161과 동일)으로 완전히 정상화됨 — **Exp-160의 sbs1 위험신호는 confidence-raise 코드 자체가 아니라 `audio_max_len=30.0`의 lag 확인이었음을 확인**. 단 bong1·ytn2는 현재 baseline(30.5%/28.1%) 대비 뚜렷한 개선도 회귀도 없어(노이즈 수준 차이) — 확신도 상향 자체의 순 효과는 **중립**으로 판단, N=3 추가 투자는 보류(워크트리는 계속 보존).
+
+**JSON**: `.omc/benchmarks/eval_20260705_2335_sbs1_audiomax15.json`(N=1 스크리닝) · `eval_20260705_2338_audiomax15_N3.json`(N=3 확정) · `eval_20260706_0002_audiomax15_heldout.json`(held-out) · `eval_20260706_0010_confraise_v2.json`(langswitch-confidence-raise 후속 재확인). 서버로그 `.omc/server_logs/server_sbs1_C_R{1,2,3}_20260705_23*.log`.
