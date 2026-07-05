@@ -91,11 +91,14 @@ USB에 담을 3가지:
 |---|---|---|
 | STT 기본(전사) | base deps (fastapi, faster-whisper, torch/torchaudio cu128, tiktoken, safetensors …) | (기본) |
 | 화자분할(sortformer) | `nemo-toolkit[asr]` (**무겁다** — lightning/hydra 등 다수 의존) | `diarization-sortformer` |
-| 경로 C 자동측정 | `playwright`, `comtypes` (+chromium 바이너리) | `vbcable` |
+| 경로 C 자동측정 | `playwright`, `comtypes`, **`sounddevice`**(+chromium 바이너리) | `vbcable` |
 | 번역(LLM) | `httpx` (이미 `uv.lock`에 포함) | (별도 extra 불필요) |
 | GPU(RTX 30/50) | torch/torchaudio **cu128** 휠 | `cu128` |
 
-> `listen`(sounddevice) extra는 별도 CLI 청취 모드용으로 **경로 B/C에는 불필요**(경로 B는 브라우저 마이크, 경로 C는 VBCable+브라우저).
+> **[정정]** 과거 이 문서는 "`listen`(sounddevice) extra는 경로 B/C에 불필요"라고 적었으나 **틀렸다** —
+> `scripts/vbcable_test.py`의 `run_browser_test()`가 `sd.play()`로 VBCable Input에 오디오를 재생하는 게
+> 경로 C의 실제 재생 메커니즘이라 `sounddevice`는 하드 의존성이다(실사고로 확인, §8 트랩 참조).
+> `vbcable` extra에 `sounddevice`를 추가해 바로잡았다. `listen` extra는 여전히 CLI 마이크 청취 모드 전용으로 별개다.
 > `translation`(`nllw`) extra는 NLLB(`--target-language`) 경로용으로 **LLM 번역(gpt-oss)에는 불필요**.
 
 ### 2.2 deploy/ 폴더 만들기 (온라인 개발 PC)
@@ -485,3 +488,4 @@ curl http://localhost:2010/v1/models
 | 문서 플래그 오타 | `--avg-logprob-threshold`는 없음 | 실제 플래그는 `--logprob-threshold`([parse_args.py:321](../whisperlivekit/parse_args.py#L321)) |
 | **Python 버전 불일치** | `uv pip install -r requirements-deploy.txt` 중 `aiohttp`(또는 soxr·multiprocess 등)가 "Python 버전이 안 맞는다"고 실패 | wheelhouse가 **dev(3.12) 태그로 고정**됨(§2.2). 배포 PC에 `python-installer\python-3.12.10-amd64.exe` 설치(PATH 미등록, 예 `C:\Python312`) 후 `uv venv --python "C:\Python312\python.exe"`로 재생성(§3.0·§3.1). 기존 3.11 프로그램은 PATH를 건드리지 않으므로 영향 없음 |
 | **가상환경 미활성화** | 설치 로그엔 `numpy`·`torch` 등이 분명히 설치됐는데, `python -c "import ..."`나 `whisperlivekit-server` 실행 시 `ModuleNotFoundError: No module named 'numpy'` 등 발생 | `uv venv`/`uv pip install`은 cwd의 `.venv`를 자동 인식하지만 일반 `python`·콘솔스크립트 실행은 PATH에 `.venv\Scripts`가 있어야 한다. **`C:\whist\wlk\.venv\Scripts\Activate.ps1`을 먼저 실행**(§3.1 step 4). 활성화는 세션 한정이라 **새 PowerShell 창마다 매번 재실행** 필요(프롬프트 앞 `(.venv)` 표시로 확인) |
+| **sounddevice 누락** | `python scripts/closed_test.py ...`(경로 C) 실행 시 `ModuleNotFoundError: No module named 'sounddevice'` | `scripts/vbcable_test.py`가 `sd.play()`로 VBCable에 오디오를 재생하는 하드 의존성인데 과거 `vbcable` extra(playwright+comtypes만)에 빠져 있었음 — master에서 수정 완료(pyproject.toml `vbcable` extra에 `sounddevice` 추가, requirements-deploy.txt·wheelhouse 갱신). 이미 설치된 배포 PC는 `uv pip install --no-index --find-links C:\whist\wlk\deploy\wheelhouse sounddevice==0.5.5`로 단건 추가하면 된다(전체 재설치 불필요) |
