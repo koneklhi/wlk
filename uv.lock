@@ -6775,6 +6775,7 @@ translation = [
 vbcable = [
     { name = "comtypes" },
     { name = "playwright" },
+    { name = "sounddevice" },
 ]
 voxtral-hf = [
     { name = "accelerate" },
@@ -6820,6 +6821,7 @@ requires-dist = [
     { name = "python-multipart" },
     { name = "safetensors" },
     { name = "sounddevice", marker = "extra == 'listen'", specifier = ">=0.4.6" },
+    { name = "sounddevice", marker = "extra == 'vbcable'", specifier = ">=0.4.6" },
     { name = "soundfile" },
     { name = "tiktoken" },
     { name = "torch", marker = "(platform_machine != 'AMD64' and platform_machine != 'x86_64') or sys_platform == 'darwin'", specifier = ">=2.0.0" },

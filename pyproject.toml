@@ -55,7 +55,7 @@ voxtral-hf = [
     "accelerate>=0.12",
 ]
 listen = ["sounddevice>=0.4.6"]
-vbcable = ["playwright>=1.40", "comtypes>=1.4"]
+vbcable = ["playwright>=1.40", "comtypes>=1.4", "sounddevice>=0.4.6"]
 cpu = ["torch>=2.0.0", "torchaudio>=2.0.0"]
 cu128 = [
     "torch>=2.0.0",
