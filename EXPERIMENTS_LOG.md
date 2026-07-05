@@ -2067,3 +2067,31 @@ sbs1 WER 19.0%(정상 범위, 회귀 없음). 서버로그 lag가 시종 0.00s(1
 **후속 확인 완료(2026-07-06)**: 1번 재확인 — `exp/langswitch-confidence-raise`에 master 병합(신규 기본값 반영) 후 재측정: bong1 31.7%/ytn2 27.6%/**sbs1 14.9%**(N=1). sbs1이 기존 47.0%(게이트 초과)에서 새 baseline 수준(14.9%, Exp-161과 동일)으로 완전히 정상화됨 — **Exp-160의 sbs1 위험신호는 confidence-raise 코드 자체가 아니라 `audio_max_len=30.0`의 lag 확인이었음을 확인**. 단 bong1·ytn2는 현재 baseline(30.5%/28.1%) 대비 뚜렷한 개선도 회귀도 없어(노이즈 수준 차이) — 확신도 상향 자체의 순 효과는 **중립**으로 판단, N=3 추가 투자는 보류(워크트리는 계속 보존).
 
 **JSON**: `.omc/benchmarks/eval_20260705_2335_sbs1_audiomax15.json`(N=1 스크리닝) · `eval_20260705_2338_audiomax15_N3.json`(N=3 확정) · `eval_20260706_0002_audiomax15_heldout.json`(held-out) · `eval_20260706_0010_confraise_v2.json`(langswitch-confidence-raise 후속 재확인). 서버로그 `.omc/server_logs/server_sbs1_C_R{1,2,3}_20260705_23*.log`.
+
+---
+
+## Exp-162 — P3 파라미터 재검증: beam·CRT (turbo에서 현재 기본값 재확인) [E5, 코드변경 없음] (2026-07-06)
+
+**가설**: E1~E4(base 기질)에서 나온 beam(Exp-125: beam2 최적, beam3/4 ytn2 catastrophic)·CRT 결론이 turbo에서도 유효한지 재검증(epoch 게이트 §CLAUDE.md). 도구 준비로 `eval.py`에 `--beams` 패스스루 플래그 추가(브랜치 `exp/eval-add-beams-flag` → master 머지, 커밋 `4ae604f`).
+
+**세션 메모(하니스 확인)**: 서버 시작 배너가 항상 `Model: base`로 표시됨을 발견해 model_dir 배선 버그(Exp-158) 재발을 의심했으나, 이미 정상으로 확인된 P0 held-out 로그(`server_ytn1_C_R1_20260705_212611.log`)에도 동일하게 표시됨을 대조 확인 — **배너의 모델명은 cosmetic**(기존 메모리 `turbo-nograd-perf-cliff`와 동일 현상)이며 실제 로드 모델과 무관. 유사하게 provenance 줄의 `beams=` 값도 `eval.py`가 빈 인자로 `parse_args`를 프로브해 얻은 **정적 기본값**이라 `--beams` 오버라이드를 반영하지 않는 cosmetic 표시임을 확인(WER 결과 자체가 beam값별로 뚜렷이 달라지는 것으로 플래그 실제 적용은 검증됨).
+
+### 스크리닝 결과 (N=1, 현재 baseline: bong1 30.5%/ytn2 28.1%/sbs1 14.9%, 게이트 max 30.5%/34.5%/16.1%)
+
+| 파라미터 | bong1 | ytn2 | sbs1 | 판정 |
+|---------|-------|------|------|------|
+| beam=1(greedy) | 36.9%(게이트초과) | 20.2%(개선) | 21.4%(게이트초과) | ❌ 2/3 파일 게이트 초과 |
+| beam=3 | 36.9%(게이트초과) | 40.9%(게이트초과) | 26.8%(게이트초과) | ❌ 3/3 파일 게이트 초과 — 명백한 악화 |
+| CRT=2.5 | 34.7%(게이트초과) | 33.0%(게이트이내) | 19.0%(게이트초과) | ❌ 2/3 파일 게이트 초과 |
+| CRT=2.8 | 29.3%(이내) | 28.6%(이내) | 14.3%(이내) | ➖ baseline과 통계적으로 구분 안 됨(전부 게이트 이내, 소폭 변동) |
+
+### 판정
+
+**beam=2, CRT=3.0(현재 master 기본값) 모두 turbo에서 재확인 — 변경 없음**. beam=1·beam=3·CRT=2.5는 스크리닝 단계에서 이미 여러 파일이 게이트를 초과해 N=3 확정 없이 기각(방향이 명확히 나쁨). CRT=2.8은 baseline과 구분 안 되는 수준이라 추가 투자(N=3) 근거 없음. **base 기질(Exp-125 등)의 "beam=2 최적" 결론이 turbo에서도 동일한 방향으로 재확인**됨 — [base전용·재검증] 태그를 [모델무관·유지]로 격상 가능.
+
+### 다음 가설
+
+1. logprob 임계·no_speech 등 잔여 P3 파라미터는 현재 우선순위 낮음(beam·CRT가 이미 안정적으로 재확인됨). 후속 세션에서 여유 있을 때 착수.
+2. `repeat-filter-langagnostic`(Exp-160 미결정) cross-batch phrase-level 재설계는 여전히 유효한 다음 과제.
+
+**JSON**: `.omc/benchmarks/eval_20260706_0023_beam1.json` · `eval_20260706_0032_beam3.json` · `eval_20260706_0040_crt25.json` · `eval_20260706_0048_crt28.json`.
