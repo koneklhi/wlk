@@ -137,8 +137,10 @@ def filter_segments(segments: list) -> list:
                 text = text.replace(bad, "")
         text = re.sub(r"\s+", " ", text).strip()
 
-        if not text or text in {".", "?"} or set(text) == {"."}:
-            continue  # 빈/구두점-only 세그먼트 제거
+        # 빈/구두점-only 세그먼트 제거. 공백을 무시해 " . ."(diar 병합 유령 온점)도 드롭한다.
+        bare = text.replace(" ", "")
+        if not bare or set(bare) <= {".", "?", "!", "。", "！", "？"}:
+            continue
 
         if pattern:
             text = pattern.sub(lambda m: replacements[m.group(0)], text)
