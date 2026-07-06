@@ -2144,3 +2144,68 @@ F1(v2 N=3 med): bong1 46.2% / ytn2 43.5% / sbs1 16.7%. 경로 C 평균 WER 26.4%
 **후보 3(비음성 게이팅, 원천 차단)으로 피벗**(사용자 승인). VAC threshold(0.3)·no_speech(nonspeech_prob=0.5, 현재 세그먼트 **첫 토큰만** 검사) 재검토 + mid-segment no_speech 검사로 필러 생성 구간을 전사에서 배제. STATE "Layer 3b 미해결 1순위 과제"와 정합. base 시절 nonspeech/VAC 기각 이력은 base 기질이라 turbo 재검증 대상(epoch 게이트).
 
 **JSON**: `.omc/benchmarks/eval_20260706_1009_exp163_phrasefilter_screen.json`(v1 스크리닝) · `eval_20260706_1049_exp163v2_fillerstorm_screen.json`(v2 스크리닝) · `eval_20260706_1100_exp163v2_fillerstorm_N3.json`(v2 N=3).
+
+---
+
+## Exp-164 — 비음성 게이팅 원천 차단 시도: no_speech 계측(구조적 무효 규명) + VAC 임계값 스윕(목표 미달성) [E5, 코드변경 있음·master 미머지·기각] (2026-07-06)
+
+**가설**: Exp-163(필러 반복 후처리 필터)가 "필러는 원천에서 차단해야 한다"는 교훈으로 기각됨에 따라, STATE "Layer 3b 미해결 1순위 과제"에 해당하는 **비음성 구간 게이팅**을 시도한다. 두 기존 메커니즘이 후보: ① no_speech SOT 품질게이트(`nonspeech_prob`, 현재 0.5 고정·CLI 미노출) ② VAC(Silero VAD, threshold=0.3 고정·CLI 미노출). 워크트리 `exp/nonspeech-gating`.
+
+**변경 (2단계)**:
+- **1단계 — no_speech 계측** (커밋 `0a5ed1a`): `--nonspeech-prob` CLI 노출(`parse_args.py`) + `AlignAttConfig` 배선(`backend.py`) + `_check_no_speech`에 `[NoSpeechProbe]` 상시 로깅 추가(`simul_whisper.py:341`) + `eval.py` 패스스루. 기본값 0.5 유지(동작 불변).
+  - **하니스 버그 발견·수정**: 첫 계측 run에서 로그 0회 발동 확인 → 원인 규명 — `basic_server.py`가 root 로거를 WARNING으로 두고 `--trace-tokens` 시 `backend.py`/`align_att_base.py` 로거만 DEBUG로 승격하는데 `simul_whisper.py`(내 계측 위치)가 그 목록에서 누락되어 전부 필터링됨. 목록에 추가 후 재계측.
+- **2단계 — VAC 계측 + 임계값 노출** (커밋 `99db307`): `silero_vad_iterator.py`의 `VADIterator.__call__`(speech_prob 계산 직후, `:264` 부근)에 `[VacProbe]` 상시 로깅 추가 + `basic_server.py` trace-tokens 목록에 로거 추가. `--vac-threshold` CLI 노출(`parse_args.py`) + `audio_processor.py:103-108`(`FixedVADIterator(..., threshold=vac_threshold)`) 배선 + `eval.py` 패스스루. 기본값 0.3 유지.
+
+**테스트 설정**: 경로 C, diar-ON(Sortformer + CRT 3.0), turbo, `--trace-tokens`. no_speech 계측 3파일 N=1(진단 목적), VAC 계측 ytn2 단독 N=1(신호 검증), VAC=0.4 스윕 3파일 N=1(스크리닝).
+
+### 계측 결과 — no_speech 게이트는 구조적으로 무효
+
+| 파일 | NoSpeechProbe 샘플 수 | mean | max |
+|------|---------|------|-----|
+| bong1(웃음구간 포함) | 531 | 0.000000 | 0.000000 |
+| ytn2(필러구간 포함) | 402 | 0.000000 | 0.000000 |
+| sbs1 | 288 | 0.000000 | 0.000000 |
+
+**3파일 합계 1221개 세그먼트 샘플 전부 정확히 0.000** — 어떤 임계값(0.4/0.5/0.6)을 넣어도 `0.000 > threshold`는 항상 False라 게이트가 원천적으로 발동 불가능함이 실측 확인됨. **원인**: `align_att_base.py:288-289`의 `_concat_segments()`가 롤링 버퍼 **전체**(최대 `audio_max_len`=15s, 이전 실제 발화 포함)를 인코딩하고 `_check_no_speech`(`simul_whisper.py:338-345`)는 그 전체 세그먼트에 대한 SOT 확률 **하나**로 판정 — 버퍼에 실제 발화가 조금이라도 섞여 있으면(거의 항상) no_speech 확률이 절대 오르지 않는다. **→ 임계값 스윕을 실행하지 않고 즉시 중단**(무의미한 측정 사이클 낭비 방지, 사용자 확인 후 VAC로 피벗).
+
+### 계측 결과 — VAC(Silero)는 신호 자체는 살아있음
+
+ytn2 단독 N=1, 3807 샘플: mean=0.715, min=0.000, **max=0.996**, 히스토그램 이중봉(0.0대 682개, 0.9대 2457개). threshold=0.3 미만 25.3%. no_speech와 달리 실제로 변동하는 신호 확인 → 스윕 진행 근거 확보.
+
+### 테스트 세트 결과 (VAC=0.4 스크리닝, N=1)
+
+| 파일 | baseline(VAC=0.3) med | VAC=0.4 | 게이트(max) | 판정 |
+|------|------|---------|--------|------|
+| bong1 | 30.5% | **34.4%** (F1 52.4) | ≤30.5% | ❌ 초과 +3.9pp |
+| ytn2 | 28.1% | 30.0% (F1 54.5) | ≤34.5% | ✓ 이내 |
+| sbs1 | 14.9% | 11.9% (F1 18.2) | ≤16.1% | ✓ 이내(개선 -3.0pp) |
+
+provenance: `branch=exp/nonspeech-gating@99db307 vac_threshold=0.4 vbcable=ok`.
+
+### 분석 (전사 내용 정성 대조)
+
+**bong1** (VAC=0.4, 게이트 초과): **VAC 상향의 목표(웃음 구간 환각 억제)가 달성되지 않음** — 웃음 구간 전사에 `"This man Thank you very. much. Thank you. Thank."`(baseline VAC=0.3의 Exp-163 관측과 **정확히 동일 위치·동일 패턴**) + 신규 `"Ha, ha, ha,. ha,. I'm sorry, sir. I'm sorry."`(웃음소리 자체가 축자 전사됨) 그대로 존재. VAC를 올려도 필러·웃음 전사가 사라지지 않음.
+
+**ytn2** (VAC=0.4, 게이트 이내): 필러 잔존 — `"resolutions Thank you very much. Thank you very much."`(baseline과 동일 위치). 단 게이트 초과는 없었고, 전환 경계 서두 절단(base 기각 사유였던 단어유실)도 이번 run에선 뚜렷하지 않음(`"논의한 사안 중에서는 우선 왕성한 연합 방위태세를 유지하기 위한..."` 온전 보존) — base의 "VAC 상향→전환 speech 손실" 우려가 이번 run에서는 재현 안 됨.
+
+**sbs1** (VAC=0.4, 개선): 필러 없음(baseline과 동일), VAC 임계값과 무관.
+
+**이번 변경 영향**: **구조적 해석** — VAC(Silero)는 "음성 에너지(성대 진동·포먼트)가 있는가"를 판정하는 메커니즘이지 "어휘적으로 이해 가능한 발화인가"를 판정하지 않는다. 웃음·필러성 발성은 실제 음성 에너지를 동반하므로(무음·잡음이 아님) 어떤 합리적 VAC 임계값을 써도 "speech"로 통과되어 ASR에 유입된다. no_speech 게이트가 "롤링버퍼 전체 판정"이라는 배선 문제로 무효였다면, VAC는 "애초에 겨냥하는 신호가 다르다"는 **개념적 한계**로 무효 — 둘 다 §CLAUDE.md Layer 3b(웃음·필러를 "비음성"으로 분류해 배제)의 목표에 도달하지 못한다.
+
+### 채택 (조건) 판정
+
+- ① max 미회귀: bong1 게이트 초과(34.4>30.5) ❌.
+- ② 정성 목표 달성: 웃음/필러 환각 억제 **미달성**(전사에 그대로 잔존) ❌.
+- 정량 회귀 + 정성 목표 미달성 → **기각** (§4 판정표: "회귀, 목표 미달성 → 기각"에 해당).
+
+### 결론
+
+**기각 (master 미머지, 워크트리 `exp/nonspeech-gating` 보존).** no_speech 게이트는 배선(롤링버퍼 전체 판정) 때문에 구조적으로 무효, VAC는 판정 대상(음성 에너지 vs 어휘적 이해가능성)이 달라 개념적으로 무효 — **두 기존 메커니즘 모두 웃음/필러를 "비음성"으로 걸러내지 못함**이 실측으로 확정됨. `--nonspeech-prob`/`--vac-threshold` CLI 노출과 `[NoSpeechProbe]`/`[VacProbe]` 계측 인프라 자체는 향후 진단에 재사용 가능(기본값 유지로 동작 불변, pytest 127 passed 확인됨)하므로 워크트리 보존.
+
+### 다음 가설
+
+1. **Layer 3b 재설계 필요** — 기존 메커니즘 확장이 아니라 새로운 신호가 필요: (a) no_speech를 세그먼트 전체가 아니라 **신규 tail만** 판정하도록 디코더 구조 변경(리스크 큼, 별도 설계 세션 필요), 또는 (b) 웃음 전용 분류기(비-ASR, 별도 오디오 분류 모델) 도입 — 둘 다 이번 세션 범위 밖.
+2. **후보 2(전환 경계 오디오 보존, `LANG_SWITCH_KEEP_SECS` 등)** — Exp-164에서 VAC=0.4의 ytn2 전환 손실 우려가 재현 안 됨을 확인했으므로, ytn2 잔여 회귀(서두 절단) 재조사는 여전히 유효한 후보.
+3. **후보 4(diar 과분할 F1)** — F1 병목(전 파일 precision 붕괴)은 이번 실험과 무관하게 미해결.
+
+**JSON**: `.omc/benchmarks/eval_20260706_1439_exp164_nsp_default_probe.json`(no_speech 계측 1차, 로깅버그로 무효) · `eval_20260706_1511_exp164_vac04_screen.json`(VAC=0.4 스크리닝).
