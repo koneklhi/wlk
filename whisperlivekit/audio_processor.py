@@ -26,10 +26,7 @@ logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 
 SENTINEL = object() # unique sentinel object for end of stream marker
-# 문장 확정용 Silence 토큰 생성 침묵 길이 기준(초). tokens_alignment.py의
-# PUNCT_SPLIT_GAP_SECS와 반드시 같은 값이어야 한다(순환 임포트 회피로 값만 동기화 —
-# 상세 근거는 그쪽 주석 참조). 값을 바꾸면 그쪽도 함께 바꿀 것.
-MIN_DURATION_REAL_SILENCE = 0.4
+MIN_DURATION_REAL_SILENCE = 0.4  # 문장 확정용 Silence 토큰 생성 침묵 길이 기준(초)
 
 
 def _append_terminal_punctuation(lines: List[Any]) -> None:

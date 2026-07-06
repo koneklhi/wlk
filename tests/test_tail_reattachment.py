@@ -21,7 +21,6 @@ from whisperlivekit.timed_objects import (
 )
 from whisperlivekit.tokens_alignment import (
     FINALIZE_GRACE_SECS,
-    PUNCT_SPLIT_GAP_SECS,
     TokensAlignment,
 )
 
@@ -235,60 +234,63 @@ def test_reattach_through_consecutive_silences():
     assert tail_idx < first_sil_idx, f"연속 침묵 통과 재귀속 실패: {order}"
 
 
-# ─── 9. 경로4(구두점-매개 꼬리분리) 사각지대 갭 회귀 ─────────────────────────────
+# ─── 9. 경로4(구두점-매개 꼬리분리) — 갭 기반 분기 완전 제거(Exp-166 FIX 1) ─────
 #
-# 1단계 조사 결론(정확한 커밋 메커니즘):
-# compute_punctuations_segments()는 매 호출마다 self.all_tokens 전체로 새로 계산되고
-# finalized 플래그도 매번 새로 부여된다(영속 상태 아님) — 그래서 "먼저 굳어 버려서
-# 되돌릴 수 없는" lock은 실제로 존재하지 않는다. 그런데도 분리가 "영구화"돼 보이는
-# 이유는 더 단순하다: 꼬리 토큰 도착 전엔 idx+1>=len(tokens)("발화 끝")로 온점이
-# 분할점을 얻고, 꼬리 도착 후 재계산에서도 nxt.start - tokens[idx].end 라는 고정된
-# 타임스탬프 갭을 그대로 재평가하므로 매번 같은(틀린) 결론에 도달한다 — 입력이
-# 안 바뀌니 결과도 안 바뀔 뿐이다. audio_processor.MIN_DURATION_REAL_SILENCE(0.4)
-# 보다 짧은 갭(예 0.32s, bong1 실측 "자빠졌/는데")은 Silence 토큰을 만들지 않지만
-# 구 PUNCT_SPLIT_GAP_SECS(0.3) 문턱은 넘어 "실제 pause"로 오판된다 — [0.3,0.4) 사각지대.
+# 1라운드 결론 정정: PUNCT_SPLIT_GAP_SECS를 0.3→0.4로 올린 조치("Direction A")는
+# 근본 수정이 아니었다. 서버로그의 "Silence of = 0.32s"는 backend.py가 재는 VAD
+# 침묵 길이일 뿐, _punct_split_justified()가 실제로 쓰는 토큰 타임스탬프 갭
+# (nxt.start - tokens[idx].end)과는 다른 양이다 — 이 둘을 같다고 가정한 게 Direction
+# A가 실패한 원인이었다(N=3 확정측정에서 bong1/sbs1 모두 3/3 재현으로 드러남).
 #
-# finalized 플래그는 이 버그와 무관하다(중요 — Direction B 원안을 기각한 근거):
-# whisperlivekit/web/live_transcription.js의 renderLinesWithBuffer()는 lines[]의
-# 각 항목마다 finalized/completed 값과 무관하게 <p>.textcontent 한 줄을 만든다
-# (item.finalized 참조 자체가 코드에 없음 — grep으로 확인). scripts/eval.py의
-# hyp_sentences(경로 A: `[line["text"] for line in result.lines if line.get("text")]`,
-# 경로 C: DOM `.textcontent` 스냅샷)도 finalized 여부를 보지 않고 text만으로 줄을 센다.
-# 즉 "확정 유예"만 확장해선(Direction B 원안) 이미 갈라진 텍스트 자체를 되돌리지 못해
-# hyp 문장수·꼬리분리 증상을 전혀 개선하지 못한다 — 그래서 Direction A(문턱 정합)만
-# 적용하고 Direction B는 채택하지 않았다.
+# 소거법: get_lines()/get_lines_diarization()은 매 틱 self.all_tokens 전체를 새로
+# 계산하는 풀스냅샷이고 영속 상태가 없다(1라운드에서 이미 확인). 최종 스냅샷에
+# 분리가 남아있다는 것 자체가 최종 all_tokens 기준으로 _punct_split_justified가
+# True를 반환했다는 뜻이고, (a)발화 끝도 아니고 (b)Silence 토큰도 없으니(VAD 침묵이
+# 0.4 미만이라 안 만들어짐) 남는 건 구 (c)갭 분기뿐 — 즉 실제 토큰 갭은 이미 (문턱을
+# 얼마로 올리든) 그 문턱 이상이었다는 뜻이다. 갭 기반 분기는 "문턱을 얼마로 잡아도
+# 그보다 큰 실제 갭 앞에서는 무력하다"는 구조적 결함이 있어 문턱 조정 대신 (c)분기
+# 자체를 제거했다 — 온점 분할은 이제 오직 (a)발화 끝 또는 (b)실제 Silence 토큰에서만
+# 일어난다. 아래 테스트들은 "갭 값이 얼마든(0.32든 1.5든) 분할 근거가 못 된다"는
+# 문턱-무관성을 검증한다 — 특정 갭 값 하나만 고쳐 맞추는 게 아니다.
+#
+# finalized 플래그는 이 버그와 무관하다(Direction B 원안을 기각한 근거는 1라운드와
+# 동일하게 유지): whisperlivekit/web/live_transcription.js의 renderLinesWithBuffer()는
+# finalized/completed 값과 무관하게 lines[] 각 항목마다 .textcontent 한 줄을 만들고,
+# scripts/eval.py의 hyp_sentences도 finalized를 보지 않고 text만으로 줄을 센다.
 
-def test_audio_processor_min_silence_matches_punct_split_gap():
-    """순환 임포트 회피로 값이 중복 정의된 두 상수가 어긋나지 않는지 회귀 방지.
+def test_large_token_gap_without_silence_merges_at_source():
+    """실서버 재현값(gap=0.45s, 실제 Silence 없음) — compute_punctuations_segments
+    원천에서 병합돼야 한다.
 
-    audio_processor.py가 tokens_alignment.py를 임포트하므로 역방향 임포트는 순환
-    임포트가 된다 — 그래서 두 상수는 값으로만 동기화하고, 이 테스트로 드리프트를 잡는다.
+    N=3 확정측정에서 bong1 "자빠졌/는데" 지점은 VAD 침묵이 0.29~0.32s(Silence 토큰
+    미생성)였는데도 3/3 전부 분리가 재현됐다 — 소거법상 실제 토큰 갭은 이미 0.4s
+    이상이었다는 뜻이다(구 Direction A로는 못 막았던 바로 그 값대). 이 테스트는
+    그 실서버 케이스를 gap=0.45s로 직접 재현한다. 구 코드(Direction A, 문턱=0.4)라면
+    0.45>=0.4로 여전히 분할됐을 값이다.
     """
-    from whisperlivekit.audio_processor import MIN_DURATION_REAL_SILENCE
-    assert PUNCT_SPLIT_GAP_SECS == MIN_DURATION_REAL_SILENCE == 0.4
-
-
-def test_deadzone_gap_no_split_at_source():
-    """[0.3,0.4) 사각지대(bong1 실측 0.32s) — compute_punctuations_segments 원천에서 병합."""
     proc = make_processor(diarization=True)
-    proc.all_tokens = [tok(0.0, 0.5, '것으로.'), tok(0.82, 1.2, '보입니다.')]  # gap=0.32s
+    proc.all_tokens = [tok(0.0, 0.5, '것으로.'), tok(0.95, 1.3, '보입니다.')]  # gap=0.45s
     segments = proc.compute_punctuations_segments()
     txts = text_segs(segments)
-    assert len(txts) == 1, f"사각지대 갭(0.32s)이 여전히 과분할됨: {[s.text for s in txts]}"
+    assert len(txts) == 1, f"갭(0.45s)이 여전히 과분할됨: {[s.text for s in txts]}"
     assert '것으로.' in txts[0].text and '보입니다.' in txts[0].text
 
 
-def test_gap_at_new_threshold_still_splits():
-    """문턱 정합 후에도 실제 pause(>=0.4s)는 여전히 분할한다 — 과교정(never split) 방지."""
+def test_very_large_token_gap_without_silence_still_merges():
+    """갭이 훨씬 커도(1.5s) 실제 Silence 토큰이 없으면 분할 근거가 못 된다.
+
+    "문턱을 더 올리면 되지 않을까"류의 재도입을 막기 위해 극단값으로도 문턱
+    자체가 없어졌음을 명시적으로 검증한다.
+    """
     proc = make_processor(diarization=True)
-    proc.all_tokens = [tok(0.0, 0.5, '것으로.'), tok(0.9, 1.3, '보입니다.')]  # gap=0.4s
+    proc.all_tokens = [tok(0.0, 0.5, '것으로.'), tok(2.0, 2.5, '보입니다.')]  # gap=1.5s
     segments = proc.compute_punctuations_segments()
     txts = text_segs(segments)
-    assert len(txts) == 2, f"신 문턱(0.4s) 이상 갭인데 분할 안 됨: {[s.text for s in txts]}"
+    assert len(txts) == 1, f"큰 갭인데도 과분할됨(갭 기반 분기 재도입 의심): {[s.text for s in txts]}"
 
 
 def test_zero_gap_midpunct_still_not_split():
-    """gap=0(중간 온점, "very. much"류)은 여전히 안 끊긴다 — 문턱 상향 후 회귀 없음 확인."""
+    """gap=0(중간 온점, "very. much"류)은 여전히 안 끊긴다 — 회귀 없음 확인."""
     proc = make_processor(diarization=True)
     proc.all_tokens = [tok(1.0, 1.4, 'very.'), tok(1.4, 1.8, ' much')]
     segments = proc.compute_punctuations_segments()
@@ -297,7 +299,7 @@ def test_zero_gap_midpunct_still_not_split():
 
 
 def test_real_silence_still_hard_splits():
-    """실제 Silence 토큰이 있으면(0.4s 이상 침묵) 여전히 무조건 분할한다 — 회귀 없음."""
+    """실제 Silence 토큰이 있으면 여전히 무조건 분할한다 — (b)분기 회귀 없음."""
     proc = make_processor(diarization=True)
     proc.all_tokens = [tok(1.0, 1.4, 'very.'), sil(1.5, 2.0)]
     segments = proc.compute_punctuations_segments()
@@ -306,27 +308,26 @@ def test_real_silence_still_hard_splits():
     assert any(s.is_silence() for s in segments), "침묵 세그먼트가 없다"
 
 
-def test_deadzone_gap_no_permanent_split_across_calls():
-    """것으로/보입니다류 실전 재현: 화자분할 지연과 겹쳐도 사각지대 갭 자체가 없으면
-    (Direction A) 애초에 분할되지 않아 화자귀속 지연에 영향받지 않는다.
+def test_utterance_end_still_splits():
+    """발화 끝(다음 토큰 없음)은 여전히 분할한다 — (a)분기 회귀 없음."""
+    proc = make_processor(diarization=True)
+    proc.all_tokens = [tok(1.0, 1.4, '끝.')]
+    segments = proc.compute_punctuations_segments()
+    txts = text_segs(segments)
+    assert len(txts) == 1 and txts[0].text.strip() == '끝.'
 
-    실전에서 diar-ON 경로가 "영구" 분리로 관찰되는 이유는 사각지대 갭 하나만으로는
-    설명되지 않는다 — get_lines_diarization()의 인접-동일화자 병합 단계가 두 조각을
-    같은 화자로 판정하면 자동으로 재병합되기 때문이다(이 부분은 사각지대 갭과
-    무관하게 항상 존재하던 기존 동작). 진짜로 "영구" 분리되려면 그 자동 재병합이
-    실패해야 한다 — 예: 화자분할이 비동기로 뒤처져(diarization lag) 꼬리 세그먼트가
-    아직 어떤 diar 세그먼트에도 덮이지 않은 시점(get_lines_diarization의
-    `punctuation_segment.start >= diarization_segments[-1].end` 분기 — 화자 미귀속
-    상태로 diarization_buffer에만 쌓임)에 재계산되면, 머리(이미 화자 귀속됨)와
-    화자값이 달라(귀속됨 vs 기본값 -1) 병합되지 못하고 2개로 굳는다.
 
-    이 테스트는 그 지연 상황을 재현한다: diar 커버리지가 "것으로."까지만(0.0~0.6)
-    도달하고 "보입니다."(start=0.82)는 아직 안 덮인 상태. 수정 전엔 사각지대 갭이
-    compute_punctuations_segments 단계에서 먼저 2개로 쪼개 놓고, 그 다음 화자귀속
-    지연이 재병합을 막아 2개로 "영구" 고정된다(진짜 sbs1/bong1처럼). 수정 후
-    (Direction A)엔 애초에 소스 단계에서 1개로 합쳐지므로, 그 뒤 화자귀속이
-    지연되든 말든 세그먼트 개수엔 영향이 없다 — 즉 Direction A는 화자분할 타이밍과
-    무관하게 견고하다.
+def test_large_gap_no_permanent_split_across_calls():
+    """것으로/보입니다류 실전 재현(갭 기반 분기 완전 제거 버전): 꼬리 도착 전/후
+    두 시점 재조회, 화자귀속 지연과 겹쳐도 병합 유지.
+
+    diar-ON 경로의 인접-동일화자 병합은 두 조각이 같은 화자로 판정되면 자동
+    재병합하지만, 화자분할이 비동기로 뒤처지면(diarization lag) 꼬리 세그먼트가
+    아직 화자 미귀속 상태(get_lines_diarization의
+    `punctuation_segment.start >= diarization_segments[-1].end` 분기)라 병합이
+    실패할 수 있다 — 이는 여전히 유효한 2차 메커니즘이지만(1라운드에서 확인),
+    갭 기반 분기가 완전히 제거된 지금은 애초에 compute_punctuations_segments
+    단계에서 분할 자체가 안 일어나므로 diar-lag 유무와 무관하게 항상 병합 상태다.
     """
     from whisperlivekit.timed_objects import SpeakerSegment
 
@@ -339,10 +340,10 @@ def test_deadzone_gap_no_permanent_split_across_calls():
     txts = text_segs(segs)
     assert len(txts) == 1 and txts[0].text.strip() == '것으로.'
 
-    # T2: "보입니다." 도착 (gap=0.32s, 사각지대 + 화자귀속 지연 겹침)
-    segs, _, _ = feed(proc, [tok(0.82, 1.2, '보입니다.')], diarization=True, audio_time=1.2)
+    # T2: "보입니다." 도착 (gap=0.45s, 실서버 재현값 + 화자귀속 지연 겹침)
+    segs, _, _ = feed(proc, [tok(0.95, 1.3, '보입니다.')], diarization=True, audio_time=1.3)
     txts = text_segs(segs)
     assert len(txts) == 1, (
-        f"사각지대 갭+화자귀속 지연이 겹쳐 분리 유지됨: {[s.text for s in txts]}"
+        f"갭+화자귀속 지연이 겹쳐 분리됨: {[s.text for s in txts]}"
     )
     assert '것으로.' in txts[0].text and '보입니다.' in txts[0].text

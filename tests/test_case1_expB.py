@@ -1,7 +1,8 @@
 # -*- coding: utf-8 -*-
 """CASE1 잔여 3종(Exp-B) 단위 테스트.
 
-B1: 중간 온점 분리 조건화 — 갭 없는 온점("very. much")은 안 끊고, 갭/침묵/끝일 때만 끊는다.
+B1: 중간 온점 분리 조건화 — 갭 자체는(Exp-166 FIX 1로 은퇴) 분할 근거가 아니고,
+    실제 Silence 토큰 또는 발화 끝일 때만 끊는다(tests/test_tail_reattachment.py §9 참조).
 B2: QG 온점-only 억제는 refresh streak에 미산입 — 실단어 억제만 누적한다.
 B3: 유령/중복 온점 collapse — ". ." → ".", 선두 단독 온점 스트립, 정상 온점 보존.
 
@@ -23,10 +24,7 @@ from whisperlivekit.timed_objects import (
     Silence,
     TimedText,
 )
-from whisperlivekit.tokens_alignment import (
-    PUNCT_SPLIT_GAP_SECS,
-    TokensAlignment,
-)
+from whisperlivekit.tokens_alignment import TokensAlignment
 
 # ─── 헬퍼 ────────────────────────────────────────────────────────────────────
 
@@ -72,19 +70,22 @@ def test_b1_gapless_midpunct_not_split():
     assert 'very.' in txts[0].text and 'much' in txts[0].text
 
 
-def test_b1_gap_after_punct_splits():
-    """온점 뒤 실제 갭(>=PUNCT_SPLIT_GAP_SECS)이면 분할한다 — 세그먼트 2개.
+def test_b1_gap_alone_no_longer_splits():
+    """온점 뒤 갭만으로는(실제 Silence 토큰 없이) 더 이상 분할하지 않는다 — 세그먼트 1개.
 
-    Exp-166(CASE1 4번째 경로 수정)에서 PUNCT_SPLIT_GAP_SECS를 0.3→0.4로 상향
-    (audio_processor.MIN_DURATION_REAL_SILENCE와 정합) — 갭 값도 0.4로 갱신.
+    Exp-166 FIX 1: 과거엔 PUNCT_SPLIT_GAP_SECS(갭 임계값, 0.3→0.4로 상향까지 시도)
+    기반 분기가 있었으나, N=3 확정측정에서 그 문턱 조정으로는 실서버 재현이 안 됨을
+    확인 — 소거법상 실제 토큰 갭이 문턱을 얼마로 올리든 그 이상이었다는 뜻이라
+    갭 기반 분기 자체를 제거했다(PUNCT_SPLIT_GAP_SECS 상수도 은퇴). 이제 온점 분할은
+    (a)발화 끝 또는 (b)실제 Silence 토큰에서만 일어난다 — 큰 갭(여기선 1.4s)이어도
+    Silence 토큰이 없으면 병합된다.
     """
-    assert PUNCT_SPLIT_GAP_SECS == 0.4
     proc = make_processor(diarization=True)
-    # 갭 = 1.9 - 1.4 = 0.5 >= 0.4
-    proc.all_tokens = [tok(1.0, 1.4, 'very.'), tok(1.9, 2.3, ' much')]
+    # 갭 = 2.8 - 1.4 = 1.4 (과거라면 분할됐을 큰 값이지만 Silence 토큰이 없다)
+    proc.all_tokens = [tok(1.0, 1.4, 'very.'), tok(2.8, 3.2, ' much')]
     segments = proc.compute_punctuations_segments()
     txts = text_segs(segments)
-    assert len(txts) == 2, f"갭 있는 온점이 분할 안 됨: {[s.text for s in txts]}"
+    assert len(txts) == 1, f"갭만으로 여전히 분할됨(갭 기반 분기 잔존 의심): {[s.text for s in txts]}"
 
 
 def test_b1_punct_before_silence_splits():

@@ -24,22 +24,18 @@ FINALIZE_GRACE_SECS: float = 2.0  # 침묵 직후 이만큼은 직전 세그먼�
 # 구조적 상한이며 특정 데이터가 아니라 메커니즘 자체의 한계에 근거한다.
 TAIL_REATTACH_MAX_LOOKBACK_SECS: float = 1.5
 
-# 온점 토큰에서 세그먼트를 끊을 최소 음향 갭(초). 온점 뒤 다음 토큰과의 간격이
-# 이보다 작으면(발화 중간 spurious 온점, 예 "very. much") 문장을 끊지 않는다.
-# §3.3: 침묵(화자전환) 경계가 1순위, 온점 경계는 2순위(선택)이므로 갭 없는 온점에서
-# 과분할하느니 보수적으로 유지한다. 특정 단어가 아닌 타임스탬프 갭 기준이라 일반화됨.
-#
-# audio_processor.py의 MIN_DURATION_REAL_SILENCE(0.4)와 반드시 같은 값이어야 한다.
-# audio_processor.py가 tokens_alignment.py를 임포트하므로(순환 임포트 회피) 두 상수는
-# import로 공유하지 못하고 값만 동기화한다 — 값이 어긋나면 [작은 값, 큰 값) 구간이
-# "사각지대"가 된다: 그 구간의 pause는 Silence 토큰을 만들 만큼 길지는 않은데
-# (< MIN_DURATION_REAL_SILENCE) 온점 분할은 발동시켜(>= 이 상수의 구값) 실제
-# 침묵이 전혀 없어도 문장이 과분할된다(CASE1 4번째 경로 — Exp-166. bong1 실측
-# "자빠졌/는데" 갭 0.32s가 구값 0.3 사각지대에 정확히 들어맞아 재현됨). 값을 바꾸면
-# audio_processor.py의 MIN_DURATION_REAL_SILENCE도 함께 바꿀 것 — 동기화는
-# tests/test_tail_reattachment.py::test_audio_processor_min_silence_matches_punct_split_gap
-# 로 회귀 방지.
-PUNCT_SPLIT_GAP_SECS: float = 0.4
+# [폐기됨 — Exp-166 FIX 1] 과거 PUNCT_SPLIT_GAP_SECS(온점 뒤 토큰 갭 기반 분할 임계값,
+# 0.3→0.4로 조정했던 시도)는 근본 원인을 잘못 짚은 수정이었다. 서버로그의 "Silence of
+# = 0.32s"는 backend.py의 VAD 침묵 길이일 뿐 _punct_split_justified()가 보는 토큰
+# 타임스탬프 갭(nxt.start - tokens[idx].end)과는 다른 양이었다 — 이 둘을 같다고
+# 가정한 게 문턱 조정이 실패한 원인이다. 소거법: 서버 응답은 매 틱 전체 재계산되는
+# 풀스냅샷이라 영속 상태가 없으므로, 최종 스냅샷에 분리가 남는다는 것 자체가 최종
+# all_tokens 기준으로 (a)발화 끝도 아니고 (b)Silence 토큰도 없는데 True가 나왔다는
+# 뜻이었고, 그건 곧 실제 토큰 갭이 이미 문턱(0.3/0.4 무엇이든) 이상이었다는 뜻이다 —
+# 즉 갭 기반 (c)분기는 갭 값을 얼마로 조정해도 원리적으로 구멍이 남는다. 그래서 갭
+# 기반 분기 자체를 제거했다(아래 _punct_split_justified 참조) — 온점 분할은 이제
+# (a) 발화 끝 또는 (b) 실제 Silence 토큰에서만 정당화된다. 비-diar 경로는 애초에
+# 이 갭 분기가 없었으므로 이 제거로 diar/비-diar 판정 기준이 대칭화된다.
 
 
 class TokensAlignment:
@@ -154,9 +150,12 @@ class TokensAlignment:
     def _punct_split_justified(self, idx: int) -> bool:
         """온점 토큰(all_tokens[idx])에서 세그먼트를 끊을 음향적 근거가 있는지 판정.
 
-        온점 뒤에 (a) 발화 끝, (b) 침묵, (c) 실제 pause(다음 토큰과 갭>=PUNCT_SPLIT_GAP_SECS)가
-        있을 때만 True. 갭 없이 이어지는 중간 온점("very. much")에서는 False → 과분할 방지.
-        특정 단어가 아니라 타임스탬프 갭 기준이라 일반화된다(§3.3 온점 경계는 2순위).
+        온점 뒤에 (a) 발화 끝 또는 (b) 실제 Silence 토큰이 있을 때만 True. 그 외(다음
+        토큰이 일반 텍스트 토큰인 모든 경우, 갭이 크든 작든)는 항상 False로 분할하지
+        않는다 — 갭 기반 분기(과거 (c))는 Exp-166 FIX 1에서 제거했다(위 주석 참조).
+        스트리밍 디코더가 매기는 토큰 타임스탬프 갭은 실제 음향 침묵과 별개로 벌어질
+        수 있어(버퍼 트림·AlignAtt 유보 등) 신뢰 가능한 분할 근거가 못 된다 — 오직
+        VAD가 실제로 검출한 침묵(Silence 토큰)과 발화 종료만 근거로 인정한다.
         """
         tokens = self.all_tokens
         if idx + 1 >= len(tokens):
@@ -164,7 +163,7 @@ class TokensAlignment:
         nxt = tokens[idx + 1]
         if nxt.is_silence():
             return True
-        return nxt.start - tokens[idx].end >= PUNCT_SPLIT_GAP_SECS
+        return False
 
     def compute_punctuations_segments(self, tokens: Optional[List[ASRToken]] = None) -> List[PuncSegment]:
         """Group tokens into segments split by punctuation and explicit silence."""
