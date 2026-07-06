@@ -2248,3 +2248,47 @@ goal §P1 분기표의 **(b) 분리 불가**: "웃음에서도 확률이 낮게 
 P3(게이팅 설계)는 (b) 분기로 **스킵**. P2(`LANG_SWITCH_KEEP_SECS` 스윕, 전환경계 보존)로 진행 — 별도 워커가 병렬 구현 중(Exp-166, 커밋 `21266b2`, 브랜치 `exp/exp-langswitch-keepsecs-sweep`).
 
 **JSON**: `.omc/benchmarks/eval_20260706_1614_exp165_tailprobe2.json`(bong1+ytn2 계측) · `eval_20260706_1631_exp165_precision.json`(bong1 고정밀). 서버로그: `.omc/server_logs/server_{bong1,ytn2}_C_R1_*.log`.
+
+## Exp-166 — `LANG_SWITCH_KEEP_SECS` 스윕(3.5/4.5): 전환경계 서두 유실 미완화·ytn2 미개선 [E5, 코드변경 있음·master 미머지·기각] (2026-07-06)
+
+**가설**: ytn2 전환경계에서 서두 단어·문장이 절단되는 오류(WER 1순위 유형 B)를, 언어전환 시 유지하는 최근 오디오 창(`LANG_SWITCH_KEEP_SECS`, 현재 2.5s 하드코딩 — base 기질 Exp-150~153 튜닝값)을 **늘리면**(3.5/4.5) 재디코딩 범위가 넓어져 서두 보존이 개선될까? 워크트리 `exp/exp-langswitch-keepsecs-sweep`.
+
+**변경**: `align_att_base.py:13`의 `LANG_SWITCH_KEEP_SECS=2.5`를 `--lang-switch-keep-secs` CLI로 노출(커밋 `21266b2`). `parse_args.py`→`WhisperLiveKitConfig`(`config.py`)→`core.py` `simulstreaming_params`→`align_att_base.py:187` `getattr(self.cfg,"lang_switch_keep_secs",None)` fallback(None=서버 기본 2.5) 배선 + `eval.py` 패스스루·provenance(`LSKEEP=`). **코드는 병렬 서브에이전트(이전 활동)가 구현, 측정·기록은 본 세션이 단독 워커로 수행**(pytest 127 passed 재확인). 동작 불변(기본값 None).
+
+**테스트 설정**: 경로 C, diar-ON(Sortformer + CRT 3.0), turbo, N=1 스크리닝. keep_secs 3.5·4.5 각 bong1+ytn2+sbs1. provenance `branch=exp/exp-langswitch-keepsecs-sweep@21266b2 LSKEEP=3.5/4.5 vbcable=ok`.
+
+### 테스트 세트 결과 (N=1 스크리닝, 방향 신호)
+
+| 파일 | baseline med / max | keep=3.5 | keep=4.5 | 게이트(max) |
+|------|------|------|------|------|
+| bong1 | 30.5% / 30.5% | 31.1% (F1 51.4) | 28.4% (F1 52.9) | ≤30.5% |
+| ytn2  | 28.1% / 34.5% | **40.9%** (F1 36.4) | **34.5%** (F1 59.3) | ≤34.5% |
+| sbs1  | 14.9% / 16.1% | 15.5% (F1 20.0) | **18.5%** (F1 18.2) | ≤16.1% |
+
+- **ytn2(목표)**: 두 값 모두 baseline median(28.1%) 위 — keep=3.5는 40.9%(+12.8pp, max도 초과), keep=4.5는 34.5%(=baseline max). **개선 신호 없음**, N=1 분산도 6.4pp로 큼.
+- **sbs1**: keep=4.5에서 18.5%로 **게이트 초과**(+2.4pp).
+
+### 분석 (전사 정성 대조 — 필수)
+
+**목표(서두 유실 완화)가 두 값 모두 미달성**:
+- keep=3.5 ytn2: "논의한 사안 중에서는 **우.**"(우선→우 절단)·"왕성한 **연**"(연합방위태세 절단) — 서두 절단 **잔존**.
+- keep=4.5 ytn2: "논의한 사안 중에서는 [**우선 누락**] 왕성한 [**연합방위태세 누락**] 김정은 기자가 보도합니다" — 서두 유실 **오히려 악화**(단어 통째 소실 + 방송환각 유입).
+
+**ytn2 WER의 지배적 주범은 keep_secs와 무관한 영역**: 두 run 모두 ① "Thank you" 필러 스톰(대량 연쇄) ② "김정은 기자입니다/보도합니다" 방송클로징 환각이 우세. 이는 Exp-158~160·Exp-165에서 확인된 turbo 필러/환각 실패모드로, `LANG_SWITCH_KEEP_SECS`(전환 시 오디오 트림 범위)가 손대는 대상이 아니다. **즉 keep_secs는 ytn2의 실제 오류에 대해 잘못된 레버.** goal §P2가 경고한 "재방출(전환세금) 부활"보다는, **서두 절단 자체가 keep_secs 확대로도 안 고쳐지고 지배 오류(필러·환각)가 무관**하다는 게 실측 결론.
+
+### 채택 판정 — 기각
+
+- ① max 미회귀: keep=3.5 ytn2 40.9%>34.5% ❌, keep=4.5 sbs1 18.5%>16.1% ❌.
+- ② 목표(서두 유실 완화) 달성: **미달성**(전사에 절단 잔존/악화) ❌.
+- 정량 회귀 + 목표 미달성 → **기각**. keep_secs 기본값 2.5 유지.
+
+### 결론
+
+**기각 (master 미머지, 워크트리 `exp/exp-langswitch-keepsecs-sweep` 보존).** `--lang-switch-keep-secs` CLI 노출은 기본값 None(=2.5)로 동작 불변이며 향후 실험에 재사용 가능하므로 보존. **keep_secs 증가(3.5/4.5)는 ytn2 전환경계 서두 유실을 완화하지 못하며, ytn2 WER은 keep_secs가 접근 못 하는 필러 스톰·방송환각이 지배**함을 실측 확인. 이는 Exp-165(no_speech 폐기)와 정합 — ytn2/bong1 개선의 병목은 전환경계 오디오 보존이 아니라 **비음성·불확실 구간의 turbo 필러/환각**이며, 이는 backend 파라미터로는 손대기 어려운 영역(별도 접근 필요).
+
+### 다음 (참고)
+
+- keep_secs **감소**(1.5/2.0) 방향은 미측정 — 다만 지배 오류(필러·환각)가 무관하므로 ytn2 개선 여지 낮음(재방출 감소로 미세 이득 가능성만). 우선순위 낮음.
+- ytn2/bong1 실질 병목 = turbo 필러/환각. no_speech(Exp-164/165)·후처리 필터(Exp-163) 모두 실패 → 남은 후보는 웃음/필러 전용 비-ASR 분류기 또는 디코더 레벨 불확실성 억제(별도 설계).
+
+**JSON**: `.omc/benchmarks/eval_20260706_1821_exp166_keep35.json` · `eval_20260706_1829_exp166_keep45.json`.

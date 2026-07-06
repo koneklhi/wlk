@@ -98,6 +98,7 @@
 
 | Exp | Epoch | 날짜 | 변경 | bong1 WER med | ytn2 WER med | sbs1 WER med | 판정 |
 |-----|-------|------|------|--------------|-------------|-------------|------|
+| Exp-166 | **E5** | 2026-07-06 | LANG_SWITCH_KEEP_SECS 스윕(3.5/4.5) `--lang-switch-keep-secs` CLI, master 미머지 | 31.1/28.4% | **40.9/34.5%** | 15.5/**18.5%** | ❌ 기각 (N=1: ytn2 두 값 모두 baseline median 위·서두 유실 미완화(정성 잔존/악화), sbs1 4.5 게이트 초과; ytn2 지배오류=필러스톰·방송환각으로 keep_secs 무관) |
 | Exp-165 | **E5** | 2026-07-06 | tail-only no_speech shadow probe(tail-slice 재조합 계측), master 미머지 | — (probe 로깅전용·WER 해석불가) | — | — | ❌ 기각·폐기확정 ((b)분리불가: tail 513샘플+고정밀 290샘플 전부 no_speech=0.000000, ns_logit≈-10 고착 = turbo no_speech 헤드 degenerate; Exp-164 "버퍼오염" 진단 정정 = tail도 0; Layer 3b no_speech 계열 폐기, P3 스킵) |
 | Exp-164 | **E5** | 2026-07-06 | 비음성 게이팅(no_speech 계측+VAC 임계값 스윕 0.4), master 미머지 | **34.4% (max초과 ❌)** | 30.0% | 11.9% | ❌ 기각 (no_speech는 롤링버퍼 전체판정이라 구조적 무효(1221샘플 전부 0.000) — 스윕 스킵; VAC=0.4는 게이트 초과 + 웃음/필러 전사 그대로 잔존, VAC가 음성에너지만 판정해 개념적으로 부적합) |
 | Exp-163 | **E5** | 2026-07-06 | cross-batch 필러 반복 필터(v1 연속 n-gram→v2 윈도우-앵커), master 미머지 | 26.3% (필터0회·분산) | **34.0% (max46.8 ❌)** | 16.1% | ❌ 기각 (ytn2 max catastrophic; 후처리 필터가 디코더 필러 재생성 못 막고 storm-refresh가 ytn2 정렬 교란해 악화; 원천 비음성게이팅으로 피벗) |
