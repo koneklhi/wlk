@@ -2095,3 +2095,52 @@ sbs1 WER 19.0%(정상 범위, 회귀 없음). 서버로그 lag가 시종 0.00s(1
 2. `repeat-filter-langagnostic`(Exp-160 미결정) cross-batch phrase-level 재설계는 여전히 유효한 다음 과제.
 
 **JSON**: `.omc/benchmarks/eval_20260706_0023_beam1.json` · `eval_20260706_0032_beam3.json` · `eval_20260706_0040_crt25.json` · `eval_20260706_0048_crt28.json`.
+
+---
+
+## Exp-163 — cross-batch 필러 반복 필터 (v1 연속 n-gram → v2 윈도우-앵커) [E5, 코드변경 있음·master 미머지·기각] (2026-07-06)
+
+**가설**: turbo(E5) 지배 실패모드는 비발화/전환 갭 구간의 "Thank you" 연쇄·"Yeah" 폭주 등 **다단어 필러 환각**(Exp-158/159 관측, 3파일 공통). 기존 cross-batch 필터(`backend.py` `_filter_cross_batch_repetitions`)는 단일단어 dedup·한글 배치드롭만 잡아 다단어 영어 구 반복을 원리상 못 잡는다. 이를 backend 필터로 억제하면 worst-case(특히 ytn2 max) WER을 방어할 것으로 기대. 워크트리 `exp/repeat-filter-phrase`.
+
+**변경 (2단계)**:
+- **v1** (커밋 `e141898`): 언어무관 2–4gram **연속** 반복 탐지 — `detect_seq` 누적으로 주기 정합, `_PHRASE_ALLOWED_REPEATS=2`(정상 2회 보존), 연속 4회 드롭 시 `refresh_segment`. `whisperlivekit/simul_whisper/backend.py`의 `_filter_cross_batch_repetitions` 확장 + 외부 리셋 3곳(long_silence·new_speaker·stall)에서 phrase 상태 클리어. pytest 17.
+- **v2** (커밋 `d0cf799`): v1 스크리닝에서 **필터 0회 발동** 확인 → 실제 필러는 삽입·변형 낀 **비연속 재등장**이라 연속-일치 전제가 실패. **윈도우-앵커 재설계**: 트레일링 16단어 윈도우 내 짧은 앵커(2~3gram) 등장 `>2`회면 드롭, `≥4`회(또는 연속드롭 4회)면 `refresh_segment`. 1gram 제외(함수어·기존 dedup 담당). `_count_ngram_occurrences` 신설, `_trailing_repeat_count` 대체. pytest 19. ruff 클린.
+
+**테스트 설정**: 경로 C, diar-ON(Sortformer + `--compression-ratio-threshold 3.0`), turbo, **cwd=워크트리**(provenance `whisperlivekit_file`=워크트리 경로·`git_sha`=d0cf799·`vbcable=ok` 확인 — 워크트리 코드 실측). v1/v2 스크리닝 `--repeat 1`, v2 채택검증 `--repeat 3`.
+
+### 테스트 세트 결과
+
+| 측정 | bong1 | ytn2 | sbs1 | 필터 발동 |
+|------|-------|------|------|-----------|
+| baseline(Exp-161) | 30.5% med/max30.5 | 28.1% med/max34.5 | 14.9% med/max16.1 | — |
+| v1 스크리닝(N=1, e141898) | 35.6% | 28.6% | 13.1% | Filler **0회** (변형 필러 미포착) |
+| v2 스크리닝(N=1, d0cf799) | 31.1% | 28.1% | 15.5% | **0회** (이 run 스톰 미발현·오탐 없음 확인) |
+| **v2 N=3(d0cf799) med** | 26.3% (23.0/26.3/28.7, max28.7, sd2.9) | **34.0% (28.6/46.8/34.0, max46.8 ❌, sd9.4)** | 16.1% (15.5/16.1/18.5, max18.5, sd1.6) | ytn2 전회차 발동(R1:2·R2:3·R3:1), 앵커 전부 `'thank you'` 매번 refresh; bong1/sbs1 **0회** |
+
+F1(v2 N=3 med): bong1 46.2% / ytn2 43.5% / sbs1 16.7%. 경로 C 평균 WER 26.4%.
+
+### 분석 (전사 내용 정성 대조)
+
+**bong1** (R2 median 26.3, 필터 0회): 필러 스톰 없음. 코드스위칭·웃음 구간 오류가 WER 주도. **필터 0회 발동 → 코드경로가 baseline과 동일 → med 26.3은 필터 효과가 아닌 실측 분산**(base med 30.5의 저분산 우연 샘플).
+
+**ytn2** (R3 median 34.0 필터 1회 / R2 max 46.8 필터 3회): median에도 필러 잔존 — 전사 말미 `"...close coordination on this topic Thank you very much. Thank you. Thank very much, everyone. Thank you"` + `"네, 네, 네,, 감사합니다"` 방송아웃트로 환각. **max(R2)는 필러 홍수 + refresh 교란** — 전사 `"...initial operational capability Thank you very much. Thank you. very much for your time. Thank. Thank Thank you very much... for coming... for your question."` 및 `"왕성한 연. 문화 방위태세를 1부에서 계속 됩니다 감사합니다"` 신규 방송아웃트로 삽입. **필터가 'thank you' 스톰을 올바로 탐지·refresh하지만 필러가 사라지지 않음**(refresh가 윈도우 비워 디코더가 재생성). refresh_segment가 ytn2 취약 정렬을 교란해 콘텐츠 손실·환각 삽입 유발.
+
+**sbs1** (R2 median 16.1, 필터 0회): 필러 없음, 정상 종료 `"...입니다. SBS 뉴스입니다."`. F1 낮음(과분할·ref 3블록 granularity)은 이번 변경과 무관. 필터 0회 → baseline 동일.
+
+**이번 변경 영향**: 필러 억제 목표는 **악화**로 귀결. 필터가 표적('thank you' 스톰)을 탐지하나 (a)출력 드롭이 디코더 재생성을 못 막아 필러 잔존, (b)refresh_segment가 ytn2를 교란해 max 34.5→46.8 catastrophic 회귀(**Exp-160 PLC 재디코딩이 ytn2 망친 것과 동형**). bong1/sbs1은 필터 미발동이라 무관.
+
+### 채택 (조건) 판정
+
+- ① max 미회귀: **ytn2 max 46.8% > 게이트 34.5% (+12.3pp catastrophic)** ❌. sbs1 max 18.5%>16.1% 소폭 초과.
+- ② median 개선: bong1 개선은 필터 무발동(분산), ytn2 median 28.1→34.0 악화, sbs1 14.9→16.1 소폭 악화.
+- **§4 1순위(worst-case max 미회귀) 위반 → 기각.**
+
+### 결론
+
+**기각 (master 미머지, 워크트리 보존).** 후처리 반복 필터 접근(v1·v2)은 turbo "thank you" 필러에 부적합: ①필러는 디코더가 모호/비음성 구간에서 **생성**하는 것이라 출력 후처리로 못 막고(refresh 후 재생성), ②storm 시 refresh가 ytn2 정렬을 교란해 오히려 악화. 코드 품질 자체는 정상(pytest 19·ruff 클린)이나 측정으로 기각. **핵심 교훈: 필러는 원천(비음성 게이팅 Layer 3b)에서 차단해야 한다.**
+
+### 다음 가설
+
+**후보 3(비음성 게이팅, 원천 차단)으로 피벗**(사용자 승인). VAC threshold(0.3)·no_speech(nonspeech_prob=0.5, 현재 세그먼트 **첫 토큰만** 검사) 재검토 + mid-segment no_speech 검사로 필러 생성 구간을 전사에서 배제. STATE "Layer 3b 미해결 1순위 과제"와 정합. base 시절 nonspeech/VAC 기각 이력은 base 기질이라 turbo 재검증 대상(epoch 게이트).
+
+**JSON**: `.omc/benchmarks/eval_20260706_1009_exp163_phrasefilter_screen.json`(v1 스크리닝) · `eval_20260706_1049_exp163v2_fillerstorm_screen.json`(v2 스크리닝) · `eval_20260706_1100_exp163v2_fillerstorm_N3.json`(v2 N=3).
