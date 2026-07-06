@@ -73,11 +73,15 @@ def test_b1_gapless_midpunct_not_split():
 
 
 def test_b1_gap_after_punct_splits():
-    """온점 뒤 실제 갭(>=PUNCT_SPLIT_GAP_SECS)이면 분할한다 — 세그먼트 2개."""
-    assert PUNCT_SPLIT_GAP_SECS == 0.3
+    """온점 뒤 실제 갭(>=PUNCT_SPLIT_GAP_SECS)이면 분할한다 — 세그먼트 2개.
+
+    Exp-166(CASE1 4번째 경로 수정)에서 PUNCT_SPLIT_GAP_SECS를 0.3→0.4로 상향
+    (audio_processor.MIN_DURATION_REAL_SILENCE와 정합) — 갭 값도 0.4로 갱신.
+    """
+    assert PUNCT_SPLIT_GAP_SECS == 0.4
     proc = make_processor(diarization=True)
-    # 갭 = 1.8 - 1.4 = 0.4 >= 0.3
-    proc.all_tokens = [tok(1.0, 1.4, 'very.'), tok(1.8, 2.2, ' much')]
+    # 갭 = 1.9 - 1.4 = 0.5 >= 0.4
+    proc.all_tokens = [tok(1.0, 1.4, 'very.'), tok(1.9, 2.3, ' much')]
     segments = proc.compute_punctuations_segments()
     txts = text_segs(segments)
     assert len(txts) == 2, f"갭 있는 온점이 분할 안 됨: {[s.text for s in txts]}"

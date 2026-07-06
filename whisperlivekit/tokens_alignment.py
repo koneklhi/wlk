@@ -28,7 +28,18 @@ TAIL_REATTACH_MAX_LOOKBACK_SECS: float = 1.5
 # 이보다 작으면(발화 중간 spurious 온점, 예 "very. much") 문장을 끊지 않는다.
 # §3.3: 침묵(화자전환) 경계가 1순위, 온점 경계는 2순위(선택)이므로 갭 없는 온점에서
 # 과분할하느니 보수적으로 유지한다. 특정 단어가 아닌 타임스탬프 갭 기준이라 일반화됨.
-PUNCT_SPLIT_GAP_SECS: float = 0.3
+#
+# audio_processor.py의 MIN_DURATION_REAL_SILENCE(0.4)와 반드시 같은 값이어야 한다.
+# audio_processor.py가 tokens_alignment.py를 임포트하므로(순환 임포트 회피) 두 상수는
+# import로 공유하지 못하고 값만 동기화한다 — 값이 어긋나면 [작은 값, 큰 값) 구간이
+# "사각지대"가 된다: 그 구간의 pause는 Silence 토큰을 만들 만큼 길지는 않은데
+# (< MIN_DURATION_REAL_SILENCE) 온점 분할은 발동시켜(>= 이 상수의 구값) 실제
+# 침묵이 전혀 없어도 문장이 과분할된다(CASE1 4번째 경로 — Exp-166. bong1 실측
+# "자빠졌/는데" 갭 0.32s가 구값 0.3 사각지대에 정확히 들어맞아 재현됨). 값을 바꾸면
+# audio_processor.py의 MIN_DURATION_REAL_SILENCE도 함께 바꿀 것 — 동기화는
+# tests/test_tail_reattachment.py::test_audio_processor_min_silence_matches_punct_split_gap
+# 로 회귀 방지.
+PUNCT_SPLIT_GAP_SECS: float = 0.4
 
 
 class TokensAlignment:
