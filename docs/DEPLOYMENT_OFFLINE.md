@@ -105,6 +105,16 @@ USB에 담을 3가지:
 
 모든 배포 산출물은 **`deploy/`** 한 폴더에 모인다. USB 반입 시 이 폴더만 통째로 복사하면 된다.
 
+> **⚠️ 반드시 독립 `.venv`에서 실행 — 공유(Junction) `.venv`에 절대 금지.**
+> 아래 블록은 `uv export`·`uv pip install pip`·(재생성 시)`uv venv`를 dev `.venv`에 돌린다.
+> 워크트리들이 메인 `.venv`를 Junction 공유하므로, 이를 **공유 venv에 실행하면 병렬로 진행 중인
+> `/eval` 측정을 clobber**하고, 그 순간 IDE(antigravity Jedi 언어서버)가 `.venv\Scripts\python.exe`를
+> 잡고 있으면 **Lib·pyvenv.cfg만 소실되는 반쪽 손상(python.exe exit 106 `No pyvenv.cfg`)**으로
+> 악화돼 모든 세션의 측정·pytest가 전면 차단된다(실사고). 따라서 wheelhouse 빌드는:
+> 1. **전용 워크트리**를 만들고 Junction을 해제(`rmdir .venv`) 후 **독립 `.venv`** 를 구성(`uv venv` + `uv sync --extra …`)한다(CLAUDE.md 워크트리 규약의 "독립 venv" 예외 케이스).
+> 2. **IDE의 Python 인터프리터를 공유 `.venv`에서 분리**(또는 IDE 종료)한 뒤 uv를 실행한다 — 만약의 clobber가 반쪽 손상이 아니라 복구 가능한 클린 상태로 끝난다.
+> 3. 손상 발생 시 복구: base python으로 임시 venv를 만들어 그 `pyvenv.cfg`를 `.venv\`에 복사 → python 기동 회복 → `uv sync --extra diarization-sortformer --extra vbcable --extra cu128`로 Lib 재설치(§8 트랩 표 참조).
+
 ```powershell
 # 0) 폴더 초기화 (최초 1회 또는 재생성 시)
 New-Item -ItemType Directory -Force deploy\wheelhouse, deploy\uv-installer | Out-Null
@@ -491,3 +501,4 @@ curl http://localhost:2010/v1/models
 | **가상환경 미활성화** | 설치 로그엔 `numpy`·`torch` 등이 분명히 설치됐는데, `python -c "import ..."`나 `whisperlivekit-server` 실행 시 `ModuleNotFoundError: No module named 'numpy'` 등 발생 | `uv venv`/`uv pip install`은 cwd의 `.venv`를 자동 인식하지만 일반 `python`·콘솔스크립트 실행은 PATH에 `.venv\Scripts`가 있어야 한다. **`C:\whist\wlk\.venv\Scripts\Activate.ps1`을 먼저 실행**(§3.1 step 4). 활성화는 세션 한정이라 **새 PowerShell 창마다 매번 재실행** 필요(프롬프트 앞 `(.venv)` 표시로 확인) |
 | **sounddevice 누락** | `python scripts/closed_test.py ...`(경로 C) 실행 시 `ModuleNotFoundError: No module named 'sounddevice'` | `scripts/vbcable_test.py`가 `sd.play()`로 VBCable에 오디오를 재생하는 하드 의존성인데 과거 `vbcable` extra(playwright+comtypes만)에 빠져 있었음 — master에서 수정 완료(pyproject.toml `vbcable` extra에 `sounddevice` 추가, requirements-deploy.txt·wheelhouse 갱신). 이미 설치된 배포 PC는 `uv pip install --no-index --find-links C:\whist\wlk\deploy\wheelhouse sounddevice==0.5.5`로 단건 추가하면 된다(전체 재설치 불필요) |
 | **filtering/llm_translation 누락** | `whisperlivekit-server` 또는 `closed_test.py` 실행 시 `ModuleNotFoundError: No module named 'whisperlivekit.filtering'`(또는 `.llm_translation`) | `pyproject.toml`의 `[tool.setuptools] packages` 목록에 두 서브패키지가 빠져 빌드된 wheel에서 통째로 누락됨(dev는 editable 설치라 미표면화). master에서 수정 완료(packages 목록 추가 + `filtering`의 `*.json` package-data). 배포 PC는 새로 빌드된 `whisperlivekit-0.2.20-py3-none-any.whl`로 `uv pip install --no-index --force-reinstall --no-deps ...` 재설치하면 해결 |
+| **공유 `.venv` 반쪽 손상** | dev PC에서 `.venv\Scripts\python.exe`가 `No pyvenv.cfg file`(exit 106)로 기동 불가 → 측정·pytest 전면 차단. `.venv` 최상위에 `Lib`/`pyvenv.cfg` 없이 `Scripts`/`share`만 잔존 | **원인**: 배포/wheelhouse 작업(§2.2)의 `uv venv`/`uv pip`/`uv sync`를 **공유(Junction) `.venv`에 실행**했고, 그 순간 IDE Jedi 언어서버가 python.exe를 잠가 Scripts 제거가 실패한 반쪽 손상. **예방**: §2.2 경고대로 wheelhouse 빌드는 독립 `.venv`에서 + IDE 인터프리터 분리. **복구(무중단)**: `uv venv` 출력의 base python(`Using CPython … at <경로>`)으로 임시 probe venv 생성 → 그 `pyvenv.cfg`를 손상된 `.venv\`에 복사 → python 기동 회복 → `uv sync --extra diarization-sortformer --extra vbcable --extra cu128`로 Lib 재설치(Scripts 제거를 안 하므로 IDE 잠금과 무관). 진행 중 uv 경합이 있으면 먼저 멈춘 뒤 복구 |
