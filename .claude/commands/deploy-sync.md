@@ -34,7 +34,7 @@ description: master 변경사항을 배포 반입 산출물(deploy/, wlk_in/)에
    | `whisperlivekit/**` (패키지 코드) | 프로젝트 wheel만 재빌드(§2.2 step 5) + 내용 검증 | **변경 파일 복사 필수** — cwd 섀도잉으로 실제 실행되는 게 이 사본이다 |
    | `scripts/**` | 불필요 — wheel엔 안 들어감 | 변경 파일 복사(배포 PC에서 소스 그대로 직접 실행) |
    | `docs/**` | 불필요 | 변경 파일 복사(배포 PC 운영자 참고용 — "배포 산출물 없음"과 "wlk_in 사본 갱신 불필요"는 다른 얘기다) |
-   | `test_data/**`, 루트 메타파일(`README.md` 등) | 불필요 | 변경 파일 복사 |
+   | `test_data/**`, `tests/**`, 루트 메타파일(`README.md`·`EXPERIMENTS*.md` 등) | 불필요 | 변경 파일 복사 |
    | `whisperlivekit/model/**` | 해당 없음 | `.gitignore` 비추적이라 git diff로 안 잡힘 — 새 모델 파일 추가 여부를 사용자에게 별도 확인 |
    | `.claude/`, `.memorize/`, `.omc/` | 불필요 | **범위 밖** — 배포 PC는 Claude Code를 쓰지 않는다. `wlk_in`에 이미 있는 구버전은 방치해도 무방(정리 불필요) |
 
