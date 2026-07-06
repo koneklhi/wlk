@@ -31,6 +31,7 @@ from eval import (  # noqa: E402
     SERVER_PORT,
     WARMUP_FILE,
     _aggregate_runs,
+    _server_log_path,
     eval_path_c,
     start_server,
     stop_server,
@@ -51,6 +52,17 @@ AUDIO_EXTS = {".mp3", ".wav", ".m4a", ".flac", ".ogg"}
 
 def _fmt_pct(v) -> str:
     return f"{v * 100:.1f}%" if v is not None else "N/A"
+
+
+def _print_log_tail(log_path: str, n: int = 40) -> None:
+    """서버 로그 파일의 마지막 n줄을 stderr로 출력한다 (서버 조기 종료 원인 확인용)."""
+    path = Path(log_path)
+    if not path.exists() or path.stat().st_size == 0:
+        print("[server-log] (로그 파일 없음 또는 비어 있음)", file=sys.stderr)
+        return
+    lines = path.read_text(encoding="utf-8").splitlines()
+    for line in lines[-n:]:
+        print(f"[server-log] {line}", file=sys.stderr)
 
 
 def collect_audio_files(target: Path) -> list:
@@ -100,14 +112,16 @@ def run_one(audio_path, base_url, *, repeat, wait, warmup, model_dir, diarizatio
     runs = []
     for rep in range(repeat):
         print(f"[closed_test]   서버 기동(포트 {SERVER_PORT}) 회차 {rep + 1}/{repeat} ...")
+        log_path = _server_log_path(audio_path, "C", rep + 1)
         proc = start_server(
             model_dir, pcm_input=False, port=SERVER_PORT, warmup=warmup, lan="auto",
             diarization=diarization, sortformer_model=sortformer_model,
-            extra_server_args=extra_server_args,
+            extra_server_args=extra_server_args, server_log_file=log_path,
         )
         try:
             if not wait_for_ready(base_url, proc):
-                print("[오류] 서버 ready 시간 초과", file=sys.stderr)
+                print(f"[오류] 서버 ready 시간 초과 또는 조기 종료 — 로그: {log_path}", file=sys.stderr)
+                _print_log_tail(log_path)
                 continue
             result = asyncio.run(eval_path_c(audio_path, base_url, wait))
             runs.append(result)
