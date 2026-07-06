@@ -17,7 +17,8 @@ description: master 변경사항을 배포 반입 산출물(deploy/, wlk_in/)에
      이번에도 재발했는지 먼저 점검한다.
 
 2. **변경 범위 파악**
-   - `git log <직전 커밋>..master --oneline`, `git diff <직전 커밋>..master --stat`으로 무엇이 바뀌었는지 확인한다.
+   - `git log <직전 커밋>..master --oneline`, `git diff <직전 커밋>..master --name-status`로 무엇이
+     바뀌었는지 확인한다(이 `--name-status` 출력을 6단계 파일 단위 복사의 목록으로 그대로 재사용한다).
    - 변경이 없으면 "이미 최신"으로 보고하고 종료한다.
 
 3. **변경 범위별 대응 결정 — 2축으로 분리해서 판단한다**
