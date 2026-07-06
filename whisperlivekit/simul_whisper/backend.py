@@ -101,6 +101,7 @@ class SimulStreamingOnlineProcessor:
             self.model.state.lang_before_reset = None   # 긴 침묵 = 문장 경계, 전환 판정 불필요
             self.model.state.first_timestamp = None     # 재감지 조건 충족
             self.model.global_time_offset = silence_duration + offset
+            self.model.state.quality_suppress_streak = 0  # 침묵 경계 넘어 streak 누적 → 엉뚱한 refresh 방지
             self._last_emitted_word = None
             self._last_emit_end = self.end
             self._consecutive_char_repeat = 0

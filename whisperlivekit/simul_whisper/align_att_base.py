@@ -11,6 +11,11 @@ from .config import AlignAttConfig
 
 DEC_PAD = 50257
 LANG_SWITCH_KEEP_SECS = 2.5  # 언어 전환 시 유지할 최근 오디오(초): 감지창 2.0s + 완충 0.5s
+
+# QG 억제가 구두점/공백만 담고 있으면 refresh streak에 산입하지 않기 위한 문자 집합.
+# 실단어가 하나도 없는 억제는 버퍼 폐기(단어 유실) 위험을 감수할 만한 garbage가 아니다.
+_PUNCT_ONLY_CHARS = frozenset({'.', '?', '!', '。', '！', '？', ',', ';', ':'})
+
 logger = logging.getLogger(__name__)
 
 
@@ -403,7 +408,7 @@ class AlignAttBase(ABC):
 
         num_generated = max(0, current_tokens.shape[1] - token_len_before)
         if not is_last and self._quality_gate(new_hypothesis, sum_logprobs, num_generated):
-            self._on_quality_suppressed()
+            self._on_quality_suppressed(new_hypothesis)
             return []
         self.state.quality_suppress_streak = 0
 
@@ -586,9 +591,27 @@ class AlignAttBase(ABC):
                     return True
         return False
 
-    def _on_quality_suppressed(self):
-        """품질 게이트 억제 처리 — 연속 N회 억제 시 context refresh."""
+    def _is_punct_only(self, hypothesis) -> bool:
+        """디코드된 hypothesis가 공백/구두점만인지(실단어 없음) 판정."""
+        if not hypothesis:
+            return True
+        bare = self.tokenizer.decode(hypothesis).replace(" ", "").strip()
+        if not bare:
+            return True
+        return set(bare) <= _PUNCT_ONLY_CHARS
+
+    def _on_quality_suppressed(self, hypothesis=None):
+        """품질 게이트 억제 처리 — 연속 N회 억제 시 context refresh.
+
+        억제 자체(clean_cache·억제 동작)는 항상 수행하되, 억제된 hypothesis가
+        구두점/공백-only면 refresh streak에 **산입하지 않는다**. refresh_segment는
+        버퍼를 폐기해 다음 문장 첫 음절까지 유실시키므로, 실단어가 포함된 garbage가
+        연속될 때만 발동해야 한다(Exp-154 QG 안전성 보존).
+        """
         self._clean_cache()
+        if hypothesis is not None and self._is_punct_only(hypothesis):
+            logger.debug("[QualityGate] 구두점/공백-only 억제 — refresh streak 미산입")
+            return
         streak = getattr(self.state, "quality_suppress_streak", 0) + 1
         self.state.quality_suppress_streak = streak
         reset_after = self.cfg.quality_gate_reset_after

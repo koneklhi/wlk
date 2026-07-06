@@ -19,6 +19,12 @@ _DEFAULT_RETENTION_SECONDS: float = 300.0
 TAIL_REATTACH_EPS: float = 0.05   # 프레임 양자화(0.02s) 지터 방어용 여유
 FINALIZE_GRACE_SECS: float = 2.0  # 침묵 직후 이만큼은 직전 세그먼트 확정 유예(유보 꼬리 도착 대기)
 
+# 온점 토큰에서 세그먼트를 끊을 최소 음향 갭(초). 온점 뒤 다음 토큰과의 간격이
+# 이보다 작으면(발화 중간 spurious 온점, 예 "very. much") 문장을 끊지 않는다.
+# §3.3: 침묵(화자전환) 경계가 1순위, 온점 경계는 2순위(선택)이므로 갭 없는 온점에서
+# 과분할하느니 보수적으로 유지한다. 특정 단어가 아닌 타임스탬프 갭 기준이라 일반화됨.
+PUNCT_SPLIT_GAP_SECS: float = 0.3
+
 
 class TokensAlignment:
 
@@ -125,6 +131,21 @@ class TokensAlignment:
                 break
 
 
+    def _punct_split_justified(self, idx: int) -> bool:
+        """온점 토큰(all_tokens[idx])에서 세그먼트를 끊을 음향적 근거가 있는지 판정.
+
+        온점 뒤에 (a) 발화 끝, (b) 침묵, (c) 실제 pause(다음 토큰과 갭>=PUNCT_SPLIT_GAP_SECS)가
+        있을 때만 True. 갭 없이 이어지는 중간 온점("very. much")에서는 False → 과분할 방지.
+        특정 단어가 아니라 타임스탬프 갭 기준이라 일반화된다(§3.3 온점 경계는 2순위).
+        """
+        tokens = self.all_tokens
+        if idx + 1 >= len(tokens):
+            return True  # 발화 끝
+        nxt = tokens[idx + 1]
+        if nxt.is_silence():
+            return True
+        return nxt.start - tokens[idx].end >= PUNCT_SPLIT_GAP_SECS
+
     def compute_punctuations_segments(self, tokens: Optional[List[ASRToken]] = None) -> List[PuncSegment]:
         """Group tokens into segments split by punctuation and explicit silence."""
         segments = []
@@ -152,7 +173,7 @@ class TokensAlignment:
                     segments.append(previous_segment)
                 segment_start_idx = i+1
             else:
-                if token.has_punctuation():
+                if token.has_punctuation() and self._punct_split_justified(i):
                     segment = PuncSegment.from_tokens(
                         tokens=self.all_tokens[segment_start_idx: i+1],
                     )
