@@ -18,6 +18,11 @@ _DEFAULT_RETENTION_SECONDS: float = 300.0
 # 다음 줄 첫머리로 밀리는 문제를, 꼬리의 타임스탬프를 근거로 침묵 앞으로 재귀속해 교정한다.
 TAIL_REATTACH_EPS: float = 0.05   # 프레임 양자화(0.02s) 지터 방어용 여유
 FINALIZE_GRACE_SECS: float = 2.0  # 침묵 직후 이만큼은 직전 세그먼트 확정 유예(유보 꼬리 도착 대기)
+# AlignAtt 유보는 이론상 frame_threshold(기본 0.5s) 이내 꼬리만 만든다 — 재귀속을
+# 이 범위 밖까지 허용하면(타임스탬프가 재디코딩·버퍼트림·언어전환 등으로 불안정해진
+# 구간에서) 서로 무관한 발화가 잘못 병합될 위험이 있다. 정상 유보 폭의 3배 여유를 둔
+# 구조적 상한이며 특정 데이터가 아니라 메커니즘 자체의 한계에 근거한다.
+TAIL_REATTACH_MAX_LOOKBACK_SECS: float = 1.5
 
 # 온점 토큰에서 세그먼트를 끊을 최소 음향 갭(초). 온점 뒤 다음 토큰과의 간격이
 # 이보다 작으면(발화 중간 spurious 온점, 예 "very. much") 문장을 끊지 않는다.
@@ -75,6 +80,9 @@ class TokensAlignment:
           start가 침묵 end보다 앞설 수 있어 end 기준은 오귀속을 낳는다.
         - is_boundary(LanguageSwitch)나 일반 토큰을 만나면 스캔 중단 — 경계 넘김 금지.
         - 연속 Silence는 각 침묵의 start와 개별 비교하며 통과한다.
+        - TAIL_REATTACH_MAX_LOOKBACK_SECS 상한: 정상 유보는 항상 짧다. 타임스탬프가
+          재디코딩·언어전환 등으로 불안정해진 구간에서 무관한 발화가 멀리 있는 침묵
+          앞으로 잘못 병합되는 것을 막는다.
         """
         for t in tokens:
             if t.is_silence() or t.is_boundary():
@@ -82,7 +90,8 @@ class TokensAlignment:
                 continue
             i = len(self.all_tokens)
             while (i > 0 and self.all_tokens[i - 1].is_silence()
-                   and t.start + TAIL_REATTACH_EPS < self.all_tokens[i - 1].start):
+                   and t.start + TAIL_REATTACH_EPS < self.all_tokens[i - 1].start
+                   and self.all_tokens[i - 1].start - t.start <= TAIL_REATTACH_MAX_LOOKBACK_SECS):
                 i -= 1
             self.all_tokens.insert(i, t)
 
