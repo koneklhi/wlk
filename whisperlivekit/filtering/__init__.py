@@ -137,8 +137,16 @@ def filter_segments(segments: list) -> list:
                 text = text.replace(bad, "")
         text = re.sub(r"\s+", " ", text).strip()
 
-        if not text or text in {".", "?"} or set(text) == {"."}:
-            continue  # 빈/구두점-only 세그먼트 제거
+        # 유령/중복 온점 collapse: QG 억제→재디코딩이 재귀속 자리에 만든 중복 "."을 정리한다.
+        # ". ." ".." → ".", 선두 단독 온점 스트립(". 자신의" → "자신의"). 문장 끝 정상 온점
+        # 1개와 단어 사이 단일 온점("very. much")은 보존, 물음표·느낌표도 보존.
+        text = re.sub(r"(?:\s*\.\s*){2,}", ". ", text).strip()
+        text = re.sub(r"^[.\s]+", "", text).strip()
+
+        # 빈/구두점-only 세그먼트 제거. 공백을 무시해 " . ."(diar 병합 유령 온점)도 드롭한다.
+        bare = text.replace(" ", "")
+        if not bare or set(bare) <= {".", "?", "!", "。", "！", "？"}:
+            continue
 
         if pattern:
             text = pattern.sub(lambda m: replacements[m.group(0)], text)

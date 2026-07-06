@@ -13,6 +13,30 @@ from whisperlivekit.timed_objects import (
 
 _DEFAULT_RETENTION_SECONDS: float = 300.0
 
+# CASE1 문장 꼬리 분리 교정 상수.
+# AlignAtt가 유보한 마지막 단어(꼬리)가 재디코딩 후 Silence 마커 뒤로 들어가
+# 다음 줄 첫머리로 밀리는 문제를, 꼬리의 타임스탬프를 근거로 침묵 앞으로 재귀속해 교정한다.
+TAIL_REATTACH_EPS: float = 0.05   # 프레임 양자화(0.02s) 지터 방어용 여유
+FINALIZE_GRACE_SECS: float = 2.0  # 침묵 직후 이만큼은 직전 세그먼트 확정 유예(유보 꼬리 도착 대기)
+# AlignAtt 유보는 이론상 frame_threshold(기본 0.5s) 이내 꼬리만 만든다 — 재귀속을
+# 이 범위 밖까지 허용하면(타임스탬프가 재디코딩·버퍼트림·언어전환 등으로 불안정해진
+# 구간에서) 서로 무관한 발화가 잘못 병합될 위험이 있다. 정상 유보 폭의 3배 여유를 둔
+# 구조적 상한이며 특정 데이터가 아니라 메커니즘 자체의 한계에 근거한다.
+TAIL_REATTACH_MAX_LOOKBACK_SECS: float = 1.5
+
+# [폐기됨 — Exp-166 FIX 1] 과거 PUNCT_SPLIT_GAP_SECS(온점 뒤 토큰 갭 기반 분할 임계값,
+# 0.3→0.4로 조정했던 시도)는 근본 원인을 잘못 짚은 수정이었다. 서버로그의 "Silence of
+# = 0.32s"는 backend.py의 VAD 침묵 길이일 뿐 _punct_split_justified()가 보는 토큰
+# 타임스탬프 갭(nxt.start - tokens[idx].end)과는 다른 양이었다 — 이 둘을 같다고
+# 가정한 게 문턱 조정이 실패한 원인이다. 소거법: 서버 응답은 매 틱 전체 재계산되는
+# 풀스냅샷이라 영속 상태가 없으므로, 최종 스냅샷에 분리가 남는다는 것 자체가 최종
+# all_tokens 기준으로 (a)발화 끝도 아니고 (b)Silence 토큰도 없는데 True가 나왔다는
+# 뜻이었고, 그건 곧 실제 토큰 갭이 이미 문턱(0.3/0.4 무엇이든) 이상이었다는 뜻이다 —
+# 즉 갭 기반 (c)분기는 갭 값을 얼마로 조정해도 원리적으로 구멍이 남는다. 그래서 갭
+# 기반 분기 자체를 제거했다(아래 _punct_split_justified 참조) — 온점 분할은 이제
+# (a) 발화 끝 또는 (b) 실제 Silence 토큰에서만 정당화된다. 비-diar 경로는 애초에
+# 이 갭 분기가 없었으므로 이 제거로 diar/비-diar 판정 기준이 대칭화된다.
+
 
 class TokensAlignment:
 
@@ -49,10 +73,34 @@ class TokensAlignment:
         self.new_translation, self.state.new_translation = self.state.new_translation, []
         self.new_tokens_buffer, self.state.new_tokens_buffer = self.state.new_tokens_buffer, []
 
-        self.all_tokens.extend(self.new_tokens)
+        self._insert_with_reattachment(self.new_tokens)
         self.all_diarization_segments.extend(self.new_diarization)
         self.all_translation_segments.extend(self.new_translation)
         self.new_translation_buffer = self.state.new_translation_buffer
+
+    def _insert_with_reattachment(self, tokens: List[ASRToken]) -> None:
+        """새 토큰을 all_tokens에 삽입하되, AlignAtt가 유보한 꼬리 토큰은 Silence 앞으로 재귀속.
+
+        정상 토큰은 끝에 append(기존 동작과 동일). 텍스트 토큰의 start가 바로 앞
+        Silence 마커의 start보다 앞서면(유보됐던 꼬리) 그 Silence 앞으로 이동한다.
+        - 기준은 Silence.end가 아니라 **start**: 긴 침묵 후 앵커 재설정 시 직후 토큰
+          start가 침묵 end보다 앞설 수 있어 end 기준은 오귀속을 낳는다.
+        - is_boundary(LanguageSwitch)나 일반 토큰을 만나면 스캔 중단 — 경계 넘김 금지.
+        - 연속 Silence는 각 침묵의 start와 개별 비교하며 통과한다.
+        - TAIL_REATTACH_MAX_LOOKBACK_SECS 상한: 정상 유보는 항상 짧다. 타임스탬프가
+          재디코딩·언어전환 등으로 불안정해진 구간에서 무관한 발화가 멀리 있는 침묵
+          앞으로 잘못 병합되는 것을 막는다.
+        """
+        for t in tokens:
+            if t.is_silence() or t.is_boundary():
+                self.all_tokens.append(t)
+                continue
+            i = len(self.all_tokens)
+            while (i > 0 and self.all_tokens[i - 1].is_silence()
+                   and t.start + TAIL_REATTACH_EPS < self.all_tokens[i - 1].start
+                   and self.all_tokens[i - 1].start - t.start <= TAIL_REATTACH_MAX_LOOKBACK_SECS):
+                i -= 1
+            self.all_tokens.insert(i, t)
 
     def _prune(self) -> None:
         """Drop tokens/segments older than ``_retention_seconds`` from the latest token."""
@@ -99,6 +147,24 @@ class TokensAlignment:
                 break
 
 
+    def _punct_split_justified(self, idx: int) -> bool:
+        """온점 토큰(all_tokens[idx])에서 세그먼트를 끊을 음향적 근거가 있는지 판정.
+
+        온점 뒤에 (a) 발화 끝 또는 (b) 실제 Silence 토큰이 있을 때만 True. 그 외(다음
+        토큰이 일반 텍스트 토큰인 모든 경우, 갭이 크든 작든)는 항상 False로 분할하지
+        않는다 — 갭 기반 분기(과거 (c))는 Exp-166 FIX 1에서 제거했다(위 주석 참조).
+        스트리밍 디코더가 매기는 토큰 타임스탬프 갭은 실제 음향 침묵과 별개로 벌어질
+        수 있어(버퍼 트림·AlignAtt 유보 등) 신뢰 가능한 분할 근거가 못 된다 — 오직
+        VAD가 실제로 검출한 침묵(Silence 토큰)과 발화 종료만 근거로 인정한다.
+        """
+        tokens = self.all_tokens
+        if idx + 1 >= len(tokens):
+            return True  # 발화 끝
+        nxt = tokens[idx + 1]
+        if nxt.is_silence():
+            return True
+        return False
+
     def compute_punctuations_segments(self, tokens: Optional[List[ASRToken]] = None) -> List[PuncSegment]:
         """Group tokens into segments split by punctuation and explicit silence."""
         segments = []
@@ -126,7 +192,7 @@ class TokensAlignment:
                     segments.append(previous_segment)
                 segment_start_idx = i+1
             else:
-                if token.has_punctuation():
+                if token.has_punctuation() and self._punct_split_justified(i):
                     segment = PuncSegment.from_tokens(
                         tokens=self.all_tokens[segment_start_idx: i+1],
                     )
@@ -235,6 +301,40 @@ class TokensAlignment:
         return segments, diarization_buffer
 
 
+    def _reattach_tail_nondiar(self, token: ASRToken) -> bool:
+        """비-diar 경로: 직전에 침묵으로 닫힌 텍스트 세그먼트로 꼬리 토큰을 병합.
+
+        비-diar 경로는 all_tokens가 아니라 validated_segments를 누적한다. 침묵이 이미
+        앞 줄을 확정해 커밋한 뒤(validated_segments 말미 = [텍스트, 침묵]) 유보 꼬리가
+        도착하면, 그 꼬리를 앞 텍스트 세그먼트에 되붙인다.
+        재귀속했으면 True(호출부가 current_line에 넣지 않음), 아니면 False.
+        """
+        if self.current_line_tokens or len(self.validated_segments) < 2:
+            return False
+        last = self.validated_segments[-1]
+        prev = self.validated_segments[-2]
+        if (last.is_silence() and not prev.is_silence() and prev.text
+                and token.start + TAIL_REATTACH_EPS < last.start):
+            prev.text = prev.text + token.text
+            prev.end = max(prev.end, token.end)
+            return True
+        return False
+
+    def _apply_finalize_grace(self, segments: List[Segment], audio_time: Optional[float]) -> None:
+        """침묵 직후 유예 창 안에서는 직전 텍스트 세그먼트 확정을 보류(꼬리 도착 대기).
+
+        마지막 세그먼트가 침묵이고 그 앞이 텍스트일 때, audio_time - silence.start가
+        FINALIZE_GRACE_SECS 미만이면 finalized=False로 되돌린다(유예). 경과했으면 True로
+        확정한다. 후속 발화 토큰이 도착하면 마지막 세그먼트가 침묵이 아니게 되므로
+        (텍스트) 즉시 확정 상태가 유지된다.
+        """
+        if audio_time is None or len(segments) < 2:
+            return
+        last = segments[-1]
+        prev = segments[-2]
+        if last.is_silence() and not prev.is_silence() and prev.text:
+            prev.finalized = (audio_time - last.start) >= FINALIZE_GRACE_SECS
+
     def get_lines(
             self,
             diarization: bool = False,
@@ -282,11 +382,17 @@ class TokensAlignment:
                             self.validated_segments.append(seg)
                         self.current_line_tokens = []
                 else:
-                    self.current_line_tokens.append(token)
+                    # 유보됐던 꼬리 토큰은 침묵 앞의 확정 세그먼트로 되붙인다(CASE1 교정).
+                    if not self._reattach_tail_nondiar(token):
+                        self.current_line_tokens.append(token)
 
             segments = list(self.validated_segments)
             if self.current_line_tokens:
                 segments.append(Segment.from_tokens(self.current_line_tokens))
+
+        # 침묵 직후 확정 유예: 유보 꼬리가 아직 도착하지 않았을 수 있으므로
+        # 유예 창(FINALIZE_GRACE_SECS) 안에서는 직전 텍스트 세그먼트 확정을 보류한다.
+        self._apply_finalize_grace(segments, audio_time)
 
         if current_silence:
             end_silence = current_silence.end if current_silence.has_ended else _silence_now

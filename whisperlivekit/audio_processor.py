@@ -28,6 +28,20 @@ logger.setLevel(logging.DEBUG)
 SENTINEL = object() # unique sentinel object for end of stream marker
 MIN_DURATION_REAL_SILENCE = 0.4  # 문장 확정용 Silence 토큰 생성 침묵 길이 기준(초)
 
+
+def _append_terminal_punctuation(lines: List[Any]) -> None:
+    """확정 문장 끝에 온점 부착 (UI 표시용; WER 무영향 — normalize_text가 구두점 제거).
+
+    finalized=True 세그먼트에만 부착한다: 미확정 세그먼트에 붙이면 유보 꼬리가
+    이어질 때 문장 중간에 온점이 박힌다(CASE1). 마지막(진행 중) 세그먼트는 제외.
+    멱등 — 이미 구두점으로 끝나면 미수정.
+    """
+    for seg in lines[:-1]:
+        if not seg.is_silence() and seg.text and seg.finalized:
+            stripped = seg.text.rstrip()
+            if stripped and stripped[-1] not in PUNCTUATION_MARKS:
+                seg.text = stripped + "."
+
 async def get_all_from_queue(queue: asyncio.Queue) -> Union[object, Silence, np.ndarray, List[Any]]:
     items: List[Any] = []
 
@@ -557,13 +571,7 @@ class AudioProcessor:
                     audio_time=self.total_pcm_samples / self.sample_rate if self.sample_rate else None,
                 )
                 lines = filter_segments(lines)
-                # 확정 문장 끝 온점 부착 (UI 표시용; WER 무영향 — normalize_text가 구두점 제거).
-                # 마지막 세그먼트는 진행 중(미확정)일 수 있으므로 제외. 멱등 — 이미 구두점이면 미수정.
-                for seg in lines[:-1]:
-                    if not seg.is_silence() and seg.text:
-                        stripped = seg.text.rstrip()
-                        if stripped and stripped[-1] not in PUNCTUATION_MARKS:
-                            seg.text = stripped + "."
+                _append_terminal_punctuation(lines)
                 if self.llm_translation_manager is not None:
                     self.llm_translation_manager.apply_translations(lines)
                 state = await self.get_current_state()
