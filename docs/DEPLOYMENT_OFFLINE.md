@@ -81,6 +81,14 @@ USB에 담을 3가지:
 
 배포 PC에서 unzip 후 §3대로 `uv venv` + 오프라인 설치하면 editable 경로·Python 경로가 폐쇄망 기준으로 새로 잡혀 정상 동작한다.
 
+**반복 갱신은 `wlk_in`을 통해 — `SYNC_STATE.txt`로 이력 추적**: 위 방식은 최초 1회 전체 셋업 기준이다.
+이후 master에 변경이 쌓이면 매번 `deploy_source.zip`을 통째로 새로 만들 필요 없이, dev PC의 반입
+스테이징 디렉터리(`wlk_in`, 저장소 밖 sibling 폴더)를 `/deploy-sync` 절차로 증분 갱신한다.
+`wlk_in\SYNC_STATE.txt`가 마지막으로 동기화된 master 커밋·시각·범위를 기록하는 1차 소스다 — 다음
+반입 때 이 파일을 기준으로 "무엇이 바뀌었는지"만 diff해 해당 파일만 옮기면 된다. 단, `wlk_in`이
+최신이라는 것과 배포 PC가 실제로 그 내용을 반영했다는 것은 별개다(폐쇄망이라 여기서 검증 불가) —
+USB 반입·적용 여부는 매번 별도로 확인해야 한다. 상세 절차는 `.claude/commands/deploy-sync.md` 참조.
+
 ---
 
 ## 2. 오프라인 의존성 패키징 (개발 PC에서)
@@ -502,3 +510,5 @@ curl http://localhost:2010/v1/models
 | **sounddevice 누락** | `python scripts/closed_test.py ...`(경로 C) 실행 시 `ModuleNotFoundError: No module named 'sounddevice'` | `scripts/vbcable_test.py`가 `sd.play()`로 VBCable에 오디오를 재생하는 하드 의존성인데 과거 `vbcable` extra(playwright+comtypes만)에 빠져 있었음 — master에서 수정 완료(pyproject.toml `vbcable` extra에 `sounddevice` 추가, requirements-deploy.txt·wheelhouse 갱신). 이미 설치된 배포 PC는 `uv pip install --no-index --find-links C:\whist\wlk\deploy\wheelhouse sounddevice==0.5.5`로 단건 추가하면 된다(전체 재설치 불필요) |
 | **filtering/llm_translation 누락** | `whisperlivekit-server` 또는 `closed_test.py` 실행 시 `ModuleNotFoundError: No module named 'whisperlivekit.filtering'`(또는 `.llm_translation`) | `pyproject.toml`의 `[tool.setuptools] packages` 목록에 두 서브패키지가 빠져 빌드된 wheel에서 통째로 누락됨(dev는 editable 설치라 미표면화). master에서 수정 완료(packages 목록 추가 + `filtering`의 `*.json` package-data). 배포 PC는 새로 빌드된 `whisperlivekit-0.2.20-py3-none-any.whl`로 `uv pip install --no-index --force-reinstall --no-deps ...` 재설치하면 해결 |
 | **공유 `.venv` 반쪽 손상** | dev PC에서 `.venv\Scripts\python.exe`가 `No pyvenv.cfg file`(exit 106)로 기동 불가 → 측정·pytest 전면 차단. `.venv` 최상위에 `Lib`/`pyvenv.cfg` 없이 `Scripts`/`share`만 잔존 | **원인**: 배포/wheelhouse 작업(§2.2)의 `uv venv`/`uv pip`/`uv sync`를 **공유(Junction) `.venv`에 실행**했고, 그 순간 IDE Jedi 언어서버가 python.exe를 잠가 Scripts 제거가 실패한 반쪽 손상. **예방**: §2.2 경고대로 wheelhouse 빌드는 독립 `.venv`에서 + IDE 인터프리터 분리. **복구(무중단)**: `uv venv` 출력의 base python(`Using CPython … at <경로>`)으로 임시 probe venv 생성 → 그 `pyvenv.cfg`를 손상된 `.venv\`에 복사 → python 기동 회복 → `uv sync --extra diarization-sortformer --extra vbcable --extra cu128`로 Lib 재설치(Scripts 제거를 안 하므로 IDE 잠금과 무관). 진행 중 uv 경합이 있으면 먼저 멈춘 뒤 복구 |
+| **`wlk_in` 최신화 ≠ 배포 PC 반영** | dev PC의 `wlk_in`은 최신 master 기준으로 갱신됐는데, 배포 PC(`C:\whist\wlk`)는 여전히 구버전 코드로 동작(예: `model_dir` 미전파로 인터넷 다운로드 시도 → `getaddrinfo failed`) | `wlk_in`을 갱신하는 것과 그걸 USB로 옮겨 배포 PC에 실제로 덮어쓰는 것은 별개 단계다. `wlk_in\SYNC_STATE.txt`의 `deploy_pc_confirmed_applied`가 `unknown`이면 아직 배포 PC 반영이 확인되지 않은 것 — 매번 USB 반입·적용 여부를 사용자에게 확인한다 |
+| **cwd가 wheel을 가림** | 배포 PC에서 `whisperlivekit` wheel을 재설치해도 버그가 그대로 재현됨(코드가 안 바뀐 것처럼 보임) | `python -m whisperlivekit.basic_server`는 cwd(`C:\whist\wlk`)를 sys.path 최우선에 둔다 — cwd에 `whisperlivekit\` raw 소스 폴더가 있으면 **wheel 설치 여부와 무관하게 그 raw 폴더가 항상 먼저 로드**된다. `python -c "import whisperlivekit; print(whisperlivekit.__file__)"`로 실제 로드 경로를 확인하고, raw 폴더 쪽을 갱신해야 한다(wheel만 갱신해선 소용없음) |
