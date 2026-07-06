@@ -2209,3 +2209,42 @@ provenance: `branch=exp/nonspeech-gating@99db307 vac_threshold=0.4 vbcable=ok`.
 3. **후보 4(diar 과분할 F1)** — F1 병목(전 파일 precision 붕괴)은 이번 실험과 무관하게 미해결.
 
 **JSON**: `.omc/benchmarks/eval_20260706_1439_exp164_nsp_default_probe.json`(no_speech 계측 1차, 로깅버그로 무효) · `eval_20260706_1511_exp164_vac04_screen.json`(VAC=0.4 스크리닝).
+
+## Exp-165 — tail-only no_speech shadow probe: tail-slice로도 no_speech 상승 없음(Layer 3b no_speech 계열 폐기 확정) [E5, 코드변경 있음·master 미머지·기각] (2026-07-06)
+
+**가설**: Exp-164에서 no_speech SOT 게이트가 "롤링버퍼 전체 판정"(최대 15s, 이전 실제 발화 포함) 때문에 무효(3파일 1221샘플 전부 0.000)로 규명됨. 그 다음 가설로 제시된 것이 "no_speech를 세그먼트 전체가 아니라 **신규 tail만** 판정하도록 구조 변경"이었다. 이 tail 판정은 새 아키텍처가 아니라 **기존 두 메서드의 재조합**이다: `detect_current_language`(`align_att_base.py:250`)의 tail-slice(`all_audio[-window_samples:]` → `_encode`) + `lang_id`(`simul_whisper.py:207`)의 SOT 1-스텝 단독 forward를 조합하고, 언어 확률 대신 `_check_no_speech`가 읽는 것과 같은 no_speech 토큰 확률을 읽으면 된다. **가설: tail만 보면 웃음/필러 구간에서 no_speech 확률이 상승해 정상 발화와 분리 가능한가?** 워크트리 `exp/nonspeech-gating` 이어서.
+
+**변경 (진단 전용, 게이팅 미연결)**:
+- `probe_tail_no_speech(window_secs=2.0)` 신규 메서드(`align_att_base.py`, **`@torch.no_grad()` 필수** — Exp-158 stall 재발 방지, 확인함): tail-slice → `_encode` → `[[sot]]` 단독 forward → `softmax[no_speech]`. `infer()` 인코딩 직후 매 사이클 병행 로깅(`[TailNoSpeechProbe]`), 출력 로직 미개입. 커밋 `647f053`.
+- CLI `--tail-nonspeech-probe`(store_true) + `--tail-nonspeech-window`(float) 노출(`parse_args.py`), `eval.py` 패스스루.
+- **하니스 버그 발견·수정** (커밋 `5b525d9`): 첫 run에서 `[TailNoSpeechProbe]` 0회 발동 — 원인은 backend가 argparse 전체가 아니라 `core.py`의 **curated `simulstreaming_params` dict**(`config.X`만 읽음)로 kwargs를 받는데 신규 필드가 누락돼 `self.cfg.tail_nonspeech_probe`가 False 고착됨(Exp-164 `nonspeech_prob`도 같은 이유로 실은 배선 미완이었으나 결론 무관). `lang_restrict_koen`과 동일 경로로 `WhisperLiveKitConfig`(`config.py`) + `simulstreaming_params`(`core.py`) 양쪽에 배선. 재측정에서 발동 확인.
+- **고정밀 진단 로깅 추가** (커밋 `1350f99`): `no_speech=%.6f` + raw `ns_logit` + SOT `top_id`/`top_p` 병기 — 0.0000이 formatting 아티팩트인지 vs 진짜 0인지 확정용.
+
+**테스트 설정**: 경로 C, diar-ON(Sortformer + CRT 3.0), turbo, `--trace-tokens --tail-nonspeech-probe`. bong1(웃음)·ytn2(필러) N=1 진단. provenance `branch=exp/nonspeech-gating@647f053/5b525d9 vbcable=ok`. **WER은 probe 추가 forward 비용 때문에 해석 대상 아님**(동작 불변 검증용).
+
+### 계측 결과 — tail-slice로도 no_speech는 구조적으로 0
+
+| 파일 | TailNoSpeechProbe 샘플 | no_speech min~max | 원인 진단(고정밀) |
+|------|---------|------|------|
+| bong1(웃음구간) | 294 | **0.000000 전부** | ns_logit ≈ -10.1~-10.5(변동), top_id=50360 top_p≈0.52 |
+| ytn2(필러구간) | 219 | **0.000000 전부** | (동일) |
+
+**513개 tail 샘플(win=2.0s) 전부 정확히 0.000000.** 고정밀 bong1 재측정(290샘플)에서 **`ns_logit`이 -10.1~-10.5로 실제 변동**(→ forward가 살아있고 실제 logits 생성) + **`top_id=50360 top_p≈0.52`**(SOT softmax가 정상 분포 생성)임에도 no_speech 토큰만 logit ~-10에 고착 → softmax 후 확률 ~0. **즉 probe 자체는 정상 작동하며, turbo의 no_speech 토큰이 tail 내용(웃음/필러/발화)과 무관하게 항상 무시할 확률을 받는 degenerate 상태**임이 확정됨.
+
+### 분석 — Exp-164 진단 정정
+
+Exp-164는 no_speech=0의 원인을 "롤링버퍼 전체 판정(이전 발화 오염)"으로 봤으나, **본 실험이 이를 정정한다**: 2.0s tail만 판정해도 no_speech가 전혀 오르지 않으므로 원인은 버퍼 크기·오염이 **아니라** turbo의 no_speech 헤드 자체가 비활성(logit 고착)인 것이다. `whisper-large-v3-turbo`(증류 모델)에서 no_speech 토큰이 SOT 위치에서 유의미한 확률을 받지 못하는 모델 고유 특성으로 추정. **동작 불변 검증**: probe는 로깅 전용이므로 WER은 baseline 대비 N=1 분산 내(run1 bong1 24.8/ytn2 36.9, run2 bong1 36.9/ytn2 28.1 — probe 오버헤드에도 출력 로직 미개입 확인).
+
+### 분기 판정 — (b) 분리 불가
+
+goal §P1 분기표의 **(b) 분리 불가**: "웃음에서도 확률이 낮게 유지 → Layer 3b를 no_speech 계열로는 폐기 확정, P3 스킵, P2로 진행"에 정확히 해당. no_speech 계열(전체버퍼 Exp-164 + tail Exp-165)은 turbo에서 웃음/필러를 비음성으로 분류할 수 없음이 실측 2회로 확정. **Layer 3b는 no_speech 신호로는 도달 불가 — 남은 경로는 웃음 전용 비-ASR 분류기(별도 오디오 모델) 뿐이며, 이는 별도 설계 세션 범위.**
+
+### 결론
+
+**기각·폐기 확정 (master 미머지, 워크트리 `exp/nonspeech-gating` 보존).** tail-probe 계측 인프라(`probe_tail_no_speech` + `[TailNoSpeechProbe]` 고정밀 로깅 + CLI + 완전 배선)는 기본값 off로 동작 불변(pytest 127 passed), 향후 진단 재사용 가능하므로 보존. Layer 3b no_speech 계열은 **폐기 확정** — 후속 세션은 이 결론을 재검증하지 말고 (필요 시) 웃음 전용 분류기 방향만 고려.
+
+### 다음 (P2로 이관)
+
+P3(게이팅 설계)는 (b) 분기로 **스킵**. P2(`LANG_SWITCH_KEEP_SECS` 스윕, 전환경계 보존)로 진행 — 별도 워커가 병렬 구현 중(Exp-166, 커밋 `21266b2`, 브랜치 `exp/exp-langswitch-keepsecs-sweep`).
+
+**JSON**: `.omc/benchmarks/eval_20260706_1614_exp165_tailprobe2.json`(bong1+ytn2 계측) · `eval_20260706_1631_exp165_precision.json`(bong1 고정밀). 서버로그: `.omc/server_logs/server_{bong1,ytn2}_C_R1_*.log`.
