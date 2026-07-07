@@ -42,6 +42,43 @@ STALL_RECOVER_SEC = 10.0
 
 _FOREIGN_LANG_PATTERN = re.compile(r'\(speaking in foreign language', re.IGNORECASE)
 
+# P2: 언어-출력 스크립트 불일치 억제 게이트.
+# 배경: EN→KO 전환 직후 "Thank you"류 영어 필러 환각이 KO 세그먼트 전체를 삼키는 사례가
+# 반복 관측됐다(EXPERIMENTS_LOG Exp-158/159/161 등). avg_logprob(영어 최빈구문=고신뢰),
+# compression_ratio(필러가 매번 변주돼 압축률 임계 미달), BatchRepeatFilter(한국어 전용
+# 정규식이라 영어 필러는 진입 자체를 못함), CrossBatchFilter(완전 동일 인접단어만 제거)
+# 모두 이 패턴을 못 잡는 사각지대다.
+# 판정은 특정 문구 하드코딩 없이 구조적 시그니처만 사용(§3.8): detected_language와 정반대
+# 스크립트로만 구성되고, 타입-토큰 비율(고유어/전체어)이 붕괴한(=반복/변주) 세그먼트만 억제.
+# 반복 없는 정상 코드스위칭 전체 문장은 TTR이 높아 통과한다(오탐 방지).
+_WORD_TOKEN_PATTERN = re.compile(r"[A-Za-z']+|[가-힣]+")
+_SCRIPT_MISMATCH_MIN_WORDS = 6        # 이보다 적으면 통계적으로 판단 불가 → 통과(오탐 방지)
+_SCRIPT_MISMATCH_TTR_THRESHOLD = 0.6  # 고유어/전체어 비율이 이 값 이하면 반복 시그니처로 판정
+_SCRIPT_MISMATCH_STREAK_CAP = 40      # streak 누적 상한(무한 성장 방지)
+
+
+def _is_script_mismatch_filler(text: str, detected_language) -> bool:
+    """detected_language와 반대 스크립트로만 구성된 반복형 세그먼트인지 판정.
+
+    대칭 적용(방향 무관, §3.8 일반화): ko 감지 중 영어-only 반복도, en 감지 중
+    한글-only 반복도 동일 로직으로 잡는다.
+    """
+    if detected_language not in ("ko", "en"):
+        return False
+    has_hangul = bool(re.search(r'[가-힣]', text))
+    has_latin = bool(re.search(r'[A-Za-z]', text))
+    if detected_language == "ko":
+        script_mismatch = has_latin and not has_hangul
+    else:  # "en"
+        script_mismatch = has_hangul and not has_latin
+    if not script_mismatch:
+        return False
+    words = [w.lower() for w in _WORD_TOKEN_PATTERN.findall(text)]
+    if len(words) < _SCRIPT_MISMATCH_MIN_WORDS:
+        return False
+    unique_ratio = len(set(words)) / len(words)
+    return unique_ratio <= _SCRIPT_MISMATCH_TTR_THRESHOLD
+
 class SimulStreamingOnlineProcessor:
     """Online processor for SimulStreaming ASR."""
     SAMPLING_RATE = 16000
@@ -62,6 +99,10 @@ class SimulStreamingOnlineProcessor:
         self._consecutive_char_repeat: int = 0
         self._short_silence_check_at: float = 0.0
         self._recent_emitted_words: List[str] = []  # 중복 방출 계측용 최근 방출 단어(정규화) tail
+        # P2 스크립트 불일치 게이트: 실측(TokenTrace)상 배치가 보통 1~3 토큰 단위라
+        # 한 배치만으로는 TTR 판정 표본이 부족하다 — detected_language와 반대
+        # 스크립트로만 구성된 배치가 연속될 때 그 단어들을 여기 누적한다.
+        self._script_mismatch_streak: List[str] = []
 
         if asr.tokenizer:
             self.model.tokenizer = asr.tokenizer
@@ -87,6 +128,18 @@ class SimulStreamingOnlineProcessor:
         """Handle silence period."""
         self.end += silence_duration
         long_silence = silence_duration >= MIN_DURATION_REAL_SILENCE
+        # 계측용(행동 비변경): 어느 분기를 타는지는 아래 if/elif와 동일 조건으로 별도 계산해
+        # 로그 라벨만 만든다 — 기존 if/elif 조건식 자체는 건드리지 않는다.
+        _short_cond = (
+            silence_duration >= MIN_DURATION_SHORT_LANG_RESET
+            and self.model.cfg.language == "auto"
+            and self.model.state.detected_language is not None
+        )
+        logger.info(
+            "[EndSilence] dur=%.2fs branch=%s det_lang=%s lang_before_reset=%s",
+            silence_duration, "long" if long_silence else ("short" if _short_cond else "none"),
+            self.model.state.detected_language, self.model.state.lang_before_reset,
+        )
         if not long_silence:
             gap_len = int(16000 * silence_duration)
             if gap_len > 0:
@@ -97,6 +150,10 @@ class SimulStreamingOnlineProcessor:
                 self.model.insert_audio(gap_silence)
         if long_silence:
             self.model.refresh_segment(complete=True)
+            logger.info(
+                "[EndSilence] long-silence 리셋 직전(폐기 예정): det_lang=%s→None lang_before_reset=%s→None",
+                self.model.state.detected_language, self.model.state.lang_before_reset,
+            )
             self.model.state.detected_language = None   # 재감지 허용
             self.model.state.lang_before_reset = None   # 긴 침묵 = 문장 경계, 전환 판정 불필요
             self.model.state.first_timestamp = None     # 재감지 조건 충족
@@ -106,6 +163,7 @@ class SimulStreamingOnlineProcessor:
             self._last_emit_end = self.end
             self._consecutive_char_repeat = 0
             self._short_silence_check_at = 0.0
+            self._script_mismatch_streak = []
         elif (
             silence_duration >= MIN_DURATION_SHORT_LANG_RESET
             and self.model.cfg.language == "auto"
@@ -143,9 +201,24 @@ class SimulStreamingOnlineProcessor:
         경계 재디코딩: held 음역을 final 확정하지 않고(flush 생략), 최근 오디오(경계 구간)를
         complete=False 로 유지해 새 화자 언어로 재디코딩한다. refresh 전에 최근 1.5s 윈도우로
         언어를 즉시 재감지하고, 성공 시 refresh 후 토크나이저를 교정한다(실패 시 None → 기존 2.0s 폴백).
+
+        since_offset(화자전환 시각의 버퍼상대 오프셋)을 넘겨 1.5s 창이 화자전환 이전(직전 화자)
+        오디오까지 무조건 포함하지 않도록 한다 — 전환 직후엔 새 화자 오디오가 아직 1.5s보다
+        짧게 쌓여 있을 수 있고, 이때 창 전체를 쓰면 대부분 직전 화자 오디오라 그 언어로 오판된다
+        (ytn2 CASE2 경계2: eager=en 오판 → 새 화자(KO) 문장 "Thank you" 필러 폭주로 유실).
         """
         # 1. refresh 전 버퍼로 새 화자 언어 즉시 감지 (경계 오디오가 아직 버퍼에 있음)
-        eager = self.model.detect_current_language(window_secs=1.5, min_prob=0.85)
+        # global_time_offset은 아직 change_speaker.start로 갱신되기 전(§2 아래)이므로
+        # 현재 버퍼 시작의 절대 시각 그대로다 — 화자전환 절대시각과의 차이가 버퍼상대 오프셋.
+        boundary_offset = change_speaker.start - self.model.global_time_offset
+        eager = self.model.detect_current_language(
+            window_secs=1.5, min_prob=0.85, since_offset=boundary_offset,
+        )
+        logger.info(
+            "[NewSpeaker] spk=%s→%s det_before=%s eager=%s",
+            self.model.state.speaker, change_speaker.speaker,
+            self.model.state.detected_language, eager,
+        )
         # 2. flush 생략 + 경계 오디오 유지(complete=False) + 미확정 음역 폐기
         self.model.refresh_segment(complete=False)
         self.buffer = []
@@ -156,11 +229,16 @@ class SimulStreamingOnlineProcessor:
         # 3. 감지 성공 시 토크나이저 즉시 교정 (refresh 후 적용)
         if eager:
             self.model._apply_detected_language(eager)
+        logger.info(
+            "[NewSpeaker] spk=%s det_after=%s (eager_applied=%s)",
+            change_speaker.speaker, self.model.state.detected_language, bool(eager),
+        )
         self.model.speaker = change_speaker.speaker
         self.model.global_time_offset = change_speaker.start
         self._last_emitted_word = None
         self._last_emit_end = self.end
         self._consecutive_char_repeat = 0
+        self._script_mismatch_streak = []
 
     def get_buffer(self):
         concat_buffer = Transcript.from_tokens(tokens= self.buffer, sep='')
@@ -249,6 +327,39 @@ class SimulStreamingOnlineProcessor:
             self._last_emitted_word = self._normalize(result[-1].text)
         return result
 
+    def _update_script_mismatch_streak(self, decoded_text: str, seg_lang) -> bool:
+        """P2 게이트의 cross-batch 누적 판정.
+
+        실측(TokenTrace) 확인 결과 한 infer() 배치는 보통 1~3 토큰이라, 배치 1개만
+        검사하면 `_is_script_mismatch_filler`의 MIN_WORDS 문턱을 거의 못 넘어 사실상
+        무력화된다. 그래서 seg_lang과 반대 스크립트로만 구성된 배치가 연속될 때 그
+        단어들을 self._script_mismatch_streak에 누적하고, 누적분이 반복 시그니처를
+        보이면 True(드롭)를 반환한다. seg_lang과 같은 스크립트가 섞인 배치가 오면
+        정상 콘텐츠 재개로 보고 streak을 리셋한다.
+        """
+        if seg_lang not in ("ko", "en"):
+            self._script_mismatch_streak = []
+            return False
+        has_hangul = bool(re.search(r'[가-힣]', decoded_text))
+        has_latin = bool(re.search(r'[A-Za-z]', decoded_text))
+        if seg_lang == "ko":
+            is_pure_mismatch = has_latin and not has_hangul
+        else:  # "en"
+            is_pure_mismatch = has_hangul and not has_latin
+        if not is_pure_mismatch:
+            self._script_mismatch_streak = []
+            return False
+        words = [w.lower() for w in _WORD_TOKEN_PATTERN.findall(decoded_text)]
+        if not words:
+            return False
+        self._script_mismatch_streak.extend(words)
+        if len(self._script_mismatch_streak) > _SCRIPT_MISMATCH_STREAK_CAP:
+            self._script_mismatch_streak = self._script_mismatch_streak[-_SCRIPT_MISMATCH_STREAK_CAP:]
+        if _is_script_mismatch_filler(' '.join(self._script_mismatch_streak), seg_lang):
+            self._script_mismatch_streak = []
+            return True
+        return False
+
     def process_iter(self, is_last=False) -> Tuple[List[ASRToken], float]:
         """
         Process accumulated audio chunks using SimulStreaming.
@@ -286,6 +397,26 @@ class SimulStreamingOnlineProcessor:
                                        " ".join(t.text for t in dropped))
                     timestamped_words = [t for t in timestamped_words
                                          if not _FOREIGN_LANG_PATTERN.search(t.text)]
+
+            if timestamped_words:
+                decoded_text = ''.join(t.text for t in timestamped_words)
+                seg_lang = self.model.state.detected_language
+                if self._update_script_mismatch_streak(decoded_text, seg_lang):
+                    logger.warning(
+                        "[ScriptMismatchFilter] lang=%s 반대스크립트 반복 세그먼트 드롭: %.200s",
+                        seg_lang, decoded_text,
+                    )
+                    # ForeignLang과 동일한 재감지 arm 매커니즘을 재사용한다(신규 발명 금지).
+                    # refresh_segment는 호출하지 않는다 — Exp-163에서 refresh가 정렬을 교란해
+                    # catastrophic 회귀를 일으킨 전례가 있다. 드롭만 하고 언어 재감지만 arm.
+                    self.model.state.lang_before_reset = (
+                        self.model.state.detected_language or self.model.state.lang_before_reset
+                    )
+                    self.model.state.detected_language = None
+                    self.model.state.first_timestamp = None
+                    self.model.state.eager_lang_detect = True
+                    self.model.state.last_lang_switch_time = 0.0
+                    timestamped_words = []
 
             if not timestamped_words:
                 # 디코더 멈춤 복구 워치독: 오디오가 STALL_RECOVER_SEC 이상 전진했는데
