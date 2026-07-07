@@ -2295,6 +2295,51 @@ P3(게이팅 설계)는 (b) 분기로 **스킵**. P2(`LANG_SWITCH_KEEP_SECS` 스
 
 ---
 
+## Exp-168
+
+**날짜**: 2026-07-07
+**워크트리/브랜치**: `worktrees/case2-frontloss` @ `exp/case2-frontloss`, 최종 HEAD `0fed0d5` → master 머지
+
+**가설**: CASE2(코드스위칭 서두 유실)의 ytn2 지배적 실패모드를 실증 규명하고 수정한다. 최초 가설(diarization 화자전환이 언어전환 감지를 억제 — "dormant" 가설)은 계측 로깅(`d007014`)으로 클린 측정을 재실행한 결과 **기각**됨(오염된 구버전 로그 기반 오판이었음): 언어전환 보호경로 자체는 정상 작동(`switch_true=15`, `marker_count=15`) 확인. 전사 vs 정답 직접 대조로 진짜 근본원인 재발견: **EN→KO 전환 경계 직후 "Thank you"류 필러 환각이 실제 발화를 통째로 삼킨다**(2/2 재현). 기존 4개 필터(QualityGate avg_logprob/compression_ratio, BatchRepeatFilter, CrossBatchFilter, DRY penalty) 전부 "완전동일반복" 또는 "한국어 전용"을 전제해 "영어+변주" 필러를 원리상 통과시킴을 코드 분석으로 확정 — 특히 `BatchRepeatFilter`가 `[가-힣]` 매치 조건이라 한글 0개인 영어 필러엔 애초에 진입 못 하는 결정적 사각지대.
+
+전역 상수(`LANG_SWITCH_KEEP_SECS`) 축소 시도(Direction P1a, 기각)는 경계1을 개선했으나 경계2에 신규 catastrophic 필러를 유발 — 문제를 해결한 게 아니라 경계를 이동시켰을 뿐임이 실증됨(Exp-166의 "keep_secs 무관" 결론과 정합).
+
+**변경 내용** (커밋 순, `exp/case2-frontloss`):
+- `8aeb5a2` **P2(채택)**: `whisperlivekit/simul_whisper/backend.py`에 `_is_script_mismatch_filler(text, detected_language)` 순수함수 추가 — detected_language와 반대 스크립트로만 구성 + type-token ratio≤0.6(최소 6단어) 시 필러로 판정(ko/en 대칭, 특정 문구 무하드코딩). 실측 배치가 1~3토큰뿐이라 단일배치 판정 불가함을 확인하고 `_update_script_mismatch_streak`로 cross-batch 누적 계층 추가. 드롭 시 기존 ForeignLang과 동일한 재감지 arm 재사용(`refresh_segment` 미호출 — Exp-163 재환각 함정 회피).
+- `0fed0d5` **since_offset 배선(채택)**: `align_att_base.py`의 `detect_current_language()`에 `since_offset: float | None = None` 파라미터 추가 — 지정 시 그 이전 오디오 배제(window_secs 상한 캡 유지). `backend.py`의 `new_speaker()`에서 화자전환 경계시각(`change_speaker.start`)을 전달 — 기존엔 버퍼 끝에서 무조건 마지막 1.5초를 잘라, 새 화자 발화 직후엔 그 창이 직전 화자 오디오로 지배돼 eager 언어감지가 오판(`eager=en`으로 확정, 서버로그 직접 확인)하던 문제 수정. 기존 호출부(`_check_short_silence_language`)는 미전달로 하위호환 유지.
+- 신규 유닛테스트 19개(`tests/test_script_mismatch_gate.py` 14 + `tests/test_eager_lang_since_offset.py` 5) — 오탐방지(정상 코드스위칭/한국어 문장 비드롭) 케이스 포함, red→green 확인. pytest 160→**179 passed/1 skipped**(회귀없음). ruff 클린.
+- 기각: Direction P1a(`LANG_SWITCH_KEEP_SECS` 2.5→1.5/1.0 축소) — 경계1 개선하나 경계2에 신규 catastrophic 필러 유발, 미채택(uncommitted, 되돌림).
+
+**테스트 설정**: 경로 C, diar-ON(Sortformer + CRT 3.0), turbo. 스크리닝 N=1(진단·각 방향 확인) → 확정 N=3(fail-fast 금지).
+
+### 테스트 세트 결과 (N=3 확정, fail-fast 없음, JSON `eval_20260707_1057_case2_confirm.json`)
+
+| 파일 | 베이스라인(E5, Exp-167 기준) med/max | **채택 확정** med/max/min/stdev | 게이트(max, +10pp 완화) |
+|------|------|------|------|
+| bong1 | 28.7% / 29.0% | **27.8% / 30.5% / 26.3% / 2.1%** ✅ | ≤40.5% |
+| ytn2  | 36.0% / 43.8% | **19.7% / 26.1% / 19.2% / 3.8%** ✅ 대폭개선 | ≤44.5% |
+| sbs1  | 14.3% / 16.1% | **16.7% / 48.8% / 13.1% / 19.7%** ❌초과(+22.7pp) | ≤26.1% |
+
+held-out(단회): ytn1 29.4%/F1 63.2%(baseline 33.1%보다 개선) · eng1 2.9%/F1 0.0%(영어 회귀 없음).
+
+### 판정 근거 (sbs1 게이트 초과 — 원인 무관성 실증 후 사용자 확인하에 채택)
+
+sbs1 R2(48.8%)만 catastrophic, R1/R3(13.1%/16.7%)는 정상. 서버로그 확인 결과 sbs1은 **화자전환 0회**(기존 Exp-155 확인사항 — 단일화자 파일)라 이번 변경의 핵심 코드경로(`new_speaker()`/`since_offset`)가 애초에 호출되지 않음. R2 전사는 정답 첫 문단(5문장) 통째 누락 + `SimulStreaming stall recovery` 4회(QualityGate 억제 연쇄) — 기존에 알려진 저빈도(Exp-167 자체 N=3에서도 0/3) 확률적 stall 현상으로, CLAUDE.md에 명시된 "실행마다 ±30~120%p 편차" 범위 내. 이번 변경과 인과관계 없음을 실증 후 사용자에게 보고, **채택 확정**.
+
+### 정성 확인 (`.omc/transcripts/` 직접대조)
+
+- **경계1**("...Security Council resolutions." 직후 "이런 목표들을...") — 3/3 필러폭주 없이 대상 문장 대부분 출력(선두 절 경미한 누락 잔존 — catastrophic swallow와는 질적으로 다름).
+- **경계2**("...initial operational capability." 직후 "정경두 국방장관과 저는...") — **3/3 안정적으로 확정 해결**.
+- bong1 웃음구간 필러(기존 이슈, 이번 변경과 무관) 1/3 재현. CASE1 타겟 병합패턴은 자연변동(Exp-167에서 이미 규명한 Silence 0.4s 문턱 민감도).
+- ytn2 R2에서 세 번째(비대상) 경계에 짧은 필러("네, 감사합니다" ×2) 관찰 — 게이트 영향 없음, **CASE3(Req-3) 공유 근본원인으로 재분류**(필러 환각 메커니즘 자체가 CASE3 핵심 현상과 동일 계열).
+- ytn1(held-out) 스트림 최초 문장이 필러로 대체 — `new_speaker()` 개입 불가한 스트림 시작 지점이라 이번 변경과 무관.
+
+### Epoch 판단
+
+**유지(E5)** — CASE1 FIX1(`e6ae496`) 전례와 동일 논리: 기존 언어전환 파이프라인에 새 방어선(스크립트 불일치 게이트 + eager 감지 시각보정)을 추가한 것이지, 언어고정·비음성억제류처럼 파이프라인 전체의 실패모드 지형을 재정의하는 근본적 구조변경은 아님.
+
+---
+
 ## Exp-167
 
 **날짜**: 2026-07-07
