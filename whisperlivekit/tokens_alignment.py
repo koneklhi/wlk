@@ -1,6 +1,7 @@
 from time import time
 from typing import Any, List, Optional, Tuple, Union
 
+from whisperlivekit.sentence_boundary import is_genuine_sentence_end
 from whisperlivekit.timed_objects import (
     ASRToken,
     PuncSegment,
@@ -165,6 +166,23 @@ class TokensAlignment:
             return True
         return False
 
+    def _punct_split_here(self, idx: int, start_idx: int) -> bool:
+        """온점 토큰에서 분할할지: (a)발화끝/(b)Silence[기존] 또는 (c)형태소 종결[신규].
+
+        (c)는 온점(.。) 전용 — ?/! 는 소수점·약어 위험이 없어 (a)/(b) 경로만 유지(현행 불변).
+        판별은 닫히는 세그먼트 누적 텍스트(온점 앞 어절의 스크립트·종결어미·약어)로 한다.
+        """
+        if self._punct_split_justified(idx):
+            return True
+        closing = "".join(t.text for t in self.all_tokens[start_idx: idx + 1])
+        stripped = closing.rstrip()
+        if not stripped or stripped[-1] not in (".", "。"):
+            return False
+        nxt = self.all_tokens[idx + 1] if idx + 1 < len(self.all_tokens) else None
+        next_text = nxt.text if (nxt is not None and not nxt.is_silence()
+                                 and not nxt.is_boundary()) else None
+        return is_genuine_sentence_end(closing, next_text)
+
     def compute_punctuations_segments(self, tokens: Optional[List[ASRToken]] = None) -> List[PuncSegment]:
         """Group tokens into segments split by punctuation and explicit silence."""
         segments = []
@@ -192,10 +210,11 @@ class TokensAlignment:
                     segments.append(previous_segment)
                 segment_start_idx = i+1
             else:
-                if token.has_punctuation() and self._punct_split_justified(i):
+                if token.has_punctuation() and self._punct_split_here(i, segment_start_idx):
                     segment = PuncSegment.from_tokens(
                         tokens=self.all_tokens[segment_start_idx: i+1],
                     )
+                    segment.punct_boundary = True
                     segments.append(segment)
                     segment_start_idx = i+1
 
@@ -286,11 +305,14 @@ class TokensAlignment:
         if punctuation_segments:
             segments = [punctuation_segments[0]]
             for segment in punctuation_segments[1:]:
-                if segment.speaker == segments[-1].speaker and not segments[-1].hard_boundary:
+                if (segment.speaker == segments[-1].speaker
+                        and not segments[-1].hard_boundary
+                        and not getattr(segments[-1], "punct_boundary", False)):
                     if segments[-1].text:
                         segments[-1].text += segment.text
                     segments[-1].end = segment.end
                     segments[-1].hard_boundary = segment.hard_boundary
+                    segments[-1].punct_boundary = getattr(segment, "punct_boundary", False)
                 else:
                     closing = segments[-1]
                     if not closing.is_silence():
@@ -298,6 +320,10 @@ class TokensAlignment:
                             closing.finalize_trigger = "language_switch"
                         elif segment.is_silence():
                             closing.finalize_trigger = "punctuation" if closing.has_punctuation() else "silence"
+                        elif segment.speaker != closing.speaker:
+                            closing.finalize_trigger = "speaker_change"
+                        elif getattr(closing, "punct_boundary", False):
+                            closing.finalize_trigger = "punctuation"
                         else:
                             closing.finalize_trigger = "speaker_change"
                     segments.append(segment)
@@ -327,6 +353,14 @@ class TokensAlignment:
             prev.end = max(prev.end, token.end)
             return True
         return False
+
+    def _nondiar_punct_split_pending(self, next_token: ASRToken) -> bool:
+        """비-diar: 현재 줄이 종결 온점으로 끝났고 다음 토큰이 새 문장을 열면 True(선-분할)."""
+        line_text = "".join(t.text for t in self.current_line_tokens)
+        s = line_text.strip()
+        if not s or s[-1] not in (".", "。"):
+            return False
+        return is_genuine_sentence_end(line_text, getattr(next_token, "text", None))
 
     def _apply_finalize_grace(self, segments: List[Segment], audio_time: Optional[float]) -> None:
         """침묵 직후 유예 창 안에서는 직전 텍스트 세그먼트 확정을 보류(꼬리 도착 대기).
@@ -398,6 +432,15 @@ class TokensAlignment:
                 else:
                     # 유보됐던 꼬리 토큰은 침묵 앞의 확정 세그먼트로 되붙인다(CASE1 교정).
                     if not self._reattach_tail_nondiar(token):
+                        # 형태소 종결 온점 분할: 직전 줄이 종결 온점으로 끝났고 이 토큰이
+                        # 발화를 이으면, 새 토큰을 넣기 전에 현재 줄을 확정해 닫는다.
+                        if self.current_line_tokens and self._nondiar_punct_split_pending(token):
+                            seg = Segment.from_tokens(self.current_line_tokens)
+                            if seg is not None:
+                                seg.finalized = True
+                                seg.finalize_trigger = "punctuation"
+                                self.validated_segments.append(seg)
+                            self.current_line_tokens = []
                         self.current_line_tokens.append(token)
 
             segments = list(self.validated_segments)
