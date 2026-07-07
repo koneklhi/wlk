@@ -149,6 +149,7 @@ class Segment(TimedText):
     tokens: Optional[ASRToken] = None
     translation: Optional[Translation] = None
     finalized: bool = False
+    finalize_trigger: Optional[str] = None
 
     @classmethod
     def from_tokens(
@@ -192,6 +193,7 @@ class Segment(TimedText):
             'finalized': self.finalized,
             'completed': self.finalized,          # React 호환 별칭
         }
+        _dict['finalize_trigger'] = self.finalize_trigger    # None 이어도 항상 방출
         if self.translation:
             _dict['translation'] = self.translation
         if self.detected_language:

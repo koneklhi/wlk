@@ -107,8 +107,12 @@ async def run_browser_test(
     url: str,
     wait_sec: int,
     output_device: str | None,
-) -> list[str]:
-    """Playwright 헤드풀 브라우저로 VBCable 경로 전사 테스트. 확정 문장 리스트 반환."""
+) -> list[dict]:
+    """Playwright 헤드풀 브라우저로 VBCable 경로 전사 테스트. 확정 문장+트리거 리스트 반환.
+
+    반환형: [{"text": str, "trigger": str}, ...] — trigger는 문장 DOM의 data-trigger
+    속성값(silence/punctuation/language_switch/speaker_change 또는 '')이다.
+    """
     import asyncio
     from concurrent.futures import ThreadPoolExecutor
 
@@ -121,7 +125,7 @@ async def run_browser_test(
     processing_timeout_sec = max(wait_sec, 30)
     poll_interval = 0.5
 
-    sentences: list[str] = []
+    lines: list[dict] = []
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=False)
         try:
@@ -196,12 +200,14 @@ async def run_browser_test(
                 await page.evaluate("if (typeof websocket !== 'undefined' && websocket) { websocket.close(); }")
                 await asyncio.sleep(2.0)
 
-            texts = await page.locator("#linesTranscript .textcontent").all_inner_texts()
-            sentences = [t.strip() for t in texts if t.strip()]
+            rows = await page.locator("#linesTranscript .textcontent").evaluate_all(
+                "els => els.map(e => ({ text: (e.innerText || '').trim(), trigger: e.getAttribute('data-trigger') || '' }))"
+            )
+            lines = [r for r in rows if r["text"]]
         finally:
             await browser.close()
 
-    return sentences
+    return lines
 
 
 async def test_file(
@@ -216,7 +222,8 @@ async def test_file(
     check_server_health(url)
     reference = find_reference(audio_path)
 
-    sentences = await run_browser_test(audio_path, url, wait_sec, output_device)
+    lines = await run_browser_test(audio_path, url, wait_sec, output_device)
+    sentences = [r["text"] for r in lines]
     transcription = " ".join(sentences)
 
     wer = None
