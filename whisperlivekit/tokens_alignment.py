@@ -292,6 +292,14 @@ class TokensAlignment:
                     segments[-1].end = segment.end
                     segments[-1].hard_boundary = segment.hard_boundary
                 else:
+                    closing = segments[-1]
+                    if not closing.is_silence():
+                        if getattr(closing, "hard_boundary", False):
+                            closing.finalize_trigger = "language_switch"
+                        elif segment.is_silence():
+                            closing.finalize_trigger = "punctuation" if closing.has_punctuation() else "silence"
+                        else:
+                            closing.finalize_trigger = "speaker_change"
                     segments.append(segment)
 
         # 화자 전환이 발생한 세그먼트는 확정 완료 — 마지막 세그먼트(현재 발화 중)는 제외
@@ -334,6 +342,10 @@ class TokensAlignment:
         prev = segments[-2]
         if last.is_silence() and not prev.is_silence() and prev.text:
             prev.finalized = (audio_time - last.start) >= FINALIZE_GRACE_SECS
+            prev.finalize_trigger = (
+                ("punctuation" if prev.has_punctuation() else "silence")
+                if prev.finalized else None
+            )
 
     def get_lines(
             self,
@@ -362,6 +374,7 @@ class TokensAlignment:
                         seg = Segment.from_tokens(self.current_line_tokens)
                         if seg is not None:
                             seg.finalized = True
+                            seg.finalize_trigger = "punctuation" if seg.has_punctuation() else "silence"
                             self.validated_segments.append(seg)
                         self.current_line_tokens = []
 
@@ -379,6 +392,7 @@ class TokensAlignment:
                         seg = Segment.from_tokens(self.current_line_tokens)
                         if seg is not None:
                             seg.finalized = True
+                            seg.finalize_trigger = "language_switch"
                             self.validated_segments.append(seg)
                         self.current_line_tokens = []
                 else:

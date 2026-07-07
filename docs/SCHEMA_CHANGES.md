@@ -44,6 +44,7 @@ React UI 연결 시 이 문서를 기준으로 수정 범위를 결정한다.
 | `status: "process"/"complete"` | `finalized: bool` | `false`=비확정(진행중), `true`=확정 |
 | — | `completed` | `finalized` 와 동일 값 (React 호환 별칭) |
 | — | `speaker` | 화자 번호 (`int`). 화자분리 미사용 시 `1` |
+| — | `finalize_trigger` | 문장이 **어떤 로직으로 확정·분리됐는지**(`string`\|`null`). 값: `silence`/`punctuation`/`language_switch`/`speaker_change`/`null`(미확정). React는 무시 가능한 **additive** 필드(배지 표시 등에 선택 활용) |
 | `start` (float, 초) | `start` (str, `"H:MM:SS.cc"`) | **타입 변경** — float에서 포맷 문자열로 |
 | `end` (float, 초) | `end` (str, `"H:MM:SS.cc"`) | **타입 변경** |
 | — | `translation` | 번역 결과 (문자열). 번역 활성 + 확정된 세그먼트에만 존재 |

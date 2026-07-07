@@ -105,6 +105,7 @@ _dict = {
   'end':     format_time(self.end),
   'finalized': self.finalized,
   'completed': self.finalized,          # React 호환 별칭
+  'finalize_trigger': self.finalize_trigger,  # 확정 트리거(silence/punctuation/language_switch/speaker_change|null)
 }
 if self.translation:        _dict['translation'] = self.translation
 if self.detected_language:  _dict['detected_language'] = ...; _dict['lang'] = ...
@@ -118,6 +119,7 @@ if self.detected_language:  _dict['detected_language'] = ...; _dict['lang'] = ..
 | `end` | str | O | `"0:00:05.10"` | 동상 |
 | `finalized` | bool | O | `true`/`false` | 문장 확정 여부. **diar 모드에선 항상 false(§3.4 제약)** |
 | `completed` | bool | O | `finalized`와 동일 | React 호환 별칭 |
+| `finalize_trigger` | str·null | O | `silence`/`punctuation`/`language_switch`/`speaker_change`/`null` | 문장이 어떤 로직으로 확정·분리됐는지. `null`=미확정. **additive** 필드 — 프론트에서 확정 트리거 배지 표시에 활용 가능(필수 아님) |
 | `translation` | str | 번역 있을 때만 | `"Hello"` | 인라인 번역(§5). 확정+번역활성 세그먼트만 |
 | `detected_language` | str | 감지됐을 때만 | `"ko"`,`"en"` | 언어 코드 |
 | `lang` | str | detected_language 있을 때만 | 동일 값 | React 호환 별칭 |

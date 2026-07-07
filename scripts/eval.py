@@ -106,6 +106,7 @@ class FileResult:
     seg_recall: Optional[float] = None
     ref_sentences: Optional[int] = None
     hyp_sentences: Optional[int] = None
+    hyp_lines: Optional[list] = None   # [{"text": str, "trigger": str|None}, ...] 문장별 확정 트리거
 
 
 @dataclass
@@ -142,11 +143,19 @@ def _save_transcript(transcript_dir: Path, file_result: "FileResult", rep: int =
     filename = f"{audio_name}_{file_result.path}_R{rep}.txt"
     wer_str = f"{file_result.wer * 100:.1f}%" if file_result.wer is not None else "N/A"
     f1_str = f"{file_result.seg_f1 * 100:.1f}%" if file_result.seg_f1 is not None else "N/A"
+    lines_block = ""
+    if file_result.hyp_lines:
+        rows = []
+        for i, ln in enumerate(file_result.hyp_lines, 1):
+            trig = ln.get("trigger") or "-"
+            rows.append(f"{i}. {ln['text']}  ⟨{trig}⟩")
+        lines_block = "\n[문장별 확정 트리거]\n" + "\n".join(rows) + "\n"
     content = (
         f"파일: {file_result.audio_file}\n"
         f"경로: {file_result.path} | 회차: R{rep}\n"
         f"WER: {wer_str} | F1: {f1_str}\n"
         f"\n[전사]\n{file_result.transcription}\n"
+        f"{lines_block}"
         f"\n[정답]\n{file_result.reference or '(정답 없음)'}\n"
     )
     transcript_dir.mkdir(parents=True, exist_ok=True)
@@ -257,7 +266,7 @@ def stop_server(proc: subprocess.Popen) -> None:
         proc.kill()
 
 
-def _build_result(audio_path: Path, transcription: str, hyp_sentences: list, path: str) -> FileResult:
+def _build_result(audio_path: Path, transcription: str, hyp_sentences: list, path: str, hyp_lines: Optional[list] = None) -> FileResult:
     """전사 결과로부터 WER + 문장 분리 F1을 산출해 FileResult를 만든다."""
     from whisperlivekit.metrics import compute_segmentation, compute_wer
 
@@ -281,6 +290,7 @@ def _build_result(audio_path: Path, transcription: str, hyp_sentences: list, pat
         seg_recall=seg["recall"] if seg else None,
         ref_sentences=seg["ref_sentences"] if seg else None,
         hyp_sentences=seg["hyp_sentences"] if seg else None,
+        hyp_lines=hyp_lines,
     )
 
 
@@ -300,8 +310,10 @@ async def eval_path_a(audio_file: Path, base_url: str) -> Optional[FileResult]:
         print(f"[eval] 경고: {audio_file.name} 전사 실패: {e}", file=sys.stderr)
         return None
     hyp_sentences = [line["text"] for line in result.lines if line.get("text")]
+    hyp_lines = [{"text": line["text"], "trigger": line.get("finalize_trigger")}
+                 for line in result.lines if line.get("text")]
     transcription = result.committed_text or result.text
-    return _build_result(audio_file, transcription, hyp_sentences, "A")
+    return _build_result(audio_file, transcription, hyp_sentences, "A", hyp_lines=hyp_lines)
 
 
 async def eval_path_c(audio_file: Path, base_url: str, wait_sec: int = 120) -> FileResult:
@@ -309,12 +321,14 @@ async def eval_path_c(audio_file: Path, base_url: str, wait_sec: int = 120) -> F
 
     print(f"  [C] {audio_file.name} ...", flush=True)
     try:
-        hyp_sentences = await run_browser_test(audio_file, base_url, wait_sec, None)
+        rows = await run_browser_test(audio_file, base_url, wait_sec, None)
     except Exception as e:
         print(f"[eval] 경고: {audio_file.name} 브라우저 테스트 실패: {e}", file=sys.stderr)
-        hyp_sentences = []
+        rows = []
+    hyp_sentences = [r["text"] for r in rows]
+    hyp_lines = [{"text": r["text"], "trigger": (r.get("trigger") or None)} for r in rows]
     transcription = " ".join(hyp_sentences)
-    return _build_result(audio_file, transcription, hyp_sentences, "C")
+    return _build_result(audio_file, transcription, hyp_sentences, "C", hyp_lines=hyp_lines)
 
 
 def print_summary(result: EvalResult, repeat: int = 1, file_summaries: Optional[list] = None) -> None:
