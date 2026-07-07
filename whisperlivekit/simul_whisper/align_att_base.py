@@ -216,6 +216,10 @@ class AlignAttBase(ABC):
                 seconds_since_start = self.segments_len()
             else:
                 # diar-off silence 경로: first_timestamp 설정 전엔 감지 보류 (Exp-093 안정 동작 — 잦은 _apply_detected_language 리셋으로 인한 반복 폭주 방지)
+                logger.debug(
+                    "[LangDetectDeferred] 감지 보류: first_timestamp=None, eager_lang_detect=False (segments_len=%.2fs)",
+                    self.segments_len(),
+                )
                 return
             # 화자전환 직후엔 1.5s+확신도≥0.85로 빠른 감지 — 잘못된 언어 고착 방지
             threshold = 1.5 if self.state.eager_lang_detect else 2.0
@@ -420,6 +424,10 @@ class AlignAttBase(ABC):
 
         if len(l_absolute_timestamps) >= 2 and self.state.first_timestamp is None:
             self.state.first_timestamp = l_absolute_timestamps[0]
+            logger.info(
+                "[FirstTimestamp] 최초 설정: %.3fs (segments_len=%.2fs)",
+                self.state.first_timestamp, self.segments_len(),
+            )
 
         timestamped_words = self._build_timestamped_words(
             split_words, split_tokens, l_absolute_timestamps

@@ -87,6 +87,18 @@ class SimulStreamingOnlineProcessor:
         """Handle silence period."""
         self.end += silence_duration
         long_silence = silence_duration >= MIN_DURATION_REAL_SILENCE
+        # 계측용(행동 비변경): 어느 분기를 타는지는 아래 if/elif와 동일 조건으로 별도 계산해
+        # 로그 라벨만 만든다 — 기존 if/elif 조건식 자체는 건드리지 않는다.
+        _short_cond = (
+            silence_duration >= MIN_DURATION_SHORT_LANG_RESET
+            and self.model.cfg.language == "auto"
+            and self.model.state.detected_language is not None
+        )
+        logger.info(
+            "[EndSilence] dur=%.2fs branch=%s det_lang=%s lang_before_reset=%s",
+            silence_duration, "long" if long_silence else ("short" if _short_cond else "none"),
+            self.model.state.detected_language, self.model.state.lang_before_reset,
+        )
         if not long_silence:
             gap_len = int(16000 * silence_duration)
             if gap_len > 0:
@@ -97,6 +109,10 @@ class SimulStreamingOnlineProcessor:
                 self.model.insert_audio(gap_silence)
         if long_silence:
             self.model.refresh_segment(complete=True)
+            logger.info(
+                "[EndSilence] long-silence 리셋 직전(폐기 예정): det_lang=%s→None lang_before_reset=%s→None",
+                self.model.state.detected_language, self.model.state.lang_before_reset,
+            )
             self.model.state.detected_language = None   # 재감지 허용
             self.model.state.lang_before_reset = None   # 긴 침묵 = 문장 경계, 전환 판정 불필요
             self.model.state.first_timestamp = None     # 재감지 조건 충족
@@ -146,6 +162,11 @@ class SimulStreamingOnlineProcessor:
         """
         # 1. refresh 전 버퍼로 새 화자 언어 즉시 감지 (경계 오디오가 아직 버퍼에 있음)
         eager = self.model.detect_current_language(window_secs=1.5, min_prob=0.85)
+        logger.info(
+            "[NewSpeaker] spk=%s→%s det_before=%s eager=%s",
+            self.model.state.speaker, change_speaker.speaker,
+            self.model.state.detected_language, eager,
+        )
         # 2. flush 생략 + 경계 오디오 유지(complete=False) + 미확정 음역 폐기
         self.model.refresh_segment(complete=False)
         self.buffer = []
@@ -156,6 +177,10 @@ class SimulStreamingOnlineProcessor:
         # 3. 감지 성공 시 토크나이저 즉시 교정 (refresh 후 적용)
         if eager:
             self.model._apply_detected_language(eager)
+        logger.info(
+            "[NewSpeaker] spk=%s det_after=%s (eager_applied=%s)",
+            change_speaker.speaker, self.model.state.detected_language, bool(eager),
+        )
         self.model.speaker = change_speaker.speaker
         self.model.global_time_offset = change_speaker.start
         self._last_emitted_word = None
