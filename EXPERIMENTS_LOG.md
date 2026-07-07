@@ -2463,3 +2463,58 @@ Req-3 자체 목표(storm 최대반복횟수 감소·ytn2 "김정은" storm 소�
 - **설계안 1순위(oracle 사이클1에서 보류)**: 컨텍스트 기아 fire 억제(segments_len<1.5s + boundary refresh 직후 배치 defer) — 근본원인 대응이나 Req-2 회귀위험이 커서 별도 사이클 필요.
 
 **JSON**: `.omc/benchmarks/eval_20260706_2248_exp167_confirm.json`(초기 bong1+sbs1 N=3, HEAD e210465) · `eval_20260707_0002_expC_screen.json`(Direction A 스크리닝) · `eval_20260707_0023_expC_confirm_dirA.json`(Direction A 확정, 기각) · `eval_20260707_0127_expC_fix1_screen.json`(FIX 1 스크리닝) · `eval_20260707_0144_expC_fix1_confirm.json`(FIX 1 확정, 채택 — 위 표 출처).
+
+---
+
+## Exp-170 — 온점 형태소 분할: 한국어 종결어미·영어 약어 판별로 온점을 독립 문장경계로 승격 [E5, master 머지 `4b193ea`] (2026-07-07)
+
+**날짜**: 2026-07-07
+**워크트리/브랜치**: `worktrees/punct-split` @ `exp/punct-split`, feat `4159b1e` → master 머지 `4b193ea`(--no-ff)
+
+**가설**: 연속 발화(특히 한국어)가 문장 분리 없이 한 줄로 길게 이어진다. Whisper는 마침표를 찍지만 현재 온점 분할은 뒤에 실제 침묵/발화끝이 있어야만 발동(Exp-166 축소)해 침묵 없는 경계를 놓친다. 동시에 Whisper는 거짓 마침표를 대량 생성한다(한국어 "올렸.습니다"·"주한미군.사령관", 영어 약어 "Dr.", 소수점) → 단순 온점 분할은 과분할. **형태소 판별**(한국어 종결어미 + 영어 약어 배제 + 다음단어 대문자)로 진짜 종결만 분할하면 문장 단위 확정(§3.3 최종목표)에 다가간다.
+
+**변경 내용**:
+- `whisperlivekit/sentence_boundary.py` 신설(순수 판별기): `is_genuine_sentence_end`/`is_sentence_final_ko`/`is_abbreviation_en`. 한국어 `KO_FINAL_SUFFIXES`(니다/어요/세요/구나/았다…, **bare 단음절 군/네/다/까 제외**=명사·조사 충돌 방어) + `KO_EXCLUDE_SUFFIXES`(니까/으로/는데…), 영어 `EN_ABBREV`+단일대문자+다음단어 대문자, 숫자-직전 가드. 온점 앞 어절 스크립트(한글/라틴)로 언어 라우팅.
+- `whisperlivekit/tokens_alignment.py`: `_punct_split_here`(기존 (a)발화끝/(b)Silence에 (c)형태소 종결 추가), `compute_punctuations_segments` 분할점, diar 병합 3곳(병합조건·전파·라벨 — `PuncSegment.punct_boundary`로 같은 화자 재합침 방지·"punctuation" 정라벨), 비-diar `_nondiar_punct_split_pending` 선-분할. 범위 = 온점(`.`/`。`) 전용, `?`/`!`는 현행 유지.
+- `whisperlivekit/timed_objects.py`: `PuncSegment.punct_boundary` 필드(내부 전용, to_dict 미방출).
+- 테스트: `tests/test_sentence_boundary.py`(판별기 단위) + `tests/test_punct_split.py`(diar/비-diar 통합). 기존 6 assert(것으로/very 비종결) 회귀 없음. pytest 53 passed, ruff 클린.
+
+**테스트 설정**: 경로 C, diar-ON(Sortformer + CRT 3.0), turbo beam=2. 스크리닝 N=1 → 확정 N=3. **held-out(ytn1/eng1) 미측정** — 출력계층 WER중립 + F1 지표한계(아래)로 held-out도 동일 한계, 사용자 승인 채택이라 생략(향후 온점 F1 metric 구현 후 재검토).
+
+### 테스트 세트 결과 (N=3 확정, JSON `eval_punctsplit_adopt.json`)
+
+| 파일 | baseline(Exp-161) med/max·F1 | 이번 med/max/min/stdev·F1med | ΔWER med/max | ΔF1 |
+|------|------|------|------|------|
+| bong1 | 30.5/30.5 · 50.0 | 30.2 / **36.0** / 29.9 / 3.4 · 44.9 | -0.3 / **+5.5** | -5.1 |
+| ytn2  | 28.1/34.5 · 38.5 | 29.6 / 32.5 / 25.1 / 3.7 · **55.2** | +1.5 / -2.0 | **+16.7** |
+| sbs1  | 14.9/16.1 · 16.7 | 14.3 / 14.9 / 11.9 / 1.6 · 13.3(R3=0.0) | -0.6 / -1.2 | -3.4 |
+
+스크리닝(N=1) 참고: bong1 30.2/53.3, ytn2 15.8/60.9, sbs1 13.1/28.6(1회는 방향신호).
+
+### 분석 (전사 정성 대조 — `.omc/transcripts/`)
+
+- **형태소 분할 정확(핵심 목표 달성)**: sbs1 "…겁니다.⟨punctuation⟩ / …정의했습니다.⟨punctuation⟩ / …역설했습니다.⟨punctuation⟩"(니다 종결), ytn2 "…했습니다.⟨punctuation⟩", bong1 영어 "…in the film.⟨punctuation⟩ So he's…"·"…character.⟨punctuation⟩ But…"(다음단어 대문자). baseline 1줄 뭉침 → sbs1 14개 정문 분리.
+- **거짓 마침표 미분할(과분할 방지)**: "주한미군 사령관"(군 제외)·"올렸습니다"(어간 미파편화)·"이와 관련해서"(baseline "관련." 분할 소멸)·"정연의 핵심은"·"저는"(조사). **영어 약어 가드**: bong1 "Dr. Bong" 병합 유지.
+- **신규 실패모드(경미)**: 영어 환각 마침표+대문자 다음단어 → 가끔 오분할(bong1 ", what was the." | "What's…", garbage 구간). 한국어에선 미관측.
+- **bong1 WER max 36.0 원인**: R3 웃음구간 필러 환각 폭주("That. I'm. I. I'm. I'm sorry. Yeah." — bong1 고질, STATE Exp-163/168). **출력계층 전용인 punct-split과 무관**(디코더 생성 단어, 분할이 환각을 늘릴 수 없음). 필러를 여러 줄로 쪼갤 뿐 WER은 그 단어들 탓.
+
+### 채택 조건 판정
+
+| # | 조건 | 판정 |
+|---|------|------|
+| ① max WER 미회귀 | bong1 36.0>게이트30.5(+5.5) / ytn2 32.5≤34.5 ✓ / sbs1 14.9≤16.1 ✓ | △ bong1만 초과 — 웃음 필러환각 변동(기능 무관, 위 분석) |
+| ② median 개선 | WER median 3파일 ≈baseline(~WER중립·출력계층) | ➖ 중립 |
+| 목표(§3.3 문장분리) | sbs1 1줄→14정문·형태소 분할 정확 | ✅ 달성 |
+
+**판정: ✅ 채택 (사용자 승인 — 목표 필수 기능 §4)**
+- **F1 지표 한계 규명(핵심)**: 정답이 `scripts/eval.py:parse_reference_sentences`로 **빈 줄(화자전환/문단) 기준** 분할이라 문장(온점) 경계를 credit 못 함(§3.3 온점 2순위 metric 미구현) → 문장분할↑ = hyp 경계↑ = precision↓ = F1 하락. sbs1 R3 F1=0.0%인데 전사는 14개 정문이 증거. **∴ 현행 F1로 이 기능 정량평가 불가** — 온점 경계 F1 구현이 후속 과제.
+- WER median≈baseline(출력계층 전용·단어 시퀀스 불변), 정성 정확, ytn2 F1+16.7pp. bong1 max 초과는 웃음 필러 변동으로 규명(기능 무관). 사용자 지침: 목표=문장단위 확정, F1보다 WER 우선, 화자전환 시 화자분리 필수(CLAUDE.md §3.3 갱신).
+
+**Epoch 판단**: 세대 안 올림(E5 유지) — punct-split은 **출력 계층 전용**(확정된 세그먼트 분할)이라 디코더 파라미터(beam/CRT/PLC/logprob) 트레이드오프에 영향 없음. epoch 게이트가 보호하는 것은 디코더-파라미터 결론인데 punct-split은 WER 중립이라 E5 결론(Exp-160/161/162) 전부 유효. (연동갱신표의 "구조적 변경 bump"는 언어고정·비음성억제·디코더/VAD 등 WER 영향 변경 대상 — 출력계층 문장분할은 해당 안 됨.)
+
+### 다음 가설 (향후 검토 후보)
+- **온점 경계 F1 metric 구현**(§3.3 예고된 후속): 정답을 화자전환(빈 줄) + 문장(온점) 2계층으로 파싱해 문장분리 기능을 정량평가 가능하게. 이게 있어야 punct-split 후속 튜닝을 측정으로 판단 가능.
+- **한국어 Tier2 종결어미**(`-다`/`-ㄴ다`, `len>=2` 가드) 커버리지 확대 — 온점 F1 구현 후.
+- **영어 오분할 축소**: 환각 마침표+대문자 다음단어 오분할(bong1) 완화.
+
+**JSON**: `.omc/benchmarks/eval_punctsplit_screen.json`(스크리닝 N=1) · `eval_punctsplit_adopt.json`(확정 N=3, 위 표 출처).

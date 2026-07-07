@@ -41,6 +41,7 @@
 - 메시지 스키마는 [docs/SCHEMA_CHANGES.md](docs/SCHEMA_CHANGES.md)로 **확정·구현됨**. 문장 확정 알고리즘(신호 조합)은 일부 미정 — [docs/OPEN_QUESTIONS.md](docs/OPEN_QUESTIONS.md) §1 참조 후 합의해 확정.
 - 문장 확정 품질은 `/eval`의 **문장 분리 F1**(정답 기준: 빈 줄 = 화자전환 경계(1순위 필수) + 긴 발화 온점분리 경계(2순위 선택), STT `lines[]` 경계와 단어 정렬 비교; F1 primary=화자전환 경계·secondary=온점 경계 — metric 구현 후속)로 정량 평가한다.
   **성능 판정 기준은 경로 C(VBCable 루프백)만** 사용한다. 경로 A(PCM 파일 주입)는 브라우저 오디오 파이프라인을 우회해 실사용과 무관한 수치를 내므로 폐기.
+- **최종 목표 = 문장 단위 확정 (Exp-170~ 온점 형태소 분할 도입)**: 궁극 목표는 발화를 **한 문장씩 확정·분리**하는 것이다. 단 **화자가 바뀌는 순간에는 반드시 화자 분리**가 일어나야 한다(정답 스크립트가 화자전환 기준으로 줄바꿈됨). 그래서 현재 F1 지표는 정답의 **화자전환=문단 경계**만 재고 문장(온점) 2순위 metric이 미구현이라, **문장 분할을 늘리면 당장 F1이 떨어져 보일 수 있으나 괜찮다** — 최종 목적(문장 단위 확정)에 부합하고 WER이 회귀하지 않으면 채택한다. **성능 개선 방향은 F1보다 WER을 우선**한다(§4 지표 우선순위 재확인). `bong1`처럼 **다화자가 짧은 단어를 번갈아 말하는 케이스**는 그 순간 문장·화자 분리를 잘 해야 전사 정확도(WER)도 함께 개선된다 — 다화자 화자전환 경계에서의 정확한 분리가 §3.8 최우선(ytn2·bong1) 개선과 직결된다.
 
 ### 3.4 번역 트리거 (기존 흐름 이식)
 - 문장이 **확정된 시점**에 번역 수행 → UI 출력. 번역 파이프라인(LLM, 프롬프트, 번역기 모듈)은
@@ -125,7 +126,7 @@
 - 실행 명령어·검증 순서·test_data 구조·모델 경로 상세 → [docs/TESTING.md](docs/TESTING.md)
 - 작업 시 우선 참조 파일 색인 → [docs/FILE_INDEX.md](docs/FILE_INDEX.md)
 - 미정 설계 사항(문장 확정 알고리즘, 메시지 스키마, Code-Switching, 폐쇄망 패키징) → [docs/OPEN_QUESTIONS.md](docs/OPEN_QUESTIONS.md)
-- 문장 확정·분리 로직 상세(경계 원인 3종+`punctuation` 라벨·파라미터·`finalize_trigger` 계측) → [docs/SENTENCE_FINALIZATION_LOGIC.md](docs/SENTENCE_FINALIZATION_LOGIC.md)
+- 문장 확정·분리 로직 상세(경계 원인 3종+온점 형태소 분할[Exp-170]·`punctuation` 라벨·파라미터·`finalize_trigger` 계측) → [docs/SENTENCE_FINALIZATION_LOGIC.md](docs/SENTENCE_FINALIZATION_LOGIC.md)
 - Phase 정의·태스크·완료 기준 → [ROADMAP.md](ROADMAP.md) / 실험 기록 3계층 → [EXPERIMENTS.md](EXPERIMENTS.md)(STATE·항상읽음) · [EXPERIMENTS_LOG.md](EXPERIMENTS_LOG.md)(LOG·온디맨드 Exp-131~) · [PHASE2_EXPERIMENTS.md](PHASE2_EXPERIMENTS.md)(ARCHIVE·Exp-001~130 동결)
 - master 최종본 upstream 대비 전체 변경 + 향후 개선 → [docs/MASTER_CHANGES.md](docs/MASTER_CHANGES.md)
 

@@ -10,7 +10,7 @@
 
 ---
 
-## 1. 한눈에 — 경계 원인은 3종, `finalize_trigger` 값은 4종
+## 1. 한눈에 — 경계 원인 3종(침묵·언어전환·화자전환) + 온점 형태소 분할, `finalize_trigger` 값 4종
 
 **중요 구분**: "문장 경계를 *만드는* 원인"과 "`finalize_trigger`가 *내보내는 라벨*"은 개수가 다르다.
 
@@ -19,11 +19,12 @@
 | `language_switch` | **독립 경계 원인** | ✅ 한↔영 전환 마커가 줄을 닫음 |
 | `speaker_change` | **독립 경계 원인** (diar ON 한정) | ✅ 화자 전환이 줄을 닫음 |
 | `silence` | **독립 경계 원인** | ✅ 침묵(VAD pause) 토큰이 줄을 닫음 |
-| `punctuation` | **라벨** (침묵/화자경계로 닫힌 줄의 텍스트가 종결부호로 끝날 때) | ❌ 독립 원인 아님 — 침묵/화자경계가 만든 줄에 붙는 세분 라벨 |
+| `punctuation` | **조건부 독립 원인 + 라벨** | △ 온점 형태소 종결(§3.5, Exp-170~)이면 **독립 분할** / 침묵·화자경계로 닫힌 줄의 종결부호면 세분 라벨 |
 
-즉 **실제 분할 신호는 3개**(침묵·언어전환·화자전환)이고, `punctuation`은 그중 침묵/화자경계로 닫힌
-세그먼트가 `.!?。！？`로 끝나면 `silence`/`speaker_change` 대신 붙는 **세분 라벨**이다.
-전수 감사 결과 이 4개 외에 UI `lines[]` 경계를 만드는 다른 메커니즘은 없다(§6에 근거).
+즉 경계를 만드는 메커니즘은 **음향·마커 3종(침묵·언어전환·화자전환) + 온점 형태소 분할(§3.5)**이다.
+`punctuation` 라벨은 두 경로로 붙는다: ① 온점 형태소 종결이 **독립적으로** 줄을 분할할 때(Exp-170~),
+② 침묵/화자경계로 닫힌 세그먼트가 `.!?。！？`로 끝나 `silence`/`speaker_change` 대신 붙는 **세분 라벨**일 때.
+전수 감사 결과 이 4개 값 외에 UI `lines[]` 경계를 만드는 다른 메커니즘은 없다(§6에 근거).
 
 미확정으로 남는 경우(스트림 진행 중 마지막 줄, 종료 시 강제확정 없음)는 `finalize_trigger = null`.
 
@@ -36,9 +37,10 @@
 - **diarization ON** (기본값 `--diarization`): `TokensAlignment.get_lines_diarization()` — `tokens_alignment.py:266`~
 - **diarization OFF**: `TokensAlignment.get_lines()`의 비-diar 루프 — `tokens_alignment.py:358`~
 
-두 함수는 매 사이클 토큰 스트림으로부터 세그먼트를 재구성한다. 세그먼트를 실제로 닫거나 여는 것은
-토큰 스트림에 섞여 들어오는 **3종 신호**(Silence 토큰 / LanguageSwitch 마커 / (diar)화자 변경)뿐이다.
-직렬화는 `Segment.to_dict()` (`timed_objects.py:185`)가 `finalized`/`completed`/`finalize_trigger`를 항상 방출.
+두 함수는 매 사이클 토큰 스트림으로부터 세그먼트를 재구성한다. 세그먼트를 닫거나 여는 것은
+토큰 스트림에 섞여 들어오는 **3종 신호**(Silence 토큰 / LanguageSwitch 마커 / (diar)화자 변경)와,
+**온점 형태소 종결**(`_punct_split_here`가 `sentence_boundary.is_genuine_sentence_end`로 판정 — §3.5)이다.
+직렬화는 `Segment.to_dict()` (`timed_objects.py:186`)가 `finalized`/`completed`/`finalize_trigger`를 항상 방출.
 
 ---
 
@@ -97,16 +99,39 @@
 - **파라미터**: 화자분할 백엔드 `--diarization-backend sortformer`, 모델 `--sortformer-model <.nemo>`.
   기본 `--diarization` = ON (`parse_args.py`). diarization OFF면 이 트리거는 발생하지 않는다.
 
-### 3.4 `punctuation` — 침묵/화자경계로 닫힌 줄의 종결부호 세분 라벨
+### 3.4 `punctuation` — 라벨 의미 (두 경로)
 
-- **독립 원인 아님**. 침묵(3.1)/화자경계(3.3)로 닫힌 세그먼트의 텍스트가 종결부호로 끝나면 붙는다.
+`punctuation` 라벨은 두 경우에 붙는다:
+1. **온점 형태소 종결이 독립적으로 줄을 분할**할 때(§3.5, Exp-170~) — 이 경우 punctuation은 **독립 경계 원인**이다.
+2. **침묵(3.1)/화자경계(3.3)로 닫힌** 세그먼트의 텍스트가 종결부호로 끝날 때 — `silence`/`speaker_change`의 세분 라벨.
+
 - 판정: `TimedText.has_punctuation()` — 텍스트 끝 문자가 `PUNCTUATION_MARKS = {. ! ? 。 ！ ？}`인지
   (`timed_objects.py:4,28-30`).
-- 온점 자체의 분할(`compute_punctuations_segments` + `_punct_split_justified`)은 **뒤에 Silence/발화끝이
-  있어야만** 발동하도록 축소돼 있어(갭 기반 분기는 Exp-166에서 제거, `tokens_alignment.py:150-166`) 독립 경계를
-  만들지 못한다 — 같은 화자·non-hard_boundary 인접 세그먼트는 병합 루프에서 다시 합쳐진다(`tokens_alignment.py:289`).
-- **우선순위**(동시 발생 시): `language_switch` > `speaker_change` > `punctuation` > `silence`.
-  종결부호가 있으면 침묵 동반이어도 `punctuation`으로 라벨(자연스러운 끝맺음을 드러내기 위함).
+- **우선순위**(동시 발생 시): `language_switch` > `speaker_change` > `punctuation`(온점 형태소) > `silence`
+  — diar 라벨 분기 `tokens_alignment.py:320-328`. 화자가 동시에 바뀌면 `speaker_change`가 온점보다 우선.
+
+### 3.5 `punctuation`(온점 형태소 종결) — 독립 문장 경계 (Exp-170~)
+
+Whisper가 찍는 마침표(`.`/`。`)를 문장 분할 신호로 쓰되, **진짜 종결과 거짓 마침표**(한국어 어간·조사 중간
+온점, 영어 약어, 소수점)를 형태소로 판별해 분할한다. `?`/`!`는 1차 범위 제외(소수점·약어 위험이 없어 현행 (a)/(b) 유지).
+
+- **판별기**: `whisperlivekit/sentence_boundary.py`(순수 함수). `is_genuine_sentence_end(closing_text, next_text)`가
+  닫히는 세그먼트 누적 텍스트로 판정하고, 온점 앞 어절의 **스크립트(한글/라틴)**로 언어를 라우팅한다:
+  - 한국어 `is_sentence_final_ko`: `KO_FINAL_SUFFIXES`(니다/어요/세요/구나/았다… 종결어미)로 끝나고
+    `KO_EXCLUDE_SUFFIXES`(니까/으로/는데/다는… 연결어미·조사)로 끝나지 않으면 종결. **bare 단음절(군/네/다/까)은
+    명사·조사 충돌로 제외**(오탐 방어 핵심 — "주한미군"·"저는" 미분할).
+  - 영어 `is_abbreviation_en`(Mr/U.S/etc/단일대문자)이 **아니고**, 다음 어절이 대문자 시작일 때만 종결
+    ("island. or"[소문자]는 미분할, "film. So"[대문자]는 분할).
+  - 소수점: 종결 온점 직전 문자가 숫자면(서수·열거·소수) 분할 안 함. "3.1"은 토큰 병합상 `has_punctuation=False`라 구조적으로 안전.
+- **분할 게이트**: `_punct_split_here(idx, start_idx)`(`tokens_alignment.py:169`)가 기존 (a)발화끝/(b)Silence
+  (`_punct_split_justified`)에 (c) 온점 형태소 종결을 추가. `compute_punctuations_segments`(:213)가 호출.
+- **diar 병합 생존**: 온점 형태소 분할 세그먼트에 `PuncSegment.punct_boundary=True`를 세팅해, 같은 화자여도
+  병합 루프(`tokens_alignment.py:310`)가 재합침하지 않게 한다(병합조건·전파·라벨 3곳 일관). 라벨은 :326에서 `"punctuation"`.
+- **비-diar 경로**: `_nondiar_punct_split_pending`(`tokens_alignment.py:357`)이 직전 줄이 종결 온점으로 끝나고
+  다음 토큰이 새 문장을 열면 선-분할, `finalize_trigger="punctuation"`(:441).
+- **파라미터**: §5 `KO_FINAL_SUFFIXES`/`KO_EXCLUDE_SUFFIXES`/`EN_ABBREV`(SoT=`sentence_boundary.py`).
+- **측정(Exp-170)**: 출력 계층 전용이라 **WER 중립**(단어 시퀀스 불변). F1은 정답이 화자전환(문단) 경계 기준이라
+  문장 분할을 credit 못 함(§3.3 온점 2순위 metric 미구현) — 채택 근거는 목표(문장분리)·정성·WER 중립.
 
 ---
 
@@ -148,6 +173,9 @@
 | `STALL_RECOVER_SEC` | `10.0`s | `backend.py:41` | stall 복구 refresh |
 | `periodic_lang_check_secs` | `None`(비활성) | `parse_args.py` `--periodic-lang-check` | 주기 언어 재감지 간격 |
 | `PUNCTUATION_MARKS` | `. ! ? 。 ！ ？` | `timed_objects.py:4` | `punctuation` 라벨 판정 |
+| `KO_FINAL_SUFFIXES` | 니다/어요/세요/구나/았다… | `sentence_boundary.py` | 한국어 종결어미(온점 형태소 분할, §3.5) |
+| `KO_EXCLUDE_SUFFIXES` | 니까/으로/는데/다는… | `sentence_boundary.py` | 연결어미·조사 차단(오탐 방어) |
+| `EN_ABBREV` | mr/us/un/etc… + 단일대문자 | `sentence_boundary.py` | 영어 약어 배제(온점 형태소 분할, §3.5) |
 | 언어감지 문턱 | 일반 `2.0`s / eager `1.5`s+p≥0.85 | `align_att_base.py:225-235` | 전환 arm 조건 |
 
 디코더 파라미터(간접 영향: 어떤 텍스트가 나오는지에 영향, 경계는 §3의 3신호가 전담) —
@@ -159,9 +187,10 @@
 ## 6. 전수 감사 결론 (판정 근거)
 
 `{silence, punctuation, language_switch, speaker_change}`가 `finalize_trigger` 방출값의 **전부**임을 확인했다
-(`tokens_alignment.py`의 문자열 리터럴 대입 지점 전수 grep). 실제 경계 생성 원인은 3종(침묵·언어전환·화자전환)이며
-`punctuation`은 침묵/화자경계로 닫힌 줄의 세분 라벨이다. §4의 모든 메커니즘은 텍스트를 드롭·이동·유예·리셋할 뿐
-Silence/LanguageSwitch 마커나 SpeakerSegment 경계를 새로 만들지 않으므로 UI 경계를 생성하지 않는다.
+(`tokens_alignment.py`의 문자열 리터럴 대입 지점 전수 grep). 실제 경계 생성 메커니즘은 **음향·마커 3종
+(침묵·언어전환·화자전환) + 온점 형태소 종결(§3.5, Exp-170~)**이다. `punctuation`은 온점 형태소 분할이
+독립적으로 줄을 닫거나(§3.5), 침묵/화자경계로 닫힌 줄이 종결부호로 끝날 때(§3.4) 붙는다. §4의 모든 메커니즘은
+텍스트를 드롭·이동·유예·리셋할 뿐 경계 마커/세그먼트를 새로 만들지 않으므로 UI 경계를 생성하지 않는다.
 **누락된 경계 생성 메커니즘: 없음.**
 
 ---
@@ -173,6 +202,7 @@ Silence/LanguageSwitch 마커나 SpeakerSegment 경계를 새로 만들지 않�
 | 바뀐 코드 | 갱신할 이 문서의 절 |
 |---|---|
 | `tokens_alignment.py`의 `finalize_trigger` 대입 지점·조건 (확정 로직) | §2, §3 (해당 트리거), §6 |
+| `sentence_boundary.py` 판별기 목록·로직 (KO_FINAL/KO_EXCLUDE/EN_ABBREV·`is_genuine_sentence_end`·`_punct_split_here`) | §3.5, §5 |
 | 새 트리거 종류 추가/제거 (예: `end_of_stream` 도입) | §1 표, §3(신설 절), §6, 그리고 UI 라벨(`live_transcription.js` `TRIGGER_LABELS`)·`docs/SCHEMA_CHANGES.md` |
 | 경계 신호 생성 조건 변경 (Silence 토큰 문턱, LanguageSwitch arm 진입점, 화자경계 로직) | §3 해당 절 |
 | §5 파라미터 상수의 **값** 변경 | §5 표(현재값), 그리고 그 값을 언급한 §3 본문 |
