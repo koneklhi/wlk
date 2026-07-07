@@ -95,6 +95,7 @@
 | `scripts/eval.py` `SERVER_PORT` 또는 측정 기본 설정 | `docs/TESTING.md` 경로 C, `.claude/commands/eval.md` |
 | `whisperlivekit/test_client.py` 기본 URL | `docs/TESTING.md` 경로 A |
 | `config.py` `WhisperLiveKitConfig` 필드 (WebSocket 메시지 스키마 영향) | `docs/SCHEMA_CHANGES.md`, `docs/FRONTEND_HANDOFF.md` |
+| 문장 확정·분리 로직 변경 (`tokens_alignment.py` 확정 지점·`finalize_trigger` 라벨·경계 신호 조건·관련 임계치) | `docs/SENTENCE_FINALIZATION_LOGIC.md` (§7 갱신 규약 표대로 해당 절 갱신) |
 | `pyproject.toml` extras 추가/제거 | `docs/DEPLOYMENT_OFFLINE.md` §2.1 기능별 extra 표 및 §2.2 export 명령 |
 | 번역 파이프라인 변경 (`translator.py`, config 번역 필드) | `docs/DEPLOYMENT_OFFLINE.md` §5, `docs/FRONTEND_HANDOFF.md` |
 | `test_data/` 파일 추가 또는 정답 .txt 추가 | `docs/TESTING.md` 파일 목록, `CLAUDE.md` §4 측정 기본 설정(테스트셋 변경 시) |
@@ -124,6 +125,7 @@
 - 실행 명령어·검증 순서·test_data 구조·모델 경로 상세 → [docs/TESTING.md](docs/TESTING.md)
 - 작업 시 우선 참조 파일 색인 → [docs/FILE_INDEX.md](docs/FILE_INDEX.md)
 - 미정 설계 사항(문장 확정 알고리즘, 메시지 스키마, Code-Switching, 폐쇄망 패키징) → [docs/OPEN_QUESTIONS.md](docs/OPEN_QUESTIONS.md)
+- 문장 확정·분리 로직 상세(경계 원인 3종+`punctuation` 라벨·파라미터·`finalize_trigger` 계측) → [docs/SENTENCE_FINALIZATION_LOGIC.md](docs/SENTENCE_FINALIZATION_LOGIC.md)
 - Phase 정의·태스크·완료 기준 → [ROADMAP.md](ROADMAP.md) / 실험 기록 3계층 → [EXPERIMENTS.md](EXPERIMENTS.md)(STATE·항상읽음) · [EXPERIMENTS_LOG.md](EXPERIMENTS_LOG.md)(LOG·온디맨드 Exp-131~) · [PHASE2_EXPERIMENTS.md](PHASE2_EXPERIMENTS.md)(ARCHIVE·Exp-001~130 동결)
 - master 최종본 upstream 대비 전체 변경 + 향후 개선 → [docs/MASTER_CHANGES.md](docs/MASTER_CHANGES.md)
 
