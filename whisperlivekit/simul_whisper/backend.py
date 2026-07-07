@@ -4,7 +4,7 @@ import platform
 import re
 import sys
 from collections import Counter
-from typing import List, Tuple
+from typing import Dict, List, Tuple
 
 import numpy as np
 import torch
@@ -79,6 +79,85 @@ def _is_script_mismatch_filler(text: str, detected_language) -> bool:
     unique_ratio = len(set(words)) / len(words)
     return unique_ratio <= _SCRIPT_MISMATCH_TTR_THRESHOLD
 
+
+# CASE3 — script-agnostic 앵커 반복(필러 storm) 게이트.
+# 배경: 오프라인 oracle 확정 결과, 잔존 필러 storm(bong1 "thank you"×3, ytn2 "김정은"×4)의
+# 근본원인은 모델천장이 아니라 경계 리프레시 직후 <1s 컨텍스트기아 상태에서 발생하는
+# 스트리밍 세금이다. `_is_script_mismatch_filler`(P2 게이트, 위)는 "반대 스크립트 +
+# TTR 붕괴" 전제라 ① 같은 스크립트(ko/ko, en/en) storm ② "앵커 토큰 1개는 정확반복,
+# 주변부는 변주"라 전체 TTR은 붕괴하지 않는 storm(ytn2 "김정은"+접미부 변주 — 전체
+# TTR=0.809로 문턱 통과)을 못 잡는다. 아래 게이트는 스크립트·언어 무관하게 "최근
+# 방출 단어 윈도우 안에서 앵커(1~2gram)가 비정상적으로 몰려 반복되는가"만 본다
+# (§3.8: 특정 문구·언어 하드코딩 금지 — 판정은 순수 반복 밀도 통계).
+#
+# 파라미터는 analyze_case3_hallucination.py의 오프라인 분석(문서 전체 대비 국소집중도)과
+# 철학은 같지만, 스트리밍 게이트는 "문서 전체"를 알 수 없으므로 롤링 윈도우 자체가
+# 관찰가능한 전부다 — concentration은 "윈도우 내 그 앵커 전체 등장 중 이 클러스터가
+# 차지하는 비율"로 정의한다(문서 전체 어절 수 대비가 아님).
+#
+# 값 근거(유닛테스트로 검증·튜닝, tests/test_anchor_repeat_gate.py):
+#   WINDOW=40 — 필러 storm은 보통 한 문장~두 문장(15~25단어) 안에서 완결되므로 40단어면
+#     현재 storm 전체 + 직전 문맥까지 포괄. 너무 크면 서로 무관한 두 문단의 우연한 재등장을
+#     한 클러스터로 오인할 여지가 커진다.
+#   MIN_COUNT=4 — "네, 네, 알겠습니다"류 정상 강조 반복은 실측상 2~3회가 흔하다(오탐 방지
+#     최우선). storm은 실측 관측(김정은×4, thank you×4)이 모두 4회 이상이라 이 값으로
+#     3회 이하 정상 반복과 4회+ storm을 분리한다.
+#   MAX_GAP=5 — 실측 storm은 앵커 사이에 변주 접미부가 1~5단어 끼는 구조("기자입니다"/
+#     "기자가 보도합니다", 영어 실측 "Thank you very much for coming" 등 — 접미부가
+#     길 때는 앵커 사이 간격이 5단어까지 벌어짐, 유닛테스트로 확인). 이보다 훨씬 크게
+#     잡으면 "북한"처럼 문서 전반에 8~20단어 간격으로 자연스레 재등장하는 고유명사까지
+#     하나의 클러스터로 묶여 오탐한다(유닛테스트 `test_scattered_mention_*`로 gap=8
+#     기준 안전 확인).
+#   MIN_CONCENTRATION=0.6 — 클러스터가 윈도우 내 그 앵커 전체 등장의 과반 이상을 차지해야
+#     "국소적으로 몰림"으로 판정한다(문서 전반에 흩어진 재등장과 구분).
+_ANCHOR_REPEAT_WINDOW = 40
+_ANCHOR_REPEAT_MIN_COUNT = 4
+_ANCHOR_REPEAT_MAX_GAP = 5
+_ANCHOR_REPEAT_MIN_CONCENTRATION = 0.6
+
+
+def _find_anchor_repeat_storm(
+    words: List[str],
+    window: int = _ANCHOR_REPEAT_WINDOW,
+    min_count: int = _ANCHOR_REPEAT_MIN_COUNT,
+    max_gap: int = _ANCHOR_REPEAT_MAX_GAP,
+    min_concentration: float = _ANCHOR_REPEAT_MIN_CONCENTRATION,
+) -> bool:
+    """최근 words의 롤링 윈도우(마지막 window개)에서 1~2gram 앵커가 gap-tolerant하게
+    min_count회 이상 반복되고, 그 클러스터가 윈도우 내 해당 앵커 전체 등장의
+    min_concentration 비율 이상을 차지하면 True(필러 storm 판정).
+
+    n=2(구 단위 앵커, 예 "thank you")부터 검사하고, 안 잡히면 n=1(단일 토큰 앵커,
+    예 "김정은")로 내려간다. 언어·문구 하드코딩 없음 — 순수 위치 통계만 사용.
+    """
+    tail = words[-window:] if window > 0 else list(words)
+    n_tail = len(tail)
+    for n in (2, 1):
+        if n_tail < n:
+            continue
+        occurrences: Dict[Tuple[str, ...], List[int]] = {}
+        for k in range(n_tail - n + 1):
+            occurrences.setdefault(tuple(tail[k:k + n]), []).append(k)
+        for positions in occurrences.values():
+            total = len(positions)
+            if total < min_count:
+                continue
+            best_cluster = 1
+            cluster = 1
+            for prev_pos, cur_pos in zip(positions, positions[1:]):
+                gap_words = cur_pos - prev_pos - n
+                if gap_words <= max_gap:
+                    cluster += 1
+                    best_cluster = max(best_cluster, cluster)
+                else:
+                    cluster = 1
+            if best_cluster < min_count:
+                continue
+            if (best_cluster / total) >= min_concentration:
+                return True
+    return False
+
+
 class SimulStreamingOnlineProcessor:
     """Online processor for SimulStreaming ASR."""
     SAMPLING_RATE = 16000
@@ -103,6 +182,10 @@ class SimulStreamingOnlineProcessor:
         # 한 배치만으로는 TTR 판정 표본이 부족하다 — detected_language와 반대
         # 스크립트로만 구성된 배치가 연속될 때 그 단어들을 여기 누적한다.
         self._script_mismatch_streak: List[str] = []
+        # CASE3 앵커 반복 게이트: 최근 방출 단어 롤링 윈도우(스크립트 무관, 위
+        # _find_anchor_repeat_storm 참고). _recent_emitted_words(최근 10개, SwitchTaxMeasure
+        # 계측 전용)와 별도 상태 — 이 게이트는 40단어 윈도우가 필요해 재사용하지 않는다.
+        self._anchor_repeat_window: List[str] = []
 
         if asr.tokenizer:
             self.model.tokenizer = asr.tokenizer
@@ -164,6 +247,7 @@ class SimulStreamingOnlineProcessor:
             self._consecutive_char_repeat = 0
             self._short_silence_check_at = 0.0
             self._script_mismatch_streak = []
+            self._anchor_repeat_window = []
         elif (
             silence_duration >= MIN_DURATION_SHORT_LANG_RESET
             and self.model.cfg.language == "auto"
@@ -239,6 +323,7 @@ class SimulStreamingOnlineProcessor:
         self._last_emit_end = self.end
         self._consecutive_char_repeat = 0
         self._script_mismatch_streak = []
+        self._anchor_repeat_window = []
 
     def get_buffer(self):
         concat_buffer = Transcript.from_tokens(tokens= self.buffer, sep='')
@@ -360,6 +445,25 @@ class SimulStreamingOnlineProcessor:
             return True
         return False
 
+    def _update_anchor_repeat_window(self, decoded_text: str) -> bool:
+        """CASE3 앵커 반복 게이트의 cross-batch 누적 판정(script-agnostic).
+
+        `_update_script_mismatch_streak`과 달리 seg_lang/스크립트 불일치 전제가 없다 —
+        같은 스크립트 안에서 앵커 1개만 정확반복하고 주변부가 변주되는 storm(ytn2
+        "김정은"류)까지 잡기 위함이다. 이번 배치 단어를 롤링 윈도우에 잠정 추가해
+        storm 여부를 검사하고, storm이면 이번 배치 단어는 윈도우에 반영하지 않은 채
+        True(드롭)를 반환한다(반복 유발원을 윈도우에서 제외해 연쇄 재트리거를 줄인다).
+        storm이 아니면 윈도우를 갱신하고 False.
+        """
+        words = [w.lower() for w in _WORD_TOKEN_PATTERN.findall(decoded_text)]
+        if not words:
+            return False
+        candidate = (self._anchor_repeat_window + words)[-_ANCHOR_REPEAT_WINDOW:]
+        if _find_anchor_repeat_storm(candidate):
+            return True
+        self._anchor_repeat_window = candidate
+        return False
+
     def process_iter(self, is_last=False) -> Tuple[List[ASRToken], float]:
         """
         Process accumulated audio chunks using SimulStreaming.
@@ -416,6 +520,31 @@ class SimulStreamingOnlineProcessor:
                     self.model.state.first_timestamp = None
                     self.model.state.eager_lang_detect = True
                     self.model.state.last_lang_switch_time = 0.0
+                    timestamped_words = []
+
+            if timestamped_words:
+                decoded_text = ''.join(t.text for t in timestamped_words)
+                if self._update_anchor_repeat_window(decoded_text):
+                    logger.warning(
+                        "[AnchorRepeatFilter] 앵커 반복 storm 드롭(script-agnostic): %.200s",
+                        decoded_text,
+                    )
+                    # ForeignLang/ScriptMismatchFilter와 달리 언어 재감지 arm을 하지 않는다
+                    # (사이클2 실측으로 확정된 회귀 — bong1 WER 24.5%→113.3% catastrophic).
+                    # 근본원인: 이 게이트는 언어전환/스크립트불일치와 무관하게 같은 언어
+                    # 중간발화에서도 발동할 수 있다(bong1 실측: detected_language='en' 내내
+                    # 정상 유지). 그런데 detected_language=None+eager_lang_detect=True로
+                    # 재감지를 arm하면 `_detect_language_if_needed`가 곧 재감지를 트리거하고,
+                    # 재감지된 언어가 이전과 같아 is_switch=False라도
+                    # `_apply_detected_language`가 무조건 `init_tokens()`/`init_context()`를
+                    # 호출해 디코더 컨텍스트를 매번 지운다(align_att_base.py:194-196) —
+                    # 이는 이 프로젝트가 규명한 CASE3 근본원인(경계 리프레시 직후 컨텍스트기아
+                    # → 저신뢰 재환각)을 게이트 스스로 반복 유발하는 자기강화 루프였다(실측
+                    # 로그: 10회 드롭 각각 직후 [FirstTimestamp] 재설정 로그 확인, 그 창구
+                    # 안에서 같은 문장이 매회 조금씩 길어지며 재환각 → 결국 창밖으로 escape해
+                    # 무방비 폭주). 따라서 드롭만 하고 어떤 언어/컨텍스트 상태도 건드리지
+                    # 않는다 — 그 다음 배치는 기존 컨텍스트를 그대로 유지한 채 자연스럽게
+                    # 이어서 디코드된다.
                     timestamped_words = []
 
             if not timestamped_words:

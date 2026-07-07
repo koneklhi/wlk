@@ -42,6 +42,7 @@ def _make_processor(detected_language="ko", lang_before_reset=None):
     proc._consecutive_char_repeat = 0
     proc._short_silence_check_at = 0.0
     proc._recent_emitted_words = []
+    proc._anchor_repeat_window = []
 
     model = MagicMock()
     model.cfg.language = "auto"
