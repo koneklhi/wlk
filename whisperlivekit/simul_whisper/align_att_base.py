@@ -256,8 +256,17 @@ class AlignAttBase(ABC):
             self.state.last_lang_switch_time = audio_end_secs
 
     @torch.no_grad()
-    def detect_current_language(self, window_secs: float = 1.5, min_prob: float = 0.90):
+    def detect_current_language(self, window_secs: float = 1.5, min_prob: float = 0.90,
+                                 since_offset: float | None = None):
         """최근 window_secs 초 오디오의 언어를 감지해 반환. 확신도 min_prob 미만이면 None.
+
+        since_offset: 지정하면 버퍼 시작(pos 0) 기준 상대 초 이전의 오디오는 감지에서
+        배제한다(하한만 당김 — window_secs 상한 캡은 그대로 유지). 화자전환처럼 버퍼 내
+        특정 이벤트 이후 오디오만 봐야 하는 경우에 쓴다: 이벤트 직후엔 새로 쌓인 오디오가
+        window_secs보다 짧을 수 있는데, since_offset 없이 무조건 마지막 window_secs를 자르면
+        이벤트 이전(예: 직전 화자) 오디오가 섞여 오판할 수 있다(ytn2 CASE2 경계2 — 화자전환
+        eager 감지가 아직 대부분 이전 화자 오디오인 1.5s 창을 봐서 새 화자 언어를 놓친 사례).
+        미지정 시 기존 동작(마지막 window_secs) 그대로 하위호환 유지.
 
         no_grad 필수: 이 경로의 self._encode()는 infer()/lang_id()와 달리 no_grad 밖에서
         호출된다(process_iter → _check_short_silence_language / new_speaker eager 감지).
@@ -270,7 +279,14 @@ class AlignAttBase(ABC):
         try:
             window_samples = int(window_secs * 16000)
             all_audio = self._concat_segments()
-            recent = all_audio[-window_samples:] if len(all_audio) > window_samples else all_audio
+            total_samples = len(all_audio)
+            start_idx = max(0, total_samples - window_samples)
+            if since_offset is not None:
+                since_idx = max(0, int(since_offset * 16000))
+                start_idx = max(start_idx, min(since_idx, total_samples))
+            if start_idx >= total_samples:
+                return None
+            recent = all_audio[start_idx:]
             encoder_feature, _ = self._encode(recent)
             _, language_probs = self.lang_id(encoder_feature)
             probs = language_probs[0] if isinstance(language_probs, list) else language_probs

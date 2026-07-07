@@ -201,9 +201,19 @@ class SimulStreamingOnlineProcessor:
         경계 재디코딩: held 음역을 final 확정하지 않고(flush 생략), 최근 오디오(경계 구간)를
         complete=False 로 유지해 새 화자 언어로 재디코딩한다. refresh 전에 최근 1.5s 윈도우로
         언어를 즉시 재감지하고, 성공 시 refresh 후 토크나이저를 교정한다(실패 시 None → 기존 2.0s 폴백).
+
+        since_offset(화자전환 시각의 버퍼상대 오프셋)을 넘겨 1.5s 창이 화자전환 이전(직전 화자)
+        오디오까지 무조건 포함하지 않도록 한다 — 전환 직후엔 새 화자 오디오가 아직 1.5s보다
+        짧게 쌓여 있을 수 있고, 이때 창 전체를 쓰면 대부분 직전 화자 오디오라 그 언어로 오판된다
+        (ytn2 CASE2 경계2: eager=en 오판 → 새 화자(KO) 문장 "Thank you" 필러 폭주로 유실).
         """
         # 1. refresh 전 버퍼로 새 화자 언어 즉시 감지 (경계 오디오가 아직 버퍼에 있음)
-        eager = self.model.detect_current_language(window_secs=1.5, min_prob=0.85)
+        # global_time_offset은 아직 change_speaker.start로 갱신되기 전(§2 아래)이므로
+        # 현재 버퍼 시작의 절대 시각 그대로다 — 화자전환 절대시각과의 차이가 버퍼상대 오프셋.
+        boundary_offset = change_speaker.start - self.model.global_time_offset
+        eager = self.model.detect_current_language(
+            window_secs=1.5, min_prob=0.85, since_offset=boundary_offset,
+        )
         logger.info(
             "[NewSpeaker] spk=%s→%s det_before=%s eager=%s",
             self.model.state.speaker, change_speaker.speaker,
