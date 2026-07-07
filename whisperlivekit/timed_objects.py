@@ -205,6 +205,7 @@ class Segment(TimedText):
 @dataclass
 class PuncSegment(Segment):
     hard_boundary: bool = False
+    punct_boundary: bool = False   # 형태소 종결 온점 분할 경계(diar 병합 생존용). 내부 전용 — to_dict 미방출.
 
 class SilentSegment(Segment):
     def __init__(self, *args: Any, **kwargs: Any) -> None:
