@@ -2410,4 +2410,56 @@ CASE1(문장 꼬리 분리) 4대 경로 전부 수정 완료. bong1의 명명된
 - **sbs1 Silence-경계 민감도**: 0.4s 문턱 부근 호흡성 pause를 하드 문장경계로 취급할지 재검토 여지(문장확정 신호조합 정책 — docs/OPEN_QUESTIONS.md §1). 문법적 연속성(조사·어미 패턴)을 보조 신호로 쓰는 방안 등 — 단, 데이터 특화 하드코딩 아닌 일반화된 정책 변경이어야 함(§3.8).
 - **ytn2 "Thank you" 필러/환각**: CASE3(환각 폭주)의 핵심 대상. Exp-158~165에서 no_speech·후처리필터 모두 실패한 바로 그 이슈 — CASE3 조사에서 이어서 다룸.
 
+## Exp-169
+
+**날짜**: 2026-07-07
+**워크트리/브랜치**: `worktrees/case3-hallucination` @ `exp/case3-hallucination`, 최종 HEAD `dc0dc35`(master 미머지 — 사용자 확인 대기)
+
+**가설**: CASE3(환각 폭주)의 잔존 필러 storm(bong1 "thank you"×3, ytn2 "김정은"×4)은 오프라인 oracle 진단(별도 사이클1)으로 모델천장이 아니라 **스트리밍 세금**(경계 리프레시 직후 <1s 컨텍스트기아 상태의 저신뢰 재환각)임이 확정됐다. 기존 `_is_script_mismatch_filler`(Req-2 P2 게이트)는 "반대 스크립트+TTR 붕괴" 전제라 ① 같은 스크립트 내 storm ② 앵커 1개만 정확반복하고 주변부가 변주돼 전체 TTR은 안 무너지는 storm(ytn2 "김정은"+접미부변주, 전체TTR=0.809로 통과)을 못 잡는다. **script-agnostic 앵커 반복 게이트**로 이 사각지대를 커버한다.
+
+**변경 내용** (커밋 순, `exp/case3-hallucination`):
+- `4eaefd2` 진단 스크립트 `scripts/analyze_case3_hallucination.py` 신설(gap-tolerant 클러스터링 + 국소집중도 필터, 오탐방지 자체발견·수정 포함) — 사이클0.
+- `dc0dc35` **게이트 구현(채택)**: `whisperlivekit/simul_whisper/backend.py`에 `_find_anchor_repeat_storm`(순수함수) — 최근 방출 단어 롤링윈도우(40단어)에서 1~2gram 앵커가 gap-tolerant(MAX_GAP=5)하게 4회 이상(MIN_COUNT=4) 반복 + 국소집중도(클러스터/윈도우내 그 앵커 총등장 ≥0.6)면 storm 판정, 순수 토큰 드롭(언어/컨텍스트 상태 불변). **자체발견 회귀**: 최초 구현이 ForeignLang/ScriptMismatchFilter의 "드롭 시 언어 재감지 arm" 패턴을 재사용했다가 `_apply_detected_language`가 재감지 후 언어가 같아도(is_switch=False) `init_tokens()`/`init_context()`를 무조건 호출해 컨텍스트를 지우는 부수효과와 결합, 자기강화 루프로 bong1 WER 24.5%→113.3% catastrophic 회귀(N=1 스크리닝에서 발견) → 드롭 시 언어/컨텍스트 상태를 전혀 건드리지 않도록 즉시 수정, 재측정으로 회귀 해소 확인(같은 커밋에 포함).
+- 신규 유닛테스트 39개(`tests/test_anchor_repeat_gate.py` 15 + 분석스크립트 24) — 오탐방지 최우선(문서전반 흩어진 재등장 gap=8 비드롭, 정상 강조반복 2~3회 비드롭, 정상 코드스위칭/전체문장 비드롭) + 실측 storm 재현(영어/한글 앵커+변주, gap 최대 5단어 확인) + 언어상태 무변경 배선검증. pytest 179→**218 passed/1 skipped**(회귀없음). ruff 클린.
+
+**테스트 설정**: 경로 C, diar-ON(Sortformer + CRT 3.0), turbo beam=2. 스크리닝 N=1(사이클0/2) → 확정 N=3(fail-fast 금지, 이번 Exp).
+
+### 테스트 세트 결과 (N=3 확정, fail-fast 없음, JSON `eval_20260707_1437_case3_confirm.json`)
+
+| 파일 | 직전 확정 베이스라인(Exp-168, `0fed0d5`) med/max | **이번 확정** med/max/min/stdev | 게이트(max, +10pp 완화) |
+|------|------|------|------|
+| bong1 | 27.8% / 30.5% | **35.3% / 35.6% / 28.4% / 4.1%** ✅(<40.5) | ≤40.5% |
+| ytn2  | 19.7% / 26.1% | **26.1% / 30.5% / 21.2% / 4.7%** ✅(<44.5) | ≤44.5% |
+| sbs1  | 16.7% / 48.8% | **13.7% / 14.9% / 12.5% / 1.2%** ✅(<26.1, sbs1은 오히려 Exp-168의 저빈도 stall 재현 없이 안정) | ≤26.1% |
+
+held-out(단회, JSON `eval_20260707_1437_case3_heldout.json`): ytn1 WER 23.3%/F1 57.1%(Exp-159 baseline 33.1%보다 개선) · eng1 WER 3.8%/F1 0.0%(영어 회귀 없음).
+
+**§5 완화게이트 판정 — 3조건 전부 미해당(클린 통과)**: ①max +10pp초과 없음(bong1 35.6≤40.5, ytn2 30.5≤44.5, sbs1 14.9≤26.1) ②WER≥60% 없음 ③F1 2회이상 0%대 없음(sbs1 R2만 1회 0.0%).
+
+### storm 분석 (`scripts/analyze_case3_hallucination.py --per-file`, 9개 파일-회차)
+
+- **파일당 최대 반복횟수(worst-case) = 3**(9개 회차 전부 4 미만) — 사이클0 베이스라인(bong1 "thank you"×3/ytn2 "김정은"×4)·사이클2 수정판(bong1 최대×3) 대비 게이트가 목표한 억제 유지. **ytn2 "김정은" storm 0/3으로 완전 소멸 유지**(사이클2와 동일 결과 재확인).
+- bong1: R1 storm 0건, R2 2건(최대×3, "who"/"주인공이"), R3 1건(최대×3, "thank you") — MIN_COUNT=4 미만이라 게이트가 원래 손대지 않는 설계 영역(오탐방지 임계값대로 동작).
+- sbs1: 3회 전부 storm 0건.
+
+### ⚠️ 핵심 발견 — Req-2 두 경계 직접 정성확인, "3/3 안정" 아님(1/3씩 재현)
+
+`.omc/transcripts/ytn2_C_R{1,2,3}.txt`를 정답과 직접 대조:
+
+- **경계1**("...Security Council resolutions." 직후 → "이런 목표들을...UN안보리...") — R1 정상(선두절 "이런 목표들을" 누락은 기존 잔존 이슈), **R2는 KO 문장 전체가 "Thank you very much. Thank you. Thank you very much for joining us today. Thank you very much, everyone. Thank you very much so much."(5회 연쇄)로 완전 대체** — catastrophic swallow, R3는 "감사합니다." 단발 필러 삽입 후 문장 본체 보존(경미). → **2/3 안정, 1/3(R2) 재현**.
+- **경계2**("...Initial Operational Capability." 직후 → "정경두 국방장관과 저는...") — R1·R2 정상(화자명 "박방/전경두"로 인식오차만, 문장 본체 보존), **R3는 KO 문장 전체가 "Thank you for your time, Mr. President. Thank you very much. Thank you, Mr. President, Mr. President of the United States. Thank you very much, Mr. President and Mr. President. Thank you very much"(~6회 연쇄)로 완전 대체** — catastrophic swallow. → **2/3 안정, 1/3(R3) 재현**.
+- **원인 조사(로그 대조로 인과관계 확정)**: `grep "AnchorRepeatFilter" server_ytn2_C_R2/R3.log` 둘 다 **0건** — 이번 사이클 게이트가 두 재현 지점 근방에서 **전혀 발동하지 않았다**. 즉 이 게이트(`dc0dc35`)가 causally 유발한 회귀가 아니다. 실제 "thank you" 반복 횟수는 5~6회로 MIN_COUNT=4 이상이지만, 중간에 낀 가변길이 변주구("for joining us today", "Mr. President of the United States" 등)가 앵커 사이 gap을 5단어 초과로 벌려 `_find_anchor_repeat_storm`의 gap-tolerant 클러스터링이 이를 **연속 3회+연속 2~3회의 서브클러스터로 쪼개** MIN_COUNT=4 문턱을 피해간다 — 오탐방지를 위해 보수적으로 잡은 MIN_COUNT/MAX_GAP 설계의 **알려진 사각지대**(설계 당시 문서화된 트레이드오프가 실측으로 재현된 사례).
+- Req-2(Exp-168) 자체의 N=3 확정측정(사이클8)에서는 두 경계 모두 "3/3 안정"으로 보고됐었다 — 이번 결과는 그 결론을 뒤집는 것이 아니라, **CLAUDE.md에 명시된 회차간 편차(±30~120%p)** 안에서 이 잔존 catastrophic-swallow 위험이 낮은 빈도(관측 2/6)로 여전히 존재함을 보여준다. 이 위험은 Req-3(CASE3) 착수 전부터 있던 것으로 이번 게이트가 새로 만든 것이 아니며, 게이트가 잡는 storm 유형(짧고 규칙적인 gap)과 이번에 재현된 storm 유형(긴 가변 변주구로 쪼개지는 storm)이 다르다.
+
+### 판정 — 조건부 채택 권고(사용자 확인 필요, master 미머지)
+
+Req-3 자체 목표(storm 최대반복횟수 감소·ytn2 "김정은" storm 소멸)는 달성. §5 정량게이트 3조건 전부 클린 통과. bong1·sbs1 신규 catastrophic 이슈 없음. 그러나 "가장 중요"로 지정된 검증 항목(Req-2 두 경계 3/3 안정)은 **미달성**(2/3씩) — 단 원인이 이번 변경과 무관함을 로그로 확정(게이트 미발동 구간에서 발생). GOAL 문서 §1 특별규칙(정성 우선)의 취지에 따라 이 잔존 위험을 자율로 덮지 않고 사용자에게 그대로 보고한다. **master 머지는 이 세션 범위에서 보류**(메인 세션이 사용자 확인 후 처리).
+
+**Epoch 판단**: 세대 안 올림(E5 유지) — 기존 파이프라인의 디코더/VAD 흐름 자체는 불변, 앵커 반복 드롭이라는 새 방어선을 추가한 것뿐(Exp-167 FIX1·Exp-168 P2/since_offset과 동일 논리 — 실패모드를 바꾸는 구조 변경이 아니라 기존 실패모드에 대한 새 필터 추가).
+
+### 다음 가설 (향후 검토 후보, 이번 범위 밖)
+
+- **가변길이 변주구 대응 게이트 강화**: MAX_GAP을 5보다 살짝 늘리거나(오탐 위험 재평가 필요), 또는 "동일 화자시간 근접 구간 내 앵커 총 등장횟수"(서브클러스터 합산)로 판정 기준을 바꾸는 방안 — 이번에 재현된 두 사례(5~6회 연쇄가 3+2/3+3으로 쪼개짐) 특성을 유닛테스트로 고정한 뒤 재설계.
+- **설계안 1순위(oracle 사이클1에서 보류)**: 컨텍스트 기아 fire 억제(segments_len<1.5s + boundary refresh 직후 배치 defer) — 근본원인 대응이나 Req-2 회귀위험이 커서 별도 사이클 필요.
+
 **JSON**: `.omc/benchmarks/eval_20260706_2248_exp167_confirm.json`(초기 bong1+sbs1 N=3, HEAD e210465) · `eval_20260707_0002_expC_screen.json`(Direction A 스크리닝) · `eval_20260707_0023_expC_confirm_dirA.json`(Direction A 확정, 기각) · `eval_20260707_0127_expC_fix1_screen.json`(FIX 1 스크리닝) · `eval_20260707_0144_expC_fix1_confirm.json`(FIX 1 확정, 채택 — 위 표 출처).
