@@ -160,3 +160,50 @@ def test_insert_with_reattachment_retracts_before_appending_marker():
 def test_retract_eps_is_positive_and_small():
     """EPS는 프레임 지터 방어용 소량 여유 — 큰 값이면 zone1/zone2 경계가 무의미해진다."""
     assert 0 < RETRACT_EPS < 0.5
+
+
+def test_retract_floor_preserves_pre_window_onset():
+    """재디코딩 창(redecode_floor) 이전 토큰은 철회하지 않는다 — ① 서두유실 방지(Exp-173).
+
+    화자전환 트림이 버퍼를 76.59s부터로 잘라내 "You don't"의 오디오가 사라졌으면,
+    그 토큰들은 재디코딩으로 재현 불가하므로 철회하면 순유실. redecode_floor=76.59로
+    창 이전 토큰(You/don/'t)을 보존한다.
+    """
+    ta = _make_alignment()
+    boundary_t = 77.31
+    ta.all_tokens = [
+        ASRToken(start=76.19, end=76.37, text=" You", detected_language="ko"),
+        ASRToken(start=76.37, end=76.51, text=" don", detected_language="ko"),
+        ASRToken(start=76.51, end=76.61, text="'t understand", detected_language="ko"),
+    ]
+    ta._retract_stale_language_tokens(boundary_t, prev_lang="ko", redecode_floor=76.59)
+    texts = [t.text for t in ta.all_tokens]
+    # 76.59 미만(You 76.19, don 76.37, 't understand 76.51)은 전부 보존
+    assert texts == [" You", " don", "'t understand"]
+
+
+def test_retract_floor_still_removes_in_window_stale():
+    """재디코딩 창 안(redecode_floor 이상) 오언어 스탬프 토큰은 여전히 철회한다."""
+    ta = _make_alignment()
+    boundary_t = 77.31
+    ta.all_tokens = [
+        ASRToken(start=76.20, end=76.50, text=" outside", detected_language="ko"),  # 창 밖 보존
+        ASRToken(start=76.80, end=77.00, text=" inside", detected_language="ko"),   # 창 안 철회(zone2 반대스크립트)
+    ]
+    ta._retract_stale_language_tokens(boundary_t, prev_lang="ko", redecode_floor=76.59)
+    texts = [t.text for t in ta.all_tokens]
+    assert texts == [" outside"]
+
+
+def test_retract_floor_none_falls_back_to_keep_secs_bound():
+    """redecode_floor=None(구 마커)이면 기존 KEEP_SECS 기반 하한으로 동작(하위호환)."""
+    ta = _make_alignment()
+    boundary_t = 20.0
+    # 하한 = 20 - 2.5 - 1.0 = 16.5. 16.0은 하한 밖이라 보존, 19.0은 zone2 철회.
+    ta.all_tokens = [
+        ASRToken(start=16.0, end=16.3, text=" farback", detected_language="ko"),
+        ASRToken(start=19.0, end=19.3, text=" nearby", detected_language="ko"),
+    ]
+    ta._retract_stale_language_tokens(boundary_t, prev_lang="ko", redecode_floor=None)
+    texts = [t.text for t in ta.all_tokens]
+    assert texts == [" farback"]

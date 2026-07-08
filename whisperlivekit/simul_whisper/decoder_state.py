@@ -39,6 +39,7 @@ class DecoderState:
     pending_language_switch: Optional[float] = None
     pending_retract_from: Optional[float] = None
     pending_prev_language: Optional[str] = None
+    pending_retract_floor: Optional[float] = None
     lang_before_reset: Optional[str] = None
 
     speaker: int = -1

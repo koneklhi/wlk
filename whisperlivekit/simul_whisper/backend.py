@@ -249,6 +249,7 @@ class SimulStreamingOnlineProcessor:
             self.model.state.lang_before_reset = None   # 긴 침묵 = 문장 경계, 전환 판정 불필요
             self.model.state.pending_retract_from = None   # 긴 침묵 = 진짜 문장 경계, 철회 arm 무효화
             self.model.state.pending_prev_language = None
+            self.model.state.pending_retract_floor = None
             self.model.state.first_timestamp = None     # 재감지 조건 충족
             self.model.global_time_offset = silence_duration + offset
             self.model.state.quality_suppress_streak = 0  # 침묵 경계 넘어 streak 누적 → 엉뚱한 refresh 방지
@@ -625,11 +626,13 @@ class SimulStreamingOnlineProcessor:
                     detected_language=self.model.state.detected_language,
                     retract_from=getattr(self.model.state, "pending_retract_from", None),
                     prev_language=getattr(self.model.state, "pending_prev_language", None),
+                    retract_floor=getattr(self.model.state, "pending_retract_floor", None),
                 )
                 timestamped_words = [marker] + timestamped_words
                 self.model.state.pending_language_switch = None
                 self.model.state.pending_retract_from = None
                 self.model.state.pending_prev_language = None
+                self.model.state.pending_retract_floor = None
                 logger.info("[LangSwitch] 문장 경계 마커 방출 @ %.2fs (lang=%s)",
                             boundary_t, self.model.state.detected_language)
 
