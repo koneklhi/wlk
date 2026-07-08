@@ -128,7 +128,7 @@ class TokensAlignment:
         for t in tokens:
             if t.is_silence() or t.is_boundary():
                 if isinstance(t, LanguageSwitch) and t.retract_from is not None:
-                    self._retract_stale_language_tokens(t.retract_from, t.prev_language)
+                    self._retract_stale_language_tokens(t.retract_from, t.prev_language, t.retract_floor)
                 self.all_tokens.append(t)
                 continue
             i = len(self.all_tokens)
@@ -138,7 +138,7 @@ class TokensAlignment:
                 i -= 1
             self.all_tokens.insert(i, t)
 
-    def _retract_stale_language_tokens(self, boundary_t: float, prev_lang: Optional[str]) -> None:
+    def _retract_stale_language_tokens(self, boundary_t: float, prev_lang: Optional[str], redecode_floor: Optional[float] = None) -> None:
         """언어전환 경계에서 prev_lang으로 커밋된 잔존 토큰을 all_tokens 꼬리에서 철회.
 
         LanguageSwitch 마커가 실제로 방출될 때(=새 언어 토큰이 도착했을 때)만 호출된다 —
@@ -148,13 +148,19 @@ class TokensAlignment:
           detected_language == prev_lang이면 무조건 철회.
         구역 2 — [하한, boundary_t - RETRACT_EPS): 같은 조건 + 반대-스크립트(_is_opposite_script)
           일 때만 철회. 혼합 스크립트는 보수적으로 보존.
-        하한 = boundary_t - LANG_SWITCH_KEEP_SECS - 1.0.
+        하한 = redecode_floor(재디코딩 창 시작) 또는 미지정 시 boundary_t - LANG_SWITCH_KEEP_SECS - 1.0.
         역방향 스캔 중 Silence나 boundary 토큰을 만나면 즉시 중단(경계를 넘어 철회하지 않음).
         prev_lang과 반대 방향 언어로 스탬프된 토큰은 절대 건드리지 않는다.
         """
         if prev_lang is None:
             return
-        lower_bound = boundary_t - LANG_SWITCH_KEEP_SECS - 1.0
+        # 철회 하한 = 재디코딩 창 시작. redecode_floor가 주어지면 그것을 쓴다 — 트림이
+        # 잘라낸(재디코딩 불가) 서두 토큰을 철회하지 않기 위함(① 서두유실 방지, Exp-173).
+        # 미지정(구 마커 하위호환) 시 기존 KEEP_SECS 기반 하한으로 폴백.
+        if redecode_floor is not None:
+            lower_bound = redecode_floor
+        else:
+            lower_bound = boundary_t - LANG_SWITCH_KEEP_SECS - 1.0
         j = len(self.all_tokens) - 1
         scanned = 0
         removed = 0

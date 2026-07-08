@@ -133,6 +133,7 @@ class LanguageSwitch:
     text: str = ''  # 하류의 ''.join(t.text ...) / sep.join 호환용 빈 문자열
     retract_from: Optional[float] = None  # 철회(retraction) 재디코딩 구간 시작 절대시각
     prev_language: Optional[str] = None  # 철회 대상 판정용 — 전환 전 언어
+    retract_floor: Optional[float] = None  # 철회 하한 = 재디코딩 창 시작 절대시각(트림된 버퍼 시작). 이보다 앞선 토큰은 재디코딩 불가라 철회 안 함
 
     def is_silence(self) -> bool:
         return False

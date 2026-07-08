@@ -222,6 +222,10 @@ class AlignAttBase(ABC):
             # process_iter가 마커를 방출할 때 이 시각 기준으로 구언어 잔존 토큰을 철회한다.
             self.state.pending_retract_from = self.state.pending_language_switch
             self.state.pending_prev_language = prev_lang
+            # 재디코딩 창 시작(=현재 트림된 버퍼의 절대 시작). 철회는 이 시각 이후 토큰만
+            # 대상으로 한다 — 트림이 잘라낸 서두 토큰은 재디코딩으로 재현될 수 없어(① 서두유실)
+            # 철회하면 순유실이 된다. pending_language_switch(버퍼 END) − segments_len() = 버퍼 START.
+            self.state.pending_retract_floor = self.state.pending_language_switch - self.segments_len()
 
         logger.info("[LangSwitch] 토크나이저 적용: %s (prev=%s, switch=%s, skip_trim=%s)",
                     lang, prev_lang, is_switch, skip_trim)
