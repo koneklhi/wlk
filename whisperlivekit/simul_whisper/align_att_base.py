@@ -1,6 +1,7 @@
 """Abstract base class for AlignAtt streaming decoders (PyTorch & MLX)."""
 import logging
 from abc import ABC, abstractmethod
+from typing import Optional
 
 import torch
 
@@ -113,7 +114,14 @@ class AlignAttBase(ABC):
                 break
         logger.info(f"Context after trim: {self.state.context.text} (len: {l})")
 
-    def refresh_segment(self, complete=False):
+    def refresh_segment(self, complete=False, keep_secs: Optional[float] = None):
+        """세그먼트 버퍼를 리프레시한다.
+
+        keep_secs: None(기본값)이면 기존 동작(고정 마지막 2청크 유지, complete=False +
+        len<=2일 땐 전체 폐기) 그대로. 지정하면 complete=False일 때 뒤에서부터 세그먼트를
+        누적해 총 길이(초)가 keep_secs 이상이 될 때까지 유지한다(화자전환 경계처럼 폐기량을
+        정밀 제어해야 하는 호출부용 — new_speaker 참고).
+        """
         logger.debug("Refreshing segment:")
         # 버퍼를 버리기 전에 절대 시간 앵커를 승계한다. global_time_offset은 버퍼 pos 0의
         # 실제 스트림 시각이므로, 버려지는 오디오 길이만큼 앞으로 밀지 않으면 mid-stream
@@ -125,7 +133,17 @@ class AlignAttBase(ABC):
         self.state.last_attend_frame = -self.cfg.rewind_threshold
         self.init_context()
         logger.debug(f"Context: {self.state.context}")
-        if not complete and len(self.state.segments) > 2:
+        if not complete and keep_secs is not None:
+            kept = []
+            total = 0.0
+            for seg in reversed(self.state.segments):
+                kept.append(seg)
+                total += seg.shape[0] / 16000
+                if total >= keep_secs:
+                    break
+            kept.reverse()
+            self.state.segments = kept
+        elif not complete and len(self.state.segments) > 2:
             self.state.segments = self.state.segments[-2:]
         else:
             logger.debug("removing all segments.")
@@ -200,6 +218,10 @@ class AlignAttBase(ABC):
         if is_switch:
             # 다음 새 언어 토큰 앞에 process_iter가 경계 마커를 삽입하도록 arm.
             self.state.pending_language_switch = self.state.global_time_offset + self.segments_len()
+            # retract_from은 pending_language_switch와 동일 절대시각(재디코딩 구간 시작점) —
+            # process_iter가 마커를 방출할 때 이 시각 기준으로 구언어 잔존 토큰을 철회한다.
+            self.state.pending_retract_from = self.state.pending_language_switch
+            self.state.pending_prev_language = prev_lang
 
         logger.info("[LangSwitch] 토크나이저 적용: %s (prev=%s, switch=%s, skip_trim=%s)",
                     lang, prev_lang, is_switch, skip_trim)
