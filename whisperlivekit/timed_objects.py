@@ -131,6 +131,8 @@ class LanguageSwitch:
     end: Optional[float] = None
     detected_language: Optional[str] = None  # 전환 후 언어
     text: str = ''  # 하류의 ''.join(t.text ...) / sep.join 호환용 빈 문자열
+    retract_from: Optional[float] = None  # 철회(retraction) 재디코딩 구간 시작 절대시각
+    prev_language: Optional[str] = None  # 철회 대상 판정용 — 전환 전 언어
 
     def is_silence(self) -> bool:
         return False

@@ -85,6 +85,12 @@
   - `MIN_DURATION_SHORT_LANG_RESET = 0.5`초 — `backend.py:37`.
   - `periodic_lang_check_secs` = 기본 `None`(비활성) — `parse_args.py`(CLI `--periodic-lang-check`).
   - `lang_restrict_koen = True` (한/영 2언어 고정) — `parse_args.py`(`--lang-restrict-koen`).
+- **경계 직전/직후 잔존 오언어 텍스트 철회(retraction, Exp-171~ 진행 중)**: `LanguageSwitch` 마커가
+  `retract_from`(재디코딩 구간 시작 절대시각)·`prev_language`(전환 전 언어)를 실어 방출되면(`_apply_detected_language`가
+  `is_switch`일 때 arm — `align_att_base.py:218-224`, 마커 부착은 `backend.py:623-627`), 마커가 `all_tokens`에
+  append되기 *직전* `_insert_with_reattachment`가 `_retract_stale_language_tokens`를 호출해 diar 이벤트 지연
+  동안 구언어 잠금으로 잘못 커밋된 텍스트를 제거한다 — 상세는 §4 표 참조. **경계 개수·위치는 불변** — 마커 자체를
+  없애는 게 아니라 마커 앞의 잔존 텍스트만 사라진다.
 
 ### 3.3 `speaker_change` — 화자 전환 경계 (diarization ON 한정)
 
@@ -98,6 +104,15 @@
   즉 ChangeSpeaker는 **UI 경계를 직접 만들지 않고**, UI 화자 경계는 위 겹침 로직이 만든다.
 - **파라미터**: 화자분할 백엔드 `--diarization-backend sortformer`, 모델 `--sortformer-model <.nemo>`.
   기본 `--diarization` = ON (`parse_args.py`). diarization OFF면 이 트리거는 발생하지 않는다.
+- **경계-앵커 유지(damage B 수정, Exp-171~ 진행 중)**: `new_speaker`의 `refresh_segment(complete=False)`가
+  과거엔 고정 마지막 2청크만 유지해 화자전환 경계 앞쪽 오디오(서두)를 정책적으로 폐기했다. 이제
+  `refresh_segment(complete=False, keep_secs=...)`로 `keep_secs = min(self.end - change_speaker.start +
+  MARGIN(0.3s), MAX_KEEP(5.0s))`만큼(화자전환 시각부터 현재까지의 실제 경계 오디오 길이)을 유지한다 —
+  `backend.py:48-49,322-324`. 유지 후 `global_time_offset`도 과거의 `change_speaker.start` 맹신 대신
+  `self.end - segments_len()`(실제 유지 버퍼의 시작 절대시각)으로 재계산한다(`backend.py:340`; eager 언어
+  감지가 `_apply_detected_language`를 통해 추가로 `_trim_segments_to_recent`를 호출할 수 있어 그 *이후*에
+  계산). 이 재계산이 `refresh_segment` 자체의 `cumulative_time_offset` 승계 메커니즘을 우회하므로, 이중
+  가산을 막기 위해 재계산 직후 `cumulative_time_offset`을 명시적으로 0.0 리셋한다.
 
 ### 3.4 `punctuation` — 라벨 의미 (두 경로)
 
@@ -153,6 +168,7 @@ Whisper가 찍는 마침표(`.`/`。`)를 문장 분할 신호로 쓰되, **진�
 | stall 복구 refresh | `backend.py:554-563` (`STALL_RECOVER_SEC=10.0`, `:41`) | 디코더리셋 | 마커 미방출 → 경계 직접 생성 안 함 |
 | 버퍼 최대길이 트림 `audio_max_len` | config/`parse_args.py` (`--audio-max-len`) | 타이밍 수정자 | 디코더 버퍼 상한 — 타임스탬프 영향, 경계 미생성 |
 | 스트림 종료 flush (SENTINEL/`_finish_transcription`) | `audio_processor.py:28,311-338,740-746` | flush | 남은 토큰 flush. **강제 finalize/경계 생성 없음** — 마지막 줄은 Silence/boundary가 없으면 `finalized=false`로 남음(트리거 null) |
+| 언어전환 경계 철회 `_retract_stale_language_tokens` (Exp-171~ 진행 중) | `tokens_alignment.py:141-178` (`RETRACT_EPS=0.05`, 잠정) | 드롭(구언어 잔존) | `LanguageSwitch` 마커 append 직전 `all_tokens` 꼬리를 역스캔해 `prev_language` 스탬프 텍스트 토큰 제거 — 구역1(`start≥boundary_t-EPS`): 언어매치만으로 제거, 구역2(하한~구역1 사이): +반대스크립트일 때만 제거. Silence/boundary 만나면 스캔 중단. 마커·경계 개수 불변, 마커 앞 잔존 텍스트만 사라짐 |
 
 ---
 
@@ -177,6 +193,10 @@ Whisper가 찍는 마침표(`.`/`。`)를 문장 분할 신호로 쓰되, **진�
 | `KO_EXCLUDE_SUFFIXES` | 니까/으로/는데/다는… | `sentence_boundary.py` | 연결어미·조사 차단(오탐 방어) |
 | `EN_ABBREV` | mr/us/un/etc… + 단일대문자 | `sentence_boundary.py` | 영어 약어 배제(온점 형태소 분할, §3.5) |
 | 언어감지 문턱 | 일반 `2.0`s / eager `1.5`s+p≥0.85 | `align_att_base.py:225-235` | 전환 arm 조건 |
+| `RETRACT_EPS`(Exp-171~, **잠정**) | `0.05`s | `tokens_alignment.py` | 철회 구역1/구역2 경계 지터 여유 — Stage 0 실측 후 보정 예정 |
+| 철회 스캔 하한(Exp-171~, **잠정**) | `boundary_t - LANG_SWITCH_KEEP_SECS - 1.0`s | `tokens_alignment.py:_retract_stale_language_tokens` | 역방향 스캔이 더 이상 소급하지 않는 절대시각 — Stage 0 실측 후 보정 예정 |
+| `_NEW_SPEAKER_KEEP_MARGIN`(Exp-171~) | `0.3`s | `backend.py:48` | 화자전환 경계-앵커 유지 여유(damage B 수정) |
+| `_NEW_SPEAKER_MAX_KEEP`(Exp-171~) | `5.0`s | `backend.py:49` | 화자전환 유지 오디오 상한(과거 keep=4.5 환각 전례 반영) |
 
 디코더 파라미터(간접 영향: 어떤 텍스트가 나오는지에 영향, 경계는 §3의 3신호가 전담) —
 `frame_threshold`, `beams`, `logprob_threshold`, `compression_ratio_threshold` 등은

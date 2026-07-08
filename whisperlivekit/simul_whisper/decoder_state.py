@@ -37,6 +37,8 @@ class DecoderState:
     last_periodic_lang_check: float = 0.0
     last_lang_switch_time: float = 0.0
     pending_language_switch: Optional[float] = None
+    pending_retract_from: Optional[float] = None
+    pending_prev_language: Optional[str] = None
     lang_before_reset: Optional[str] = None
 
     speaker: int = -1

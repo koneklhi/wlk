@@ -1,9 +1,13 @@
+import logging
+import re
 from time import time
 from typing import Any, List, Optional, Tuple, Union
 
 from whisperlivekit.sentence_boundary import is_genuine_sentence_end
+from whisperlivekit.simul_whisper.align_att_base import LANG_SWITCH_KEEP_SECS
 from whisperlivekit.timed_objects import (
     ASRToken,
+    LanguageSwitch,
     PuncSegment,
     Segment,
     Silence,
@@ -11,6 +15,8 @@ from whisperlivekit.timed_objects import (
     SpeakerSegment,
     TimedText,
 )
+
+logger = logging.getLogger(__name__)
 
 _DEFAULT_RETENTION_SECONDS: float = 300.0
 
@@ -37,6 +43,33 @@ TAIL_REATTACH_MAX_LOOKBACK_SECS: float = 1.5
 # 기반 분기 자체를 제거했다(아래 _punct_split_justified 참조) — 온점 분할은 이제
 # (a) 발화 끝 또는 (b) 실제 Silence 토큰에서만 정당화된다. 비-diar 경로는 애초에
 # 이 갭 분기가 없었으므로 이 제거로 diar/비-diar 판정 기준이 대칭화된다.
+
+# 언어전환 경계 철회(retraction) 상수.
+# TAIL_REATTACH_EPS는 재귀속 비교(양의 방향 여유, t.start + EPS < silence.start)용으로
+# 용도가 달라 재사용하지 않고 별도 상수로 둔다. RETRACT_EPS/하한(LANG_SWITCH_KEEP_SECS 기반)은
+# Stage 0 실측(별도 진행 중, 아직 완료 안 됨)으로 추후 보정될 잠정값이다.
+RETRACT_EPS: float = 0.05
+
+# 반대-스크립트 판정 정규식. backend.py의 _is_script_mismatch_filler(P2 게이트)가 쓰는
+# 것과 동일한 패턴을 재사용한다(신규 언어별 하드코딩 금지, §3.8). 단 그쪽은 반복형 필러
+# 텍스트 전체(TTR·최소단어수 게이트 포함)를 판정하는 반면, 여기는 철회 대상 토큰 하나의
+# 스크립트만 보므로 TTR/word-count 게이트 없이 has_hangul/has_latin만 재사용한다.
+_HANGUL_PATTERN = re.compile(r'[가-힣]')
+_LATIN_PATTERN = re.compile(r'[A-Za-z]')
+
+
+def _is_opposite_script(text: str, prev_lang: Optional[str]) -> bool:
+    """prev_lang의 정상 스크립트와 반대 스크립트로만 구성된 텍스트인지 판정.
+
+    혼합 스크립트(한글+라틴 공존)나 스크립트 무관 텍스트(숫자·기호만)는 False(보존).
+    """
+    if prev_lang not in ("ko", "en"):
+        return False
+    has_hangul = bool(_HANGUL_PATTERN.search(text))
+    has_latin = bool(_LATIN_PATTERN.search(text))
+    if prev_lang == "ko":
+        return has_latin and not has_hangul
+    return has_hangul and not has_latin
 
 
 class TokensAlignment:
@@ -94,6 +127,8 @@ class TokensAlignment:
         """
         for t in tokens:
             if t.is_silence() or t.is_boundary():
+                if isinstance(t, LanguageSwitch) and t.retract_from is not None:
+                    self._retract_stale_language_tokens(t.retract_from, t.prev_language)
                 self.all_tokens.append(t)
                 continue
             i = len(self.all_tokens)
@@ -102,6 +137,59 @@ class TokensAlignment:
                    and self.all_tokens[i - 1].start - t.start <= TAIL_REATTACH_MAX_LOOKBACK_SECS):
                 i -= 1
             self.all_tokens.insert(i, t)
+
+    def _retract_stale_language_tokens(self, boundary_t: float, prev_lang: Optional[str]) -> None:
+        """언어전환 경계에서 prev_lang으로 커밋된 잔존 토큰을 all_tokens 꼬리에서 철회.
+
+        LanguageSwitch 마커가 실제로 방출될 때(=새 언어 토큰이 도착했을 때)만 호출된다 —
+        재디코딩이 무산되면 마커 자체가 안 나오므로 아무것도 철회되지 않는다(안전한 실패 모드).
+
+        구역 1 — token.start >= boundary_t - RETRACT_EPS: 텍스트 토큰이고
+          detected_language == prev_lang이면 무조건 철회.
+        구역 2 — [하한, boundary_t - RETRACT_EPS): 같은 조건 + 반대-스크립트(_is_opposite_script)
+          일 때만 철회. 혼합 스크립트는 보수적으로 보존.
+        하한 = boundary_t - LANG_SWITCH_KEEP_SECS - 1.0.
+        역방향 스캔 중 Silence나 boundary 토큰을 만나면 즉시 중단(경계를 넘어 철회하지 않음).
+        prev_lang과 반대 방향 언어로 스탬프된 토큰은 절대 건드리지 않는다.
+        """
+        if prev_lang is None:
+            return
+        lower_bound = boundary_t - LANG_SWITCH_KEEP_SECS - 1.0
+        j = len(self.all_tokens) - 1
+        scanned = 0
+        removed = 0
+        stopped_by = "start_of_buffer"
+        while j >= 0:
+            token = self.all_tokens[j]
+            if token.is_silence() or token.is_boundary():
+                stopped_by = "silence" if token.is_silence() else "boundary"
+                break
+            if token.start < lower_bound:
+                stopped_by = "lower_bound"
+                break
+            scanned += 1
+            if token.detected_language == prev_lang:
+                if token.start >= boundary_t - RETRACT_EPS:
+                    remove = True
+                else:
+                    remove = _is_opposite_script(token.text, prev_lang)
+                if remove:
+                    logger.info(
+                        "[Retract] 철회: %r start=%.2f prev_lang=%s",
+                        token.text, token.start, prev_lang,
+                    )
+                    self.all_tokens.pop(j)
+                    removed += 1
+            j -= 1
+        # 진단용 요약 — [Retract] 0건이 "대상 없음"인지 "Silence/하한에 조기 차단"인지
+        # 구분하기 위함(Exp-171 스크리닝에서 0건 관측 후 추가). scanned=0인데
+        # stopped_by="silence"면 마커 직전에 바로 침묵이 있어 애초에 스캔 자체가
+        # 거의 일어나지 못한 것 — 이 비율이 높으면 Silence 정지 규칙이 과도하게
+        # 보수적인지(예: 아주 짧은 Silence는 통과) 재검토가 필요하다는 신호.
+        logger.info(
+            "[RetractScan] boundary_t=%.2f prev_lang=%s scanned=%d removed=%d stopped_by=%s",
+            boundary_t, prev_lang, scanned, removed, stopped_by,
+        )
 
     def _prune(self) -> None:
         """Drop tokens/segments older than ``_retention_seconds`` from the latest token."""

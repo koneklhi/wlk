@@ -26,7 +26,11 @@ config = parse_args()
 if config.trace_tokens:
     logging.getLogger("whisperlivekit.simul_whisper.backend").setLevel(logging.DEBUG)
     logging.getLogger("whisperlivekit.simul_whisper.align_att_base").setLevel(logging.DEBUG)
-    logger.info("[TraceTokens] DEBUG 레벨 로깅 활성화 (backend + align_att_base)")
+    # tokens_alignment의 [Retract]/[RetractScan](Exp-171~ 언어전환 경계 철회 계측)도
+    # 이 목록에 없으면 root(WARNING) 레벨에 막혀 logger.info가 조용히 사라진다 — 실측 중
+    # 발견(Exp-171 스크리닝, [RetractScan] 0건으로 오인될 뻔함).
+    logging.getLogger("whisperlivekit.tokens_alignment").setLevel(logging.DEBUG)
+    logger.info("[TraceTokens] DEBUG 레벨 로깅 활성화 (backend + align_att_base + tokens_alignment)")
 transcription_engine = None
 
 

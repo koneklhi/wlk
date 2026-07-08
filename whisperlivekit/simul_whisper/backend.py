@@ -40,6 +40,14 @@ MIN_DURATION_SHORT_LANG_RESET = 0.5
 # SimulStreaming 디코더가 비-fire 상태에 빠진 것으로 보고 강제 refresh로 복구한다.
 STALL_RECOVER_SEC = 10.0
 
+# damage B(화자전환 경계 서두 유실) 수정 — new_speaker의 refresh_segment(complete=False)가
+# 무조건 마지막 2청크만 남기던 고정 컷 대신, 화자전환 시각부터 현재까지의 실제 경계 오디오
+# 길이만큼 유지하도록 keep_secs를 계산할 때 쓰는 상수.
+# MARGIN=0.3 — 경계 직전 약간의 여유(경계 시각 추정 오차 흡수).
+# MAX_KEEP=5.0 — Exp-166 keep=4.5의 방송환각 전례를 반영한 상한 — 재방출/환각 재발 방지.
+_NEW_SPEAKER_KEEP_MARGIN = 0.3
+_NEW_SPEAKER_MAX_KEEP = 5.0
+
 _FOREIGN_LANG_PATTERN = re.compile(r'\(speaking in foreign language', re.IGNORECASE)
 
 # P2: 언어-출력 스크립트 불일치 억제 게이트.
@@ -239,6 +247,8 @@ class SimulStreamingOnlineProcessor:
             )
             self.model.state.detected_language = None   # 재감지 허용
             self.model.state.lang_before_reset = None   # 긴 침묵 = 문장 경계, 전환 판정 불필요
+            self.model.state.pending_retract_from = None   # 긴 침묵 = 진짜 문장 경계, 철회 arm 무효화
+            self.model.state.pending_prev_language = None
             self.model.state.first_timestamp = None     # 재감지 조건 충족
             self.model.global_time_offset = silence_duration + offset
             self.model.state.quality_suppress_streak = 0  # 침묵 경계 넘어 streak 누적 → 엉뚱한 refresh 방지
@@ -304,7 +314,14 @@ class SimulStreamingOnlineProcessor:
             self.model.state.detected_language, eager,
         )
         # 2. flush 생략 + 경계 오디오 유지(complete=False) + 미확정 음역 폐기
-        self.model.refresh_segment(complete=False)
+        # damage B 수정: 고정 [-2:] 대신, 화자전환 시각(change_speaker.start)부터 현재(self.end)
+        # 까지의 실제 경계 오디오 길이만큼만 유지한다 — 그래야 경계 앞쪽(새 화자 발화 서두)이
+        # 정책적으로 잘려나가지 않는다. MAX_KEEP으로 상한을 두고(과거 환각 전례),
+        # max(..., MARGIN)은 계획에 없는 방어적 클램프 — change_speaker.start가 self.end보다
+        # 늦게 도착하는 극단 케이스(음수/0에 가까운 keep_secs)에서도 최소 여유를 보장한다.
+        keep_secs = min(self.end - change_speaker.start + _NEW_SPEAKER_KEEP_MARGIN, _NEW_SPEAKER_MAX_KEEP)
+        keep_secs = max(keep_secs, _NEW_SPEAKER_KEEP_MARGIN)
+        self.model.refresh_segment(complete=False, keep_secs=keep_secs)
         self.buffer = []
         self.model.state.lang_before_reset = self.model.state.detected_language or self.model.state.lang_before_reset
         self.model.state.detected_language = None
@@ -313,12 +330,30 @@ class SimulStreamingOnlineProcessor:
         # 3. 감지 성공 시 토크나이저 즉시 교정 (refresh 후 적용)
         if eager:
             self.model._apply_detected_language(eager)
+        # global_time_offset 재계산: change_speaker.start(diar 이벤트 절대시각)를 맹신하지
+        # 않는다 — refresh_segment(keep_secs=...)가 실제로 유지한 버퍼 길이는 diar 이벤트
+        # 시각과 정확히 일치하지 않을 수 있다(청크 단위 유지량과 diar 이벤트 시각 사이의
+        # 불일치). self.end(오디오 스트림의 절대 현재 위치, insert_audio_chunk에서 매 청크
+        # 갱신)에서 실제 유지된 버퍼 길이(segments_len())를 빼면 "실제 유지된 버퍼의 시작
+        # 절대시각"이 정확히 나온다 — refresh_segment가 이미 실행되어 state.segments가
+        # 새 keep_secs 기준으로 정리된 뒤에 계산해야 한다(순서 유지).
+        new_global_time_offset = self.end - self.model.segments_len()
         logger.info(
-            "[NewSpeaker] spk=%s det_after=%s (eager_applied=%s)",
+            "[NewSpeaker] spk=%s det_after=%s (eager_applied=%s) keep_secs=%.2f "
+            "kept_segments_len=%.2fs global_time_offset=%.2f",
             change_speaker.speaker, self.model.state.detected_language, bool(eager),
+            keep_secs, self.model.segments_len(), new_global_time_offset,
         )
         self.model.speaker = change_speaker.speaker
-        self.model.global_time_offset = change_speaker.start
+        self.model.global_time_offset = new_global_time_offset
+        # eager 감지가 새 언어를 확정해 위 _apply_detected_language가 _trim_segments_to_recent를
+        # 호출했다면(전환 감지) cumulative_time_offset에 그 트림량이 누적된 채 남는다. 위
+        # new_global_time_offset은 self.end - segments_len()로 절대 계산돼 이미 그 트림량까지
+        # 반영된 값이므로, 여기서 소비하지 않고 남겨두면 *다음* refresh_segment 호출 때
+        # (global_time_offset += cumulative_time_offset + discarded_len) 같은 트림량이 중복
+        # 가산되어 타임스탬프가 실제보다 앞으로 밀리는 skew가 재발한다 — 절대 재계산이
+        # 이미 흡수한 값이므로 여기서 리셋해 이중 반영을 막는다.
+        self.model.state.cumulative_time_offset = 0.0
         self._last_emitted_word = None
         self._last_emit_end = self.end
         self._consecutive_char_repeat = 0
@@ -588,9 +623,13 @@ class SimulStreamingOnlineProcessor:
                 marker = LanguageSwitch(
                     start=boundary_t, end=boundary_t,
                     detected_language=self.model.state.detected_language,
+                    retract_from=getattr(self.model.state, "pending_retract_from", None),
+                    prev_language=getattr(self.model.state, "pending_prev_language", None),
                 )
                 timestamped_words = [marker] + timestamped_words
                 self.model.state.pending_language_switch = None
+                self.model.state.pending_retract_from = None
+                self.model.state.pending_prev_language = None
                 logger.info("[LangSwitch] 문장 경계 마커 방출 @ %.2fs (lang=%s)",
                             boundary_t, self.model.state.detected_language)
 
