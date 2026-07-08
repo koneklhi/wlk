@@ -4,7 +4,7 @@ import platform
 import re
 import sys
 from collections import Counter
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import torch
@@ -14,6 +14,7 @@ from whisperlivekit.model_paths import detect_model_format, resolve_model_path
 from whisperlivekit.simul_whisper.config import AlignAttConfig
 from whisperlivekit.simul_whisper.simul_whisper import AlignAtt
 from whisperlivekit.timed_objects import ASRToken, ChangeSpeaker, LanguageSwitch, Transcript
+from whisperlivekit.tokens_alignment import _is_opposite_script
 from whisperlivekit.warmup import load_file
 from whisperlivekit.whisper import load_model, tokenizer
 
@@ -166,6 +167,27 @@ def _find_anchor_repeat_storm(
     return False
 
 
+# 스크립트-앵커 재감지 게이트 (GOAL_SCRIPT_ANCHOR_REDETECT — 코드스위칭 서두유실 근본수정).
+# 배경: LanguageSwitch 마커는 _apply_detected_language의 is_switch일 때만 arm되는데,
+# 중간 재감지 트리거 4종(짧은침묵≥0.5s·긴침묵≥2.0s·화자전환 eager·PLC=기본 None 비활성)은
+# 무음·화자전환 없는 연속 코드스위칭에서 전부 미발동한다 → 구언어 고착 → 새 언어 서두
+# 오디코드/유실(①) + 경계 마커 미생성으로 같은 line 접착(②). Exp-172 실측: bong1에서
+# 반대 스크립트 streak 3~4단어·2배치·약 1.0s 시점에야 기존 침묵 트리거가 뒤늦게 발동 —
+# 그 사이 방출분이 철회·유실됐다. 임계 기본값 N=3단어/T≈1.0s는 이 실측 근거.
+# Exp-160 면역: 이 트리거는 lang_id "확률"이 아니라 "출력 스크립트의 지속 반전"에만
+# 반응한다 — ytn2 스퓨리어스 전환 당시 출력은 계속 한글이었으므로 streak이 쌓이지 않아
+# 미발동(순수 확률 기반 주기 체크 PLC 재도입이 아님).
+# 판정은 tokens_alignment._is_opposite_script(TTR 게이트 없는 순수 스크립트) 재사용 —
+# _is_script_mismatch_filler(TTR≤0.6 반복 전제)가 정상 전환을 통과시키던 사각지대를 메운다.
+# 같은 스크립트 토큰이 섞이면 streak 리셋("I think 그건"류 1~2단어 정상 삽입 오탐 방어),
+# 라틴/한글이 전혀 없는 토큰(숫자·기호)은 스크립트 중립으로 스킵. ko↔en 대칭(§3.8).
+SCRIPT_ANCHOR_REDETECT_ENABLED = True  # 롤백 장치: False면 게이트 완전 무동작
+_SCRIPT_ANCHOR_N_WORDS = 3    # 연속 반대-스크립트 단어 수 문턱 (Exp-172 실측 N=3)
+_SCRIPT_ANCHOR_T_SECS = 1.0   # 반전 지속 시간 문턱 (Exp-172 실측 T≈1.0s)
+_SCRIPT_ANCHOR_REDETECT_WINDOW_SECS = 2.0  # 재감지 창
+_SCRIPT_ANCHOR_REDETECT_MIN_PROB = 0.90    # 재감지 확신 문턱 (미달 시 None → 미적용)
+
+
 class SimulStreamingOnlineProcessor:
     """Online processor for SimulStreaming ASR."""
     SAMPLING_RATE = 16000
@@ -194,6 +216,11 @@ class SimulStreamingOnlineProcessor:
         # _find_anchor_repeat_storm 참고). _recent_emitted_words(최근 10개, SwitchTaxMeasure
         # 계측 전용)와 별도 상태 — 이 게이트는 40단어 윈도우가 필요해 재사용하지 않는다.
         self._anchor_repeat_window: List[str] = []
+        # 스크립트-앵커 재감지 게이트: 잠긴 detected_language와 반대 스크립트로만 구성된
+        # 방출 단어의 연속(streak) + 시작/끝 절대시각(T초 문턱 판정용). 상수 주석 참조.
+        self._script_anchor_streak: List[str] = []
+        self._script_anchor_streak_start: Optional[float] = None
+        self._script_anchor_streak_end: Optional[float] = None
 
         if asr.tokenizer:
             self.model.tokenizer = asr.tokenizer
@@ -259,6 +286,7 @@ class SimulStreamingOnlineProcessor:
             self._short_silence_check_at = 0.0
             self._script_mismatch_streak = []
             self._anchor_repeat_window = []
+            self._reset_script_anchor_streak()
         elif (
             silence_duration >= MIN_DURATION_SHORT_LANG_RESET
             and self.model.cfg.language == "auto"
@@ -360,6 +388,7 @@ class SimulStreamingOnlineProcessor:
         self._consecutive_char_repeat = 0
         self._script_mismatch_streak = []
         self._anchor_repeat_window = []
+        self._reset_script_anchor_streak()
 
     def get_buffer(self):
         concat_buffer = Transcript.from_tokens(tokens= self.buffer, sep='')
@@ -500,6 +529,92 @@ class SimulStreamingOnlineProcessor:
         self._anchor_repeat_window = candidate
         return False
 
+    def _reset_script_anchor_streak(self):
+        self._script_anchor_streak = []
+        self._script_anchor_streak_start = None
+        self._script_anchor_streak_end = None
+
+    def _update_script_anchor_streak(self, tokens: List[ASRToken]) -> bool:
+        """스크립트-앵커 재감지 트리거 판정 (배치 끝 기준 누적).
+
+        잠긴 detected_language와 반대 스크립트인 방출 토큰을 streak에 누적하고,
+        배치 처리 후 streak이 N단어 또는 T초 문턱을 넘으면 True(재감지 필요).
+        잠긴 스크립트가 포함된 토큰(혼합 포함)이 나오면 정상 콘텐츠 재개로 보고 리셋,
+        라틴/한글이 전혀 없는 토큰(숫자·기호)은 중립으로 스킵한다. 배치 끝 기준
+        판정이라 배치 내에서 문턱을 넘었다가 잠긴 스크립트로 되돌아간 경우(정상
+        혼용)는 발동하지 않는다.
+        """
+        if not SCRIPT_ANCHOR_REDETECT_ENABLED:
+            return False
+        lang = self.model.state.detected_language
+        if self.model.cfg.language != "auto" or lang not in ("ko", "en"):
+            return False
+        for t in tokens:
+            text = t.text or ""
+            if _is_opposite_script(text, lang):
+                if not self._script_anchor_streak:
+                    self._script_anchor_streak_start = t.start
+                self._script_anchor_streak.append(text.strip())
+                self._script_anchor_streak_end = t.end
+                continue
+            has_hangul = bool(re.search(r'[가-힣]', text))
+            has_latin = bool(re.search(r'[A-Za-z]', text))
+            if not has_hangul and not has_latin:
+                continue  # 스크립트 중립(숫자·기호·공백) — 누적도 리셋도 안 함
+            self._reset_script_anchor_streak()  # 잠긴 스크립트 포함 → 정상 콘텐츠 재개
+        if not self._script_anchor_streak:
+            return False
+        if len(self._script_anchor_streak) >= _SCRIPT_ANCHOR_N_WORDS:
+            return True
+        return (
+            self._script_anchor_streak_start is not None
+            and self._script_anchor_streak_end is not None
+            and self._script_anchor_streak_end - self._script_anchor_streak_start
+            >= _SCRIPT_ANCHOR_T_SECS
+        )
+
+    def _apply_script_anchor_redetect(self, timestamped_words: List[ASRToken]) -> List[ASRToken]:
+        """트리거 시 언어 재감지 → 다른 언어 확신 시에만 전환 적용 + 배치 드롭.
+
+        전환 적용은 _apply_detected_language(2.5s 트림 + 마커 arm + retract arm +
+        retract_floor 계산 — Exp-174 이후 기존 메커니즘)에 그대로 위임한다. 드롭한
+        배치의 마커는 process_iter의 pending 가드에 의해 다음 신언어 배치 앞으로
+        이연되고, 드롭한 서두는 트림이 남긴 경계 오디오 재디코딩으로 복구된다.
+        refresh_segment는 호출하지 않는다(Exp-163: 재환각+정렬 교란 회귀).
+        같은 언어 재확정 시 no-op + streak 리셋(Exp-169: _apply_detected_language의
+        무조건 init_tokens/init_context 컨텍스트 소거로 인한 자기강화 재환각 루프 방지).
+        None(불확신)이면 미적용 + streak 유지(다음 배치에서 재시도).
+        """
+        if not self._update_script_anchor_streak(timestamped_words):
+            return timestamped_words
+        streak_len = len(self._script_anchor_streak)
+        streak_span = (self._script_anchor_streak_end or 0.0) - (self._script_anchor_streak_start or 0.0)
+        new_lang = self.model.detect_current_language(
+            window_secs=_SCRIPT_ANCHOR_REDETECT_WINDOW_SECS,
+            min_prob=_SCRIPT_ANCHOR_REDETECT_MIN_PROB,
+        )
+        locked = self.model.state.detected_language
+        if new_lang is None:
+            logger.info(
+                "[ScriptAnchorRedetect] streak %d단어/%.2fs 반전, 재감지 불확신(None) — 미적용·streak 유지",
+                streak_len, streak_span,
+            )
+            return timestamped_words
+        if new_lang == locked:
+            logger.info(
+                "[ScriptAnchorRedetect] streak %d단어/%.2fs 반전, 재감지=잠긴 언어(%s) 재확정 — no-op·streak 리셋",
+                streak_len, streak_span, new_lang,
+            )
+            self._reset_script_anchor_streak()
+            return timestamped_words
+        logger.warning(
+            "[ScriptAnchorRedetect] 반대스크립트 streak %d단어/%.2fs → 재감지 %s→%s — 전환 적용·배치 드롭: %.200s",
+            streak_len, streak_span, locked, new_lang, ' '.join(self._script_anchor_streak),
+        )
+        self.model._apply_detected_language(new_lang)
+        self._reset_script_anchor_streak()
+        return []
+
     def process_iter(self, is_last=False) -> Tuple[List[ASRToken], float]:
         """
         Process accumulated audio chunks using SimulStreaming.
@@ -556,7 +671,15 @@ class SimulStreamingOnlineProcessor:
                     self.model.state.first_timestamp = None
                     self.model.state.eager_lang_detect = True
                     self.model.state.last_lang_switch_time = 0.0
+                    self._reset_script_anchor_streak()  # 언어 재감지 arm — 잠긴 언어 기준 streak 무효화
                     timestamped_words = []
+
+            if timestamped_words:
+                # 스크립트-앵커 재감지 게이트: ScriptMismatchFilter(TTR≤0.6 반복 전제)가
+                # 통과시키는 "정상 전환"의 지속 반전을 잡는다. AnchorRepeatFilter보다 앞 —
+                # 전환 확신 시 배치 드롭이 우선이고, 불확신(None) 시 배치는 그대로 흘러가
+                # storm 판정을 받는다.
+                timestamped_words = self._apply_script_anchor_redetect(timestamped_words)
 
             if timestamped_words:
                 decoded_text = ''.join(t.text for t in timestamped_words)
@@ -581,6 +704,10 @@ class SimulStreamingOnlineProcessor:
                     # 무방비 폭주). 따라서 드롭만 하고 어떤 언어/컨텍스트 상태도 건드리지
                     # 않는다 — 그 다음 배치는 기존 컨텍스트를 그대로 유지한 채 자연스럽게
                     # 이어서 디코드된다.
+                    # 단 스크립트-앵커 streak은 리셋한다 — 이 배치는 storm 쓰레기로 판정돼
+                    # 방출되지 않으므로, "실제 방출 토큰의 반전" 전제가 깨진 누적분을 남기면
+                    # 다음 배치에서 오발동한다.
+                    self._reset_script_anchor_streak()
                     timestamped_words = []
 
             if not timestamped_words:
