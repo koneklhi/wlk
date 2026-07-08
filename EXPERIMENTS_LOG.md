@@ -2518,3 +2518,73 @@ Req-3 자체 목표(storm 최대반복횟수 감소·ytn2 "김정은" storm 소�
 - **영어 오분할 축소**: 환각 마침표+대문자 다음단어 오분할(bong1) 완화.
 
 **JSON**: `.omc/benchmarks/eval_punctsplit_screen.json`(스크리닝 N=1) · `eval_punctsplit_adopt.json`(확정 N=3, 위 표 출처).
+
+---
+
+## Exp-171 — 언어전환 경계 오언어 토큰 철회 + 화자전환 서두 유실 수정 [E5, master 머지 `a14d028`] (2026-07-08)
+
+**날짜**: 2026-07-08
+**워크트리/브랜치**: `worktrees/boundary-retract` @ `exp/boundary-retract`, feat `f1b4e7e` → master 머지 `a14d028`(`--no-ff`)
+
+**가설**: bong1 실사용 테스트에서 사용자가 두 결함을 보고: ① 화자전환 직후 diar 이벤트 도착 지연(~1-2s) 동안 구언어(예 en) 잠금 상태로 한국어 오디오가 디코딩되며 covert translation 발생·잔존("? Who is the.") 또는 반대로 새 화자 영어 서두가 구언어(ko) 스탬프로 커밋돼 직전 문장에 접착("했어요. The thought that."). ② `refresh_segment(complete=False)`가 무조건 마지막 2청크만 유지해 화자전환 경계 앞 서두("누가 주")가 정책적으로 폐기됨. Exp-168(CASE2)이 같은 경계의 eager 언어감지 오판(since_offset)과 반복형 필러는 해결했으나, 유창한 오번역·짧은 접착·서두유실은 P2 게이트(TTR·반복 전제)가 못 잡는 사각지대로 잔존 확인(코드 diff로 검증) — 이 갭을 메운다.
+
+**변경 내용**:
+- `whisperlivekit/timed_objects.py:134-135`: `LanguageSwitch`에 `retract_from`/`prev_language` 필드 추가(내부신호 전용, FrontData 미직렬화).
+- `whisperlivekit/simul_whisper/decoder_state.py:39-40`: `pending_retract_from`/`pending_prev_language` 필드.
+- `whisperlivekit/simul_whisper/align_att_base.py:218-224`: `_apply_detected_language`의 `is_switch` 블록에서 `pending_retract_from`/`pending_prev_language` 기록(재디코딩 구간 시작 절대시각+전환전 언어).
+- `whisperlivekit/simul_whisper/backend.py:623-627`: `LanguageSwitch` 마커 방출 시 `retract_from`/`prev_language` 부착. `backend.py:247-248`: 긴침묵 리셋 경로에서 pending 클리어(진짜 문장경계는 철회 arm 무효화).
+- `whisperlivekit/tokens_alignment.py:141-176`(`_retract_stale_language_tokens`) + `_insert_with_reattachment`(:127-130)에서 마커 append 직전 호출: **2구역 철회 규칙** — 구역1(`start≥boundary_t-RETRACT_EPS(0.05)`) `detected_language==prev_lang`이면 무조건 철회, 구역2(`[boundary_t-LANG_SWITCH_KEEP_SECS-1.0, 구역1)`) 반대-스크립트(`_is_opposite_script`, P2 게이트 로직 재사용)일 때만 철회. Silence/boundary 도달 시 스캔 즉시 중단. `[RetractScan]`/`[Retract]` 진단로그.
+- `whisperlivekit/simul_whisper/backend.py:48-49,322-324`(`new_speaker`): `refresh_segment(complete=False, keep_secs=...)`로 교체 — `keep_secs = min(self.end - change_speaker.start + MARGIN(0.3), MAX_KEEP(5.0))`(경계-앵커 유지, 고정 `[-2:]` 컷 폐기). `align_att_base.py:117-149`(`refresh_segment`): `keep_secs` 파라미터 추가(None이면 기존 `[-2:]` 동작 그대로, 다른 호출부 전부 `complete=True`라 무영향 — grep 확인).
+- `backend.py:340-356`: `global_time_offset`을 `change_speaker.start` 맹신 대신 `self.end - segments_len()`(eager 언어감지의 추가 트림 이후 계산)으로 재계산 + `cumulative_time_offset` 명시적 리셋(이중가산 방지, 구현 중 자체발견 수정).
+- `whisperlivekit/basic_server.py:26-31`: `--trace-tokens` DEBUG 목록에 `whisperlivekit.tokens_alignment` 로거 추가 — 스크리닝 중 `[RetractScan]` 0건으로 오인될 뻔한 로깅 가시성 버그 자체발견·수정(root 로거 WARNING에 막혀 있었음, 철회 로직 버그 아님).
+- 테스트: `tests/test_boundary_retract.py`(신설, 9개 — 구역1/구역2/Silence중단/하한/반대언어보존/noop 케이스 손트레이싱 검증). pytest 245 passed·1 skipped(회귀 없음).
+
+**테스트 설정**: 경로 C, diar-ON(Sortformer + CRT 3.0), turbo beam=2, PLC=None. 스크리닝 N=1(bong1 단독 2회 + 3파일 1회) → 확정 N=3 → held-out N=1.
+
+### 테스트 세트 결과 (N=3 확정, JSON `.omc/benchmarks/boundary_retract_adoption_N3.json`)
+
+| 파일 | baseline(Exp-170) med/max·F1med | 이번 med/max/min/stdev·F1med | ΔWER med/max | ΔF1 |
+|------|------|------|------|------|
+| bong1 | 30.2/36.0 · 44.9 | 28.1 / **43.5** / 24.5 / 10.1 · 50.0 | -2.1 / **+7.5** | +5.1 |
+| ytn2  | 29.6/32.5 · 55.2 | **18.7** / **18.7** / 16.7 / 1.1 · **75.0** | **-10.9** / **-13.8** | +19.8 |
+| sbs1  | 14.3/14.9 · 13.3 | 13.1 / 15.5 / 8.9 / 3.3 · 26.7 | -1.2 / +0.6 | +13.4 |
+
+held-out(N=1, JSON `.omc/transcripts/ytn1_C_R1.txt`·`eng1_C_R1.txt`): ytn1 **15.3%**/F1 52.2%(과거 참고치 21.5~33.1% 중 최저), eng1 **6.7%**/F1 0.0%(과거 2.9~4.8% 대비 +1.9~3.8pp, 절대치 한자릿수라 catastrophic 아님, F1=0.0%는 ref_sentences=1 지표한계).
+
+스크리닝(N=1) 참고: bong1 단독 재측정 2회(25.4%/32.6%, 로깅수정 전후) + 3파일 1회(bong1 25.4%/ytn2 21.2%/sbs1 14.3%) — 전부 방향신호로 게이트 통과.
+
+### 분석 (전사 내용 정성 대조 — `.omc/transcripts/`, `.omc/benchmarks/boundary_retract_adoption_N3.json`)
+
+**bong1** (R3=median 28.1% 기준):
+- **원 결함 해소 확인**: 전사 `"누가 주인공일까 이런 생각을 제가 제일 많이 했어요."`(정답과 완전 일치, 오번역 잔존 없음) 뒤에 `"The thought that I had the most is who is the main protagonist."`(별도 줄, `silence` 트리거로 정상 분리 — 과거 접착 증상 없음). 서두 유실도 미재현("누가 주" 보존).
+- **환각 폭주(R2=43.5% 이상치)**: 전사 `"누가 주인공일까 주인공일까 이런 생각을 이런 생각을"`(어절 중복) + `"Thank you."` 필러 2회 + `"하하하"`(웃음환각). R1/R3는 동일 구간이 깨끗해 회차간 확률적 변동으로 추정(3회 중 1회만 재현). `[RetractScan]` 진단(로깅수정 후 별도 재측정): 11개 마커 중 4건 실제 철회(17토큰) — 제거 텍스트(`"It's just"`·`"The main character,"`·`"죄송합니다 형님"` 등)를 정답·최종전사와 대조 결과 **전부 중복/스테일 재디코딩 사본이었고 정답과 일치하는 최종버전은 보존됨** — 과도철회 증거 없음.
+- **이번 변경 영향**: 원 결함(오번역잔존·접착·서두유실) 완전 해소. R2 이상치는 기존 문서화된 bong1 고유 실패모드(필러storm·웃음환각, STATE Exp-163/168/170)와 정성적으로 일치 — 이 변경이 유발했다는 증거 없음(단 `--trace-tokens` 없이 측정해 100% 배제는 못 함, 후속 재현조사 권장).
+
+**ytn2** (R3=median 18.7% 기준):
+- **코드스위칭 경계 대폭 개선**: 전사 `"...North Korea. UNDER SECRETARY KERRY: In the discussion..."` → `"왕성한 연합 방위태세를 유지하기 위한 노력을..."`(EN→KO 전환 경계 깔끔, language_switch 정상 발동). §3.8 최우선 목표(짧은 텀 코드스위칭)에 직접 부합하는 대폭 개선(median -10.9pp·max -13.8pp).
+- **경미한 잔존**: `"한국군 사...자, 한국군 사령관"` 짧은 어절 중복 1건(catastrophic 아님).
+
+**sbs1** (R2=median 13.1% 기준):
+- 주요 실패 없음. `"선 제이비어 브런슨 주한미군 사령관..."` 한↔영 전환("From a satellite image, the Republic of Korea looks like an island.") 정상 처리.
+
+**이번 변경 영향 총평**: 원 사용자 결함(오번역잔존·접착·서두유실) 전 회차 미재현으로 해소 확인. ytn2가 §3.8 최우선 목표에서 크게 개선, sbs1도 안정적 개선. bong1 median도 개선이나 max는 R2 1회 이상치로 게이트 초과 — 원인은 기존 bong1 고유 실패모드와 일치해 이 변경 특유 결함일 가능성은 낮게 평가되나 미확정.
+
+### 채택 조건 판정
+
+| # | 조건 | 판정 |
+|---|------|------|
+| ① max WER 미회귀 | bong1 43.5>게이트36.0(+7.5, R2 1회 이상치) / ytn2 18.7≤34.5 ✓✓ / sbs1 15.5≤16.1 ✓ | △ bong1만 초과 — 정성분석상 기존 실패모드와 일치(위 분석), 회차변동 추정 |
+| ② median 개선 | bong1 -2.1 ✓ / ytn2 **-10.9** ✓✓ / sbs1 -1.2 ✓ | ✅ 3파일 전부 개선 |
+| 원 사용자 결함 해소 | 오번역잔존·접착·서두유실 전 회차 미재현 | ✅ 달성 |
+| held-out 회귀 | ytn1 대폭개선 / eng1 소폭상승(catastrophic 아님) | ✅ 문제없음 |
+
+**판정: ✅ 채택 (사용자 승인)** — CLAUDE.md §4 "①max 미회귀 1순위" 엄격 적용 시 bong1 게이트 초과로 자동채택 불가하나, 근본원인 조사(R1/R3 동일구간 클린 vs R2만 이상치, 필러/웃음 패턴이 STATE에 기존 기록된 bong1 고유 변동성과 일치, held-out 두 파일에서 비재현)를 사용자에게 투명 보고 후 명시적 승인으로 채택. 원 결함 해소 + ytn2 §3.8 최우선 목표 대폭개선이 핵심 근거.
+
+**Epoch 판단**: 세대 안 올림(E5 유지) — Exp-168(CASE2, 같은 언어전환 경계 서브시스템)이 WER에 실질 영향을 준 개선이었음에도 epoch를 안 올린 전례를 따름. 이번 변경도 디코더 파라미터(beam/CRT/PLC/logprob) 자체를 바꾸지 않고 경계 시점의 토큰 커밋/폐기 정책만 조정 — E5의 파라미터 트레이드오프 결론(Exp-160/161/162)에 영향 없음.
+
+### 다음 가설 (향후 검토 후보)
+- **bong1 R2급 이상치 재현조사**: `--trace-tokens`로 bong1 N=3 재측정해 [RetractScan] 로그로 이 브랜치 관여 여부 확정(이번 세션 범위 밖으로 보류).
+- **철회 EPS/하한값 캘리브레이션**: `RETRACT_EPS=0.05`·하한(`LANG_SWITCH_KEEP_SECS+1.0`)은 잠정값 — 추가 실측 축적 후 조정 여지(`docs/SENTENCE_FINALIZATION_LOGIC.md` §5에 "잠정" 태그로 기록됨).
+- **ytn2 "한국군 사" 중복** 등 잔존 경미 이슈는 별도 실험으로 축적 후 판단.
+
+**JSON**: `.omc/benchmarks/boundary_retract_adoption_N3.json`(확정 N=3, 위 표 출처) · `.omc/transcripts/ytn1_C_R1.txt`·`eng1_C_R1.txt`(held-out).
