@@ -115,11 +115,13 @@ class AudioProcessor:
         self.vac: Optional[FixedVADIterator] = None
 
         if self.args.vac:
+            # 단어 내부 미세정적(≈0.1s 숨/조음 휴지)이 발화를 분할해 한 단어가
+            # 두 줄로 쪼개지는 것을 막기 위해 min_silence를 100→200ms로 올린다.
             if models.vac_session is not None:
                 vac_model = OnnxWrapper(session=models.vac_session)
-                self.vac = FixedVADIterator(vac_model, threshold=0.3)
+                self.vac = FixedVADIterator(vac_model, threshold=0.3, min_silence_duration_ms=200)
             else:
-                self.vac = FixedVADIterator(load_jit_vad(), threshold=0.3)
+                self.vac = FixedVADIterator(load_jit_vad(), threshold=0.3, min_silence_duration_ms=200)
         self.ffmpeg_manager: Optional[FFmpegManager] = None
         self.ffmpeg_reader_task: Optional[asyncio.Task] = None
         self._ffmpeg_error: Optional[str] = None
