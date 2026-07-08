@@ -85,7 +85,20 @@ held-out 단회: ytn1 21.5% / eng1 4.8%
 
 ## 5. Stage 구성
 
-### Stage 0 = Gate 0 (환경: venv / 모델 / VRAM)
+### Stage 0 = Gate 0 — ✅ 통과 (2026-07-08, 프로토콜 변경 1건 사용자 승인)
+
+**실측 결과**: 오프라인 로드 OK / `device_map="auto"`는 GPU가 비어도 CPU 오프로딩 선택(RTF 3.3~19 파탄) →
+`device_map={"": 0}` 전량 GPU 강제로 해결(가중치 8.86GB, 피크 9.28GB ≤ 9.3, OOM 0). 병목 프로파일:
+CPU 전처리 1.9ms/토큰(무죄), GPU generate 126ms/토큰 — **bf16 최선 RTF 1.5**, int8(bnb)은 RTF 4.95로 기각.
+3080에서 실시간(RTF<1) 구조적 불가, 5090(대역폭 2.4×)은 RTF ≈ 0.6~0.7 추정.
+
+**프로토콜 변경 (사용자 승인, 2026-07-08)**: **지연 허용 측정** — 개발기에서는 오디오 실시간 유입 + 전사 지연
+완성을 허용하고 **품질(WER)만 유효 지표**로 본다. F1은 침묵 flush 타이밍 왜곡 가능성으로 **참고치**.
+실시간성(S5류 기준)·최종 확정 수치는 5090 배포기 재검증 전제(§3 M2 단서와 동일 원칙).
+이행 사항: 래퍼 finish/start_silence drain을 백로그 연동으로 보강, eval 대기창을 오디오길이 연동으로 연장,
+Gate 1 S5는 "재생 종료 후 ≤ 0.7×오디오길이 내 finish + 유실 없음"으로 대체.
+
+#### (원래 계획 — 기록 보존)
 - **변경**: 워크트리+독립 venv, 모델 다운로드(`whisperlivekit/model/Voxtral-Mini-4B-Realtime-2602`, 메인 저장소, gitignore 등재).
 - **통과 기준**: ① transformers 5.2.x + `VoxtralRealtimeForConditionalGeneration` 임포트 성공
   ② `HF_HUB_OFFLINE=1` 로컬 로드 성공 ③ 15초 더미 오디오 추론 1회 피크 VRAM ≤ 9.3GB AND OOM 0 (nvidia-smi 계측)
