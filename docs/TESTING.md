@@ -26,7 +26,7 @@
   `--live`로 비확정/확정 진행 출력, `--json`으로 원본 응답 로깅.
 - **자동 평가**: `scripts/eval.py`는 기본적으로 경로 C(1차 정량)를 실행한다. 경로 A는 `--paths A`로
   빠른 개발 스모크(코드 회귀 확인)용으로 돌린다. 두 경로 모두 **WER + (화자분리 F1 + 문장분리 F1)**을 산출한다.
-  F1은 정답 신형식 `[spkN]` 전환 경계(화자분리 F1) / 화자 블록 내 줄바꿈 경계(문장분리 F1)와 STT 확정 문장(`lines[]`) 경계를 비교한다(2지표 분리는 구현 후속 — [TRANSCRIPTION_REQUIREMENTS.md](TRANSCRIPTION_REQUIREMENTS.md)).
+  F1은 정답 신형식 `[spkN]` 전환 경계(화자분리 F1) / 화자 블록 내 줄바꿈 경계(문장분리 F1)와 STT 확정 문장(`lines[]`) 경계를 비교한다(2지표 분리 구현 완료 — [TRANSCRIPTION_REQUIREMENTS.md](TRANSCRIPTION_REQUIREMENTS.md) §5).
 
 ### 경로 B — 마이크 직접 녹음 (정성적)
 
@@ -43,7 +43,7 @@
 - 마이크 입력 경로(경로 B)를 유지하면서 동일 음성으로 반복 측정 가능 → 재현성 있는 정량 평가.
   실제 오디오 파이프라인을 거치므로 Phase 2 채택/기각의 **1차 정량 신호**다.
 - 헬퍼: [scripts/vbcable_test.py](../scripts/vbcable_test.py)
-- `scripts/eval.py`는 기본으로 경로 C를 실행해 **WER + 화자분리 F1 + 문장분리 F1**을 산출한다(우선순위 = 화자분리 F1 > WER > 문장분리 F1; 정답 = 신형식 `_speak,sentence_sperate.txt` canonical). *현재 코드는 단일 `seg_f1`(구 regime 빈 줄 경계)만 산출 — 2지표 분리·신형식 파서는 구현 후속: [TRANSCRIPTION_REQUIREMENTS.md](TRANSCRIPTION_REQUIREMENTS.md) §5.*
+- `scripts/eval.py`는 기본으로 경로 C를 실행해 **WER + 화자분리 F1 + 문장분리 F1**을 산출한다(우선순위 = 화자분리 F1 > WER > 문장분리 F1; 정답 = 신형식 `_speak,sentence_sperate.txt` canonical). *2지표 분리·신형식 파서 구현 완료 — 신형식 정답이 있으면 `seg_f1`=화자분리 F1·`sentence_f1`=문장분리 F1을 산출하고, 없거나 파싱 실패 시 구 regime(빈 줄 경계, `sentence_f1=None`)으로 폴백한다: [TRANSCRIPTION_REQUIREMENTS.md](TRANSCRIPTION_REQUIREMENTS.md) §5.*
   브라우저 `#linesTranscript`의 `.textcontent`(확정 문장)만 추출하므로 타임스탬프 행이 섞이지 않는다.
 - **산출물 위치**: 벤치마크 JSON `--output`(관례 `.omc/benchmarks/`) · 전사 `.omc/transcripts/{파일}_{경로}_R{회차}.txt` · **서버 로그** `.omc/server_logs/server_<stem>_<path>_R<rep>_<ts>.log`(회차별 항상 저장 — Exp-153; `[QualityGate]`/`[LangSwitch]`(후자는 `--trace-tokens` 시) 등 필터·전환 계측용).
 - **문장별 확정 트리거**: 전사 txt에 `[문장별 확정 트리거]` 섹션(각 문장 뒤 `⟨silence/punctuation/language_switch/speaker_change/-⟩`)이, JSON `files[].hyp_lines`(`[{"text","trigger"}, …]`)가 additive로 추가된다(WER/F1 계산은 불변). 문장 분리 로직 정성 분석용 — 경로 C는 UI DOM `data-trigger` 속성, 경로 A는 `lines[].finalize_trigger`에서 수집.
@@ -70,7 +70,7 @@ whisperlivekit-server
 - **정답 스크립트 형식 (신형식 canonical)**: 성능 개선 정답 = `<name>_speak,sentence_sperate.txt`. 두 경계를 라벨링한다:
   1. **`[spkN]` 헤더 전환 = 화자전환 경계** → **화자분리 F1**(1순위·필수). 화자가 바뀌면 새 `[spkN]` 헤더(사람 단위 — 같은 화자는 한·영 code-switch 가능, bong1=4화자 `spk1`~`spk4`).
   2. **화자 블록 내 줄바꿈 = 온점 문장 경계** → **문장분리 F1**(3순위·nice-to-have). WER 정답은 `[spkN]` 헤더 제거·라벨 미포함 텍스트.
-  - **구형식 `<name>.txt`(라벨 없는 빈 줄)는 deprecated** — 단 현 eval은 `.with_suffix(".txt")`로 아직 구 파일을 읽는다(신형식 파서 전환 = 구현 후속). 과도기 병존. 형식·측정 정본 = [TRANSCRIPTION_REQUIREMENTS.md](TRANSCRIPTION_REQUIREMENTS.md) §2·§3.
+  - **구형식 `<name>.txt`(라벨 없는 빈 줄)는 deprecated** — eval은 신형식(`<stem>_speak,sentence_sperate.txt`)을 우선 읽고, 없거나 `[spkN]` 헤더 파싱에 실패한 경우에만 `.with_suffix(".txt")`로 구 파일을 읽는다(신형식 파서 전환 구현 완료). 과도기 병존. 형식·측정 정본 = [TRANSCRIPTION_REQUIREMENTS.md](TRANSCRIPTION_REQUIREMENTS.md) §2·§3.
 - **파일 목록** (측정 기본 설정: 화자분할 ON — 이 옵션 전체가 이제 `parse_args.py` 기본값이라 추가 인자 없이 `whisperlivekit-server`만 기동해도 동일 설정임):
   - `bong1.mp3` / `bong1.txt` — 봉준호 기생충 인터뷰. **영어 2명 + 한국어 2명**, 화자 교대·긴 발화 혼재. 다화자·온점분리 역량의 핵심 테스트 대상.
     **테스트(채택/기각) + 개선 최우선 대상**(다화자·긴 발화). 채택 확정 시 `--repeat 3` 루틴.

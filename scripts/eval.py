@@ -107,6 +107,10 @@ class FileResult:
     ref_sentences: Optional[int] = None
     hyp_sentences: Optional[int] = None
     hyp_lines: Optional[list] = None   # [{"text": str, "trigger": str|None}, ...] 문장별 확정 트리거
+    sentence_f1: Optional[float] = None
+    sentence_precision: Optional[float] = None
+    sentence_recall: Optional[float] = None
+    ref_format: Optional[str] = None   # "new"(신형식 _speak,sentence_sperate.txt) | "old"(구형식 .txt) | None(정답 없음)
 
 
 @dataclass
@@ -136,6 +140,14 @@ class EvalResult:
     def avg_seg_f1_c(self) -> Optional[float]:
         return self._avg("seg_f1", "C")
 
+    @property
+    def avg_sentence_f1_a(self) -> Optional[float]:
+        return self._avg("sentence_f1", "A")
+
+    @property
+    def avg_sentence_f1_c(self) -> Optional[float]:
+        return self._avg("sentence_f1", "C")
+
 
 def _save_transcript(transcript_dir: Path, file_result: "FileResult", rep: int = 1) -> None:
     """전사 결과를 정답과 나란히 텍스트 파일로 저장한다 (LLM 비교 평가용)."""
@@ -143,6 +155,8 @@ def _save_transcript(transcript_dir: Path, file_result: "FileResult", rep: int =
     filename = f"{audio_name}_{file_result.path}_R{rep}.txt"
     wer_str = f"{file_result.wer * 100:.1f}%" if file_result.wer is not None else "N/A"
     f1_str = f"{file_result.seg_f1 * 100:.1f}%" if file_result.seg_f1 is not None else "N/A"
+    sent_f1_str = f"{file_result.sentence_f1 * 100:.1f}%" if file_result.sentence_f1 is not None else "N/A"
+    ref_format_str = {"new": "신형식", "old": "구형식", None: "정답없음"}.get(file_result.ref_format, "정답없음")
     lines_block = ""
     if file_result.hyp_lines:
         rows = []
@@ -152,8 +166,8 @@ def _save_transcript(transcript_dir: Path, file_result: "FileResult", rep: int =
         lines_block = "\n[문장별 확정 트리거]\n" + "\n".join(rows) + "\n"
     content = (
         f"파일: {file_result.audio_file}\n"
-        f"경로: {file_result.path} | 회차: R{rep}\n"
-        f"WER: {wer_str} | F1: {f1_str}\n"
+        f"경로: {file_result.path} | 회차: R{rep} | 정답형식: {ref_format_str}\n"
+        f"WER: {wer_str} | 화자분리F1: {f1_str} | 문장분리F1: {sent_f1_str}\n"
         f"\n[전사]\n{file_result.transcription}\n"
         f"{lines_block}"
         f"\n[정답]\n{file_result.reference or '(정답 없음)'}\n"
@@ -179,12 +193,47 @@ def _aggregate_runs(runs: list) -> dict:
     return {
         "wer": _stats([r.wer for r in runs]),
         "seg_f1": _stats([r.seg_f1 for r in runs]),
+        "sentence_f1": _stats([r.sentence_f1 for r in runs]),
     }
 
 
 def parse_reference_sentences(ref_text: str) -> list:
     """빈 줄(\\n\\n)로 구분된 블록 = 문장 1개."""
     return [b.strip() for b in re.split(r"\n\s*\n", ref_text) if b.strip()]
+
+
+_SPEAKER_HEADER_RE = re.compile(r"^\[(spk\d+)\]\s*$", re.MULTILINE)
+
+
+def parse_speaker_sentence_reference(ref_text: str) -> Optional[dict]:
+    """신형식(`[spkN]` 헤더 + 문장별 줄바꿈) 정답을 파싱한다.
+
+    `[spkN]` 헤더 줄이 하나도 없으면(구형식이거나 형식 불명) None을 반환한다 —
+    호출부는 이 경우 parse_reference_sentences()로 폴백한다.
+
+    Returns:
+        {
+          "blocks": [{"speaker": str, "sentences": [str, ...]}, ...],  # 문서 순서 보존,
+                                                                         # 같은 화자 id 재등장도 병합하지 않음
+          "plain_text": str,  # 라벨 제거 + 전체 문장 공백 join (WER 정답 텍스트)
+        }
+    """
+    headers = list(_SPEAKER_HEADER_RE.finditer(ref_text))
+    if not headers:
+        return None
+
+    blocks = []
+    all_sentences: list = []
+    for idx, m in enumerate(headers):
+        speaker = m.group(1)
+        start = m.end()
+        end = headers[idx + 1].start() if idx + 1 < len(headers) else len(ref_text)
+        block_text = ref_text[start:end]
+        sentences = [s.strip() for s in re.split(r"\n\s*\n", block_text) if s.strip()]
+        blocks.append({"speaker": speaker, "sentences": sentences})
+        all_sentences.extend(sentences)
+
+    return {"blocks": blocks, "plain_text": " ".join(all_sentences)}
 
 
 def _server_log_path(audio_path: Path, path_type: str, rep: int) -> str:
@@ -267,17 +316,55 @@ def stop_server(proc: subprocess.Popen) -> None:
 
 
 def _build_result(audio_path: Path, transcription: str, hyp_sentences: list, path: str, hyp_lines: Optional[list] = None) -> FileResult:
-    """전사 결과로부터 WER + 문장 분리 F1을 산출해 FileResult를 만든다."""
-    from whisperlivekit.metrics import compute_segmentation, compute_wer
+    """전사 결과로부터 WER + 화자분리 F1 + 문장분리 F1을 산출해 FileResult를 만든다.
+
+    정답은 신형식(`<stem>_speak,sentence_sperate.txt`)을 우선 사용한다 — 존재하고
+    `[spkN]` 헤더로 정상 파싱되면(parse_speaker_sentence_reference가 non-None을 반환하면)
+    화자분리 F1(seg_f1)·문장분리 F1(sentence_f1)을 함께 산출한다. 신형식 파일이 없거나,
+    있어도 헤더가 없어 파싱에 실패하면 구형식(`<stem>.txt`, 빈 줄=경계)으로 완전히 동일하게
+    폴백한다 — 이 경우 문장분리 F1은 산출 불가(None)이며 seg_f1은 구 정의(빈 줄 경계) 그대로다.
+    """
+    from whisperlivekit.metrics import (
+        compute_segmentation,
+        compute_speaker_sentence_segmentation,
+        compute_wer,
+        normalize_text,
+    )
 
     reference = None
     wer = None
-    seg = None
-    ref_path = audio_path.with_suffix(".txt")
-    if ref_path.exists():
-        reference = ref_path.read_text(encoding="utf-8").strip()
+    seg_f1 = seg_precision = seg_recall = None
+    ref_sentences_count = hyp_sentences_count = None
+    sentence_f1 = sentence_precision = sentence_recall = None
+    ref_format = None
+
+    new_ref_path = audio_path.with_name(audio_path.stem + "_speak,sentence_sperate.txt")
+    parsed = None
+    if new_ref_path.exists():
+        parsed = parse_speaker_sentence_reference(new_ref_path.read_text(encoding="utf-8"))
+
+    if parsed is not None:
+        reference = parsed["plain_text"]
         wer = compute_wer(reference, transcription.strip())["wer"]
-        seg = compute_segmentation(parse_reference_sentences(reference), hyp_sentences)
+        two_f1 = compute_speaker_sentence_segmentation(parsed["blocks"], hyp_sentences)
+        speaker, sentence = two_f1["speaker"], two_f1["sentence"]
+        seg_f1, seg_precision, seg_recall = speaker["f1"], speaker["precision"], speaker["recall"]
+        ref_sentences_count = len(parsed["blocks"])
+        hyp_sentences_count = len([s for s in hyp_sentences if normalize_text(s).split()])
+        if sentence is not None:
+            sentence_f1 = sentence["f1"]
+            sentence_precision = sentence["precision"]
+            sentence_recall = sentence["recall"]
+        ref_format = "new"
+    else:
+        ref_path = audio_path.with_suffix(".txt")
+        if ref_path.exists():
+            reference = ref_path.read_text(encoding="utf-8").strip()
+            wer = compute_wer(reference, transcription.strip())["wer"]
+            seg = compute_segmentation(parse_reference_sentences(reference), hyp_sentences)
+            seg_f1, seg_precision, seg_recall = seg["f1"], seg["precision"], seg["recall"]
+            ref_sentences_count, hyp_sentences_count = seg["ref_sentences"], seg["hyp_sentences"]
+            ref_format = "old"
 
     return FileResult(
         audio_file=str(audio_path),
@@ -285,12 +372,16 @@ def _build_result(audio_path: Path, transcription: str, hyp_sentences: list, pat
         reference=reference,
         wer=wer,
         path=path,
-        seg_f1=seg["f1"] if seg else None,
-        seg_precision=seg["precision"] if seg else None,
-        seg_recall=seg["recall"] if seg else None,
-        ref_sentences=seg["ref_sentences"] if seg else None,
-        hyp_sentences=seg["hyp_sentences"] if seg else None,
+        seg_f1=seg_f1,
+        seg_precision=seg_precision,
+        seg_recall=seg_recall,
+        ref_sentences=ref_sentences_count,
+        hyp_sentences=hyp_sentences_count,
         hyp_lines=hyp_lines,
+        sentence_f1=sentence_f1,
+        sentence_precision=sentence_precision,
+        sentence_recall=sentence_recall,
+        ref_format=ref_format,
     )
 
 
@@ -331,6 +422,10 @@ async def eval_path_c(audio_file: Path, base_url: str, wait_sec: int = 120) -> F
     return _build_result(audio_file, transcription, hyp_sentences, "C", hyp_lines=hyp_lines)
 
 
+def _fmt_pct(v: Optional[float]) -> str:
+    return f"{v * 100:.1f}%" if v is not None else "N/A"
+
+
 def print_summary(result: EvalResult, repeat: int = 1, file_summaries: Optional[list] = None) -> None:
     print("\n" + "=" * 60)
     print(f"평가 결과 | {result.timestamp}")
@@ -345,40 +440,45 @@ def print_summary(result: EvalResult, repeat: int = 1, file_summaries: Optional[
             runs = fs["runs"]
             agg = fs["agg"]
             for i, r in enumerate(runs):
-                wer_str = f"{r.wer * 100:.1f}%" if r.wer is not None else "N/A"
-                f1_str = f"{r.seg_f1 * 100:.1f}%" if r.seg_f1 is not None else "N/A"
+                wer_str = _fmt_pct(r.wer)
+                f1_str = _fmt_pct(r.seg_f1)
+                sent_f1_str = _fmt_pct(r.sentence_f1)
                 prefix = f"  [C] {name:20s}" if i == 0 else " " * (6 + 20)
-                print(f"{prefix}  R{i+1}: WER {wer_str:>7s}  F1 {f1_str:>7s}")
+                print(f"{prefix}  R{i+1}: WER {wer_str:>7s}  화자F1 {f1_str:>7s}  문장F1 {sent_f1_str:>7s}")
             # median 줄
             wer_agg = agg["wer"]
             f1_agg = agg["seg_f1"]
+            sent_f1_agg = agg["sentence_f1"]
 
-            def _fmt(v):
-                return f"{v * 100:.1f}%" if v is not None else "N/A"
-
-            med_wer = _fmt(wer_agg["median"])
-            med_f1 = _fmt(f1_agg["median"])
-            min_wer = _fmt(wer_agg["min"])
-            max_wer = _fmt(wer_agg["max"])
-            std_wer = _fmt(wer_agg["stdev"])
+            med_wer = _fmt_pct(wer_agg["median"])
+            med_f1 = _fmt_pct(f1_agg["median"])
+            med_sent_f1 = _fmt_pct(sent_f1_agg["median"])
+            min_wer = _fmt_pct(wer_agg["min"])
+            max_wer = _fmt_pct(wer_agg["max"])
+            std_wer = _fmt_pct(wer_agg["stdev"])
             print(
-                f"{'  ' + ' ' * 26}  median WER: {med_wer:>7s}  F1: {med_f1:>7s}"
+                f"{'  ' + ' ' * 26}  median WER: {med_wer:>7s}  화자F1: {med_f1:>7s}  문장F1: {med_sent_f1:>7s}"
                 f"  [min {min_wer} / max {max_wer} / stdev {std_wer}]"
             )
     else:
         for f in result.files:
-            wer_str = f"{f.wer * 100:.1f}%" if f.wer is not None else "N/A"
-            f1_str = f"{f.seg_f1 * 100:.1f}%" if f.seg_f1 is not None else "N/A"
+            wer_str = _fmt_pct(f.wer)
+            f1_str = _fmt_pct(f.seg_f1)
+            sent_f1_str = _fmt_pct(f.sentence_f1)
             name = Path(f.audio_file).name
-            print(f"  [{f.path}] {name:20s}  WER: {wer_str:>7s}  F1: {f1_str:>7s}")
+            print(f"  [{f.path}] {name:20s}  WER: {wer_str:>7s}  화자F1: {f1_str:>7s}  문장F1: {sent_f1_str:>7s}")
 
     print("-" * 60)
     if result.avg_wer_a is not None:
-        f1a = f"{result.avg_seg_f1_a * 100:.1f}%" if result.avg_seg_f1_a is not None else "N/A"
-        print(f"  경로 A 평균  WER: {result.avg_wer_a * 100:.1f}%  |  문장분리 F1: {f1a}")
+        line = f"  경로 A 평균  WER: {result.avg_wer_a * 100:.1f}%  |  화자분리 F1: {_fmt_pct(result.avg_seg_f1_a)}"
+        if result.avg_sentence_f1_a is not None:
+            line += f"  |  문장분리 F1: {_fmt_pct(result.avg_sentence_f1_a)}"
+        print(line)
     if result.avg_wer_c is not None:
-        f1c = f"{result.avg_seg_f1_c * 100:.1f}%" if result.avg_seg_f1_c is not None else "N/A"
-        print(f"  경로 C 평균  WER: {result.avg_wer_c * 100:.1f}%  |  문장분리 F1: {f1c}")
+        line = f"  경로 C 평균  WER: {result.avg_wer_c * 100:.1f}%  |  화자분리 F1: {_fmt_pct(result.avg_seg_f1_c)}"
+        if result.avg_sentence_f1_c is not None:
+            line += f"  |  문장분리 F1: {_fmt_pct(result.avg_sentence_f1_c)}"
+        print(line)
     print("=" * 60)
 
 
@@ -641,16 +741,22 @@ def main() -> None:
                 "repeat": args.repeat,
                 "wer": agg["wer"],
                 "seg_f1": agg["seg_f1"],
+                "sentence_f1": agg["sentence_f1"],
             })
 
     # median 기반 경로 C 평균 (repeat > 1일 때)
     avg_wer_c_median = None
     avg_seg_f1_c_median = None
+    avg_sentence_f1_c_median = None
     if args.repeat > 1 and file_summaries:
         wer_medians = [fs["agg"]["wer"]["median"] for fs in file_summaries if fs["agg"]["wer"]["median"] is not None]
         f1_medians = [fs["agg"]["seg_f1"]["median"] for fs in file_summaries if fs["agg"]["seg_f1"]["median"] is not None]
+        sent_f1_medians = [
+            fs["agg"]["sentence_f1"]["median"] for fs in file_summaries if fs["agg"]["sentence_f1"]["median"] is not None
+        ]
         avg_wer_c_median = sum(wer_medians) / len(wer_medians) if wer_medians else None
         avg_seg_f1_c_median = sum(f1_medians) / len(f1_medians) if f1_medians else None
+        avg_sentence_f1_c_median = sum(sent_f1_medians) / len(sent_f1_medians) if sent_f1_medians else None
 
     output_data: dict = {
         "timestamp": result.timestamp,
@@ -662,12 +768,15 @@ def main() -> None:
         "avg_wer_c": result.avg_wer_c,
         "avg_seg_f1_a": result.avg_seg_f1_a,
         "avg_seg_f1_c": result.avg_seg_f1_c,
+        "avg_sentence_f1_a": result.avg_sentence_f1_a,
+        "avg_sentence_f1_c": result.avg_sentence_f1_c,
         "files": [asdict(f) for f in result.files],
     }
     if args.repeat > 1:
         output_data["file_summaries"] = json_file_summaries
         output_data["avg_wer_c_median"] = avg_wer_c_median
         output_data["avg_seg_f1_c_median"] = avg_seg_f1_c_median
+        output_data["avg_sentence_f1_c_median"] = avg_sentence_f1_c_median
 
     if args.output:
         args.output.parent.mkdir(parents=True, exist_ok=True)

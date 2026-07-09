@@ -1,7 +1,7 @@
 # /eval — 경로 C 성능 평가 (실제 파이프라인 기준)
 
 기능 수정 후 경로 C(VBCable 루프백)로 실제 오디오 파이프라인 전체를 통과한 성능을 측정한다.
-**WER(전사 정확도) + 화자분리 F1 + 문장분리 F1**를 출력한다. 개선·채택 우선순위 = **화자분리 F1 > WER > 문장분리 F1** (요구사항 정본 [docs/TRANSCRIPTION_REQUIREMENTS.md](../../docs/TRANSCRIPTION_REQUIREMENTS.md)). *현재 코드는 단일 `seg_f1`만 산출 — 2지표(화자분리/문장분리) 분리는 구현 후속.*
+**WER(전사 정확도) + 화자분리 F1 + 문장분리 F1**를 출력한다. 개선·채택 우선순위 = **화자분리 F1 > WER > 문장분리 F1** (요구사항 정본 [docs/TRANSCRIPTION_REQUIREMENTS.md](../../docs/TRANSCRIPTION_REQUIREMENTS.md)). *2지표(화자분리/문장분리) 분리 구현 완료 — 신형식 정답(`<name>_speak,sentence_sperate.txt`) 존재 시 `seg_f1`=화자분리 F1, `sentence_f1`=문장분리 F1(모든 블록이 단일 문장이면 `None`)로 함께 산출된다. 아직 이 regime v2 기준 경로 C 베이스라인 실측 전이다.*
 서버 기동/종료와 VBCable 장치 설정/복원은 스크립트가 자동으로 처리한다.
 **테스트(채택/기각) 세트 = `bong1.wav` + `ytn2.mp3` + `sbs1.mp3`** (화자분할 ON; ytn2·bong1 공동 최우선). 측정은 **2계층**: ① 평소 스크리닝 = `--repeat 1`(방향 신호), ② master 채택 직전 확정 = `--repeat 3`(median+분산 판단). **held-out 정량 = `ytn1.mp3` + `eng1.mp3`** (채택 후보에 한해 **단회** diar-ON) + **held-out 정성 sanity = `kinno.mp3`**(2화자; 정답 텍스트 부정확 → **WER/F1 게이팅 제외**, 대규모 누락/환각·거친 화자/문장 분리만 정성 확인). `eval.py`의 기본 `--files`는 코드 상 여전히 sbs1/ytn1/eng1이므로 **루틴은 `--files` 명시 필수**.
 
@@ -130,7 +130,11 @@ eval.py 완료 후 `.omc/transcripts/`에 저장된 `{파일명}_{경로}_R{회�
 | 낮음(Recall↓) | 동일 화자 문장 미분리 — **허용**(Case A, 감점 아님) |
 | 낮음(Precision↓) | 과분할 — **Case B(단어중간)면 hard-fail**, 아니면 후순위 |
 
-> 구현 현황: 2지표 분리 metric은 **미구현**(현재 코드는 단일 `seg_f1`만 산출, 정답=구 `<name>.txt` 빈 줄 경계 = 구 regime). 신형식 파서·2지표 산출 계획은 [docs/TRANSCRIPTION_REQUIREMENTS.md](../../docs/TRANSCRIPTION_REQUIREMENTS.md) §5 참조. 그 전까지 `seg_f1`은 화자분리 F1의 **근사**로만 해석한다.
+> 구현 현황: 2지표 분리 metric **구현 완료**. `scripts/eval.py`가 신형식 정답(`<name>_speak,sentence_sperate.txt`)을
+> 우선 읽어 `seg_f1`=화자분리 F1·`sentence_f1`=문장분리 F1을 각각 산출한다(신형식 파일이 없거나 `[spkN]` 헤더
+> 파싱에 실패하면 구 `<name>.txt`·빈 줄 경계=구 regime으로 폴백 — 이 경우 `sentence_f1`은 `None`).
+> 상세는 [docs/TRANSCRIPTION_REQUIREMENTS.md](../../docs/TRANSCRIPTION_REQUIREMENTS.md) §5 참조. 경로 C 화자 id
+> 배선(§5 step 4, 귀속 정확도)은 아직 미구현이며, regime v2 기준 신 베이스라인 실측도 다음 세션 과제다.
 
 ## VBCable 자동 설정
 

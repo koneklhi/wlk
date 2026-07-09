@@ -142,6 +142,86 @@ def _align_words(ref_words: List[str], hyp_words: List[str]) -> List[int]:
     return hyp_to_ref
 
 
+def _flatten_sentences(sentences: List[str]):
+    """문장 리스트를 단어 스트림 + 문장 경계 위치 리스트로 펼친다.
+
+    각 문장 끝을 경계로 기록하되, 텍스트 전체의 끝(마지막 문장 뒤)은 경계가 아니므로 제외한다.
+    """
+    words: List[str] = []
+    bounds: List[int] = []
+    for s in sentences:
+        w = normalize_text(s).split()
+        if not w:
+            continue
+        words.extend(w)
+        bounds.append(len(words))
+    bounds = bounds[:-1]  # 텍스트 끝은 경계가 아님
+    return words, bounds
+
+
+def _match_boundaries(projected: List[int], ref_bounds: List[int], tolerance: int) -> set:
+    """투영된 가설 경계를 정답 경계에 그리디(첫 매치 우선)로 매칭한다.
+
+    Args:
+        projected: 가설 경계들을 정답 단어 공간에 투영한 위치 리스트(``projected[j]`` = hyp_bounds[j]의 투영).
+        ref_bounds: 정답 경계 위치 리스트.
+        tolerance: 매칭 허용 오차(단어 수).
+
+    Returns:
+        매칭에 성공한 가설 경계의 인덱스 집합(``projected``/``hyp_bounds`` 기준 인덱스).
+    """
+    used_ref = [False] * len(ref_bounds)
+    matched_hyp_indices: set = set()
+    for hi, p in enumerate(projected):
+        for k, rb in enumerate(ref_bounds):
+            if not used_ref[k] and abs(rb - p) <= tolerance:
+                used_ref[k] = True
+                matched_hyp_indices.add(hi)
+                break
+    return matched_hyp_indices
+
+
+def _boundary_prf(matched: int, n_ref: int, n_hyp: int):
+    """매칭 개수 + 정답/가설 경계 개수로부터 (precision, recall, f1)을 계산한다."""
+    if not n_ref and not n_hyp:
+        return 1.0, 1.0, 1.0
+    precision = matched / n_hyp if n_hyp else 0.0
+    recall = matched / n_ref if n_ref else 0.0
+    f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0.0
+    return precision, recall, f1
+
+
+def _flatten_blocks(blocks: List[dict]):
+    """화자 블록 리스트를 단어 스트림 + (화자경계 위치 리스트, 문장경계 위치 리스트)로 펼친다.
+
+    화자경계 = 블록의 마지막 문장 뒤(다음 블록으로의 전환 지점) — 블록 "전환 횟수" 기준이라
+    같은 화자 id가 비인접 재등장해도 매번 별도 경계로 센다. 문장경계 = 같은 블록 내부의
+    문장-문장 사이. 텍스트 전체의 끝(마지막 블록의 마지막 문장 뒤)은 경계가 아니므로 제외한다.
+
+    Args:
+        blocks: ``[{"speaker": str, "sentences": [str, ...]}, ...]`` (문서 순서).
+
+    Returns:
+        (words, speaker_bounds, sentence_bounds) 튜플.
+    """
+    words: List[str] = []
+    tagged: List[tuple] = []  # (word 위치, "speaker" | "sentence")
+    for block in blocks:
+        sentences = block.get("sentences", [])
+        n_sent = len(sentences)
+        for si, s in enumerate(sentences):
+            w = normalize_text(s).split()
+            if not w:
+                continue
+            words.extend(w)
+            category = "speaker" if si == n_sent - 1 else "sentence"
+            tagged.append((len(words), category))
+    tagged = tagged[:-1]  # 텍스트 끝은 경계가 아님(마지막 기록은 항상 "speaker" 카테고리였을 것)
+    speaker_bounds = [p for p, c in tagged if c == "speaker"]
+    sentence_bounds = [p for p, c in tagged if c == "sentence"]
+    return words, speaker_bounds, sentence_bounds
+
+
 def compute_segmentation(
     ref_sentences: List[str],
     hyp_sentences: List[str],
@@ -160,39 +240,15 @@ def compute_segmentation(
     Returns:
         Dict with keys: f1, precision, recall, ref_sentences, hyp_sentences, matched_boundaries.
     """
-    def _flatten(sentences: List[str]):
-        words: List[str] = []
-        bounds: List[int] = []
-        for s in sentences:
-            w = normalize_text(s).split()
-            if not w:
-                continue
-            words.extend(w)
-            bounds.append(len(words))
-        bounds = bounds[:-1]  # 텍스트 끝은 경계가 아님
-        return words, bounds
-
-    ref_words, ref_bounds = _flatten(ref_sentences)
-    hyp_words, hyp_bounds = _flatten(hyp_sentences)
+    ref_words, ref_bounds = _flatten_sentences(ref_sentences)
+    hyp_words, hyp_bounds = _flatten_sentences(hyp_sentences)
 
     hyp_to_ref = _align_words(ref_words, hyp_words)
     projected = [hyp_to_ref[b] for b in hyp_bounds]
 
-    used = [False] * len(ref_bounds)
-    matched = 0
-    for p in projected:
-        for k, rb in enumerate(ref_bounds):
-            if not used[k] and abs(rb - p) <= tolerance:
-                used[k] = True
-                matched += 1
-                break
-
-    if not ref_bounds and not hyp_bounds:
-        precision = recall = f1 = 1.0
-    else:
-        precision = matched / len(hyp_bounds) if hyp_bounds else 0.0
-        recall = matched / len(ref_bounds) if ref_bounds else 0.0
-        f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0.0
+    matched_idx = _match_boundaries(projected, ref_bounds, tolerance)
+    matched = len(matched_idx)
+    precision, recall, f1 = _boundary_prf(matched, len(ref_bounds), len(hyp_bounds))
 
     return {
         "f1": f1,
@@ -202,6 +258,81 @@ def compute_segmentation(
         "hyp_sentences": len([s for s in hyp_sentences if normalize_text(s).split()]),
         "matched_boundaries": matched,
     }
+
+
+def compute_speaker_sentence_segmentation(
+    blocks: List[dict],
+    hyp_sentences: List[str],
+    tolerance: int = 1,
+) -> Dict:
+    """화자분리 F1(1순위)·문장분리 F1(3순위)을 하나의 공유 정렬로 동시에 산출한다.
+
+    blocks(화자 턴 헤더 + 문장별 줄바꿈 신형식 정답을 파싱한 결과)를 단어 스트림으로 펼쳐
+    화자경계·문장경계 두 집합을 얻고, hyp_sentences도 한 번만 펼쳐 정답 단어 공간에 정렬한다.
+    이 "공유 정렬"을 두 경계 집합에 각각 매칭해 독립적인 precision/recall/f1을 낸다.
+
+    precision 분모(=이 지표의 "가설 경계 수")는 전체 hyp 경계 수가 아니라, 그 경계가
+    반대쪽 경계 유형에도 매칭되지 않은("설명되지 않은") 경계만 포함한다 — 화자경계에 붙어야 할
+    hyp 분리가 문장경계에도 우연히 걸쳐 있다고 화자 precision을 깎지 않기 위함이다(반대도 동일).
+    즉 한쪽 경계로 "설명되는" over-split은 그 자체로는 나쁜 것이 아니고(문장 내부 분리는
+    nice-to-have), 이유가 아예 없는(어느 경계에도 안 걸리는) over-split만 두 지표 모두의
+    precision을 깎는다. 이렇게 해야 두 지표가 서로 독립적으로 "제 역할"만 평가한다.
+
+    Args:
+        blocks: parse_speaker_sentence_reference()가 반환한 "blocks" 리스트,
+            즉 ``[{"speaker": str, "sentences": [str, ...]}, ...]``.
+        hyp_sentences: STT가 확정한 줄(문장) 리스트. compute_segmentation의 hyp_sentences와 동일 형태.
+        tolerance: 경계 매칭 허용 오차(단어 수).
+
+    Returns:
+        {
+          "speaker": {"f1": float, "precision": float, "recall": float,
+                      "matched_boundaries": int, "ref_boundaries": int, "hyp_boundaries": int},
+          "sentence": (동일 형태) 또는 None — 정답의 블록 내부 문장경계가 0개(모든 블록이
+                      단일 문장, 예 ytn2)이면 문장분리 F1은 해당 없음이므로 None을 반환한다
+                      (0.0이 아님 — 0.0은 "측정했는데 다 틀림"이라는 뜻이 되어 버려 오독을 유발한다).
+        }
+    """
+    ref_words, speaker_bounds, sentence_bounds = _flatten_blocks(blocks)
+    hyp_words, hyp_bounds = _flatten_sentences(hyp_sentences)
+
+    hyp_to_ref = _align_words(ref_words, hyp_words)
+    projected = [hyp_to_ref[b] for b in hyp_bounds]
+
+    speaker_matched_idx = _match_boundaries(projected, speaker_bounds, tolerance)
+    sentence_matched_idx = _match_boundaries(projected, sentence_bounds, tolerance)
+    n_hyp = len(hyp_bounds)
+    unexplained = set(range(n_hyp)) - speaker_matched_idx - sentence_matched_idx
+
+    speaker_matched = len(speaker_matched_idx)
+    speaker_hyp_boundaries = speaker_matched + len(unexplained)
+    sp_precision, sp_recall, sp_f1 = _boundary_prf(speaker_matched, len(speaker_bounds), speaker_hyp_boundaries)
+    speaker_result = {
+        "f1": sp_f1,
+        "precision": sp_precision,
+        "recall": sp_recall,
+        "matched_boundaries": speaker_matched,
+        "ref_boundaries": len(speaker_bounds),
+        "hyp_boundaries": speaker_hyp_boundaries,
+    }
+
+    sentence_result = None
+    if sentence_bounds:
+        sentence_matched = len(sentence_matched_idx)
+        sentence_hyp_boundaries = sentence_matched + len(unexplained)
+        se_precision, se_recall, se_f1 = _boundary_prf(
+            sentence_matched, len(sentence_bounds), sentence_hyp_boundaries
+        )
+        sentence_result = {
+            "f1": se_f1,
+            "precision": se_precision,
+            "recall": se_recall,
+            "matched_boundaries": sentence_matched,
+            "ref_boundaries": len(sentence_bounds),
+            "hyp_boundaries": sentence_hyp_boundaries,
+        }
+
+    return {"speaker": speaker_result, "sentence": sentence_result}
 
 
 def compute_timestamp_accuracy(
