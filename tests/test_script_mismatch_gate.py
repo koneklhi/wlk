@@ -103,11 +103,14 @@ def test_unsupported_language_not_flagged():
 # 누적이 실제로 동작하는지 검증한다.
 
 class _FakeToken:
-    """process_iter가 요구하는 최소 토큰 인터페이스: .text / .detected_language."""
+    """process_iter가 요구하는 최소 토큰 인터페이스: .text / .detected_language
+    (+ 스크립트-앵커 재감지 게이트가 읽는 .start/.end — span=0이라 T초 문턱 미발동)."""
 
-    def __init__(self, text, detected_language="en"):
+    def __init__(self, text, detected_language="en", start=0.0, end=0.0):
         self.text = text
         self.detected_language = detected_language
+        self.start = start
+        self.end = end
 
 
 def _make_processor(detected_language="ko", lang_before_reset=None):
@@ -123,6 +126,9 @@ def _make_processor(detected_language="ko", lang_before_reset=None):
     proc._recent_emitted_words = []
     proc._script_mismatch_streak = []
     proc._anchor_repeat_window = []
+    proc._script_anchor_streak = []
+    proc._script_anchor_streak_start = None
+    proc._script_anchor_streak_end = None
 
     model = MagicMock()
     model.cfg.language = "auto"
@@ -131,6 +137,9 @@ def _make_processor(detected_language="ko", lang_before_reset=None):
     model.state.lang_before_reset = lang_before_reset
     model.state.first_timestamp = 1.0
     model.state.pending_language_switch = None
+    # 스크립트-앵커 재감지 게이트는 기본 불확신(None)으로 스텁 — 이 파일은
+    # ScriptMismatchFilter 자체를 검증하므로 재감지 전환이 개입하지 않게 한다.
+    model.detect_current_language = MagicMock(return_value=None)
     proc.model = model
     return proc
 
@@ -214,9 +223,16 @@ def test_process_iter_symmetric_korean_filler_dropped_when_detected_en():
 
 def test_process_iter_preserves_normal_codeswitch_sentence():
     """(c, 가장 중요) 반복 없는 정상 전체-영어 문장은 2단어씩 여러 배치로 나뉘어도,
-    detected_language='ko' 상태에서 단 한 배치도 드롭되면 안 된다."""
+    detected_language='ko' 상태에서 단 한 배치도 드롭되면 안 된다.
+
+    스크립트-앵커 재감지 게이트(test_script_anchor_redetect.py) 도입 후 이 시나리오는
+    지속 반전으로 재감지 대상이 된다 — 재감지가 en을 "확신"하면 전환+배치 드롭(재디코딩
+    복구)이 새 정상 동작이므로, 이 테스트는 재감지를 불확신(None)으로 스텁해 본래
+    목적(ScriptMismatchFilter의 TTR 오탐 방지)만 검증한다.
+    """
     proc = _make_processor(detected_language="ko", lang_before_reset=None)
     proc.model.refresh_segment = MagicMock()
+    proc.model.detect_current_language = MagicMock(return_value=None)
 
     batches = _chunked(_NORMAL_SENTENCE_WORDS, 2)
     results = _run_batches(proc, batches, detected_language="en")
