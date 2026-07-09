@@ -78,7 +78,12 @@
   2. 주기 재감지 `_maybe_periodic_lang_check` — `align_att_base.py:239-256` (간격 `periodic_lang_check_secs` = **기본 None=비활성**; 재감지창 2.0s·min_prob 0.90; 최소 재전환 간격 3.0s).
   3. 짧은 침묵 언어 리셋 `_check_short_silence_language` — `backend.py:258-271` (침묵 `≥ MIN_DURATION_SHORT_LANG_RESET`, lang==auto, detected_language 존재; 재감지창 1.5s·min_prob 0.90).
   4. 화자전환 eager 감지 `new_speaker` — `backend.py:282-326` (window 1.5s·min_prob 0.85, 경계 이후 오디오만).
-  5. 간접 재-arm(다음 infer가 전환을 재확인하도록 `detected_language=None`+`eager` 무장):
+  5. **스크립트-앵커 재감지(Exp-175~)** `_apply_script_anchor_redetect` — `backend.py:576-618`
+     (방출 토큰 스크립트가 잠긴 언어와 연속 N=3단어 또는 T=1.0s 반전 유지 시 재감지 창 2.0s·min_prob 0.90;
+     다른 언어 확신 시에만 호출 + 해당 배치 드롭(재디코딩 복구), 같은 언어 재확정 시 no-op(Exp-169),
+     불확신(None) 시 streak 유지 재시도. 1~4 트리거가 전부 미발동하는 무음·화자전환 없는 연속 코드스위칭
+     구멍을 메움 — Exp-172 실측 근거. 롤백: `SCRIPT_ANCHOR_REDETECT_ENABLED=False`).
+  6. 간접 재-arm(다음 infer가 전환을 재확인하도록 `detected_language=None`+`eager` 무장):
      long-silence(≥2.0s) 리셋 `backend.py:234-250`, ForeignLang("(speaking in foreign language)") `backend.py:484-495`, ScriptMismatch 드롭 `backend.py:508-522`.
 - **파라미터**:
   - `LANG_SWITCH_KEEP_SECS = 2.5`초 (전환 시 유지 오디오: 감지창 2.0s+완충 0.5s) — `align_att_base.py:13`.
@@ -193,8 +198,12 @@ Whisper가 찍는 마침표(`.`/`。`)를 문장 분할 신호로 쓰되, **진�
 | `KO_EXCLUDE_SUFFIXES` | 니까/으로/는데/다는… | `sentence_boundary.py` | 연결어미·조사 차단(오탐 방어) |
 | `EN_ABBREV` | mr/us/un/etc… + 단일대문자 | `sentence_boundary.py` | 영어 약어 배제(온점 형태소 분할, §3.5) |
 | 언어감지 문턱 | 일반 `2.0`s / eager `1.5`s+p≥0.85 | `align_att_base.py:225-235` | 전환 arm 조건 |
-| `RETRACT_EPS`(Exp-171~, **잠정**) | `0.05`s | `tokens_alignment.py` | 철회 구역1/구역2 경계 지터 여유 — Stage 0 실측 후 보정 예정 |
-| 철회 스캔 하한(Exp-171~, **잠정**) | `boundary_t - LANG_SWITCH_KEEP_SECS - 1.0`s | `tokens_alignment.py:_retract_stale_language_tokens` | 역방향 스캔이 더 이상 소급하지 않는 절대시각 — Stage 0 실측 후 보정 예정 |
+| `RETRACT_EPS`(Exp-171~, **잠정**) | `0.05`s | `tokens_alignment.py` | 철회 구역1/구역2 경계 지터 여유 — 추가 실측 후 보정 여지 |
+| 철회 스캔 하한(Exp-174 정정) | `retract_floor`(재디코딩 창 시작) 우선, `None`이면 `boundary_t - LANG_SWITCH_KEEP_SECS - 1.0`s 폴백 | `tokens_alignment.py:_retract_stale_language_tokens` | 역방향 스캔 하한 — 재디코딩 불가능한 서두 토큰 철회 방지 |
+| `SCRIPT_ANCHOR_REDETECT_ENABLED`(Exp-175~) | `True` | `backend.py:184` | 스크립트-앵커 재감지 게이트 롤백 플래그 |
+| `_SCRIPT_ANCHOR_N_WORDS`(Exp-175~, **잠정**) | `3`단어 | `backend.py:185` | 반대-스크립트 연속 단어 문턱(Exp-172 실측; N=2 오트리거·N=4 미발동 스윕 확인) |
+| `_SCRIPT_ANCHOR_T_SECS`(Exp-175~, **잠정**) | `1.0`s | `backend.py:186` | 반전 지속 시간 문턱(Exp-172 실측) |
+| 스크립트-앵커 재감지 창(Exp-175~, **잠정**) | `2.0`s·p≥`0.90` | `backend.py:187-188` | 트리거 시 `detect_current_language` 창·확신 문턱 |
 | `_NEW_SPEAKER_KEEP_MARGIN`(Exp-171~) | `0.3`s | `backend.py:48` | 화자전환 경계-앵커 유지 여유(damage B 수정) |
 | `_NEW_SPEAKER_MAX_KEEP`(Exp-171~) | `5.0`s | `backend.py:49` | 화자전환 유지 오디오 상한(과거 keep=4.5 환각 전례 반영) |
 

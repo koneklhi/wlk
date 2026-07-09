@@ -2588,3 +2588,336 @@ held-out(N=1, JSON `.omc/transcripts/ytn1_C_R1.txt`·`eng1_C_R1.txt`): ytn1 **15
 - **ytn2 "한국군 사" 중복** 등 잔존 경미 이슈는 별도 실험으로 축적 후 판단.
 
 **JSON**: `.omc/benchmarks/boundary_retract_adoption_N3.json`(확정 N=3, 위 표 출처) · `.omc/transcripts/ytn1_C_R1.txt`·`eng1_C_R1.txt`(held-out).
+
+---
+
+## Exp-172 — Stage 0 계측: 코드스위칭 경계 3증상 재현·유실 경로 귀속 (GOAL_CODESWITCH_BOUNDARY, 코드 무변경)
+
+**날짜**: 2026-07-08 · **Epoch**: E5 (master `2b6a498`, 코드 무변경 계측 전용) · **브랜치**: master (main cwd)
+
+### 가설 (계측 목적)
+
+Exp-171 채택 후에도 실사용에서 잔존하는 3증상 — ① 코드스위칭 서두 유실 ② 한↔영 경계 없이 접착 ③ 문장 중간부 단어 유실 — 에 대해, ①②의 미발동 조건(무음·화자전환 없는 연속 코드스위칭에서 재감지 트리거 4종 전부 미발동)을 실측 포착하고, ③의 범인 경로를 `[TokenTrace] infer→` vs `emit→` diff + 드롭 태그 조인으로 특정한다. Stage 1(스크립트-앵커 재감지)의 N단어/T초 임계값 실측 근거 확보가 부수 목표.
+
+### 변경 내용
+
+**코드 무변경.** 분석 파서만 스크래치패드에 작성(`stage0_log_analysis.py` — 저장소 밖). 로그 사실 발견: 서버 로그 포맷은 `LEVEL:logger:msg`(타임스탬프 없음) — 구간 지속시간은 배치수×평균 배치주기(오디오길이/총배치수, 0.44~0.53s/배치)로 추정.
+
+### 테스트 설정
+
+경로 C, diar-ON(Sortformer), CRT=3.0, PLC=None, beams=2, turbo, `--trace-tokens --repeat 1`(스크리닝). provenance `vbcable=ok` 확인(RMS 0.154).
+
+### 정량 결과 (스크리닝 N=1 — 방향 신호)
+
+| 파일 | WER | F1 | baseline median (Exp-161) | 게이트(max) |
+|------|-----|----|--------------------------|-------------|
+| bong1 | 32.9% | 52.4% | 30.5% | ≤30.5 (초과, 단 N=1 방향신호·Exp-171 확정시 R2=43.5 이상치 전례) |
+| ytn2 | 16.7% | 75.0% | 28.1% | ≤34.5 ✓ (좋은 회차) |
+| sbs1 | 14.3% | 21.1% | 14.9% | ≤16.1 ✓ |
+
+catastrophic 없음, 하니스 정상. 코드 무변경이므로 채택/기각 판정 비대상.
+
+### 산출물 (a) — ①② 후보 구간 목록
+
+| 파일 | 구간 | locked | 반대스크립트 방출 | 지속 | 종결 | 최종 결과 |
+|------|------|--------|------------------|------|------|----------|
+| bong1 | ~12s | ko | "The thought that" 3단어/2배치 | ~1.0s | ko→en 전환(침묵 트리거) | [Retract] 철회 후 재디코딩 **복구 성공** |
+| bong1 | ~69s | ko | "You don 't understand" 4단어/2배치 | ~1.0s | ko→en 전환 | [Retract] 철회(76.2~76.6s) 후 재디코딩이 "Everyone here"부터 시작 — **4단어 완전 유실(① 확정 사례)** |
+| ytn2 | — | — | 미재현 (이번 회차 전환 9건 전부 마커 정상 방출, WER 16.7% 양호 회차) | — | — | — |
+| sbs1 | — | — | 해당 구간 없음(전환 2건 정상) | — | — | — |
+
+- **N·T 실측**: 후보 2건 모두 반대 스크립트 streak **3~4단어·2배치·약 1.0초** 시점에 기존 트리거(침묵)가 뒤늦게 발동. 즉 이번 회차의 지연은 1초 내외였으나 그 사이 방출분이 철회로 유실됨 → Stage 1 임계 후보 N=3단어 또는 T≈1.0s.
+- **①′ 신유형 (스크립트-앵커 사각지대)**: bong1 정답 `"아니 그 플라스틱 말랑말랑한 것도 만들었죠"`(ko) → 전사 `"plus. plastic, sorry, malang on a lot..."` — locked=en 고착 중 한국어 발화가 **영어 음차로 환각 디코딩**되어 출력 스크립트 반전이 아예 발생하지 않음. Stage 1 설계(방출 스크립트 반전 트리거)로는 **원리적으로 포착 불가**한 케이스 실측.
+
+### 산출물 (b) — ③ 경로별 유실 기여도
+
+배치 diff(infer→ vs emit→) + 태그 조인 + 정답 대조 라벨링:
+
+| 경로 | bong1 | ytn2 | sbs1 | 정당 콘텐츠 유실 여부 |
+|------|-------|------|------|---------------------|
+| **[QualityGate] logprob<-2.0 억제** (infer 내부, 트레이스 불가시) | 46건 | 33건 | 17건 | **있음 — ytn2 "verified" 유실 확정**(정답 "fully verified denuclearization"→전사 "fully denuclearization"), bong1 "who/생각을/plus/a lot/for/네·예"(일부 재디코딩 복구, 일부 유실). 대부분(~75%)은 구두점·대시·필러·웃음의 정당 억제 |
+| **[Retract] 하류 철회** (Exp-171 메커니즘) | 7건 | 0 | 0 | **있음 — bong1 "You don't understand" 4단어 유실 확정**(위 ① 사례). 철회 자체는 전부 언어전환 경계의 정당 서두였고 복구가 확률적(2건 중 1건 실패) |
+| **무태그·미재방출** (세션 초입 언어미확정 buffer) | 9 | 2 | 2 | 있음 — bong1 "Song"(호칭) 유실, sbs1 정답 서두 "현지 시간 5일 미국 육군 전쟁 대학" 통유실, ytn2 "Yeah". 3파일 공통으로 **세션 초입에 집중** |
+| **held/UTF-8 재조립 손상** | Hold12/Prep13 | Hold15/Prep15/**Drop2** | Hold29/Prep29 | 있음(sbs1) — 디코더 컨텍스트에 "방어선이라는 겁니다"·"지상 플랫..." **산출 확인**됐으나 방출은 "방 겁니다"로 손상, "플랫폼이라고" 유실. 컨텍스트에 mojibake(`방어�어�이라는어�`) 잔존 — UTF-8 held 재조립 경로 연루 정황 |
+| [AnchorRepeatFilter] | 4단어 | 0 | 0 | 없음(반복 storm 정당 드롭) |
+| [CrossBatchFilter] | 2 | 0 | 0 | 없음("malang"·"하하" 정당) |
+| [HallucinationFilter]/[BatchRepeatFilter]/[DashFilter] | 3 | 1 | 1 | 없음 |
+| [Loop Detection]/[rewind] | 0 | 2(rewind) | 0 | 미상(빈도 낮음) |
+
+### 산출물 (c) — 최다 기여 경로 지목
+
+**정당 콘텐츠 유실의 2대 경로 = ⑴ [QualityGate] logprob 억제(문장 중간부 — 증상 ③의 주범) + ⑵ [Retract] 언어전환 경계 철회 후 재디코딩 미복구(서두 — 증상 ①의 주범)**. 보조 경로 = ⑶ 세션 초입 언어미확정 buffer 유실(3파일 공통), ⑷ held/UTF-8 재조립 손상(sbs1 실측). goal 문서 §1-③ 우선순위 후보였던 CrossBatchFilter·AnchorRepeatFilter는 이번 실측에서 정당 콘텐츠 유실 기여 **미미**(전부 정당 드롭). QualityGate는 "기본 None(비활성)일 가능성 — 로그 유무로 우선 배제" 가정과 달리 **활성**(logprob 임계 -2.0)이며 최다 기여로 반전.
+
+### 분석 (전사 내용 정성 대조)
+
+**bong1** (R1 32.9%):
+- **단어 유실·잘림(①)**: 전사 `"Everyone here Everyone here, ..."` / 정답 `"You don't understand. Everyone here, ..."` — 서두 4단어가 [Retract]@76.2~76.6s로 철회 후 미복구.
+- **코드스위칭 실패(①′)**: 전사 `"plastic, sorry, malang on a lot"` / 정답 `"플라스틱 말랑말랑한 것도 만들었죠"` — locked=en 중 한국어가 영어 음차로 환각.
+- **환각·웃음**: `"하하하 아틀렘이가"`(웃음 구간, 기존 실패모드), `"So So"` 중복. 세션 서두 `"Song,"`(호칭) 유실.
+
+**ytn2** (R1 16.7%):
+- **단어 유실(③)**: 전사 `"final fully denuclearization"` / 정답 `"final, fully verified denuclearization"` — "verified"가 [QualityGate] logprob -2.052 억제로 유실.
+- 코드스위칭 경계 9건 전부 정상 분리(이번 회차 ①② 미재현). 어절 중복 `"우 중에서는 우선 왕성한 연 왕성한 연합"` 경미 잔존.
+
+**sbs1** (R1 14.3%):
+- **단어 유실(③)**: 전사 `"거대한 방 겁니다"` / 정답 `"거대한 방어선이라는 겁니다"` + `"지상 정의했습니다"` / 정답 `"지상 플랫폼이라고 정의했습니다"` — 디코더 컨텍스트에는 산출됐으나 방출 손상(held/UTF-8 정황).
+- **세션 서두 유실**: 정답 `"현지 시간 5일 미국 육군 전쟁 대학 강연에 나선"` → 전사 `"강연에 나선"`부터 시작.
+
+**총평**: 증상 ①=[Retract] 철회 후 재디코딩 미복구(확률적), 증상 ③=[QualityGate] 억제 + held/UTF-8 손상 + 세션초입 buffer로 경로 분담이 확정됨. 증상 ②(접착)는 이번 회차 미재현 — 전환 트리거(침묵)가 전부 1초 내 발동한 양호 회차.
+
+### 결론
+
+**계측 완료 (채택/기각 비대상)** — goal 문서 Stage 0 완료 기준 충족: (a) ①② 후보 구간 bong1 2건 실측(ytn2 미재현 사실 보고 포함), (b) 3파일 경로별 귀속 표, (c) 최다 기여 경로 지목(QualityGate + Retract). **③ 범인 특정됨 → Stage 2 착수 가능 상태**(단 Stage 1 채택 후 재계측 우선, 문서 §1 의존관계).
+
+### 다음 가설 (Stage 1 착수 시 — 사용자 상의 후)
+
+- **Stage 1 (스크립트-앵커 재감지)**: 실측 N=3단어/T≈1.0s 근거 확보. 단 이번 회차는 기존 침묵 트리거가 ~1s 지연으로 발동했으므로, Stage 1의 실효는 "침묵이 아예 없는" 연속 발화(ytn2 무휴지 유형, 이번 회차 미재현)에서 발현될 것. **①′ 음차 환각 유형은 Stage 1로 포착 불가** — 별도 신호 필요(사용자 상의 항목).
+- **Stage 2 후보 재정렬**: 우선순위 1=QualityGate 정당단어 오억제(임계 -2.0 캘리브레이션 또는 단어수/스크립트 조건), 2=Retract 철회분 재디코딩 복구 보장(트림 잔여 오디오 창 검증), 3=세션초입 buffer 유실, 4=held/UTF-8 재조립 손상. CrossBatch/AnchorRepeat은 후순위로 강등.
+
+**로그**: `.omc/server_logs/server_{bong1,ytn2,sbs1}_C_R1_20260708_15*.log`(TokenTrace DEBUG 포함) · **JSON**: `.omc/benchmarks/eval_20260708_1522_stage0_trace.json` · 파서: 스크래치패드 `stage0_log_analysis.py`(저장소 밖)
+
+---
+
+## Exp-173
+
+**날짜**: 2026-07-08
+**Epoch**: E5 (turbo, 파라미터 변경 — epoch bump 아님)
+
+### 가설
+
+사용자가 sbs1 전사에서 "올렸." / "습니다."처럼 한 단어(용언 어간+종결어미)가 침묵 세그먼트를 사이에 두고 두 줄로 쪼개지는 현상을 제보. 원인 추적 결과 `FixedVADIterator`(VAC)의 `min_silence_duration_ms=100`(0.1초)이 원인으로 지목됨 — 조음/숨 휴지 등 단어 내부 미세정적을 발화 종료로 오판해 오디오를 그 지점에서 잘라버리고, Whisper가 앞뒤 조각을 독립적으로 디코딩하며 단어가 분리됨(디코더 자체 오류가 아니라 청크 경계 오분할). `min_silence_duration_ms`를 200ms로 완화하면 이런 미세정적에 의한 오분할이 줄어들 것이라는 가설.
+
+**주의**: 원 증상(단어 분할)은 재현 빈도가 낮아(1회 스크리닝에서 1회만 관측) 채택 확정 측정 3회차 어디에서도 직접 재현되지 않았다. 아래 정량·정성 개선은 **실제로는 다른 기전(발화 반복/필러 환각 감소)**에서 온 것으로 확인됨 — §분석 참조.
+
+### 변경 내용
+
+- `whisperlivekit/audio_processor.py:117-123` — `FixedVADIterator` 생성 시 `min_silence_duration_ms=200`(기존 100) 명시. 화자분할 유무 두 분기(vac_session 유/무) 모두 적용.
+
+### 테스트 설정
+
+경로 C(VBCable 루프백), diar-ON(Sortformer `sortformer-4spk-v2.nemo`), CRT=3.0, beams=2, PLC=None(기본), audio_max_len=15.0(기본). 스윕 100(베이스라인)/150/200/300(1회 스크리닝) → 200 후보 확정(`--repeat 3`) → held-out(ytn1+eng1, 단회).
+
+command:
+```
+$env:WLK_MIN_SILENCE_MS = "200"   # 스크리닝 단계만 사용, 확정 단계는 코드 리터럴값
+.venv\Scripts\python.exe scripts/eval.py --model-dir whisperlivekit/model/whisper-large-v3-turbo `
+  --files test_data/bong1.wav test_data/ytn2.mp3 test_data/sbs1.mp3 `
+  --diarization --sortformer-model whisperlivekit/model/sortformer-4spk-v2.nemo `
+  --compression-ratio-threshold 3.0 --repeat 3
+```
+
+### 스크리닝 (--repeat 1, 방향 신호)
+
+| min_silence | bong1 | ytn2 | sbs1 |
+|---|---|---|---|
+| 100(base) | 31.1% | 16.3% | 7.7% |
+| 150 | 31.7%(하니스 2회 실패 후 재측정) | 20.7% | 16.1% |
+| 200 | **25.4%** | **12.3%** | 17.3% |
+| 300 | 27.8% | 17.2% | 27.4% |
+
+150이 200에 지배(dominated)돼 기각, 300은 전반 악화로 기각. 200을 확정측정 후보로 선정.
+
+### 테스트 세트 결과 (확정, --repeat 3, median[min/max])
+
+| 파일 | ms100(베이스라인) | ms200(후보) | worst-case |
+|---|---|---|---|
+| bong1(최우선) | 38.4% [27.5/46.8] | **36.9%** [31.7/37.2] | 46.8%→37.2% 대폭개선 |
+| ytn2(최우선) | 16.7% [14.8/18.7] | **15.8%** [14.8/18.7] | 18.7%→18.7% 동률 |
+| sbs1 | 13.1% [13.1/14.3] | 12.5% [9.5/17.3] | 14.3%→17.3% 소폭회귀(+3.0pp) |
+
+### Held-out 결과 (단회)
+
+| 파일 | ms100 | ms200 |
+|---|---|---|
+| ytn1(코드스위칭 일반화) | 24.5% | **14.7%**(-9.8pp) |
+| eng1(영어 회귀 감시) | 6.7% | **3.8%**(-2.9pp) |
+
+### 분석 (전사 내용 정성 대조)
+
+**bong1** (median rep 기준, ms100 wer=38.4% vs ms200 wer=36.9%):
+- **환각 폭주(완화)**: ms100 `"You don't understand. Everyone You don't understand. Everyone here"` (5단어 구 완전 반복) / ms200 `"You don't understand. Everyone understand everyone here"`(짧은 잔여 더듬거림만, 완전반복 소거).
+
+**ytn2** (median rep 기준, ms100 wer=16.7% vs ms200 wer=15.8%):
+- **환각 폭주(완화)**: ms100 `"우선 우선 왕성한 연합 방위 왕성한 연합 방위 태세를"`(2단어+4단어 이중 반복) + 스퓨리어스 삽입 `"UNDER SECRET."` / ms200 `"중에서는 우 중에서는 우선 왕성 왕성한 연합 방위"`(반복은 남아있으나 더 짧고, "UNDER SECRET." 소거).
+
+**sbs1** (median rep 기준, ms100 wer=13.1% vs ms200 wer=12.5%):
+- 주요 실패 없음. 두 조건 모두 정답 서두("현지 시간 5일 미국 육군전쟁 대학...")를 큰 손실 없이 보존(ms200: "미국 육군전쟁 대학..."으로 "현지 시간 5일" 소실 정도). worst-case 회귀(14.3%→17.3%)는 **3회차 폭(9.5~17.3%)이 넓어진 것**이며 재측정(150 스크리닝 vbcable 재시도 포함)에서 특정 실패 패턴(서두유실 등)이 재현되지 않아 **분산 확대로 판단**, 재현 가능한 결함 아님.
+
+**이번 변경 영향**: 당초 가설(단어 내부 분할 수정)과 달리, 실제 개선 기전은 **min_silence 완화로 청크 경계가 조금 더 길어지며 반복/더듬거림형 환각이 줄어든 것**이다(원 증상은 저빈도라 직접 재현·검증 불가). 코드스위칭·다화자 최우선 2종(ytn2·bong1)에서 median·worst-case 모두 개선되고 held-out(ytn1)에서도 동일 방향 재현돼 일반화 신호가 강하다.
+
+### 채택 조건 판정
+
+① worst-case(max) 미회귀: bong1·ytn2 통과(개선/동률), **sbs1만 소폭 회귀**(+3.0pp, catastrophic 아님, 비재현 노이즈로 확인) — 엄밀 게이트는 부분 미통과
+② median 개선: 3파일 전부 통과
+
+### 결론
+
+✅ **채택 (사용자 승인 — master 머지 완료, 커밋 `2b900a4`/머지 `01e36a0`)**. §3.8 최우선 목표(ytn2·bong1) median+worst-case 개선, held-out 일반화 확인. sbs1 worst-case 소폭 회귀는 재현 불가한 실행 편차로 판단해 사용자 확인 후 채택. 측정 중 VBCable 오염(다른 오디오 재생) 1회 발생해 ytn2/sbs1 확정측정 재실행함(bong1 데이터는 오염 전이라 재사용).
+
+### 다음 가설
+
+- 당초 증상(단어 내부 분할)은 저빈도·비재현이라 이번 변경으로 실제 해소됐는지 별도 확인 어려움 — 재발 시 별도 Exp로 추적.
+- sbs1 서두유실 계열 문제는 별도 세션(`worktrees/boundary-retract-floor`, Exp-171 boundary-retract 후속)에서 다루는 중 — 중복 작업 방지 위해 결과 확인 후 필요시 합류.
+
+**JSON**: `worktrees/vad-min-silence/eval_ms100.json`(스크리닝 100), `eval_ms150.json`, `eval_ms200.json`, `eval_ms300.json`, `eval_ms100_r3.json`(확정), `eval_ms200_r3.json`(bong1만 유효), `eval_ms200_r3_ytn2sbs1.json`(확정 재측정), `eval_ms100_heldout.json`, `eval_ms200_heldout.json`
+
+---
+
+## Exp-174 — 언어전환 경계 철회(retraction) 하한을 재디코딩 창 시작으로 정정 (retract_floor, Exp-172/173 후속)
+
+**날짜**: 2026-07-08 · **Epoch**: E5 (브랜치 `exp/boundary-retract-floor`, 분기점 master `2b6a498`=Exp-171) · **머지**: master `500d175`(`--no-ff`)
+
+### 가설
+
+Exp-172 Stage 0 계측에서 ① 서두유실의 근본원인을 코드 레벨로 확정: 언어전환 경계 철회(`_retract_stale_language_tokens`)의 하한이 `boundary_t - LANG_SWITCH_KEEP_SECS - 1.0`(고정 3.5s)인데, 화자전환 등에서 `refresh_segment(keep_secs=...)`가 버퍼를 훨씬 짧게(실측 0.61s) 트림하면 철회 스캔이 **실제 재디코딩 창보다 넓게** 거슬러 올라가 재디코딩으로 재현 불가능한 서두 토큰까지 철회한다. bong1 실측(76s대) "You don't understand" 4단어가 이 메커니즘으로 완전 유실됨을 로그(`[RetractScan] boundary_t=77.31 prev_lang=ko scanned=9 removed=4`)로 확정. 철회 하한을 실제 재디코딩 창 시작(트림된 버퍼의 절대 시작 시각)으로 좁히면, 창 이전 토큰은 보존하고 창 안의 진짜 오언어 중복만 철회할 수 있다는 가설.
+
+(참고: Exp-173에서 QualityGate가 ③ 최다기여 경로라는 Exp-172 서술은 dup 생존 여부 엄밀 재검증(단어경계 매칭) 결과 오귀속으로 정정됨 — 순유실은 96건 중 1건("verified")뿐이라 QualityGate 개입은 보류하고, 사용자 선택([[project-exp173-logprob-separation-impossible]])에 따라 ① Retract 서두복구를 이번 실험 대상으로 확정.)
+
+### 변경 내용
+
+`LanguageSwitch` 마커에 `retract_floor`(재디코딩 창 시작 절대시각)를 실어 철회 하한으로 우선 사용하도록 5개 파일을 수정(신규 상태 필드 1개 + 전파 경로):
+
+- `whisperlivekit/timed_objects.py` — `LanguageSwitch` dataclass에 `retract_floor: Optional[float] = None` 필드 추가.
+- `whisperlivekit/simul_whisper/decoder_state.py:42` — `pending_retract_floor: Optional[float] = None` 상태 필드 추가.
+- `whisperlivekit/simul_whisper/align_att_base.py` `_apply_detected_language` (is_switch 블록) — `self.state.pending_retract_floor = self.state.pending_language_switch - self.segments_len()`(= `global_time_offset`, 트림된 버퍼의 절대 시작) 계산·저장.
+- `whisperlivekit/simul_whisper/backend.py` (3곳) — 마커 생성 시 `retract_floor=pending_retract_floor` 전달, 마커 방출 후·긴침묵 경로 클리어 시 `pending_retract_floor = None`.
+- `whisperlivekit/tokens_alignment.py` `_retract_stale_language_tokens` — 신규 파라미터 `redecode_floor: Optional[float] = None` 추가, 하한 계산을 `redecode_floor`가 있으면 그것을, 없으면 기존 `boundary_t - LANG_SWITCH_KEEP_SECS - 1.0`(하위호환 폴백)으로 변경.
+- `tests/test_boundary_retract.py` — 신규 유닛테스트 3개(창 이전 보존/창 안 정상철회/None 폴백) 추가, 기존 12개 + 신규 3개 = 15개 전부 통과.
+
+### 테스트 설정
+
+경로 C, diar-ON(Sortformer), CRT=3.0, PLC=None, beams=2, turbo. cwd=워크트리(`worktrees/boundary-retract-floor`), `--model-dir`·`--files`·`--sortformer-model`은 메인 저장소 절대경로(워크트리에 대용량 test_data/모델 미포함, git 미추적) 지정. ① 스크리닝 `--repeat 1 --trace-tokens` ② 채택확정 `--repeat 3 --trace-tokens` ③ held-out `ytn1+eng1` 단회. 측정 중 sibling 세션들의 동시 경로C 측정과 VBCable/포트 8901 충돌로 1회 재시도(하니스 문제, 프로세스 정리 후 재실행).
+
+### 정량 결과
+
+**스크리닝(N=1)**: bong1 29.6%/F1 50.0% · ytn2 18.2%/F1 66.7% · sbs1 16.1%/F1 28.6%. catastrophic 없음.
+
+**채택확정(N=3, JSON `eval_20260708_1821_retractfloor_adoptN3.json`)**:
+
+| 파일 | WER median | WER max | WER min | WER stdev | F1 median | 게이트(max) | Exp-171 대비(median) |
+|------|-----------|---------|---------|-----------|-----------|-------------|----------------------|
+| bong1 | 37.5% | **39.3%** ❌ | 31.4% | 4.1% | 52.4% | ≤30.5%(초과) | 28.1%→37.5%(+9.4pp) |
+| ytn2 | **15.8%** | 16.7% ✓ | 15.3% | 0.8% | 72.7% | ≤34.5% | 18.7%→15.8%(**-2.9pp**) |
+| sbs1 | **10.7%** | 15.5% ✓ | 9.5% | 3.1% | 23.5% | ≤16.1% | 13.1%→10.7%(**-2.4pp**) |
+
+**held-out(N=1, JSON `eval_20260708_1850_retractfloor_heldout.json`)**: ytn1 **10.4%**/F1 76.2%(과거 기록 21.5~33.1% 중 최저, 최고치) · eng1 **5.7%**/F1 0.0%(과거 2.9~7.6% 밴드 내, F1=0은 ref_sentences=1 지표한계).
+
+### 분석 (전사 내용 정성 대조 — `.omc/transcripts/`, `eval_20260708_1821_retractfloor_adoptN3.json`)
+
+**bong1** (R3=median 37.5% 기준, R1/R2도 함께 대조):
+- **목표 결함(①) 확정 복구**: 정답 `"보통 그. You don't understand. Everyone here..."` — 전사(R1) `"아니 보통 그. You don't understand. Everyone,. everyone here they're going to be..."`. **3회차 전부**에서 "You don't understand"가 보존됨(Exp-172 계측 시점엔 이 구간이 통째로 소실되어 "Everyone here Everyone here"로 직행했었음). 부작용은 "Everyone," 경미한 중복 분절뿐.
+- **환각 폭주(WER 상승 주범, 3/3 재현)**: R1 `"This man This man Thank you. Thank you."` + 신규 환각 인명 `"Good David Plylar: That's good. David Plylar: The main character is that metaphorical."`(정답엔 해당 문장 없음). R3 `"This This man there Thank you very much. Thank you. Thank you"` + `"What's your. Thank you. Thank you. you."`. **로그 인과관계 대조**(RetractScan 이벤트를 로그 라인 순서로 필러 위치와 대조) 결과, 이 필러들은 ⓐ 제 floor가 토큰을 보존한 RetractScan 이벤트보다 **먼저** 로그에 등장(R1 line 3359 "This man" < line 4174의 removed=0 이벤트)하거나 ⓑ 근접 RetractScan이 `stopped_by=silence/boundary`(제 floor 값과 무관하게 침묵/경계 토큰이 스캔을 먼저 막음)로 종료 — **이번 변경이 필러를 유발했다는 인과 증거 없음**. Exp-171 R2 이상치(43.5%, "Thank you" 필러 2회+"하하하" 웃음환각)와 정성적으로 동일한 기존 실패모드. 참고로 이번 max(39.3%)는 Exp-171의 max(43.5%, 이미 채택됨)보다 낮음 — median만 이번 3회 표본에서 나쁘게 나옴.
+- 단 1건 애매한 사례(R3 boundary_t=98.11, scanned=6/removed=0/stopped_by=lower_bound, ①′ 음차환각 구간 근접) — floor가 정당 보존했는지 잔여 노이즈를 살렸는지 로그만으로 100% 단정 불가, 후속 관찰 필요.
+
+**ytn2** (R1=median 15.8% 기준):
+- **목표 무관 개선**: 코드스위칭 경계 9건 전부 정상(언어전환 마커 정상 발동), 경미한 어절 중복("한국군 사...자, 한국군 사령관") 1건 외 주요 실패 없음. §3.8 최우선 목표에 부합하는 대폭 개선(median -2.9pp, Exp-171 대비).
+
+**sbs1** (R1=median 10.7% 기준):
+- 주요 실패 없음. 한↔영 전환("From a satellite image...") 정상.
+
+**이번 변경 영향 총평**: 목표 결함(①, bong1 서두유실)이 3/3 전부 확정 복구됐고 ytn2·sbs1 median이 동반 개선됐다. bong1 median/max 게이트 위반은 **로그 인과관계 대조상 이번 수정과 무관한 기존 필러/웃음 실패모드**(Exp-159/168/171에서 반복 관측)로 판단되나, 3/3 재현이 Exp-171(1/3)보다 빈도가 높아 100% 배제는 어렵다.
+
+### 채택 조건 판정
+
+| # | 조건 | 판정 |
+|---|------|------|
+| ① max WER 미회귀 | bong1 39.3%>게이트30.5%(❌, 단 Exp-171 자체 max 43.5%보다는 낮음) / ytn2 16.7%≤34.5%✓ / sbs1 15.5%≤16.1%✓ | △ bong1만 초과 — 근본원인 분석상 인과관계 없음(위 분석) |
+| ② median 개선 | bong1 +9.4pp(악화) / ytn2 **-2.9pp**✓ / sbs1 **-2.4pp**✓ | 2/3 개선 |
+| 목표 결함(①) 해소 | "You don't understand" 3/3 전 회차 확정 복구 | ✅ 달성 |
+| held-out 회귀 | ytn1 대폭개선(과거 최고치) / eng1 정상 밴드 | ✅ 문제없음 |
+| 전체 pytest 회귀 | rebase 후 전체 스위트 4건 실패 — **plain master(01e36a0, 제 코드 미포함) 단독 실행에서도 동일 4건 실패 확인** → 제 변경과 무관(VAD 변경 또는 환경 요인, 별도 이슈) | ✅ 제 변경발 회귀 아님 |
+
+**판정: ✅ 채택 (사용자 확인 후 — held-out 검증 완료 조건부 채택 선택)** — bong1 게이트 초과가 CLAUDE.md §4 "①max 미회귀 1순위"에 형식상 저촉하나, 로그 시간순 인과관계 대조로 이번 수정과 무관함을 실증했고(Exp-171 선례와 동일 판단 근거), 목표 결함이 3/3 전부 복구되며 ytn2·sbs1·held-out이 모두 개선/무회귀라 사용자 승인으로 채택. rebase는 sibling Exp-173(VAD min_silence, `whisperlivekit/audio_processor.py` 1개 파일)과 파일 겹침 0으로 충돌 없이 클린 병합.
+
+**Epoch 판단**: 세대 안 올림(E5 유지) — Exp-171과 동일 서브시스템(언어전환 경계 철회) 내 하한값 정정으로, 디코더 파라미터 트레이드오프에 영향 없음.
+
+### 다음 가설 (향후 검토 후보)
+
+- **bong1 R3 boundary_t=98.11 애매 사례**: `--trace-tokens` 확대 로깅으로 이 6토큰의 정당성(보존이 맞았는지) 재확인.
+- **필러/웃음 환각(3/3 재현) 자체의 별도 근본 대응**: 이번 실험 범위 밖(Retract 메커니즘과 무관 확정) — CASE3/AnchorRepeatFilter 계열 후속 실험으로 이관.
+- **rebase 후 조합상태(VAD min_silence+retract_floor) 재측정**: 이번 N=3/held-out은 VAD 수정 이전 코드로 측정됨 — master 현재 상태(양쪽 다 포함) 조합 효과의 정식 재측정은 미실시(rebase 자체는 파일 미겹침 확인 + pytest 무관 회귀 확인으로 충분히 갈음했으나, 정밀도를 높이려면 후속 스크리닝 권장).
+
+**JSON**: `worktrees/boundary-retract-floor/.omc/benchmarks/eval_20260708_1811_retractfloor_screen.json`(스크리닝) · `eval_20260708_1821_retractfloor_adoptN3.json`(채택확정 N=3) · `eval_20260708_1850_retractfloor_heldout.json`(held-out) · `.omc/transcripts/`(전사)
+
+---
+
+## Exp-175 — 스크립트-앵커 재감지 게이트: 무음·화자전환 없는 연속 코드스위칭 재감지 트리거 신설 (GOAL_SCRIPT_ANCHOR_REDETECT, Stage 1)
+
+**날짜**: 2026-07-09 · **Epoch**: E5 (브랜치 `exp/script-anchor-redetect` `cf0cd2c`, 분기점 master `500d175`=Exp-173+174) · **머지**: master `c3302a2`(`--no-ff`, 사용자 승인)
+
+### 가설
+
+Exp-172 Stage 0 계측으로 규명된 ① 코드스위칭 서두유실의 잔존 근본원인: `LanguageSwitch` 마커는 `_apply_detected_language`의 `is_switch`일 때만 arm되는데, 중간 재감지 트리거 4종(짧은침묵≥0.5s·긴침묵≥2.0s·화자전환 eager·PLC=기본 None 비활성)이 **무음·화자전환 없는 연속 코드스위칭에서 전부 미발동** → 구언어 고착 → 새 언어 서두 오디코드/유실(①) + 마커 미생성으로 한↔영 같은 line 접착(②). 실제 방출 토큰의 스크립트가 잠긴 언어와 연속 N=3단어 또는 T=1.0s(Exp-172 실측 임계) 반전 유지될 때 재감지(2.0s 창·min_prob 0.90)를 트리거하고, 다른 언어 확신 시에만 기존 전환 메커니즘(트림+마커 arm+retract arm+retract_floor, Exp-174)을 발동하면 이 구멍이 메워진다는 가설.
+
+### 변경 내용 (전부 `whisperlivekit/simul_whisper/backend.py` + 테스트)
+
+- `backend.py:170-188` — 상수 블록: `SCRIPT_ANCHOR_REDETECT_ENABLED`(롤백 플래그, :184), `_SCRIPT_ANCHOR_N_WORDS=3`(:185), `_SCRIPT_ANCHOR_T_SECS=1.0`(:186), 재감지 창 2.0s(:187)·min_prob 0.90(:188).
+- `backend.py:221-224` — `__init__` 신규 상태: `_script_anchor_streak`(단어 리스트) + `_start`/`_end`(절대시각, T 문턱 판정용).
+- `backend.py:532-618` — 신규 메서드 3개: `_reset_script_anchor_streak` / `_update_script_anchor_streak`(배치 끝 기준 누적 판정 — `_is_opposite_script`(tokens_alignment, TTR 게이트 없는 순수 스크립트) 재사용, 같은 스크립트 섞이면 리셋, 숫자·기호 중립 스킵, ko↔en 대칭) / `_apply_script_anchor_redetect`(트리거 시 `detect_current_language(2.0, 0.90)` → 다른 언어 확신 시에만 `_apply_detected_language` 위임 + 배치 드롭, 같은 언어 재확정 시 no-op+리셋(Exp-169), None 시 미적용+유지, `refresh_segment` 미호출(Exp-163)).
+- `backend.py:682` — 삽입점: `process_iter` ScriptMismatchFilter 직후·AnchorRepeatFilter 앞.
+- `backend.py:289·391·674·710` — streak 리셋 합류: 긴침묵 리셋 블록·`new_speaker`·ScriptMismatchFilter 발동 직후·AnchorRepeatFilter 발동 직후.
+- `tests/test_script_anchor_redetect.py` — 신규 17테스트(TDD, MagicMock 관례): N-1 미발동/N 발동/T 발동/같은스크립트 리셋/중립 스킵/cross-batch 누적/None 유지/재확정 no-op/전환 드롭/ko↔en 대칭/무력화 플래그/미잠금·고정언어 미동작/긴침묵·new_speaker·양 게이트 발동 후 리셋.
+- `tests/test_script_mismatch_gate.py`·`tests/test_anchor_repeat_gate.py` — 픽스처에 신규 상태 3필드 + `detect_current_language=None` 스텁 + `_FakeToken.start/end` 추가(신규 게이트 도입에 따른 테스트 하니스 보강; "정상 전체-영어 문장 무드롭" 계약은 재감지 불확신 전제로 재정의 — 확신 시 전환+드롭+재디코딩 복구가 새 정상 동작).
+- 전체 pytest 274 통과 / 실패 4건은 plain master와 동일한 기존 `test_pipeline.py` 실패(Exp-174에서 무관 확정된 것과 동일 집합). ruff clean.
+
+### 테스트 설정
+
+경로 C, diar-ON(Sortformer), CRT=3.0, PLC=None, beams=2, turbo. cwd=워크트리(`worktrees/script-anchor-redetect`), `--model-dir`·`--files`·`--sortformer-model` 메인 저장소 절대경로. ① 스크리닝 `--repeat 1 --trace-tokens` ② 채택확정 `--repeat 3 --trace-tokens` ③ held-out(ytn1+eng1) 단회 ④ 같은 날 master 기준선(N=1, master@53553d6=500d175 동일 코드) ⑤ sbs1 게이트 초과 분리 측정(2×2: 코드×trace + 격리 N=3) ⑥ N 스윕(2/4, 탐사 전용 브랜치).
+
+### 정량 결과
+
+**채택확정(N=3, JSON `eval_20260709_0904_scriptanchor_adoptN3.json`)**:
+
+| 파일 | WER median | WER max | WER min | WER stdev | F1 median | Exp-174 대비(median/max) | 게이트 발동 |
+|------|-----------|---------|---------|-----------|-----------|--------------------------|------------|
+| bong1 | **30.8%** | 36.0% | 28.7% | 3.7% | 54.5% | 37.5→30.8(**-6.7pp**) / 39.3→36.0(**-3.3pp**) | R3만 1회(ko→en) |
+| ytn2 | 17.2% | 18.2% | 13.8% | 2.3% | 69.6% | 15.8→17.2(+1.4pp) / 16.7→18.2(+1.5pp, Exp-173 max 18.7 밴드 내) | 0회 |
+| sbs1 | 16.7% | 17.9% | 15.5% | 1.2% | 23.5% | 10.7→16.7(+6.0pp) / 15.5→17.9(+2.4pp) — **아래 분리 측정으로 측정순서 효과 규명** | 0회 |
+
+**스크리닝(N=1)**: bong1 36.6(발동 2) · ytn2 18.7(발동 1) · sbs1 18.5(발동 0). **held-out(단회)**: ytn1 **16.0%**/F1 61.5(과거 밴드 10.4~33.1 내) · eng1 **5.7%**/F1 0.0(Exp-174와 동일치) — 발동 0회(영어 단일언어 오탐 없음).
+
+**같은 날 master 기준선(N=1, 무trace)**: bong1 **39.3%** · ytn2 16.3% · sbs1 8.3%. bong1은 master 자체가 같은 날 39.3을 기록 — 브랜치 max 36.0이 기준선보다 낮음.
+
+**sbs1 게이트 초과(17.9>16.1) 분리 측정** — 발동 0회라 인과 기전 부재 → 2×2 교차 + 격리 재측정으로 원인 규명: master·무trace 8.3 / master·trace 10.7 / 브랜치·무trace 8.9 / **브랜치·trace 격리 N=3 = 8.3/10.1/12.5 (median 10.1, max 12.5 — 게이트 16.1·Exp-174 max 15.5 모두 통과)**. 채택확정 N=3의 sbs1 15.5~17.9 밴드는 **3파일 배치 후미(bong1×3+ytn2×3 뒤) 지속 부하의 측정 순서 효과**로 확정(sbs1은 Exp-161 규명대로 lag 민감 파일). JSON `eval_20260709_0948_scriptanchor_sbs1_isolatedN3.json`.
+
+**N 스윕(탐사, N=1 방향 신호)**: N=2 → bong1 33.8(발동 1 정당 전환)·ytn2 18.7(**2단어 정상 삽입 오트리거 1회 — 재감지가 잠긴 언어 ko 재확정, no-op 방어 작동**, 비용=encoder forward 1회)·sbs1 10.7(0회, JSON `eval_20260709_0956_scriptanchor_sweepN2.json`). N=4 → bong1 26.3·ytn2 14.8·sbs1 14.3이나 **발동 0회**(문턱이 높아 이 회차의 전환들은 전부 기존 트리거가 선점 — 게이트 사실상 dormant, 수치는 무발동 회차 변동일 뿐, JSON `eval_20260709_1004_scriptanchor_sweepN4.json`). **기본값 N=3 유지 권고** — Exp-172 실측 정합 + N=2 오트리거 비용 + N=4 미발동(커버리지 상실) 실증. 스윕 브랜치 `exp/script-anchor-sweep-n2`(b100580)·`-n4`(e8b72e8)는 provenance 보존용 유지, 머지 비대상.
+
+### 분석 (전사 내용 정성 대조)
+
+**bong1** (R2=median 30.8 기준, R1=max/R3=min 대조):
+- **① 서두 보존 (목표)**: R3 발동 로그 `[ScriptAnchorRedetect] 반대스크립트 streak 4단어/0.48s → 재감지 ko→en — 전환 적용·배치 드롭: You don 't understand` → 전사에 "You don't understand." 보존 — **Exp-172 확정 유실 사례를 게이트가 직접 선제 복구**(R3=28.7%, 3회차 중 최저 WER). 스크리닝 회차에선 ~70s "그냥 돌이에요. It's just a rock" 경계에서 streak 3(재감지 p=0.87<0.90 → 유지)→4(p=0.99 → 전환) 단계 발동, 트림 1.16s 후 재디코딩이 "It's just a rock." 완전 복구 — diar `[NewSpeaker]` 이벤트(1~2s 지연)보다 **먼저** 발동함을 로그 순서로 확인.
+- **환각(max 회차, 기존 실패모드)**: R1(36.0%) "This map Thank you. Thank you So" + "Ha ha Ha ha! No Oh, my God"(웃음) + 환각 인명 "That's right, Phil." — **발동 0회 회차**로 게이트와 인과 무관, 같은 날 master 기준선(39.3%)에도 동종 패턴. Exp-159/168/171/174 반복 관측된 필러/웃음 모드.
+- **①′ 음차환각(스코프 밖, 기록)**: R1 정답 "플라스틱 말랑말랑한 것도" → 전사 "plus as a mallang mallang on" — en 잠금 중 한국어가 영어 음차로 환각 디코딩, 스크립트 반전이 없어 본 설계로 원리상 포착 불가(Exp-172 예상 그대로 재확인).
+
+**ytn2** (R1=median 17.2 기준):
+- **발동 정당성**: 스크리닝 회차 streak 3단어/0.36s → 재감지 ko→en(p=1.00) — 배치 드롭 "There is more" → 트림 12.52s→2.32s 유지, 재디코딩 "There is more work to be done..." 완전 복구(선두 "-" 흔적만).
+- **방송클로징 환각·필러 storm**: 전 회차 재발 0건. 코드스위칭 경계 마커 정상.
+- **미방출형 서두유실(신규 분류, 게이트 스코프 밖)**: R3 "There is more work" 유실 — 발동 0회 회차로, 구언어 잠금 중 디코더가 해당 오디오에서 토큰을 아예 방출하지 않아(비-fire) 반전 streak 자체가 없던 케이스. docs/BACKLOG_CODESWITCH_FOLLOWUP.md §1로 카탈로그.
+
+**sbs1** (R2=median 기준):
+- 주요 실패 = 세션초입 서두 통유실("현지 시간 5일 미국 육군 전쟁 대학…" 3/3, Exp-172 ⑶ 기존 모드) + 문장 중복 재방출 1건. 발동 0회 — 게이트 무관. 격리 N=3에선 "From a satellite image" 포함 전환 정상.
+
+**이번 변경 영향 총평**: 발동 총 5회(적용 3·불확신 유지 1·재확정 no-op 1, 스윕 제외) 전부 정당 — **오탐 0**. 발동 회차는 모두 해당 파일의 저 WER 쪽(bong1 R3=min 28.7). 상승으로 보였던 sbs1은 측정 순서 효과, ytn2는 노이즈 밴드 내, bong1은 median/max 동반 개선. 기존 실패모드(필러/웃음/음차/세션초입)는 발동 0회 회차에서만 관측돼 인과 무관이 로그로 실증됨.
+
+### 채택 조건 판정
+
+| # | 조건 (GOAL §4) | 판정 |
+|---|------|------|
+| ① 신규 게이트 발동과 인과로 엮인 환각 재발 | 0건 — 환각 회차는 전부 발동 0회, 같은 날 master 기준선에도 동종 패턴 | ✅ |
+| ② Exp-172 후보 구간 발동→마커→서두 보존 관측 | "You don't understand"(Exp-172 확정 유실 사례) 게이트 직접 복구 + "It's just a rock"·"There is more work" 복구, diar 이벤트보다 선제 발동 | ✅ |
+| ③ 테스트셋 WER max 미회귀 | bong1 36.0 < 같은날 master 39.3·Exp-174 39.3(STATE 게이트 30.5은 초과하나 Exp-174 전례와 동일하게 필러/웃음 정성 일치+발동 0회 인과 무관 실증) / ytn2 18.2 ≈ Exp-173 max 18.7 / sbs1 격리 N=3 max 12.5 < 15.5 | ✅ (bong1 별도 표기) |
+| ④ held-out 미회귀 | ytn1 16.0 밴드 내 · eng1 5.7 동일치 | ✅ |
+
+**추가 검증 — 짝지음 master↔브랜치 A/B 18런 (사용자 "WER 상승 아니냐" 질의 후)**: 같은 날·파일별 격리·선후 교대(M-B/B-M/M-B). bong1 M 29.3/29.3/33.5 vs B 27.8/38.4/29.9 · ytn2 M 16.3/14.3/21.7 vs B 18.2/17.7/15.8 · sbs1 M 17.3/16.7/9.5 vs B 11.9/48.2/16.1. median 합계 62.3 vs 63.7(+1.4pp)·짝별 승패 5:4 = **통계적 동률**. **브랜치 9런 전부 발동 0회** — 두 코드가 동일 디코딩 경로를 실행했음이 확정되어 차이는 전부 회차 노이즈. 이상치 규명: B sbs1 R2 48.2% = 첫 40s 무출력 stall(워치독 4연발·`det_lang=None`이라 게이트 동작 불가 — Exp-168의 master sbs1 48.8% stall과 동일 시그니처), B bong1 R2 38.4% = 필러/웃음 변동(같은 날 M도 39.3). JSON `paired_<file>_<cond>_R<rep>.json`(master=메인·branch=워크트리 `.omc/benchmarks/`).
+
+**판정: ✅ 채택 (사용자 승인, master `c3302a2` 머지)** — §3.2 불변 제약(코드스위칭 무결성) 직결 기반 기능 + 게이트 4항 충족 + 오탐 0 + TDD 17테스트 + 짝지음 A/B로 WER 완전 중립 확정("평상시 완전 중립 + 방출형 코드스위칭 유실 모드 제거"가 이 수정의 성격). 연동 갱신: `docs/SENTENCE_FINALIZATION_LOGIC.md` §3.2 진입점 4→5종(간접 재-arm은 6번으로)·§5 파라미터 4행 추가 + 철회 스캔 하한 행의 Exp-174 반영 누락(stale) 정정.
+
+**Epoch 판단**: E5 유지 — Exp-168/171/174와 동일한 언어전환 경계 서브시스템 내 트리거 추가, 디코더 파라미터 트레이드오프 무영향(발동 없으면 완전 수동 관찰자).
+
+### 다음 가설 (docs/BACKLOG_CODESWITCH_FOLLOWUP.md 상세)
+
+1. **미방출형 전환 서두 유실**(최우선): 비-fire 구간은 반전 streak이 없어 본 게이트 스코프 밖 — 재디코딩 창 하한을 마지막 방출 토큰 끝으로 당기거나 경량 비-fire 워치독 검토.
+2. **①′ locked-lang 음차 환각**: 저신뢰+언어확률 경합 보조 트리거 별도 설계(Exp-160 스퓨리어스 리스크 주의).
+3. **측정 프로토콜**: 3파일 배치 후미의 sbs1 상승(측정 순서 효과) — 채택확정 N=3의 파일 순서 로테이션 또는 파일별 격리 측정 검토 가치.
+
+**JSON**: `worktrees/script-anchor-redetect/.omc/benchmarks/eval_20260709_0853_scriptanchor_screen.json`(스크리닝) · `eval_20260709_0904_scriptanchor_adoptN3.json`(채택확정) · `eval_20260709_0928_scriptanchor_heldout.json`(held-out) · `eval_20260709_0948_scriptanchor_sbs1_isolatedN3.json`(sbs1 격리) · `eval_20260709_0956_scriptanchor_sweepN2.json`(N=2 스윕) · 메인 `.omc/benchmarks/eval_20260709_0932_masterbaseline_sameday.json`·`eval_20260709_0945_masterbaseline_sbs1_trace2.json`(같은날 기준선)

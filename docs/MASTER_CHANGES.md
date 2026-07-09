@@ -36,20 +36,25 @@ upstream 기본값만으로는 반복 아티팩트(`바 바 바`), 언어 고착
 
 ---
 
-## 2. 현재 채택 베이스라인 수치 (Exp-105 — 2026-06-22)
+## 2. 현재 채택 베이스라인 수치 (Exp-175 — 2026-07-09, E5 turbo·diar-ON)
 
 > **채택 기준** (CLAUDE.md §4): **1순위 = max(최악 케이스) 미회귀, 2순위 = median 개선**.
 > 수치는 경로 C(VBCable 루프백) **채택 확정(N≥3) 반복 측정 결과** — `median / max / stdev`.
+> 현행 regime: **테스트 = bong1+ytn2+sbs1(diar-ON, Sortformer, CRT=3.0, PLC=None, turbo)**,
+> **held-out = ytn1+eng1(단회)**. 중간 채택 이력(Exp-106~174)은 [../EXPERIMENTS.md](../EXPERIMENTS.md) 참조.
+> JSON: 워크트리 `script-anchor-redetect/.omc/benchmarks/eval_20260709_0904_scriptanchor_adoptN3.json`.
 
 | 파일 | 설정 | WER median | WER max | stdev | 문장분리 F1 |
 |---|---|---|---|---|---|
-| sbs1 | diar-off | **19.6%** | 20.2% | 1.2% | **76.2%** |
-| ytn1 | diar-off | **18.4%** | 20.2% | 1.1% | **71.4%** |
-| eng1 | diar-off | **5.7%** | 5.7% | 1.1% | 0.0%\* |
-| **평균** (sbs1+ytn1+eng1) | — | **14.6%** | — | — | — |
-| ytn2 (held-out) | diar-on | **25.1%** | 27.1% | 1.3% | **50.0%** |
+| bong1 | diar-on | **30.8%** | 36.0%\*\* | 3.7% | 54.5% |
+| ytn2 | diar-on | **17.2%** | 18.2% | 2.3% | **69.6%** |
+| sbs1 | diar-on | **16.7%**\* | 17.9%\* | 1.2% | 23.5% |
+| ytn1 (held-out, 단회) | diar-on | **16.0%** | — | — | 61.5% |
+| eng1 (held-out, 단회) | diar-on | **5.7%** | — | — | 0.0%\*\*\* |
 
-\* eng1 F1=0%는 단일 세그먼트 구조 특성 — WER 자체는 우수. 향후 별도 접근 필요.
+\* sbs1은 3파일 배치 후미 측정의 부하 효과 포함 수치 — 같은 코드 **격리 N=3 = 10.1% / max 12.5%**(Exp-175에서 측정순서 효과 분리 실증).
+\*\* bong1 max 36.0은 기존 필러/웃음 환각 변동(같은 날 master 단독 39.3) — Exp-159/168/171/174 반복 관측 모드.
+\*\*\* eng1 F1=0%는 단일 세그먼트 구조 특성(ref_sentences=1 지표한계) — WER 자체는 우수.
 
 **참고: upstream 0.2.20 기본값 (Exp-000 베이스라인, 2026-06-04)**
 
@@ -191,6 +196,35 @@ upstream의 **언어 TRIPLE-LOCK** 문제 해소:
 
 ---
 
+### 3-6c. 스크립트-앵커 재감지 게이트 (Exp-175, E5)
+
+**upstream/기존 동작**: 언어 재감지 트리거 4종(짧은침묵≥0.5s·긴침묵≥2.0s·화자전환 eager·PLC=기본 None 비활성)이
+**무음·화자전환 없는 연속 코드스위칭**에서 전부 미발동 → 구언어 고착 → 새 언어 서두 오디코드/유실(Exp-172에서
+bong1 "You don't understand" 4단어 유실로 실측 확정) + `LanguageSwitch` 마커 미생성으로 한↔영 같은 line 접착.
+
+**우리 변경** ([`backend.py`](../whisperlivekit/simul_whisper/backend.py) 단일 파일 + 테스트):
+- 실제 방출 토큰의 스크립트가 잠긴 `detected_language`와 **연속 N=3단어 또는 T=1.0s 반전 유지**(Exp-172 실측 임계) 시
+  `detect_current_language(2.0s, p≥0.90)` 재감지 트리거 — `_update_script_anchor_streak`/`_apply_script_anchor_redetect`.
+- **다른 언어 확신 시에만** `_apply_detected_language`(트림+마커 arm+retract arm+retract_floor — Exp-174 메커니즘 재사용)
+  + 해당 배치 드롭(트림이 남긴 경계 오디오 재디코딩으로 복구). 같은 언어 재확정 시 no-op(Exp-169 재환각 루프 방지),
+  불확신(None) 시 streak 유지 재시도. `refresh_segment` 미호출(Exp-163 회귀 교훈).
+- 판정은 `tokens_alignment._is_opposite_script` 재사용(TTR 게이트 없는 순수 스크립트, ko↔en 대칭·§3.8 하드코딩 없음).
+  같은 스크립트 토큰이 섞이면 streak 리셋("I think 그건"류 정상 삽입 오탐 방어), 숫자·기호는 중립 스킵.
+- 삽입점: `process_iter` ScriptMismatchFilter 직후·AnchorRepeatFilter 앞. streak 리셋 합류: 긴침묵·`new_speaker`·기존
+  게이트 발동 직후. 롤백 플래그 `SCRIPT_ANCHOR_REDETECT_ENABLED`(모듈 상수). 출력 스크립트 반전에만 반응하므로
+  확률 기반 주기 체크(PLC)의 스퓨리어스 전환(Exp-160)에 면역.
+
+**성능/이유**: 짝지음 master↔브랜치 A/B 18런으로 **WER 완전 중립** 확인(발동 희소, 미발동 시 수동 관찰자) —
+성격은 "평상시 중립 + 방출형 코드스위칭 서두유실 모드 제거"(§3.8 worst-case 우선). 발동 회차 전수 정당(오탐 0,
+eng1 영어 단일언어 포함), Exp-172 확정 유실 사례 직접 복구 실측, diar 이벤트(1~2s 지연)보다 선제 발동.
+N 스윕: N=2 오트리거(정상 2단어 삽입) 실증·N=4 미발동(커버리지 상실) → N=3 유지.
+
+**핵심 파일**: [`backend.py:170-188`](../whisperlivekit/simul_whisper/backend.py)(상수)·`:532-618`(메서드 3개)·`:682`(삽입점),
+단위테스트 `tests/test_script_anchor_redetect.py`(17). **도입 Exp-175** (머지 `c3302a2`). 파라미터 상세는
+[SENTENCE_FINALIZATION_LOGIC.md](SENTENCE_FINALIZATION_LOGIC.md) §3.2 진입점 5·§5 표(잠정 태그).
+
+---
+
 ### 3-7. 문장 확정 + 종료 부호 (Exp-104)
 
 | 항목 | 파일 | 동작 |
@@ -296,17 +330,22 @@ upstream에는 정량 평가 도구가 없었다. 아래 모듈을 새로 추가
 
 ## 8. 향후 개선점 (TODO)
 
-### 단기 (다음 실험 후보)
+### 단기 (다음 실험 후보 — 상세: [BACKLOG_CODESWITCH_FOLLOWUP.md](BACKLOG_CODESWITCH_FOLLOWUP.md), Exp-175 탐사 산출물)
 
-- **ytn2 WER < 20%**: 현재 25.1%(diar-on). Sortformer 과분할 완화 또는 `--periodic-lang-check` 4.0→2.0s 단축 실험 필요.
+- **미방출형 전환 서두 유실**(최우선): 구언어 잠금 중 디코더 비-fire로 반전 streak 자체가 없어 3-6c 게이트
+  스코프 밖(ytn2 "There is more work"·sbs1 "From a satellite image" 실측). 재디코딩 창 하한을 마지막 방출 토큰
+  끝으로 당기거나 경량 비-fire 워치독 검토.
+- **①′ locked-lang 음차 환각**: 반대 언어 발화가 잠긴 언어 음차로 환각 디코딩(bong1 "mallang mallang") —
+  스크립트 반전이 없어 3-6c로 원리상 포착 불가. 저신뢰+언어확률 경합 보조 트리거 별도 설계(Exp-160 스퓨리어스 리스크 주의).
+- **bong1 필러/웃음 환각(C안)**: AnchorRepeatFilter 가변 변주구 사각지대(Exp-169) + 웃음 전용 비-ASR 분류기(Exp-165 결론) 별도 루프.
 - **eng1 F1=0%**: 단일 화자 영어 발화가 단일 세그먼트로 처리되어 문장분리 F1이 0. 별도 접근 방법 필요 (예: 무음 감지 기반 분할, 또는 평가 지표 재정의).
-- **sbs1 산발적 max spike**: 간헐적 VBCable 루프백 불안정이 원인 추정. 정기 진단 절차 확립 (`vbcable_test.py --verify` 활용). → [MEMORY: vbcable-loopback-instability]
+- **측정 프로토콜**: 3파일 배치 N=3 후미 파일의 부하성 상승(Exp-175 분리 실증) — 파일 순서 로테이션 또는 파일별 격리 측정 검토. sbs1 저빈도 stall(첫 40s 무출력, Exp-168/175 관측)은 별도 근본 대응 후보.
 
 ### 중기 (다음 Phase)
 
 - **diarization → finalized 마킹 완전 연결**: ChangeSpeaker 경로는 활성화됐으나 화자분할 기반 finalized 마킹이 아직 완전히 React까지 연결되지 않음. ([SCHEMA_CHANGES.md](SCHEMA_CHANGES.md) §6 참조)
 - **번역 React 연결 완성**: `TranslationManager`는 구현됐으나 번역 결과의 실시간 React 반영 경로가 Phase 4+ 작업으로 남아 있음. ([TRANSLATION_SETUP.md](TRANSLATION_SETUP.md) 참조)
-- **periodic_lang_check_secs 자동 튜닝**: 현재 수동 설정(4.0s 권장). ytn2 추가 개선 시 2.0s 실험 예정. → [MEMORY: diarization-spike-first-timestamp-regression]
+- **§3 도메인 서술 백필**: 이 문서의 §3-6b 이후 채택분 중 Exp-158(turbo 기질 전환)·160(PLC 기본 None)·161(audio_max_len 15.0)·167/168/170/171/173/174가 도메인 섹션에 미반영 — §2 수치는 최신이나 서술 백필 필요(이력 자체는 [../EXPERIMENTS.md](../EXPERIMENTS.md)에 완비).
 
 ### 장기 / 설계 제약 (§3.8)
 
