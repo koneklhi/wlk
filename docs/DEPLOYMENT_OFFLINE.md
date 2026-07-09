@@ -71,6 +71,11 @@ git archive master --output=deploy_source.zip
 
 `git archive`는 **추적 파일만** zip으로 묶는다 — `.git/`(git 이력 전체)·`worktrees/`·`.venv/`·gitignore된 파일이 **자동 제외**된다. 결과물은 **git 기록·worktree가 없는 깨끗한 단일 폴더** — IDE에서 열면 버전 관리 없는 일반 프로젝트로 보인다. 절대경로 함정 없이 가장 깔끔한 방식이다.
 
+**⚠️ raw 소스 복사만으로 끝내지 말 것**: `whisperlivekit-server`(공식 권장 기동법, §0·§4.2·§4.4)는
+cwd와 무관하게 site-packages에 설치된 wheel을 우선 로드한다 — `whisperlivekit/**`가 바뀌면 raw 사본
+복사와 별개로 **wheel도 `--force-reinstall`로 재설치**해야 실제 반영된다(§8 트랩 "wheel 재설치 누락"
+참조).
+
 USB에 담을 3가지:
 
 | # | 내용 | 방법 |
@@ -87,7 +92,9 @@ USB에 담을 3가지:
 `wlk_in\SYNC_STATE.txt`가 마지막으로 동기화된 master 커밋·시각·범위를 기록하는 1차 소스다 — 다음
 반입 때 이 파일을 기준으로 "무엇이 바뀌었는지"만 diff해 해당 파일만 옮기면 된다. 단, `wlk_in`이
 최신이라는 것과 배포 PC가 실제로 그 내용을 반영했다는 것은 별개다(폐쇄망이라 여기서 검증 불가) —
-USB 반입·적용 여부는 매번 별도로 확인해야 한다. 상세 절차는 `.claude/commands/deploy-sync.md` 참조.
+USB 반입·적용 여부는 매번 별도로 확인해야 한다. **`whisperlivekit/**` 변경분은 raw 소스 사본
+복사만으론 부족할 수 있다** — 위 경고 및 §8 트랩 "wheel 재설치 누락" 참조. 상세 절차는
+`.claude/commands/deploy-sync.md` 참조.
 
 ---
 
@@ -246,6 +253,8 @@ uv pip install --no-index --find-links C:\whist\wlk\deploy\wheelhouse -r C:\whis
 
 # 3) 프로젝트 whl 설치 (의존성은 이미 위에서 설치됨)
 #    whl 파일명의 버전이 다르면 Get-ChildItem C:\whist\wlk\deploy -Filter "*.whl"로 확인 후 맞춰 쓸 것
+#    ⚠️ 이후 master 갱신마다 이 wheel을 다시 설치할 때는 --force-reinstall 필수(§8 트랩 "wheel
+#    버전 문자열 불변" 참조) — 버전이 항상 0.2.20 그대로라 없으면 "already satisfied"로 스킵된다
 uv pip install --no-index C:\whist\wlk\deploy\whisperlivekit-0.2.20-py3-none-any.whl
 
 # 4) 가상환경 활성화 — ⚠️ 반드시 필요, 빠뜨리면 아래 6)이 시스템/다른 Python으로 실행돼
@@ -512,3 +521,5 @@ curl http://localhost:2010/v1/models
 | **공유 `.venv` 반쪽 손상** | dev PC에서 `.venv\Scripts\python.exe`가 `No pyvenv.cfg file`(exit 106)로 기동 불가 → 측정·pytest 전면 차단. `.venv` 최상위에 `Lib`/`pyvenv.cfg` 없이 `Scripts`/`share`만 잔존 | **원인**: 배포/wheelhouse 작업(§2.2)의 `uv venv`/`uv pip`/`uv sync`를 **공유(Junction) `.venv`에 실행**했고, 그 순간 IDE Jedi 언어서버가 python.exe를 잠가 Scripts 제거가 실패한 반쪽 손상. **예방**: §2.2 경고대로 wheelhouse 빌드는 독립 `.venv`에서 + IDE 인터프리터 분리. **복구(무중단)**: `uv venv` 출력의 base python(`Using CPython … at <경로>`)으로 임시 probe venv 생성 → 그 `pyvenv.cfg`를 손상된 `.venv\`에 복사 → python 기동 회복 → `uv sync --extra diarization-sortformer --extra vbcable --extra cu128`로 Lib 재설치(Scripts 제거를 안 하므로 IDE 잠금과 무관). 진행 중 uv 경합이 있으면 먼저 멈춘 뒤 복구 |
 | **`wlk_in` 최신화 ≠ 배포 PC 반영** | dev PC의 `wlk_in`은 최신 master 기준으로 갱신됐는데, 배포 PC(`C:\whist\wlk`)는 여전히 구버전 코드로 동작(예: `model_dir` 미전파로 인터넷 다운로드 시도 → `getaddrinfo failed`) | `wlk_in`을 갱신하는 것과 그걸 USB로 옮겨 배포 PC에 실제로 덮어쓰는 것은 별개 단계다. `wlk_in\SYNC_STATE.txt`의 `deploy_pc_confirmed_applied`가 `unknown`이면 아직 배포 PC 반영이 확인되지 않은 것 — 매번 USB 반입·적용 여부를 사용자에게 확인한다 |
 | **cwd가 wheel을 가림** | 배포 PC에서 `whisperlivekit` wheel을 재설치해도 버그가 그대로 재현됨(코드가 안 바뀐 것처럼 보임) | `python -m whisperlivekit.basic_server`는 cwd(`C:\whist\wlk`)를 sys.path 최우선에 둔다 — cwd에 `whisperlivekit\` raw 소스 폴더가 있으면 **wheel 설치 여부와 무관하게 그 raw 폴더가 항상 먼저 로드**된다. `python -c "import whisperlivekit; print(whisperlivekit.__file__)"`로 실제 로드 경로를 확인하고, raw 폴더 쪽을 갱신해야 한다(wheel만 갱신해선 소용없음) |
+| **wheel 재설치 누락(콘솔 스크립트 기동 시)** | `whisperlivekit-server`(§0·§4.2·§4.4의 공식 권장 기동법)로 켠 배포 PC에서 새 코드가 전혀 반영 안 됨 — raw `whisperlivekit\` 폴더는 최신으로 갱신했는데도 버그 재현 | 위 항목과 정반대 상황: `whisperlivekit-server`는 콘솔 스크립트라 cwd를 sys.path에 얹지 않고 **site-packages(설치된 wheel)를 항상 우선 로드**하며 cwd의 raw 폴더는 무시한다. `whisperlivekit/**` 변경분을 반영하려면 raw 사본 복사와 별개로 `uv pip install --no-index --force-reinstall --no-deps C:\whist\wlk\deploy\whisperlivekit-*.whl`로 wheel도 반드시 재설치해야 한다. 실사고: Exp-167~175 여러 회차의 반입 안내가 raw 사본 복사만 지시하고 wheel 재설치를 빠뜨렸다 — 그 기간 배포 PC가 `whisperlivekit-server`로 기동됐다면 CASE1/CASE2/CASE3/경계철회 등 해당 수정들이 전혀 반영되지 않았을 수 있다 |
+| **wheel 버전 문자열 불변 → 재설치 스킵** | `uv pip install ...whisperlivekit-0.2.20-....whl`을 다시 돌려도 "Requirement already satisfied"만 뜨고 실제로는 아무것도 안 바뀜 | 프로젝트 wheel은 코드가 바뀌어도 `pyproject.toml`의 버전을 올리지 않는 한 파일명이 항상 `whisperlivekit-0.2.20-py3-none-any.whl`로 동일하다 — uv/pip는 버전 문자열만 보고 "이미 만족됨"으로 건너뛴다. 내용이 바뀐 wheel을 실제로 덮어쓰려면 **`--force-reinstall`을 항상 붙인다** |
