@@ -126,25 +126,41 @@
 
 ---
 
-## 5. metric 구현 계획 (다음 세션 — 코드 과제)
+## 5. metric 구현 현황
 
-현재 신형식 파일 6종은 **orphaned**(어떤 코드도 로드 안 함). eval은 `audio_path.with_suffix(".txt")`로 구
-파일만 읽는다. 구현 순서:
+Part 1~3(파서·2지표 산출·집계/출력)은 **구현 완료**되었다(`feat/eval-speaker-sentence-f1`, TDD로 작성,
+`tests/test_eval_reference_parser.py`·`tests/test_metrics_segmentation.py`·`tests/test_eval_build_result.py`).
+Part 4(경로 C 화자 id 배선)는 **선택 확장으로 아직 미구현**이다.
 
-1. **[1순위] 신형식 canonical 파서**: `scripts/eval.py`가 `<name>_speak,sentence_sperate.txt`를 정답으로
-   읽도록 전환. `parse_reference_sentences`(현 `scripts/eval.py`, 빈 줄 분할)를 대체/확장해 `[spkN]` 헤더를
-   해석하고 **(a) 화자전환 경계 집합** + **(b) 문장 경계 집합** + **(c) 라벨 제거 WER 텍스트**를 산출.
-   신형식 부재 시 구 파일로 폴백(과도기).
-2. **2지표 산출**: `whisperlivekit/metrics.py`에 `compute_segmentation`을 화자경계·문장경계 각각으로 호출하는
-   경로 추가. `FileResult` 데이터클래스(현 `scripts/eval.py`)에 `speaker_f1/precision/recall` +
-   `sentence_f1/…` 필드 추가, `_build_result`에서 채움.
-3. **집계·출력**: `_aggregate_runs`(repeat 집계)·`print_summary`(stdout)·`output_data`(JSON)에 두 F1을
-   `seg_f1`과 병렬로 확장. `--repeat` median/min/max/stdev도 두 F1 각각.
-4. **[선택] 경로 C 화자 id 배선**: 귀속 정확도까지 보려면 `whisperlivekit/web/live_transcription.js`의
+1. **[완료] 신형식 canonical 파서**: `scripts/eval.py`의 `parse_speaker_sentence_reference()`가
+   `<name>_speak,sentence_sperate.txt`를 읽어 `[spkN]` 헤더를 해석하고 **(a) 화자경계 집합** +
+   **(b) 문장 경계 집합** + **(c) 라벨 제거 WER 텍스트**(`plain_text`)를 산출한다(`[spkN]` 헤더가 없으면
+   `None`을 반환). `_build_result()`가 신형식 파일을 우선 시도하고, 없거나 파싱 실패 시(`None`) 구
+   `parse_reference_sentences()`로 폴백한다(과도기 병존 유지).
+2. **[완료] 2지표 산출**: `whisperlivekit/metrics.py`의 `compute_speaker_sentence_segmentation()`이
+   `compute_segmentation()`과 동일한 Levenshtein 정렬·경계 매칭 로직(내부 공용 헬퍼로 추출:
+   `_flatten_sentences`/`_flatten_blocks`/`_match_boundaries`/`_boundary_prf`)을 화자경계·문장경계 두
+   집합에 각각 적용해 hyp 단어 정렬을 1회만 공유 계산한다. `FileResult`(현 `scripts/eval.py`)에는 계획과
+   달리 새 `speaker_f1` 필드를 만들지 않고 **기존 `seg_f1/seg_precision/seg_recall` 필드를 화자분리 F1이
+   그대로 이어받는 방식**으로 구현했다(§1 "화자분리 F1이 옛 단일 F1의 직접 후속"과 정합, JSON 하위호환
+   목적) — `sentence_f1/sentence_precision/sentence_recall` + `ref_format`(`"new"`/`"old"`/`None`) 필드가
+   신규 추가됐다. 모든 블록이 단일 문장이면(예 ytn2) 블록 내부 경계가 0개이므로 `sentence_f1`은 `None`
+   (해당 없음)이지 `0.0`이 아니다.
+3. **[완료] 집계·출력**: `_aggregate_runs`·`print_summary`·`output_data`(JSON)가 `seg_f1`(화자분리)과
+   `sentence_f1`(문장분리)을 나란히 median/min/max/stdev까지 산출한다. `_save_transcript`가 저장하는
+   전사 txt 헤더에도 두 F1 + `ref_format`(신형식/구형식)이 표기된다.
+4. **[미구현·선택] 경로 C 화자 id 배선**: 귀속 정확도까지 보려면 `whisperlivekit/web/live_transcription.js`의
    `.textcontent` div에 `data-speaker`를 부여하고 `scripts/vbcable_test.py` DOM scrape가 이를 수집하게 한다
-   (현재 화자 id는 `.speaker-badge` span에만 있어 scrape에서 유실). 화자분리 F1(경계 실현)만 볼 거면 불필요.
-5. **kinno 정성‑only 처리**: kinno는 수치 산출은 하되 채택 게이트에서 제외(리포트에 "sanity only" 표기).
+   (현재 화자 id는 `.speaker-badge` span에만 있어 scrape에서 유실). 화자분리 F1(경계 실현)만 볼 거면
+   불필요 — Part 1~3이 다루는 것은 항상 "경계 위치"뿐이고, "이 줄이 몇 번 화자 발화인가"(귀속)는 여전히
+   미측정이다.
+5. **kinno 정성-only 처리**: 코드 과제가 아니라 리포팅 관례다 — kinno도 다른 파일과 동일하게 수치가
+   산출되지만(코드에 kinno 특례 없음, CLAUDE.md §3.8 및 이 저장소 규약대로), 채택 게이트에서는 제외하고
+   정성 확인 용도로만 쓴다. 이미 CLAUDE.md §3.8·§4와 `.claude/commands/eval.md` §정성 평가 절차에 반영돼 있다.
 
+> **다음 실행 단계**: 코드는 착지했지만 **regime v2 베이스라인 경로 C 실측은 아직 하지 않았다**(이번
+> 작업 범위는 코드+테스트, 라이브 서버/오디오 측정은 미포함). 다음 성능 개선 세션에서
+> [EXPERIMENTS.md](../EXPERIMENTS.md)(STATE) 안내대로 신 베이스라인을 측정한다.
 > 라인 번호는 드리프트할 수 있으니 **함수/식별자 이름**으로 찾는다(위 이름은 현재 코드 기준).
 > 코드 변경 시 [../CLAUDE.md](../CLAUDE.md) "코드 변경 시 연동 갱신 문서" 표대로 관련 문서를 lockstep 갱신.
 
