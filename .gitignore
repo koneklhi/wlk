@@ -149,10 +149,11 @@ nllb-200-distilled-600M-ctranslate2/*
 .claude/settings.local.json
 
 # eval/측정 스크래치 결과 (루트) — .omc/benchmarks/ 에 저장하는 것이 원칙
-results_*.txt
-results_*.json
-eval_*.txt
-ytn2_*.txt
+# 앵커(/) 필수 — 미앵커 시 test_data/ytn2_*.txt(정답 스크립트)까지 오무시됨
+/results_*.txt
+/results_*.json
+/eval_*.txt
+/ytn2_*.txt
 
 # 워크트리 (git worktree add로 생성, 로컬 전용)
 worktrees/
