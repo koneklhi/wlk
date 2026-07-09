@@ -39,9 +39,9 @@
 - **백엔드(우리 작업)가 하는 일**: ① 한 문장이 끝났는지 판단(확정/비확정 상태 결정) ② 결과를 React UI에 메시지로 전달.
 - **배포 환경 React**는 프론트 개발자 담당(이 저장소에 React 코드 없음). **단, 개발/테스트 단계에선 내장 UI에 가벼운 프론트 기능을 직접 넣어 검증해도 된다.**
 - 메시지 스키마는 [docs/SCHEMA_CHANGES.md](docs/SCHEMA_CHANGES.md)로 **확정·구현됨**. 문장 확정 알고리즘(신호 조합)은 일부 미정 — [docs/OPEN_QUESTIONS.md](docs/OPEN_QUESTIONS.md) §1 참조 후 합의해 확정.
-- 문장 확정 품질은 `/eval`의 **문장 분리 F1**(정답 기준: 빈 줄 = 화자전환 경계(1순위 필수) + 긴 발화 온점분리 경계(2순위 선택), STT `lines[]` 경계와 단어 정렬 비교; F1 primary=화자전환 경계·secondary=온점 경계 — metric 구현 후속)로 정량 평가한다.
+- 문장 확정 품질은 `/eval`의 **화자분리 F1 + 문장분리 F1 2지표**로 정량 평가한다. 정답 = 신형식 `test_data/<name>_speak,sentence_sperate.txt`(**canonical**; 구 `<name>.txt`는 deprecated): `[spkN]` 전환 = **화자전환 경계**(화자분리 F1·1순위), 화자 블록 내 줄바꿈 = **문장 경계**(문장분리 F1·3순위). STT 확정 줄 경계와 단어 정렬로 비교한다. **요구사항·우선순위·측정·구현 계획 정본 = [docs/TRANSCRIPTION_REQUIREMENTS.md](docs/TRANSCRIPTION_REQUIREMENTS.md)** (2지표 metric 코드는 구현 후속 — 현재 신형식 파일은 orphaned).
   **성능 판정 기준은 경로 C(VBCable 루프백)만** 사용한다. 경로 A(PCM 파일 주입)는 브라우저 오디오 파이프라인을 우회해 실사용과 무관한 수치를 내므로 폐기.
-- **최종 목표 = 문장 단위 확정 (Exp-170~ 온점 형태소 분할 도입)**: 궁극 목표는 발화를 **한 문장씩 확정·분리**하는 것이다. 단 **화자가 바뀌는 순간에는 반드시 화자 분리**가 일어나야 한다(정답 스크립트가 화자전환 기준으로 줄바꿈됨). 그래서 현재 F1 지표는 정답의 **화자전환=문단 경계**만 재고 문장(온점) 2순위 metric이 미구현이라, **문장 분할을 늘리면 당장 F1이 떨어져 보일 수 있으나 괜찮다** — 최종 목적(문장 단위 확정)에 부합하고 WER이 회귀하지 않으면 채택한다. **성능 개선 방향은 F1보다 WER을 우선**한다(§4 지표 우선순위 재확인). `bong1`처럼 **다화자가 짧은 단어를 번갈아 말하는 케이스**는 그 순간 문장·화자 분리를 잘 해야 전사 정확도(WER)도 함께 개선된다 — 다화자 화자전환 경계에서의 정확한 분리가 §3.8 최우선(ytn2·bong1) 개선과 직결된다.
+- **최종 목표 = 문장 단위 확정 (Exp-170~ 온점 형태소 분할 도입)**: 궁극 목표는 발화를 **한 문장씩 확정·분리**하는 것이다. 단 **화자가 바뀌는 순간에는 반드시 화자(문장) 분리**가 일어나야 한다(정답 신형식이 `[spkN]` 화자전환 기준으로 줄바꿈됨) — 이것이 **최우선 요구(화자분리 F1 1순위)**다. **개선·채택 우선순위 = 화자분리 F1 > WER > 문장분리 F1**(§4 재확인): 화자전환 경계 분리가 가장 위, 그다음 WER, 동일 화자의 온점 문장 분리(문장분리 F1)는 **nice-to-have**(인접 문장이 붙여 전사돼도 허용). 단 **한 단어/문장이 단어 중간에서 쪼개지는 분절(Case B, 예 "올렸"⏎"습니다")은 절대 금지**. `bong1`처럼 **다화자가 짧은 단어를 번갈아 말하는 케이스**는 그 순간 화자·문장 분리를 잘 해야 전사 정확도(WER)도 함께 개선된다 — 다화자 화자전환 경계에서의 정확한 분리가 §3.8 최우선(ytn2·bong1) 개선과 직결된다. 요구사항 정본 = [docs/TRANSCRIPTION_REQUIREMENTS.md](docs/TRANSCRIPTION_REQUIREMENTS.md).
 
 ### 3.4 번역 트리거 (기존 흐름 이식)
 - 문장이 **확정된 시점**에 번역 수행 → UI 출력. 번역 파이프라인(LLM, 프롬프트, 번역기 모듈)은
@@ -61,7 +61,7 @@
 ### 3.8 STT 개선 방향 제약 (Phase 4+)
 - **ytn2·bong1 공동 최우선**: 한↔영 전환 간격이 짧은 환경(ytn2) 및 다화자·긴 발화 환경(bong1 — 영어 2명+한국어 2명, 봉준호 기생충 인터뷰)이 현재 핵심 개선 대상. **음성 데이터 개선 1순위 = ytn2·bong1**. 목표는 각각 '짧은 텀 코드스위칭 역량'과 '다화자 화자전환 역량'의 **일반화 향상**이며, **데이터 특화 하드코딩(특정 단어·구절 암기) 금지** — 개선은 일반화돼야 한다.
 - **상용화 worst-case 우선**: 동일 음성·환경에도 실행마다 편차 큼 — 배포·상용화 관점에서 **worst 케이스 감소가 최우선**이다. 개선 방향 검토 시 median보다 **최악 케이스 축소를 먼저** 생각한다(채택 확정 단계 측정·채택 규칙은 §4).
-- **범용 개선만 + 테스트/held-out 분리**: 측정 **테스트 세트 = bong1 + ytn2 + sbs1**(채택/기각 판단; 채택 확정 시 `--repeat 3`, 스크리닝은 `--repeat 1` — §4), **held-out = ytn1 + eng1**(채택 후보에 한해 일반화 검증). ytn1은 ytn2 동일 이벤트 쌍둥이 → 미학습 코드스위칭 일반화 검증, eng1은 영어 회귀 감시. 새 실험 전 "이 변경이 bong1/ytn2/sbs1 특화인가?" 자문. 추후 테스트 데이터 추가 시 회귀 없어야 한다.
+- **범용 개선만 + 테스트/held-out 분리**: 측정 **테스트 세트 = bong1 + ytn2 + sbs1**(채택/기각 판단; 채택 확정 시 `--repeat 3`, 스크리닝은 `--repeat 1` — §4), **held-out = 정량(ytn1 + eng1) + 정성 sanity(kinno)**(채택 후보에 한해 검증). ytn1은 ytn2 동일 이벤트 쌍둥이 → 미학습 코드스위칭 일반화 검증, eng1은 영어 회귀 감시. **kinno**(2화자 순차통역)는 정답 텍스트가 부정확할 수 있어 **WER/F1 채택 게이팅에서 제외** — 전반 화자·문장 분리 + 대규모 누락/환각 유무만 정성 확인. 새 실험 전 "이 변경이 bong1/ytn2/sbs1 특화인가?" 자문. 추후 테스트 데이터 추가 시 회귀 없어야 한다.
 - **하드코딩·백엔드 우선, 탈출구 허용**: 디코더 파라미터(beam_size, compression_ratio_threshold, no_speech_threshold 등)·오디오 전처리·VAD 등 backend 레벨 개선을 우선한다. **정 방법이 없는 경우 하드코딩·후처리 필터도 사용 가능**(남용 금지; 근거는 실험기록에 남긴다). 특정 언어·패턴 특화 하드코딩(한국어 N-gram 필터, N-word 배치 드롭 등)은 신규 추가보다 backend 대안을 먼저 탐색한다. 기존 베이스라인 필터(Exp-002/028/057)는 유지.
 
 ## 4. 코드 스타일 / 운영 규칙
@@ -81,10 +81,10 @@
   - **① 스크리닝(탐색) 측정 = `--repeat 1`** — 평소 개선 루프의 기본값. 빠르게 돌려 **개선 방향 탐색·catastrophic 회귀 감지·다음 실험 결정**에 쓴다. 1회 수치는 **'방향 신호'로만** 해석하고 미세 채택/기각 결론의 근거로 쓰지 않는다.
   - **② 채택 확정 측정 = `--repeat 3`** — 스크리닝에서 유망한 후보를 **master에 채택(머지)하기 직전**에만 동일 파일·설정으로 N≥3회 측정해 **median + 분산(min/max/stdev)을 함께** 본다. 이 단계에서만 **fail-fast(첫 회차 나쁘면 중단) 금지** — 분산 자체가 데이터이므로 N회를 전부 측정(단, VBCable 미설정·포트 충돌·무음 캡처 등 *하니스 버그*는 즉시 멈추고 고친다).
   - **채택 우선순위(② 단계): 1순위 = 최악 케이스(max) 미회귀, 2순위 = median 개선.** 최악 케이스가 catastrophic하게 터지는 설정은 median이 좋아도 실사용에서 무너지므로 기각. 최악 케이스 발생 시 median 개선보다 원인 파악·해결을 먼저.
-  - **지표 우선순위 — WER > F1**: WER(전사 정확도)이 1차 개선 목표이며, 문장 분리 F1은 2차 지표다. WER max 미회귀 + WER median 개선이 F1 변동보다 우선하여 채택을 결정한다. F1 하락이 동반되더라도 WER 개선이 명확하면 채택 가능 — 단, F1이 catastrophic(≈0% 반복)하게 폭주하면 원인 파악 후 결정한다(Exp-142 결정 근거).
-  - **측정 기본 설정 = 화자분할 ON**(Sortformer; `--diarization --sortformer-model whisperlivekit/model/sortformer-4spk-v2.nemo --compression-ratio-threshold 3.0`; 테스트·held-out 분리는 §3.8). held-out(ytn1+eng1)은 채택 후보에 한해 **단회** 검증(기존과 동일).
+  - **지표 우선순위 — 화자분리 F1 > WER > 문장분리 F1**(구 "WER > F1" 개정): **① 화자분리 F1**(정답 `[spk]` 화자전환 경계가 전사 줄분리로 실현되는지)이 **최우선** 개선·채택 지표, **② WER**(전사 정확도), **③ 문장분리 F1**(동일 화자 온점 문장 분리, nice-to-have). 채택 게이트 순서 = 화자분리 F1 worst-case 미회귀 → WER max 미회귀 → WER median 개선 → 문장분리 F1. **문장분리 F1 하락 단독은 기각 근거 아님**(Case A: 동일 화자 인접 문장이 붙여 전사돼도 허용). 단 **Case B(한 단어/문장이 단어 중간에서 쪼개짐, 예 "올렸"⏎"습니다")는 F1·WER 무관 hard-fail — flag·원인 수정**. 요구사항·측정·구현 정본 = [docs/TRANSCRIPTION_REQUIREMENTS.md](docs/TRANSCRIPTION_REQUIREMENTS.md). (신 regime v2 — 2지표 metric 코드는 구현 후속.)
+  - **측정 기본 설정 = 화자분할 ON**(Sortformer; `--diarization --sortformer-model whisperlivekit/model/sortformer-4spk-v2.nemo --compression-ratio-threshold 3.0`; 테스트·held-out 분리는 §3.8). **정답 = 신형식 `_speak,sentence_sperate.txt` canonical**(구 `<name>.txt` deprecated; 파서 전환은 구현 후속). held-out 정량(ytn1+eng1)은 채택 후보에 한해 **단회** 검증, held-out 정성 sanity(kinno)는 **게이팅 제외**(누락/환각·거친 화자/문장 분리만).
   - **안정화 단계 전환**: 테스트 3종 WER이 catastrophic worst-case 없이 일정 밴드로 수렴해 스크리닝 1회만으로 후보 우열을 가리기 어려워지면, **평소 측정 기본을 `--repeat 3`(상시 안정화 테스트)으로 되돌린다**. 이 전환은 **major 방향 전환**이므로 사용자에게 보고·확인 후 적용한다.
-  - **정성 평가 통합**: eval.py 완료 후 `.omc/transcripts/` 전사 파일을 읽어 **목표 달성 여부·신규 이슈 발생 여부**를 정성 판정한다. 정량 수치만으로 채택/기각하지 않고 정성 분석을 반드시 함께 고려한다. WER이 악화돼도 목표 구간이 개선됐다면 자율 기각하지 않고 사용자 확인으로 에스컬레이션한다. 판정 기준 상세는 `.claude/commands/eval.md §정성 평가 절차` 참조.
+  - **정성 평가 통합**: eval.py 완료 후 `.omc/transcripts/` 전사 파일을 읽어 **목표 달성 여부·신규 이슈 발생 여부**를 정성 판정한다. 정량 수치만으로 채택/기각하지 않고 정성 분석을 반드시 함께 고려한다. WER이 악화돼도 목표 구간이 개선됐다면 자율 기각하지 않고 사용자 확인으로 에스컬레이션한다. **필수 확인**: ① 화자전환 경계마다 줄분리 실현(1순위), ② Case B(단어 중간 분절) 발생 시 hard-fail flag, ③ 대규모 누락/환각·한영 외 언어 환각. Case A(동일 화자 문장 미분리)는 허용. 판정 기준 상세는 `.claude/commands/eval.md §정성 평가 절차` 및 [docs/TRANSCRIPTION_REQUIREMENTS.md](docs/TRANSCRIPTION_REQUIREMENTS.md) §4 참조.
 
 ### 코드 변경 시 연동 갱신 문서
 
@@ -99,7 +99,8 @@
 | 문장 확정·분리 로직 변경 (`tokens_alignment.py` 확정 지점·`finalize_trigger` 라벨·경계 신호 조건·관련 임계치) | `docs/SENTENCE_FINALIZATION_LOGIC.md` (§7 갱신 규약 표대로 해당 절 갱신) |
 | `pyproject.toml` extras 추가/제거 | `docs/DEPLOYMENT_OFFLINE.md` §2.1 기능별 extra 표 및 §2.2 export 명령 |
 | 번역 파이프라인 변경 (`translator.py`, config 번역 필드) | `docs/DEPLOYMENT_OFFLINE.md` §5, `docs/FRONTEND_HANDOFF.md` |
-| `test_data/` 파일 추가 또는 정답 .txt 추가 | `docs/TESTING.md` 파일 목록, `CLAUDE.md` §4 측정 기본 설정(테스트셋 변경 시) |
+| `test_data/` 파일 추가 또는 정답 .txt 추가(구/신형식 `_speak,sentence_sperate.txt`) | `docs/TESTING.md` 파일 목록, `CLAUDE.md` §4 측정 기본 설정(테스트셋 변경 시), `docs/TRANSCRIPTION_REQUIREMENTS.md` §2(정답 형식) |
+| 측정 지표(WER·화자분리 F1·문장분리 F1) 정의·정답 파서·2지표 산출 (`scripts/eval.py`·`whisperlivekit/metrics.py`) | `docs/TRANSCRIPTION_REQUIREMENTS.md`(§2 형식·§3 측정·§4 분석·§5 구현), `.claude/commands/eval.md` 결과 해석 기준, `docs/TESTING.md` 경로 C |
 | 실패 모드를 바꾸는 **구조적** 코드 변경의 master 머지 (언어고정·비음성억제·디코더/VAD 파이프라인 등) | `EXPERIMENTS.md`(STATE) "코드 세대(Epoch)" 절 — epoch 마커 +1, 이전 세대 파라미터 결론에 `[E?·재검증]` 부여 |
 | 신규 실험(Exp-N) 기록 | `EXPERIMENTS_LOG.md`(전체 서술) + `EXPERIMENTS.md` 빠른참조 1행(Epoch 열) — `/log-experiment` |
 | WhisperLiveKit 본체 대규모 변경 | `docs/MASTER_CHANGES.md` — `/update-master-changes` 슬래시 커맨드 실행 |

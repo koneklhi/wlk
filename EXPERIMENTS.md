@@ -40,10 +40,11 @@
 - **테스트 세트(채택/기각)**: `bong1` + `ytn2` + `sbs1`
   - **① 스크리닝(평소)**: `eval.py --repeat 1` — 빠른 방향 탐색·catastrophic 회귀 감지. 1회 수치는 방향 신호로만 해석한다.
   - **② 채택 확정(머지 직전)**: `eval.py --repeat 3` — N≥3회 **median + min/max/stdev** 함께 본다. 이 단계에서만 **fail-fast 금지**(분산 자체가 데이터).
-- **held-out(일반화 검증)**: `ytn1` + `eng1` — 채택 후보에 한해 회귀 감시, **단회** 검증. (ytn1 = ytn2 동일 이벤트 쌍둥이 코드스위칭, eng1 = 영어 회귀 감시)
+- **held-out**: 정량 = `ytn1` + `eng1`(채택 후보에 한해 **단회** 회귀 감시; ytn1 = ytn2 동일 이벤트 쌍둥이 코드스위칭, eng1 = 영어 회귀 감시). **정성 sanity = `kinno`**(2화자; 정답 텍스트 부정확 → **WER/F1 게이팅 제외**, 대규모 누락/환각·거친 화자/문장 분리만).
 - **측정 경로**: 경로 C(VBCable 루프백)만. provenance 게이트 필수 — 매 측정 첫 줄 `[provenance] code=wlk branch=master@… vbcable=ok …` 육안 확인.
-- **측정 기본 설정**: 화자분할 ON (Sortformer + `--compression-ratio-threshold 3.0`).
-- **채택 우선순위(② 단계 기준)**: ① 최악 케이스(max WER) 미회귀 ② median 개선. max가 catastrophic하면 median이 좋아도 기각.
+- **측정 기본 설정**: 화자분할 ON (Sortformer + `--compression-ratio-threshold 3.0`). **정답 = 신형식 `_speak,sentence_sperate.txt` canonical**(구 `<name>.txt` deprecated; 파서 전환 = 구현 후속).
+- **★ 측정 regime v2 (2지표 분리)**: 지표를 **화자분리 F1**(`[spk]` 전환 경계가 전사 줄분리로 실현되는지)·**문장분리 F1**(동일 화자 온점 경계)로 **분리** 측정·기록. 구 단일 F1(빈 줄 경계)과 **비교 불가**. 신 Exp는 두 F1을 따로 남긴다. 2-F1 신 베이스라인은 metric 코드 착지 후 재측정. 정본 = [docs/TRANSCRIPTION_REQUIREMENTS.md](docs/TRANSCRIPTION_REQUIREMENTS.md).
+- **채택 우선순위(② 단계, regime v2)**: **화자분리 F1 worst-case 미회귀 → WER max 미회귀 → WER median 개선 → 문장분리 F1**(후순위·Case A 허용). **Case B(단어 중간 분절)는 수치 무관 hard-fail.**
 - **개선 1순위**: `ytn2`(짧은 텀 코드스위칭) + `bong1`(다화자 장시간) 공동 최우선. **데이터 특화 하드코딩 금지 — 개선은 일반화돼야 한다.**
 
 ## 현재 베이스라인 (Epoch 5 — turbo, 확정)
@@ -52,13 +53,15 @@
 > **확정 게이트(max)**: bong1≤30.5% / ytn2≤34.5% / sbs1≤16.1% (Exp-161 N=3로 갱신 — 3파일 모두 개선).
 > JSON: `.omc/benchmarks/eval_20260705_2338_audiomax15_N3.json`(테스트 N=3) · `eval_20260706_0002_audiomax15_heldout.json`(held-out)
 
-| 파일 | WER median | WER max | WER min | WER stdev | F1 median | 측정 N |
+| 파일 | WER median | WER max | WER min | WER stdev | F1 median(구 regime) | 측정 N |
 |------|-----------|---------|---------|-----------|-----------|--------|
 | bong1 | 30.5% | 30.5% | 29.3% | 0.7% | 50.0% | 3 |
 | ytn2  | **28.1%** | 34.5% | 24.6% | 5.0% | 38.5% | 3 |
 | sbs1  | **14.9%** | 16.1% | 13.1% | 1.5% | 16.7% | 3 |
 | ytn1(held-out) | 21.5% | — | — | — | 38.1% | 1 |
 | eng1(held-out) | 4.8% | — | — | — | 0.0% | 1 |
+
+> **F1 열 = 구 regime**(단일 문장분리 F1, 정답 빈 줄=화자전환 경계). **신 regime v2의 화자분리 F1/문장분리 F1과 직접 비교 불가** — 2-F1 신 베이스라인은 metric 코드 착지 후 재측정한다(kinno held-out은 정성 sanity라 이 표에 미포함). 요구사항·측정 정본 = [docs/TRANSCRIPTION_REQUIREMENTS.md](docs/TRANSCRIPTION_REQUIREMENTS.md).
 
 **테스트 평균(median)**: WER 24.5% (Exp-160 직후 27.9%에서 대폭 개선, sbs1이 주도) · **분산 대폭 감소**(전 파일 stdev 1~5%대 — worst-case 안정성 확보, §3.8 최우선 원칙과 정합). **sbs1 실시간 lag**: 41s → **2s대**로 안정화(Exp-161).
 
@@ -94,7 +97,7 @@
 - **[E5·Exp-169 규명·모델무관·유지]** CASE3 script-agnostic 앵커 반복게이트(gap-tolerant 클러스터링, MIN_COUNT=4·MAX_GAP=5·MIN_CONCENTRATION=0.6)는 짧고 규칙적인 storm(ytn2 "김정은"×4류)은 완전 억제하나, **가변 길이 변주구가 낀 storm(예: "Thank you [긴 변주구] Thank you" 반복)은 앵커 사이 gap이 5단어를 넘어 서브클러스터(예 3+2)로 쪼개져 MIN_COUNT 문턱을 피해가는 사각지대가 실측(N=3)으로 확인됨** — Req-2가 해결했던 ytn2 두 경계(안보리결의 직후·정경두 국방장관 직전)에서 이 사각지대형 storm이 각 1/3 빈도로 재현, 목표 문장 전체를 완전 대체(catastrophic swallow). 게이트 로그(`AnchorRepeatFilter`)가 두 재현 지점에서 전혀 발동하지 않아 게이트 자체가 원인이 아님은 확정(원래도 존재하던 잔존 위험). 향후 이 사각지대(가변 변주구 storm) 대응 시 MAX_GAP 단순 확대보다 "근접 시간창 내 앵커 총 등장" 같은 재설계 고려.
 
 - **[E5·Exp-171·모델무관·유지][언어전환경계]** **언어전환 경계 철회(retraction) + 화자전환 keep_secs 채택** — diar 이벤트 지연(~1-2s) 동안 구언어 잠금으로 커밋된 잔존/접착 토큰을 `LanguageSwitch` 마커 방출 직전 2구역 규칙(재디코딩구간=언어매치만·경계직전=+스크립트불일치)으로 철회(`tokens_alignment.py _retract_stale_language_tokens`), `refresh_segment`의 고정 `[-2:]` 컷을 `keep_secs`(경계-앵커 유지)로 교체 + `global_time_offset`을 `self.end - segments_len()`으로 재계산(`backend.py new_speaker`). ytn2 §3.8 최우선 대폭개선(median -10.9pp), bong1/sbs1도 median 개선. **bong1 max만 게이트 초과**(R2 1회, 기존 필러/웃음 실패모드와 정성일치 — 회차변동 판단, 사용자 승인 채택). `RETRACT_EPS=0.05`·`MARGIN=0.3`/`MAX_KEEP=5.0`은 **잠정값**(`docs/SENTENCE_FINALIZATION_LOGIC.md` §5 "잠정" 태그) — 추가 실측 후 보정 여지. **철회 하한은 Exp-174에서 정정**: 고정 `KEEP_SECS+1.0`(3.5s) 하한이 화자전환 트림(예 keep_secs=0.61s)보다 넓게 스캔해 재디코딩 불가능한 서두 토큰까지 철회(bong1 "You don't understand" 4단어 유실 확정) → `LanguageSwitch.retract_floor`(재디코딩 창 시작=`global_time_offset`)를 하한으로 우선 사용, `None`(하위호환)일 때만 기존 계산으로 폴백. 상세는 Exp-174 참조.
-- **[E5·Exp-170·모델무관·유지][출력계층]** **온점 형태소 분할 채택** — Whisper 마침표를 문장 경계로 쓰되 한국어 종결어미(`KO_FINAL_SUFFIXES`, bare 단음절 제외로 명사충돌 방어)·영어 약어(`EN_ABBREV`+다음단어 대문자) 판별로 거짓 마침표(어간·조사 중간 온점·소수점·약어)를 걸러 분할(`sentence_boundary.py` 신설). diar 병합 재합침 방지는 `PuncSegment.punct_boundary`(병합조건·전파·라벨 3곳). **출력 계층 전용이라 WER 중립**(단어 시퀀스 불변) → 디코더 파라미터 결론 무영향(**epoch 미bump**). **F1 지표 한계 규명(중요)**: 정답이 `scripts/eval.py:parse_reference_sentences`로 **빈 줄(화자전환/문단) 기준** 분할이라 문장(온점) 경계를 credit 못 함(§3.3 온점 2순위 metric 미구현) — 문장분할을 늘리면 hyp 경계↑로 precision↓ → F1 **오히려 하락**(sbs1 R3 F1=0.0%인데 전사는 14개 정문). **∴ 문장분리 기능은 현행 F1로 정량평가 불가 — 온점 경계 F1 구현이 후속 과제**. 채택 근거 = 목표(문장단위 확정 §3.3)·정성정확·WER중립(사용자 승인). bong1 WER max 36.0(웃음 필러환각 변동)은 출력계층 기능과 무관.
+- **[E5·Exp-170·모델무관·유지][출력계층]** **온점 형태소 분할 채택** — Whisper 마침표를 문장 경계로 쓰되 한국어 종결어미(`KO_FINAL_SUFFIXES`, bare 단음절 제외로 명사충돌 방어)·영어 약어(`EN_ABBREV`+다음단어 대문자) 판별로 거짓 마침표(어간·조사 중간 온점·소수점·약어)를 걸러 분할(`sentence_boundary.py` 신설). diar 병합 재합침 방지는 `PuncSegment.punct_boundary`(병합조건·전파·라벨 3곳). **출력 계층 전용이라 WER 중립**(단어 시퀀스 불변) → 디코더 파라미터 결론 무영향(**epoch 미bump**). **F1 지표 한계 규명(중요)**: 정답이 `scripts/eval.py:parse_reference_sentences`로 **빈 줄(화자전환/문단) 기준** 분할이라 문장(온점) 경계를 credit 못 함(§3.3 온점 2순위 metric 미구현) — 문장분할을 늘리면 hyp 경계↑로 precision↓ → F1 **오히려 하락**(sbs1 R3 F1=0.0%인데 전사는 14개 정문). **∴ 문장분리 기능은 현행 F1로 정량평가 불가 — 온점 경계 F1 구현이 후속 과제**. **[regime v2 supersede]** 이 "정량평가 불가"는 **구 regime 한정** — 신형식 정답(`_speak,sentence_sperate.txt`)의 화자 블록 내 줄바꿈으로 **문장분리 F1**을, `[spk]` 전환으로 **화자분리 F1**을 별도 산출하는 경로가 마련됐다(측정·구현 = [docs/TRANSCRIPTION_REQUIREMENTS.md](docs/TRANSCRIPTION_REQUIREMENTS.md); 우선순위 화자분리 F1 > WER > 문장분리 F1). 채택 근거 = 목표(문장단위 확정 §3.3)·정성정확·WER중립(사용자 승인). bong1 WER max 36.0(웃음 필러환각 변동)은 출력계층 기능과 무관.
 
 ## 빠른 참조
 
@@ -124,4 +127,4 @@
 
 ---
 
-> **신규 실험 기록 위치**: Exp-159+ 전체 서술은 **[EXPERIMENTS_LOG.md](EXPERIMENTS_LOG.md)** 에 추가하고(작성 형식·전사 정성분석 가이드는 LOG 상단 + `/log-experiment`), **이 STATE 파일에는 위 빠른참조 표에 1행만** 추가한다(Epoch 열 포함). 확정 결론이 바뀌면 "이월 핵심사실"도 갱신. 구조 변경이 master에 머지되면 **epoch 마커를 올리고** 이전 epoch 파라미터 결론에 `[E?·재검증]` 부여.
+> **신규 실험 기록 위치**: Exp-159+ 전체 서술은 **[EXPERIMENTS_LOG.md](EXPERIMENTS_LOG.md)** 에 추가하고(작성 형식·전사 정성분석 가이드는 LOG 상단 + `/log-experiment`), **이 STATE 파일에는 위 빠른참조 표에 1행만** 추가한다(Epoch 열 포함). 확정 결론이 바뀌면 "이월 핵심사실"도 갱신. 구조 변경이 master에 머지되면 **epoch 마커를 올리고** 이전 epoch 파라미터 결론에 `[E?·재검증]` 부여. **[regime v2]** 2-F1 metric 코드 착지 후 신 Exp는 LOG에 **화자분리 F1 + 문장분리 F1을 따로** 기록한다(구 단일 F1과 비교 불가 명시; 우선순위 화자분리 F1 > WER > 문장분리 F1 — [docs/TRANSCRIPTION_REQUIREMENTS.md](docs/TRANSCRIPTION_REQUIREMENTS.md)). 빠른참조 표는 WER med 중심 유지, 화자분리 F1 열 추가 여부는 구현 세션에서 결정.

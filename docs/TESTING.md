@@ -25,8 +25,8 @@
 - 옵션: `--speed 1.0`(실시간) / `--speed 0`(가능한 한 빠르게), `--language ko`/`--language en` 강제,
   `--live`로 비확정/확정 진행 출력, `--json`으로 원본 응답 로깅.
 - **자동 평가**: `scripts/eval.py`는 기본적으로 경로 C(1차 정량)를 실행한다. 경로 A는 `--paths A`로
-  빠른 개발 스모크(코드 회귀 확인)용으로 돌린다. 두 경로 모두 **WER + 문장 분리 F1**을 산출한다.
-  문장 분리 F1은 정답의 빈 줄 경계(= 화자전환 1순위 + 온점분리 2순위)와 STT 확정 문장(`lines[]`)의 경계 위치를 비교한다.
+  빠른 개발 스모크(코드 회귀 확인)용으로 돌린다. 두 경로 모두 **WER + (화자분리 F1 + 문장분리 F1)**을 산출한다.
+  F1은 정답 신형식 `[spkN]` 전환 경계(화자분리 F1) / 화자 블록 내 줄바꿈 경계(문장분리 F1)와 STT 확정 문장(`lines[]`) 경계를 비교한다(2지표 분리는 구현 후속 — [TRANSCRIPTION_REQUIREMENTS.md](TRANSCRIPTION_REQUIREMENTS.md)).
 
 ### 경로 B — 마이크 직접 녹음 (정성적)
 
@@ -43,7 +43,7 @@
 - 마이크 입력 경로(경로 B)를 유지하면서 동일 음성으로 반복 측정 가능 → 재현성 있는 정량 평가.
   실제 오디오 파이프라인을 거치므로 Phase 2 채택/기각의 **1차 정량 신호**다.
 - 헬퍼: [scripts/vbcable_test.py](../scripts/vbcable_test.py)
-- `scripts/eval.py`는 기본으로 경로 C를 실행해 **WER + 문장 분리 F1**을 산출한다(F1 기준: 빈 줄 = 화자전환 경계(1순위 필수) + 온점분리 경계(2순위 선택)).
+- `scripts/eval.py`는 기본으로 경로 C를 실행해 **WER + 화자분리 F1 + 문장분리 F1**을 산출한다(우선순위 = 화자분리 F1 > WER > 문장분리 F1; 정답 = 신형식 `_speak,sentence_sperate.txt` canonical). *현재 코드는 단일 `seg_f1`(구 regime 빈 줄 경계)만 산출 — 2지표 분리·신형식 파서는 구현 후속: [TRANSCRIPTION_REQUIREMENTS.md](TRANSCRIPTION_REQUIREMENTS.md) §5.*
   브라우저 `#linesTranscript`의 `.textcontent`(확정 문장)만 추출하므로 타임스탬프 행이 섞이지 않는다.
 - **산출물 위치**: 벤치마크 JSON `--output`(관례 `.omc/benchmarks/`) · 전사 `.omc/transcripts/{파일}_{경로}_R{회차}.txt` · **서버 로그** `.omc/server_logs/server_<stem>_<path>_R<rep>_<ts>.log`(회차별 항상 저장 — Exp-153; `[QualityGate]`/`[LangSwitch]`(후자는 `--trace-tokens` 시) 등 필터·전환 계측용).
 - **문장별 확정 트리거**: 전사 txt에 `[문장별 확정 트리거]` 섹션(각 문장 뒤 `⟨silence/punctuation/language_switch/speaker_change/-⟩`)이, JSON `files[].hyp_lines`(`[{"text","trigger"}, …]`)가 additive로 추가된다(WER/F1 계산은 불변). 문장 분리 로직 정성 분석용 — 경로 C는 UI DOM `data-trigger` 속성, 경로 A는 `lines[].finalize_trigger`에서 수집.
@@ -67,10 +67,10 @@ whisperlivekit-server
 - `test_data/` 디렉토리: 음성 파일(mp3/wav) + 선택적 정답 스크립트(txt)
 - 파일명 규칙: 음성파일과 정답 스크립트 파일명 동일, 확장자만 다름 (예: `sbs1.mp3` ↔ `sbs1.txt`)
 - 정답 스크립트가 없는 음성파일도 존재 가능
-- **정답 스크립트 형식**: 빈 줄(`\n\n`)로 구분된 블록이 문장 분리 F1 경계가 된다. 경계 기준:
-  1. **화자가 바뀌는 순간 = 빈 줄(1순위, 필수)** — 화자전환 경계는 반드시 빈 줄로 표기.
-  2. **한 화자의 긴 발화 = 온점 기준 분리(2순위, 선택)** — 한 블록 ≤2문장 허용, 3문장+ 이상이면 분리.
-  - 잠정: metric 구현 전까지 기존 동일가중 F1을 사용. 현재 .txt가 거의 화자턴 단위이므로 **동일가중 F1 ≈ 화자전환 F1**. 온점분리 블록이 늘어날 때부터 primary/secondary 분리 metric이 필요.
+- **정답 스크립트 형식 (신형식 canonical)**: 성능 개선 정답 = `<name>_speak,sentence_sperate.txt`. 두 경계를 라벨링한다:
+  1. **`[spkN]` 헤더 전환 = 화자전환 경계** → **화자분리 F1**(1순위·필수). 화자가 바뀌면 새 `[spkN]` 헤더(사람 단위 — 같은 화자는 한·영 code-switch 가능, bong1=4화자 `spk1`~`spk4`).
+  2. **화자 블록 내 줄바꿈 = 온점 문장 경계** → **문장분리 F1**(3순위·nice-to-have). WER 정답은 `[spkN]` 헤더 제거·라벨 미포함 텍스트.
+  - **구형식 `<name>.txt`(라벨 없는 빈 줄)는 deprecated** — 단 현 eval은 `.with_suffix(".txt")`로 아직 구 파일을 읽는다(신형식 파서 전환 = 구현 후속). 과도기 병존. 형식·측정 정본 = [TRANSCRIPTION_REQUIREMENTS.md](TRANSCRIPTION_REQUIREMENTS.md) §2·§3.
 - **파일 목록** (측정 기본 설정: 화자분할 ON — 이 옵션 전체가 이제 `parse_args.py` 기본값이라 추가 인자 없이 `whisperlivekit-server`만 기동해도 동일 설정임):
   - `bong1.mp3` / `bong1.txt` — 봉준호 기생충 인터뷰. **영어 2명 + 한국어 2명**, 화자 교대·긴 발화 혼재. 다화자·온점분리 역량의 핵심 테스트 대상.
     **테스트(채택/기각) + 개선 최우선 대상**(다화자·긴 발화). 채택 확정 시 `--repeat 3` 루틴.
@@ -78,10 +78,13 @@ whisperlivekit-server
     **테스트(채택/기각) + 개선 최우선 대상**(짧은 텀 코드스위칭). 채택 확정 시 `--repeat 3` 루틴.
   - `sbs1.mp3` / `sbs1.txt` — 뉴스 리포트. **대부분 한국어 → 중간 영어 인용 → 다시 한국어 종료**(사실상 단일 앵커, 언어 전환 경계). **테스트(채택/기각)**.
   - `ytn1.mp3` / `ytn1.txt` — SCM 회의 통역, ytn2 동일 이벤트 다른 구간. 영어 발화자+한국어 통역, 한 문장씩 화자 교대.
-    **held-out**(ytn2 동일 이벤트 쌍둥이 — ytn2 개선이 미학습 데이터에 일반화되는지 코드스위칭 검증용).
+    **held-out 정량**(ytn2 동일 이벤트 쌍둥이 — ytn2 개선이 미학습 데이터에 일반화되는지 코드스위칭 검증용).
   - `eng1.mp3` / `eng1.txt` — **단일 영어 발화자**만 말하는 상황. script-switch false split 감시용.
-    **held-out**(영어 전용 회귀 감시).
-- 용도: STT 전사 정확도(WER) + 문장 확정 정확도(F1) 정량 분석
+    **held-out 정량**(영어 전용 회귀 감시).
+  - `kinno.mp3` / `kinno_speak,sentence_sperate.txt` — ITS 2021 K-혁신기업 행사, **2화자 순차통역**(한국어 MC + 통역사), 한↔영 교차.
+    **held-out 정성 sanity** — 정답 텍스트의 단어·철자가 부정확할 수 있어 **WER/F1 채택 게이팅에서 제외**. 전반적 화자·문장 분리 + 대규모 누락/환각 유무만 정성 확인.
+- **정답 스크립트**: 위 모든 파일에 신형식 `<name>_speak,sentence_sperate.txt`가 존재(canonical). 구 `<name>.txt`는 bong1·ytn1·ytn2·sbs1·eng1에 병존(deprecated), kinno는 신형식만 존재.
+- 용도: STT 전사 정확도(WER) + 화자분리 F1 + 문장분리 F1 정량 분석(우선순위 화자분리 F1 > WER > 문장분리 F1)
 
 ### STT 동작 확인용 UI 선택지
 
