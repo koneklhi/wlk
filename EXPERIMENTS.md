@@ -42,8 +42,8 @@
   - **② 채택 확정(머지 직전)**: `eval.py --repeat 3` — N≥3회 **median + min/max/stdev** 함께 본다. 이 단계에서만 **fail-fast 금지**(분산 자체가 데이터).
 - **held-out**: 정량 = `ytn1` + `eng1`(채택 후보에 한해 **단회** 회귀 감시; ytn1 = ytn2 동일 이벤트 쌍둥이 코드스위칭, eng1 = 영어 회귀 감시). **정성 sanity = `kinno`**(2화자; 정답 텍스트 부정확 → **WER/F1 게이팅 제외**, 대규모 누락/환각·거친 화자/문장 분리만).
 - **측정 경로**: 경로 C(VBCable 루프백)만. provenance 게이트 필수 — 매 측정 첫 줄 `[provenance] code=wlk branch=master@… vbcable=ok …` 육안 확인.
-- **측정 기본 설정**: 화자분할 ON (Sortformer + `--compression-ratio-threshold 3.0`). **정답 = 신형식 `_speak,sentence_sperate.txt` canonical**(구 `<name>.txt` deprecated; 파서 전환 **구현 완료** — `feat/eval-speaker-sentence-f1` 브랜치, master 머지 대기).
-- **★ 측정 regime v2 (2지표 분리)**: 지표를 **화자분리 F1**(`[spk]` 전환 경계가 전사 줄분리로 실현되는지)·**문장분리 F1**(동일 화자 온점 경계)로 **분리** 측정·기록. 구 단일 F1(빈 줄 경계)과 **비교 불가**. 신 Exp는 두 F1을 따로 남긴다. 2-F1 metric 코드는 **구현 완료**(TDD, `feat/eval-speaker-sentence-f1` — master 머지 대기); 머지 후 2-F1 신 베이스라인을 재측정하는 것이 다음 실행 단계다. 정본 = [docs/TRANSCRIPTION_REQUIREMENTS.md](docs/TRANSCRIPTION_REQUIREMENTS.md).
+- **측정 기본 설정**: 화자분할 ON (Sortformer + `--compression-ratio-threshold 3.0`). **정답 = 신형식 `_speak,sentence_sperate.txt` canonical**(구 `<name>.txt` deprecated; 파서 전환 **구현 완료**, master 머지됨).
+- **★ 측정 regime v2 (2지표 분리)**: 지표를 **화자분리 F1**(`[spk]` 전환 경계가 전사 줄분리로 실현되는지)·**문장분리 F1**(동일 화자 온점 경계)로 **분리** 측정·기록. 구 단일 F1(빈 줄 경계)과 **비교 불가**. 신 Exp는 두 F1을 따로 남긴다. 2-F1 metric 코드는 **구현 완료**(TDD, master 머지됨); **2-F1 신 베이스라인 재측정이 다음 실행 단계**. 정본 = [docs/TRANSCRIPTION_REQUIREMENTS.md](docs/TRANSCRIPTION_REQUIREMENTS.md).
 - **채택 우선순위(② 단계, regime v2)**: **화자분리 F1 worst-case 미회귀 → WER max 미회귀 → WER median 개선 → 문장분리 F1**(후순위·Case A 허용). **Case B(단어 중간 분절)는 수치 무관 hard-fail.**
 - **개선 1순위**: `ytn2`(짧은 텀 코드스위칭) + `bong1`(다화자 장시간) 공동 최우선. **데이터 특화 하드코딩 금지 — 개선은 일반화돼야 한다.**
 
@@ -61,7 +61,7 @@
 | ytn1(held-out) | 21.5% | — | — | — | 38.1% | 1 |
 | eng1(held-out) | 4.8% | — | — | — | 0.0% | 1 |
 
-> **F1 열 = 구 regime**(단일 문장분리 F1, 정답 빈 줄=화자전환 경계). **신 regime v2의 화자분리 F1/문장분리 F1과 직접 비교 불가** — 2-F1 metric 코드는 구현 완료(`feat/eval-speaker-sentence-f1`, master 머지 대기); 머지 후 2-F1 신 베이스라인을 재측정한다(kinno held-out은 정성 sanity라 이 표에 미포함). 요구사항·측정 정본 = [docs/TRANSCRIPTION_REQUIREMENTS.md](docs/TRANSCRIPTION_REQUIREMENTS.md).
+> **F1 열 = 구 regime**(단일 문장분리 F1, 정답 빈 줄=화자전환 경계). **신 regime v2의 화자분리 F1/문장분리 F1과 직접 비교 불가** — 2-F1 metric 코드는 구현 완료(master 머지됨); **2-F1 신 베이스라인 재측정이 다음 실행 단계**(kinno held-out은 정성 sanity라 이 표에 미포함). 요구사항·측정 정본 = [docs/TRANSCRIPTION_REQUIREMENTS.md](docs/TRANSCRIPTION_REQUIREMENTS.md).
 
 **테스트 평균(median)**: WER 24.5% (Exp-160 직후 27.9%에서 대폭 개선, sbs1이 주도) · **분산 대폭 감소**(전 파일 stdev 1~5%대 — worst-case 안정성 확보, §3.8 최우선 원칙과 정합). **sbs1 실시간 lag**: 41s → **2s대**로 안정화(Exp-161).
 
