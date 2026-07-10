@@ -16,7 +16,7 @@ description: Phase 2 STT 성능 개선 반자율 루프 — 한 이터레이션�
 1. `EXPERIMENTS.md`의 최신 Exp 항목을 읽어 현재 채택 베이스라인 수치(WER median/max, 화자분리/문장분리 F1 — regime v2; 미구현 시 단일 `seg_f1`을 화자분리 F1 근사로)와 "다음 가설" 항목을 추출한다.
 2. `.omc/benchmarks/` 디렉토리에서 가장 최근 JSON을 찾아 파일별 수치를 확인한다:
    ```powershell
-   Get-ChildItem .omc\benchmarks\eval_*.json | Sort-Object Name | Select-Object -Last 3
+   Get-ChildItem .omc\benchmarks\eval_*.json | Sort-Object LastWriteTime -Descending | Select-Object -First 3
    ```
 3. bong1 수치가 없으면(최초 측정 전) → **이번 이터레이션의 1순위는 bong1 베이스라인 확립**이다.
 4. 목표 달성 여부를 파일별로 표로 정리:

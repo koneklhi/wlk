@@ -58,7 +58,7 @@ $ts = Get-Date -Format "yyyyMMdd_HHmm"
    정량(WER/F1)과 정성(목표 달성 여부·신규 이슈)을 **함께** 고려해 채택/기각/사용자 확인을 판정한다.
 5. `.omc/benchmarks/`의 가장 최근 JSON과 비교:
    ```powershell
-   Get-ChildItem .omc/benchmarks/eval_*.json | Sort-Object Name | Select-Object -Last 1
+   Get-ChildItem .omc/benchmarks/eval_*.json | Sort-Object LastWriteTime -Descending | Select-Object -First 1
    ```
 6. 개선 여부를 "이전 WER → 현재 WER (변화량%p)" 및 정성 판정 결과와 함께 표시
 7. 결과를 `/log-experiment`로 기록할지 사용자에게 확인
