@@ -239,6 +239,15 @@ def _slugify(name: str) -> str:
     return re.sub(r"[^a-zA-Z0-9_-]+", "_", name)
 
 
+def _render_trigger_chip(trigger: Optional[str]) -> str:
+    """확정 트리거 칩 하나를 <span>+줄바꿈(<br>)으로 렌더링한다. trigger가 None/빈 값이면 "none"으로
+    표시한다. render_diff()의 두 플러시 지점(메인 루프 중간 / 잔여 줄 마무리)이 동일 로직을
+    공유하도록 추출한 헬퍼 — 문장 경계마다 실제 줄바꿈이 나오게 하는 지점이 한 곳으로 모인다.
+    """
+    trig_label = trigger or "none"
+    return f'<span class="trigger trigger--{trig_label}">⟨{_esc(trig_label)}⟩</span><br>\n'
+
+
 def render_diff(diff_spans: List[DiffSpan], line_spans: List[LineSpan], case_b_hits: Optional[List[dict]] = None) -> str:
     """diff_spans + line_spans를 하나의 연속 HTML 플로우로 렌더링한다(2단 컬럼이 아닌 track-changes 스타일).
 
@@ -257,8 +266,7 @@ def render_diff(diff_spans: List[DiffSpan], line_spans: List[LineSpan], case_b_h
     def _flush_chips_up_to(hyp_pos: int) -> None:
         nonlocal line_ptr
         while line_ptr < n_lines and line_spans[line_ptr].end <= hyp_pos:
-            trig_label = line_spans[line_ptr].trigger or "none"
-            parts.append(f'<span class="trigger trigger--{trig_label}">⟨{_esc(trig_label)}⟩</span> ')
+            parts.append(_render_trigger_chip(line_spans[line_ptr].trigger))
             line_ptr += 1
 
     for span in diff_spans:
@@ -288,8 +296,7 @@ def render_diff(diff_spans: List[DiffSpan], line_spans: List[LineSpan], case_b_h
 
     # 잔여 줄 전부 플러시(예: 마지막 span 이후에도 아직 표시 안 된 트리거가 남아있는 경우).
     while line_ptr < n_lines:
-        trig_label = line_spans[line_ptr].trigger or "none"
-        parts.append(f'<span class="trigger trigger--{trig_label}">⟨{_esc(trig_label)}⟩</span> ')
+        parts.append(_render_trigger_chip(line_spans[line_ptr].trigger))
         line_ptr += 1
 
     return "".join(parts)
@@ -404,18 +411,44 @@ def render_summary_table(groups: List[FileGroup]) -> str:
 
 
 def render_legend() -> str:
-    """색상·기호 범례(고정 HTML, 데이터 의존 없음)."""
-    return (
-        '<div class="legend">'
-        '<span class="legend-item"><span class="del">삭제</span> 정답에만 있음</span>'
-        '<span class="legend-item"><span class="ins">삽입</span> 전사에만 있음(환각)</span>'
-        '<span class="legend-item"><span class="sub"><span class="sub-ref">정답</span>'
-        '<span class="sub-hyp">전사</span></span> 치환</span>'
-        '<span class="legend-item"><span class="sub caseb"><span class="sub-ref">정답</span>'
-        '<span class="sub-hyp">전사</span></span> Case B(단어 중간 분절, hard-fail)</span>'
-        '<span class="legend-item"><span class="trigger trigger--silence">⟨silence⟩</span> 문장 확정 트리거</span>'
+    """색상·기호 범례(고정 HTML, 데이터 의존 없음).
+
+    스와치에 쓰는 클래스(eq/del/ins/sub/sub-ref/sub-hyp/sub.caseb/trigger)는 `_CSS`에서
+    `.legend` 셀렉터도 함께 매치하도록 스코프를 넓혀 놨다 — 여기서 만든 마크업이 실제로
+    색이 입혀지려면 그 CSS 확장과 짝이 맞아야 한다.
+    """
+    # (스와치 HTML, 굵은 라벨, 한국어 설명) — eq(일치)부터 caseb까지 실제 진단 색상을 그대로 재사용.
+    items = [
+        ('<span class="eq">일치 예시</span>', "일치", "정답과 전사가 같음(정상)."),
+        ('<span class="del">삭제 예시</span>', "삭제", "정답에만 있고 전사에서는 빠진 단어(누락)."),
+        ('<span class="ins">삽입 예시</span>', "삽입", "전사에만 있고 정답에는 없는 단어(환각으로 추정)."),
+        (
+            '<span class="sub"><span class="sub-ref">정답</span><span class="sub-hyp">전사</span></span>',
+            "치환",
+            "정답과 다른 단어로 인식됨(취소선=정답, 옆 글자=실제 전사).",
+        ),
+        (
+            '<span class="sub caseb"><span class="sub-ref">정답</span><span class="sub-hyp">전사</span></span>',
+            "Case B",
+            '한 단어/문장이 단어 중간에서 쪼개짐(예: "올렸"⏎"습니다"). '
+            "치명적 오류로 간주한다 — 원인을 반드시 수정해야 하는 대상(hard-fail).",
+        ),
+        (
+            '<span class="trigger trigger--silence">⟨silence⟩</span>',
+            "확정 트리거",
+            "문장이 확정된 원인: silence=침묵, punctuation=구두점, "
+            "speaker_change=화자전환, language_switch=언어전환(none=미표기).",
+        ),
+    ]
+    rows = "".join(
+        '<div class="legend-item">'
+        f'<span class="legend-swatch">{swatch}</span>'
+        f'<span class="legend-label">{_esc(label)}</span>'
+        f'<span class="legend-desc">{desc}</span>'
         "</div>"
+        for swatch, label, desc in items
     )
+    return f'<div class="legend"><div class="legend-title">범례(표시 기호 설명)</div>{rows}</div>'
 
 
 _CSS = """
@@ -441,8 +474,19 @@ body {
 h1 { font-size: 1.4rem; margin: 0 0 0.25rem; }
 .meta { color: var(--muted); font-size: 0.85rem; margin-bottom: 1rem; }
 a { color: var(--link); }
-.legend { display: flex; flex-wrap: wrap; gap: 0.75rem; margin: 1rem 0; font-size: 0.85rem; color: var(--muted); }
-.legend-item { display: inline-flex; align-items: center; gap: 0.3rem; }
+.legend {
+  border: 1px solid var(--border); border-radius: 6px; background: var(--card-bg);
+  padding: 0.8rem 1rem; margin: 1rem 0; font-size: 0.95rem; color: var(--fg);
+}
+.legend-title { font-weight: 700; font-size: 1.05rem; margin-bottom: 0.4rem; }
+.legend-item {
+  display: flex; align-items: center; gap: 0.6rem; padding: 0.4rem 0;
+  border-top: 1px solid var(--border);
+}
+.legend-item:first-of-type { border-top: none; }
+.legend-swatch { flex: 0 0 auto; }
+.legend-label { flex: 0 0 auto; min-width: 4.5rem; font-weight: 700; }
+.legend-desc { color: var(--fg); }
 table.summary-table { border-collapse: collapse; width: 100%; margin: 1rem 0 2rem; font-size: 0.9rem; }
 table.summary-table th, table.summary-table td { border: 1px solid var(--border); padding: 0.4rem 0.6rem; text-align: left; }
 table.summary-table thead { background: var(--card-bg); }
@@ -453,13 +497,13 @@ details.file-section summary { cursor: pointer; font-weight: 600; padding: 0.6re
 .run-metrics { color: var(--muted); font-size: 0.8rem; margin-bottom: 0.4rem; }
 .caseb-flag { color: var(--caseb); font-weight: 700; }
 .diff { font-size: 0.95rem; word-break: keep-all; }
-.diff .eq { color: var(--eq); }
-.diff .del { color: var(--del); text-decoration: line-through; opacity: 0.85; }
-.diff .ins { background: var(--ins-bg); color: var(--ins-fg); border-radius: 3px; padding: 0 2px; }
-.diff .sub { background: var(--sub-bg); color: var(--sub-fg); border-radius: 3px; padding: 0 2px; }
-.diff .sub .sub-ref { text-decoration: line-through; opacity: 0.75; margin-right: 0.3em; }
-.diff .sub.caseb { border: 2px solid var(--caseb); font-weight: 700; }
-.diff .trigger {
+.diff .eq, .legend .eq { color: var(--eq); }
+.diff .del, .legend .del { color: var(--del); text-decoration: line-through; opacity: 0.85; }
+.diff .ins, .legend .ins { background: var(--ins-bg); color: var(--ins-fg); border-radius: 3px; padding: 0 2px; }
+.diff .sub, .legend .sub { background: var(--sub-bg); color: var(--sub-fg); border-radius: 3px; padding: 0 2px; }
+.diff .sub .sub-ref, .legend .sub .sub-ref { text-decoration: line-through; opacity: 0.75; margin-right: 0.3em; }
+.diff .sub.caseb, .legend .sub.caseb { border: 2px solid var(--caseb); font-weight: 700; }
+.diff .trigger, .legend .trigger {
   display: inline-block; background: var(--chip-bg); color: var(--chip-fg); border-radius: 999px;
   font-size: 0.75rem; padding: 0.05rem 0.5rem; margin: 0 0.2rem; vertical-align: middle;
 }
