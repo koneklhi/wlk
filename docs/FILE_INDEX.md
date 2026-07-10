@@ -58,11 +58,15 @@
 - [docs/DEPLOYMENT_OFFLINE.md](DEPLOYMENT_OFFLINE.md) — 폐쇄망 오프라인 반입·서버 기동·경로 C 자동/경로 B 테스트 + 단어집·번역 배포 설정
 - [docs/TRANSLATION_SETUP.md](TRANSLATION_SETUP.md) — 번역 파이프라인 환경별 설정
 - [docs/DIARIZATION_SPIKE.md](DIARIZATION_SPIKE.md) — Sortformer 화자분할 스파이크 상세
-- [docs/OPEN_QUESTIONS.md](OPEN_QUESTIONS.md) — 미정 설계 사항
+- [docs/CODESWITCH_REALTIME_DESIGN.md](CODESWITCH_REALTIME_DESIGN.md) — 현행 master 실시간 코드스위칭 파이프라인 코드레벨 정리
+- [docs/PHASE3_TRANSLATION_RESEARCH.md](PHASE3_TRANSLATION_RESEARCH.md) — Phase 3 번역 파이프라인 연구 기록
+- [docs/PHASE3_WORD_REPLACEMENT_RESEARCH.md](PHASE3_WORD_REPLACEMENT_RESEARCH.md) — Phase 3 단어 교정(디코더 바이어싱·퍼지 후처리) 연구 기록
+- [docs/SETUP_NEW_PC.md](SETUP_NEW_PC.md) — 신규 개발 PC 셋업 가이드
+- [docs/OPEN_QUESTIONS.md](OPEN_QUESTIONS.md) — 설계 결정 이력 (대부분 해소 — 정본 문서 링크)
 - [docs/TESTING.md](TESTING.md) — 실행 명령어·검증 순서·test_data 구조
 
 ## eval 하니스 (경로 C 정량 측정)
 
-- [scripts/eval.py](../scripts/eval.py) — 경로 C/A 측정, WER + 문장 분리 F1 산출 (`--repeat`, `--paths`)
+- [scripts/eval.py](../scripts/eval.py) — 경로 C/A 측정, WER + 화자분리 F1 + 문장분리 F1 2지표 산출 (`--repeat`, `--paths`)
 - [scripts/vbcable_test.py](../scripts/vbcable_test.py) — VBCable 브라우저 자동화
 - [scripts/audio_device.py](../scripts/audio_device.py) — VBCable 장치 자동 설정/복원
