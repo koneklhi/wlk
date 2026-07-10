@@ -90,7 +90,7 @@
   - `MIN_DURATION_SHORT_LANG_RESET = 0.5`초 — `backend.py:37`.
   - `periodic_lang_check_secs` = 기본 `None`(비활성) — `parse_args.py`(CLI `--periodic-lang-check`).
   - `lang_restrict_koen = True` (한/영 2언어 고정) — `parse_args.py`(`--lang-restrict-koen`).
-- **경계 직전/직후 잔존 오언어 텍스트 철회(retraction, Exp-171~ 진행 중)**: `LanguageSwitch` 마커가
+- **경계 직전/직후 잔존 오언어 텍스트 철회(retraction, Exp-171~174 머지 완료)**: `LanguageSwitch` 마커가
   `retract_from`(재디코딩 구간 시작 절대시각)·`prev_language`(전환 전 언어)를 실어 방출되면(`_apply_detected_language`가
   `is_switch`일 때 arm — `align_att_base.py:218-224`, 마커 부착은 `backend.py:623-627`), 마커가 `all_tokens`에
   append되기 *직전* `_insert_with_reattachment`가 `_retract_stale_language_tokens`를 호출해 diar 이벤트 지연
@@ -109,7 +109,7 @@
   즉 ChangeSpeaker는 **UI 경계를 직접 만들지 않고**, UI 화자 경계는 위 겹침 로직이 만든다.
 - **파라미터**: 화자분할 백엔드 `--diarization-backend sortformer`, 모델 `--sortformer-model <.nemo>`.
   기본 `--diarization` = ON (`parse_args.py`). diarization OFF면 이 트리거는 발생하지 않는다.
-- **경계-앵커 유지(damage B 수정, Exp-171~ 진행 중)**: `new_speaker`의 `refresh_segment(complete=False)`가
+- **경계-앵커 유지(damage B 수정, Exp-171~174 머지 완료)**: `new_speaker`의 `refresh_segment(complete=False)`가
   과거엔 고정 마지막 2청크만 유지해 화자전환 경계 앞쪽 오디오(서두)를 정책적으로 폐기했다. 이제
   `refresh_segment(complete=False, keep_secs=...)`로 `keep_secs = min(self.end - change_speaker.start +
   MARGIN(0.3s), MAX_KEEP(5.0s))`만큼(화자전환 시각부터 현재까지의 실제 경계 오디오 길이)을 유지한다 —
@@ -179,7 +179,7 @@ Whisper가 찍는 마침표(`.`/`。`)를 문장 분할 신호로 쓰되, **진�
 | stall 복구 refresh | `backend.py:554-563` (`STALL_RECOVER_SEC=10.0`, `:41`) | 디코더리셋 | 마커 미방출 → 경계 직접 생성 안 함 |
 | 버퍼 최대길이 트림 `audio_max_len` | config/`parse_args.py` (`--audio-max-len`) | 타이밍 수정자 | 디코더 버퍼 상한 — 타임스탬프 영향, 경계 미생성 |
 | 스트림 종료 flush (SENTINEL/`_finish_transcription`) | `audio_processor.py:28,311-338,740-746` | flush | 남은 토큰 flush. **강제 finalize/경계 생성 없음** — 마지막 줄은 Silence/boundary가 없으면 `finalized=false`로 남음(트리거 null) |
-| 언어전환 경계 철회 `_retract_stale_language_tokens` (Exp-171~ 진행 중) | `tokens_alignment.py:141-178` (`RETRACT_EPS=0.05`, 잠정) | 드롭(구언어 잔존) | `LanguageSwitch` 마커 append 직전 `all_tokens` 꼬리를 역스캔해 `prev_language` 스탬프 텍스트 토큰 제거 — 구역1(`start≥boundary_t-EPS`): 언어매치만으로 제거, 구역2(하한~구역1 사이): +반대스크립트일 때만 제거. Silence/boundary 만나면 스캔 중단. 마커·경계 개수 불변, 마커 앞 잔존 텍스트만 사라짐 |
+| 언어전환 경계 철회 `_retract_stale_language_tokens` (Exp-171~174 머지 완료) | `tokens_alignment.py:141-178` (`RETRACT_EPS=0.05`, 잠정) | 드롭(구언어 잔존) | `LanguageSwitch` 마커 append 직전 `all_tokens` 꼬리를 역스캔해 `prev_language` 스탬프 텍스트 토큰 제거 — 구역1(`start≥boundary_t-EPS`): 언어매치만으로 제거, 구역2(하한~구역1 사이): +반대스크립트일 때만 제거. Silence/boundary 만나면 스캔 중단. 마커·경계 개수 불변, 마커 앞 잔존 텍스트만 사라짐 |
 
 ---
 

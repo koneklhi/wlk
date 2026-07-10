@@ -1455,7 +1455,7 @@ E2에서 시도·기각된 파라미터:
 
 ## Exp-150 — 단계1 채택 머지(언어전환 프로토콜+SOT 배선수정) + diar-OFF 탐색 + 신규버그 2건 발견 (2026-07-02) [E3]
 
-goal `docs/GOAL_CODESWITCH_STRUCTURAL.md` 5단계 루프의 **단계 1**. E2 파라미터 탐색(Exp-131~149) 소진 후, 코드 수준 구조 병목을 직접 공략하는 첫 단계.
+goal(구 `docs/GOAL_CODESWITCH_STRUCTURAL.md`, 폐기) 5단계 루프의 **단계 1**. E2 파라미터 탐색(Exp-131~149) 소진 후, 코드 수준 구조 병목을 직접 공략하는 첫 단계.
 
 ### 가설
 언어 전환 시 `_apply_detected_language`가 디코딩 상태만 지우고 오디오 버퍼(`state.segments`)는 유지해 **버퍼 전체가 새 언어로 재디코딩 → 방출 완료 단어가 재방출**(전환 세금). 이 세금을 오디오 절단으로 제거하고, `_check_short_silence_language`의 SOT 배선버그(`init_tokens()` 누락 → SOT 언어토큰 미갱신)를 수정하면 ytn2 코드스위칭 개선 + F1 향상 기대.
@@ -1584,7 +1584,7 @@ goal 단계2(VAD-게이트 언어감지)의 **사전 프로브** 결과에 따�
 
 ## Exp-153 — diar-ON 언어전환 경로 배선(prev_lang fallback + hard_boundary) + 회차별 서버 로그 하니스 (2026-07-03) [E3→E4]
 
-goal 단계1(E3, Exp-150)이 만든 언어전환 메커니즘(마커 + 2.5s 트림 재디코딩)이 **측정 기본 설정(diar-ON)에서 dormant**임을 다른 세션(fable) 분석(`jiggly-sniffing-scone.md` Q3)이 지적. Explore 2회로 현행 master(9ed1ee9)에서 검증 완료 후 배선. 브랜치 `exp/diaron-switch-wiring` → master `dc312bb`(--no-ff 머지). **채택은 게이트 혼합으로 사용자 결정(A: 지금 채택).**
+goal 단계1(E3, Exp-150)이 만든 언어전환 메커니즘(마커 + 2.5s 트림 재디코딩)이 **측정 기본 설정(diar-ON)에서 dormant**임을 다른 세션(fable) 분석(`docs/archive/jiggly-sniffing-scone.md` Q3)이 지적. Explore 2회로 현행 master(9ed1ee9)에서 검증 완료 후 배선. 브랜치 `exp/diaron-switch-wiring` → master `dc312bb`(--no-ff 머지). **채택은 게이트 혼합으로 사용자 결정(A: 지금 채택).**
 
 ### 가설
 diar-ON 화자전환 시 `new_speaker()`가 `detected_language=None`으로 리셋한 **뒤** eager 감지 언어를 `_apply_detected_language`로 적용 → `prev_lang=self.state.detected_language`(이미 None) → `is_switch = prev_lang is not None and …` 항상 False → 마커 arm·트림 절대 미발동(원인 A). 마커가 생겨도 `get_lines_diarization()` 병합 루프가 같은 화자면 무조건 재병합해 경계 소실(원인 B). 두 원인을 배선하면 diar-ON에서 전환 경계 단어보존(§3.2/Q4) + 문장분리 F1 개선(1차 기대)이 나타날 것.

@@ -36,9 +36,10 @@
   (HF Hub auto-download, github.com 요청 등). 모델 경로는 로컬 파일/디렉터리.
 - **§3.2 언어 강제**: 한/영 두 언어 + **Code-Switching**(한 발화 내 한·영 혼용)에서 단어 유실·환각·문장 조기
   확정이 없도록 하는 것이 목표. 특히 전환 간격이 짧은 환경(ytn2) 및 다화자 장시간 발화 환경(bong1)이 핵심 대상.
-- **§3.3 성능 판정 = 경로 C만**: 문장 확정 품질은 문장 분리 F1로 평가하되, **판정 기준 수치는 경로 C(VBCable
+- **§3.3 성능 판정 = 경로 C만**: 성능 판정 수치는 **경로 C(VBCable
   루프백)만** 쓴다. 경로 A(PCM 파일 주입) 수치는 실사용과 무관해 폐기됨 — 경로 A 기반 결론을 제안하지 않는다.
-  F1 기준: 정답 빈 줄 = 화자전환 경계(1순위 필수) + 긴 발화 온점분리(2순위 선택).
+  지표 우선순위 = **화자분리 F1 > WER > 문장분리 F1**(정본 = [docs/TRANSCRIPTION_REQUIREMENTS.md](docs/TRANSCRIPTION_REQUIREMENTS.md)).
+  정답 = 신형식 `_speak,sentence_sperate.txt` canonical(`[spkN]` 전환 = 화자분리 경계 1순위, 화자블록 내 줄바꿈 = 문장 경계 3순위 nice-to-have). 구 "빈 줄 = 화자전환" 단일 F1 형식은 deprecated.
 - **§3.8 STT 개선 방향 제약 (Phase 4+)**:
   - **ytn2·bong1 공동 최우선** — 짧은 텀 코드스위칭(ytn2) 및 다화자·긴 발화(bong1)가 핵심 개선 대상. **개선 1순위 = ytn2·bong1**(일반 역량 향상 목표; **데이터 특화 하드코딩 금지** — 일반화돼야 함).
   - **상용화 worst-case 우선** — worst 케이스 감소 최우선. 개선 검토 시 median보다 최악 케이스 축소를 먼저.

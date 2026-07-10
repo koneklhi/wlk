@@ -81,17 +81,17 @@ Phase 2 성능 개선 우선순위 (반자율 개선 루프 기준)
 - 1순위 — 코드스위칭 신뢰성 (적극 개선):
   · 한↔영 전환 시점 단어 유실·환각 억제 — ytn2(짧은 텀 코드스위칭) 핵심 지표
   · 언어 고착 후 환각 체인 억제 — periodic_lang_check(PLC) 기본 4.0 채택(Exp-154, base 기질) → **turbo 기질(E5)에서 재검증 후 기본 None(비활성)으로 전환(Exp-160)**: PLC=4.0이 ytn2에서 스퓨리어스 전환→환각을 유발함을 N=3로 확인
-  · 디코더 파라미터 — beam=3 정식 재검증 (ytn2 catastrophic 회귀 없을 시 채택 검토)
+  · 디코더 파라미터 — beam=3은 Exp-162에서 N=3 재검증·기각(게이트 초과). 추가 디코더 탐색은 EXPERIMENTS.md 빠른참조 참조
   · worst-case WER 최소화 — median 개선보다 최악 케이스 스파이크 억제 우선
 - 2순위 — 다화자·장시간 발화 안정성:
   · bong1 웃음 구간 환각 다발 — 비음성 구간 억제 개선
-  · Sortformer 과분할 완화 — 단일화자(sbs1) 문장분리 F1 급락(diar-ON 36.4% vs diar-OFF 76.2%) 원인 추적
+  · Sortformer 과분할 완화 — 단일화자(sbs1) 문장분리 F1 급락 원인은 Exp-155/167에서 과분할로 규명(문장분리 F1은 현행 3순위 nice-to-have)
 - 관리 대상 (적극 추적 제외):
   · 반복 토큰 아티팩트("바 바 바"·"보 보 보") — Exp-002/028/057 필터로 기초 억제 완료, 추가 하드코딩보다 backend 대안 우선
   · 단어 치환 오류 (예: "육군"→"6군") — Phase 3 사전 필터로 처리 완료, 모델 한계 범주
 
 목표 수치 (경로 C 기준 — 실제 오디오 파이프라인 신호)
-- 문장 분리 F1: 베이스라인 ≈0 → 목표 ≥ 0.7 (1차), 이상적으로 ≥ 0.8
+- 지표 우선순위(정본 = [docs/TRANSCRIPTION_REQUIREMENTS.md](docs/TRANSCRIPTION_REQUIREMENTS.md)): ① 화자분리 F1(화자전환 경계 실현, 1순위) → ② WER → ③ 문장분리 F1(nice-to-have). 구 "문장분리 F1 단일 ≥0.7" 목표는 2지표 regime으로 대체됨
 - WER: 경로 C 베이스라인 대비 개선 또는 유지 (환각 삽입·단어 누락은 WER로 검출)
   · WER이 높을 때 원인이 치환 오류("육군"→"6군")라면 Phase 2에서 직접 추적하지 않는다.
     원인이 환각 삽입·단어 누락이라면 스트리밍 단계 문제이므로 개선 대상이다.
@@ -100,8 +100,8 @@ Phase 2 성능 개선 우선순위 (반자율 개선 루프 기준)
 
 채택/기각 규칙 (하이브리드 루프)
 - 채택 후보 조건 (모두 충족):
-  ① 경로 C 문장 분리 F1이 직전 베이스라인 대비 유의미하게 상승
-  ② 경로 C WER 회귀 ≤ +5%p
+  ① 경로 C 화자분리 F1(정답 `[spkN]` 화자전환 경계가 전사 줄분리로 실현, 1순위)이 worst-case 미회귀 — 최우선 게이트
+  ② 경로 C WER worst-case(max) 미회귀 후 median 개선 (문장분리 F1은 3순위 nice-to-have — 하락 단독은 기각 근거 아님, Case A 허용; 단 Case B 단어 중간 분절은 hard-fail). 정본 = [docs/TRANSCRIPTION_REQUIREMENTS.md](docs/TRANSCRIPTION_REQUIREMENTS.md)
   ③ pytest 유닛 테스트 전부 통과
   ④ 삽입 아티팩트가 전사 출력/경로 B 점검에서 악화되지 않음
   ⑤ held-out(ytn1+eng1) 단회 diar-ON 검증에서 catastrophic 회귀 없음 (테스트 세트 변경과 무관히 held-out은 ytn1+eng1 유지)
@@ -110,7 +110,7 @@ Phase 2 성능 개선 우선순위 (반자율 개선 루프 기준)
 
 반자율 개선 루프 절차
 1. 계획: EXPERIMENTS.md 직전 기록 + 현재 베이스라인 검토 후 가설 수립
-2. 구현: 외과적 변경 (CLAUDE.md §2.3 준수)
+2. 구현: 외과적 변경 (CLAUDE.md §2 — karpathy-guidelines 스킬 준수)
 3. 테스트: `/eval` (경로 C = 1차 자동 성능 신호; 경로 A `--paths A` = 선택적 빠른 개발 체크) + pytest
 4. 분석: 베이스라인 대비 F1·WER 비교, 삽입/확정 정성 확인
 5. 보고: 채택/기각 판단 근거를 정리해 사용자에게 제시 → 승인 대기
@@ -118,7 +118,7 @@ Phase 2 성능 개선 우선순위 (반자율 개선 루프 기준)
    → 채택분을 master에 머지했다면 `/update-master-changes`로 docs/MASTER_CHANGES.md도 갱신
 
 
-Phase 3 — 필터링 / 단어 교정 이식 🔄 진행 중 (2026-06-21, 3-3 추가 완료)
+Phase 3 — 필터링 / 단어 교정 이식 ✅ 이식 완료 (3-6 번역 Glossary는 Phase 5로 이월)
 목표
 기존 whisperlive의 환각 제거·단어 대치 로직을 현재 whisperlivekit 환경에 맞게 구현해 전사 결과에 적용한다.
 
