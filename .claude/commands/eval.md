@@ -65,6 +65,8 @@ $ts = Get-Date -Format "yyyyMMdd_HHmm"
 
 ## 정성 평가 절차
 
+**(선택) 시각화**: `.venv\Scripts\python.exe scripts/render_eval_report.py .omc/benchmarks/eval_*.json --output .omc/transcripts/eval_report.html`로 전사·정답을 단어 단위 색깔 하이라이트(삭제=빨강 취소선·삽입=파랑·치환=노랑·**Case B=굵은 빨강 테두리**, 문장별 확정 트리거 칩 포함)한 자체완결 HTML로 렌더링하면, 아래 절차(특히 2번 Case B·6번 트리거 확인)를 원문 `.txt`보다 훨씬 빠르게 육안 판정할 수 있다. 여러 JSON(테스트셋+held-out 등)을 한 번에 넘기면 한 리포트에 합쳐진다.
+
 eval.py 완료 후 `.omc/transcripts/`에 저장된 `{파일명}_{경로}_R{회차}.txt`를 읽어
 **정량 지표가 포착 못하는 목표 달성 여부**를 판정한다.
 
