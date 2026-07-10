@@ -16,6 +16,7 @@ _SCRIPTS_DIR = Path(__file__).parent.parent / "scripts"
 sys.path.insert(0, str(_SCRIPTS_DIR))
 
 from render_eval_report import (  # noqa: E402
+    _CSS,
     FileGroup,
     _esc,
     _normalize_text,
@@ -28,6 +29,7 @@ from render_eval_report import (  # noqa: E402
     render_diff,
     render_document,
     render_file_section,
+    render_legend,
     render_run_section,
     tokenize,
 )
@@ -649,3 +651,87 @@ def test_main_returns_nonzero_for_missing_json_file(tmp_path):
     rc = main([str(missing), "--output", str(tmp_path / "out.html")])
 
     assert rc == 1
+
+
+# ---------------------------------------------------------------------------
+# 카테고리 9: 범례 CSS 스코프 버그 수정 + 내용 보강 + 문장 경계 줄바꿈
+# ---------------------------------------------------------------------------
+
+
+def test_render_legend_covers_all_mark_categories():
+    """일치/삭제/삽입/치환/Case B 라벨 텍스트와 실제 클래스 스와치가 모두 포함돼야 한다."""
+    legend_html = render_legend()
+
+    for label in ("일치", "삭제", "삽입", "치환", "Case B"):
+        assert label in legend_html, f"missing label: {label}"
+    for cls in ('class="eq"', 'class="del"', 'class="ins"', 'class="sub"', "caseb"):
+        assert cls in legend_html, f"missing class swatch: {cls}"
+
+
+def test_render_legend_explains_all_four_trigger_meanings():
+    """트리거 칩 4가지 라벨(silence/punctuation/speaker_change/language_switch)의 한국어 의미가
+    범례에 전부 설명돼 있어야 한다."""
+    legend_html = render_legend()
+
+    for meaning in ("침묵", "구두점", "화자전환", "언어전환"):
+        assert meaning in legend_html, f"missing trigger meaning: {meaning}"
+
+
+def test_render_legend_has_heading():
+    """범례 맨 앞에 헤딩이 있어야 한다."""
+    assert "범례" in render_legend()
+
+
+def test_render_legend_case_b_marked_as_critical():
+    """Case B 설명에는 "치명적" 같은 한국어 경고 문구가 명시적으로 들어가야 한다(기존 영어
+    "hard-fail" 단어만으로는 사용자가 심각성을 놓칠 수 있음 — 이 문구는 수정 전 코드엔 없다)."""
+    assert "치명적" in render_legend()
+
+
+def test_css_styles_marks_inside_legend():
+    """_CSS의 마킹 셀렉터(del/ins/sub/sub-ref/sub.caseb/trigger)가 `.legend` 안에서도 매치돼야
+    한다 — render_legend()가 만드는 스와치가 `.diff` 밖(.legend 안)에 있어서 지금은 스타일이
+    전혀 먹지 않는 회귀를 방지하는 가드."""
+    for selector in (".legend .del", ".legend .ins", ".legend .sub", ".legend .trigger"):
+        assert selector in _CSS, f"missing selector: {selector}"
+
+
+def test_render_document_includes_legend_heading():
+    """render_document() 통합 결과에도 범례 헤딩이 포함돼야 한다."""
+    doc = render_document("테스트 리포트", _sample_groups(), generated_at="2026-07-10 12:00")
+    assert "범례" in doc
+
+
+def test_render_diff_inserts_line_break_after_trigger_chip():
+    """두 문장짜리 hyp_lines를 렌더링하면 각 트리거 칩 바로 뒤에 <br>이 와야 한다(지금은 공백만
+    붙어서 전체 전사가 한 문단으로 이어짐)."""
+    ref = tokenize("the cat sat on the mat")
+    hyp_lines = [
+        {"text": "the cat sat", "trigger": "silence"},
+        {"text": "on the mat", "trigger": "punctuation"},
+    ]
+    hyp_toks, line_spans = build_hyp_layout(hyp_lines)
+    diff_spans = diff_tokens(ref, hyp_toks)
+
+    html_out = render_diff(diff_spans, line_spans)
+
+    chip_line_breaks = re.findall(r"⟩</span><br>", html_out)
+    assert len(chip_line_breaks) == 2
+
+
+def test_render_diff_line_break_after_case_b_block():
+    """Case B로 여러 hyp 토큰이 하나의 sub 블록으로 병합된 경우에도, 그 뒤에 오는 트리거 칩에
+    줄바꿈이 살아있어야 한다."""
+    ref_toks = tokenize("before understand after")
+    hyp_lines = [
+        {"text": "before under", "trigger": "silence"},
+        {"text": "stand after", "trigger": "punctuation"},
+    ]
+    hyp_toks, line_spans = build_hyp_layout(hyp_lines)
+    diff_spans = diff_tokens(ref_toks, hyp_toks)
+    case_b_hits = detect_case_b(diff_spans, line_spans)
+    assert case_b_hits  # 사전 조건: Case B가 실제로 탐지돼야 함
+
+    html_out = render_diff(diff_spans, line_spans, case_b_hits)
+
+    assert re.search(r"⟩</span><br>", html_out)
