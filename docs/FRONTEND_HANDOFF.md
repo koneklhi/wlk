@@ -24,7 +24,7 @@
 | 녹음 시작/종료 | `POST /api/recordings/start`·`/stop` | WS 연결=시작, **빈 프레임 `ArrayBuffer(0)`**=종료 |
 | 번역 | 별도 `POST /api/translate` SSE | `lines[].translation` **인라인** + `buffer_translation` |
 | 화자분할 | 없음 | **신규** `lines[].speaker`(int) + `buffer_diarization` |
-| 시간 필드 | `start`/`end` float(초) | `start`/`end` **문자열** `"H:MM:SS.cc"` |
+| 시간 필드 | `start`/`end` float(초) | `start`/`end` **문자열** `"HH:MM:SS"` — **PC 실제 벽시계 시각**(녹음 시작 0초 기준 경과시간 아님) |
 | 확정 표시 | `status: "process"/"complete"` | `finalized: bool`(별칭 `completed`) |
 
 React가 반드시 새로 구현할 것: ① WS 연결·종료 시퀀스 ② config 메시지 처리 후 오디오 송신 ③ 매 메시지 전체교체 렌더 ④ 화자(speaker) 배지/색 ⑤ 오디오 캡처(PCM AudioWorklet 또는 WebM MediaRecorder).
@@ -103,14 +103,31 @@ React가 반드시 새로 구현할 것: ① WS 연결·종료 시퀀스 ② con
 | `remaining_time_diarization` | float(초) | O | 화자분할 처리 지연(diar off면 0) | [audio_processor.py:594](../whisperlivekit/audio_processor.py#L594) |
 | `error` | str | status=="error"만 | 오류 메시지(FFmpeg 등) | [timed_objects.py:242-243](../whisperlivekit/timed_objects.py#L242-L243) |
 
-### 2.3 `lines[]` 세그먼트 필드 (`Segment.to_dict()`)
+> ⚠️ **서버는 5분 슬라이딩 윈도우만 유지한다** — `lines[]`는 무제한 누적이 아니라 최근 구간만 담겨 온다.
+> React도 내장 UI([live_transcription.js:27-30, 370-376](../whisperlivekit/web/live_transcription.js#L27-L30))처럼
+> **`finalized`(=`completed`) `true`인 줄을 별도 상태(예: Map, key=`${start}|${end}|${speaker}` 복합키)에 직접 누적**하고 화면엔
+> "누적 history + 아직 미확정인 최신 줄"만 합쳐 렌더해야 한다. 매 스냅샷을 그대로 전체교체(§0 TL;DR)만 하면
+> 5분이 지난 확정 자막이 화면에서 사라진다.
+> ⚠️ `start`가 초 단위 벽시계 시각(`HH:MM:SS`)으로 바뀌면서 같은 초에 여러 세그먼트가 시작될 수 있다(빠른 화자전환·코드스위칭) —
+> `start` 단독을 키로 쓰면 충돌로 항목이 덮어써진다. 반드시 `start`+`end`+`speaker` 복합키를 쓸 것
+> ([live_transcription.js:370-376](../whisperlivekit/web/live_transcription.js#L370-L376) 참고).
+
+### 2.3 `lines[]` 세그먼트 필드 (`Segment.to_dict(session_start)`)
 ```python
-# timed_objects.py:189-205
+# timed_objects.py — Segment.to_dict(self, session_start: Optional[float] = None)
+# session_start(에폭초, WS 라이브 세션에선 AudioProcessor.beg_loop)가 주어지면
+# 세션 상대 경과초(self.start/self.end)를 실제 벽시계 시각으로 변환해 내보낸다.
+if session_start is not None:
+    start_str = format_walltime(session_start, self.start)  # "HH:MM:SS" — PC 실제 시각
+    end_str = format_walltime(session_start, self.end)
+else:
+    start_str = format_time(self.start)   # 폴백: "H:MM:SS.cc" (세션 상대 경과시간, 업로드 배치용)
+    end_str = format_time(self.end)
 _dict = {
   'speaker': int(self.speaker) if self.speaker != -1 else 1,
   'text':    self.text,
-  'start':   format_time(self.start),   # "H:MM:SS.cc"
-  'end':     format_time(self.end),
+  'start':   start_str,
+  'end':     end_str,
   'finalized': self.finalized,
   'completed': self.finalized,          # React 호환 별칭
 }
@@ -118,13 +135,14 @@ _dict['finalize_trigger'] = self.finalize_trigger  # None이어도 항상 방출
 if self.translation:        _dict['translation'] = self.translation
 if self.detected_language:  _dict['detected_language'] = ...; _dict['lang'] = ...
 ```
+> 라이브 WS(`/asr`) 응답은 `basic_server.py`의 `handle_websocket_results()`가 `session_start = audio_processor.beg_loop`(첫 유효 오디오 청크 수신 시점의 `time.time()` epoch)를 읽어 매번 전달하므로, `lines[].start`/`end`는 **항상 PC의 실제 벽시계 시각**이다. 반면 업로드 배치 엔드포인트(`/v1/audio/transcriptions`, `/v1/listen`)는 `session_start`를 넘기지 않아 기존 경과시간 포맷을 그대로 유지한다.
 
 | 필드 | 타입 | 항상? | 값/예시 | 의미 |
 |---|---|---|---|---|
 | `speaker` | int | O | `1`,`2`,… / `-2` | 화자 번호. **diar off면 항상 `1`**. **`-2`=침묵 세그먼트**. (§3) |
 | `text` | str·null | O | `"안녕하세요"` | 전사 텍스트(침묵이면 `null`/`""`) |
-| `start` | str | O | `"0:00:03.42"` | **포맷 문자열**(H:MM:SS.cc) — float 아님 ([format_time](../whisperlivekit/timed_objects.py#L6-L15)) |
-| `end` | str | O | `"0:00:05.10"` | 동상 |
+| `start` | str | O | `"13:15:30"` | **PC 실제 벽시계 시각**(`HH:MM:SS`, 24시간제, 센티초 없음) — 녹음 시작 시점이 아니라 그 세그먼트가 실제로 발화된 현재 시각. float 아님 ([format_walltime](../whisperlivekit/timed_objects.py#L18-L20)) |
+| `end` | str | O | `"13:15:32"` | 동상 |
 | `finalized` | bool | O | `true`/`false` | 문장 확정 여부. **(정정) diar 모드에서도 이제 정상 갱신됨** — 화자전환 등으로 줄이 닫히면 `true`(§3.4) |
 | `completed` | bool | O | `finalized`와 동일 | React 호환 별칭 |
 | `finalize_trigger` | str·null | O | `silence`/`punctuation`/`language_switch`/`speaker_change`/`null` | 문장이 어떤 로직으로 확정·분리됐는지. `null`=미확정. 항상 방출되는 필드 — 프론트에서 확정 트리거 배지 표시에 활용 가능(필수 아님) |
@@ -140,8 +158,8 @@ if self.detected_language:  _dict['detected_language'] = ...; _dict['lang'] = ..
 | `content` | `lines[].text` | |
 | `language` | `lines[].detected_language`(별칭 `lang`) | |
 | `status:"process"/"complete"` | `lines[].finalized`(별칭 `completed`) | bool로 변경 |
-| `start`(float) | `lines[].start`(str) | **타입 변경** |
-| `end`(float) | `lines[].end`(str) | **타입 변경** |
+| `start`(float) | `lines[].start`(str) | **타입 변경** — PC 실제 벽시계 시각(`"HH:MM:SS"`) |
+| `end`(float) | `lines[].end`(str) | **타입 변경** — 위와 동일 |
 | (이벤트 단위 1개) | `lines[]`(전체 배열) | 매 메시지 전체교체 |
 | — | `lines[].speaker` | **신규(화자분할)** |
 | 별도 `POST /api/translate` | `lines[].translation` + `buffer_translation` | 인라인화 |
@@ -229,8 +247,10 @@ const speakerNum = `<span class="speaker-badge">${item.speaker}</span>`;
 - [ ] `EventSource`/`POST start|stop` 제거 → `new WebSocket(".../asr")`.
 - [ ] 첫 `{"type":"config"}` 처리 → `useAudioWorklet` 분기 후 녹음 시작.
 - [ ] 매 스냅샷 메시지에서 transcript **전체 교체** 렌더(append/patch 아님). `lines[]` + `buffer_transcription`(마지막 줄 미확정) 합성.
+- [ ] **확정(`finalized`) 줄 누적**: 서버 5분 슬라이딩 윈도우 대응 — 확정 줄은 프론트 상태에 누적, 미확정 줄만 매번 교체(§2 참조).
+- [ ] 녹음 종료 시 `POST /api/save-transcript` 호출(§10) — 내장 UI와 동일하게 자동 저장하면 저장 로직이 통일된다.
 - [ ] 오디오 캡처 구현: PCM(AudioWorklet+Worker) 또는 WebM(MediaRecorder).
-- [ ] 필드 타입 변경: `start`/`end`는 `"H:MM:SS.cc"` 문자열, `finalized`(=completed) bool, 언어는 `detected_language`(=lang).
+- [ ] 필드 타입 변경: `start`/`end`는 `"HH:MM:SS"` 문자열(PC 실제 벽시계 시각 — 녹음 시작 시점이 아니라 발화 시각, 센티초 없음), `finalized`(=completed) bool, 언어는 `detected_language`(=lang). history Map 키는 `start` 단독이 아니라 `start`+`end`+`speaker` 복합키(같은 초 충돌 방지).
 - [ ] 화자 UI: `speaker` 배지/색 직접 구현, `-2`=침묵, `0`=diar 진행중, `buffer_diarization` 표시.
 - [ ] 종료: `send(new ArrayBuffer(0))` → `ready_to_stop` 수신 → `close()`.
 - [ ] 번역 표시: 인라인 `translation` + `buffer_translation`. diar ON에서도 이제 정상 동작(§3.4, 과거엔 미지원이었음).
@@ -246,7 +266,7 @@ const speakerNum = `<span class="speaker-badge">${item.speaker}</span>`;
 3. **`?mode=diff`** 증분 프로토콜 존재(문서엔 없음).
 4. **`?language=` 쿼리**로 세션별 언어 강제 가능(문서엔 없음).
 5. **(정정, 2026-07-10 재대조)** 화자분할 finalized=false / 인라인 번역 미동작 제약은 SCHEMA_CHANGES §6·본 문서 최초판 작성 시점 기준으로는 코드와 일치했으나, **그 뒤 커밋 `2af2765`로 해소됐다**(§3.4). SCHEMA_CHANGES.md 해당 절도 이 문서와 함께 갱신이 필요하다.
-6. **`/api/corrections`·`/health`·`/v1/listen`·`/v1/audio/transcriptions`·`/v1/models` REST/WS 엔드포인트**는 SCHEMA_CHANGES.md에도 없다(§9 참고).
+6. **`/api/corrections`·`/health`·`/v1/listen`·`/v1/audio/transcriptions`·`/v1/models`·`/api/save-transcript` REST/WS 엔드포인트**는 SCHEMA_CHANGES.md에도 없다(§9·§10 참고).
 
 ---
 
@@ -273,3 +293,22 @@ React에 운영자용 사전 관리 화면이 필요하면 이 3개 엔드포인
 - **Deepgram 호환 WebSocket** `/v1/listen`([basic_server.py:154-159](../whisperlivekit/basic_server.py#L154-L159), 구현은 `whisperlivekit/deepgram_compat.py`) — Deepgram SDK를 쓰는 외부 클라이언트가 서버를 drop-in 교체할 수 있게 하는 경로. 인증 없음, 신뢰도 점수 0.0 고정 등 Deepgram과 차이 있음.
 - **OpenAI 호환 REST** `POST /v1/audio/transcriptions`(파일 업로드 1회성 전사, `response_format`으로 `json`/`text`/`verbose_json`/`srt`/`vtt` 지원)와 `GET /v1/models`([basic_server.py:270-354](../whisperlivekit/basic_server.py#L270-L354)) — OpenAI Whisper API 클라이언트 호환용 배치 전사 엔드포인트. **실시간 스트리밍이 아니다**(파일 전체를 받아 처리 후 응답) — React 실시간 UI에는 해당 없음.
 - 이 세 엔드포인트는 CLAUDE.md §3.1(폐쇄망) 제약과 무관하게 로컬 파이프라인만 태운다(외부 네트워크 호출 없음).
+
+---
+
+## 10. REST API — 전사 저장 (`/api/save-transcript`)
+
+WS `/asr`와 별개로, 녹음 종료 시 누적 전사를 **서버 로컬 파일**로 저장하는 REST 엔드포인트다
+(브라우저 다운로드가 아니라 서버 프로세스가 디스크에 씀). 단어 교정 API(`/api/corrections`,
+[SCHEMA_CHANGES.md](SCHEMA_CHANGES.md) §4)와 동일한 REST 계열이며, 내장 UI는 `ready_to_stop` 수신 직후
+자동 호출한다([live_transcription.js:307-320](../whisperlivekit/web/live_transcription.js#L307-L320)).
+
+| 메서드/경로 | 요청 body | 응답 | 비고 |
+|---|---|---|---|
+| `POST /api/save-transcript` | `{"lines":[{"speaker":int,"text":str,"translation":str\|undefined}, ...]}` | `{"status":"success","path":str,"line_count":int}` | 저장 경로는 서버 `--transcript-save-dir`(기본 `./transcripts`); 파일명 `transcript_YYYYMMDD_HHMMSS.txt` |
+
+- 서버 구현: [basic_server.py](../whisperlivekit/basic_server.py) `save_transcript()`.
+- txt 형식은 화자+텍스트(+번역)만 담는다(타임스탬프 없음): `[화자 N] 텍스트` 다음 줄에 `    ↳ 번역`(있을 때만).
+- **React 권장 흐름**: `ready_to_stop` 처리 시 §2의 누적 history(`finalized` 줄 전체) + 마지막 미확정 줄을 합쳐
+  `lines` payload로 구성해 fire-and-forget으로 호출(await/블로킹 금지 — 실패해도 녹음 종료 흐름을 막지 않아야 함).
+  이렇게 하면 내장 UI와 React의 저장 로직이 통일된다.

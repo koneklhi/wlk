@@ -377,6 +377,7 @@ whisperlivekit-server
 → 브라우저 **http://localhost:8900/** 접속(내장 UI) → 마이크 권한 허용 후 한·영 섞어 발화.
 - **통과 기준**: 발화가 끊김·환각 없이 실시간 전사되고, 화자가 바뀌면 화자 배지(1·2·3…)가 분리된다.
 - 음성 파일로 보려면 VBCable 재생장치를 통해 틀거나(경로 C), 빠른 방법은 마이크 앞에서 직접 발화.
+- 녹음을 멈추면 내장 UI가 누적 전사를 서버 로컬 폴더(`--transcript-save-dir`, 기본값 `./transcripts`)에 `.txt`로 자동 저장한다.
 
 #### 2단계 — whisperlive React 프론트 UI 연결
 같은 서버(`/asr`)에 기존 whisperlive React UI를 붙인다. 기존 whisperlive와 **달라진 점**만 맞추면 된다 — 상세·코드 위치는 [FRONTEND_HANDOFF.md](FRONTEND_HANDOFF.md):
@@ -385,7 +386,7 @@ whisperlivekit-server
 |---|---|
 | 엔드포인트 | WebSocket **`ws://<host>:<port>/asr`** (기존 SSE/REST 아님) |
 | 메시지 모델 | 50ms마다 **전체 스냅샷** `lines[]`(델타 아님) |
-| 시간 필드 | `start`/`end`가 **문자열 `"H:MM:SS.cc"`**(기존 float 아님) |
+| 시간 필드 | `start`/`end`가 **문자열 `"HH:MM:SS"`**(기존 float 아님) — PC 실제 벽시계 시각(녹음 시작 0초 기준 경과시간 아님) |
 | 확정 표시 | `finalized`(별칭 `completed`) bool |
 | 화자 | `lines[].speaker` int(−2=침묵, 0=diar 로딩중, 1·2·3…=화자) |
 | 오디오 송신 | 서버 `config` 메시지의 `useAudioWorklet` 분기 — PCM AudioWorklet(16kHz s16le) 또는 WebM MediaRecorder |
