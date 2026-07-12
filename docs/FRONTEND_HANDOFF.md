@@ -6,6 +6,13 @@
 > 이 문서는 [SCHEMA_CHANGES.md](SCHEMA_CHANGES.md)의 상위 확장본이다(코드 대조로 보강·정정 포함).
 > 모든 인용은 `파일:라인`으로 근거를 명시했다.
 
+> **⚠️ 갱신 이력(코드 재대조 결과 — 2026-07-10)**: 최초 작성 이후 상당한 백엔드 리팩터링(CASE1/2/3 문장경계
+> 수정, Exp-1xx대)이 있었다. 이번 대조로 발견한 실질 변경 3가지:
+> 1. **§3.4·§5 정정**: "화자분할(diar) 모드에서 인라인 번역 미동작" 제약은 **해소됐다**([tokens_alignment.py:425-427](../whisperlivekit/tokens_alignment.py#L425-L427), 커밋 `2af2765`). 이제 diar ON에서도 번역이 붙는다.
+> 2. **§3.1 정정**: `--diarization` 플래그의 **기본값이 `True`(ON)로 바뀌었다** — 아무 설정 없이 연결해도 화자 배정이 붙는다.
+> 3. **§9(신규) 추가**: 문서 작성 이후 `/api/corrections`(단어교정 사전 관리) REST API가 신설됐다. `/health`, `/v1/listen`(Deepgram 호환), `/v1/audio/transcriptions`·`/v1/models`(OpenAI 호환)도 함께 추가됐으나 React 메인 연동에는 필수 아님.
+> 그 외 파일 내 `파일:라인` 인용은 대규모 라인 이동이 있어 이번 대조로 갱신했다 — 내용(스키마·필드 의미) 자체는 대부분 그대로다.
+
 ---
 
 ## 0. 한눈에 보는 변경 (TL;DR)
@@ -28,11 +35,12 @@ React가 반드시 새로 구현할 것: ① WS 연결·종료 시퀀스 ② con
 
 ### 1.1 엔드포인트
 - WebSocket: `ws://<host>:<port>/asr` (기본 `ws://localhost:8900/asr`), TLS면 `wss://`.
-  - 핸들러: [basic_server.py:82](../whisperlivekit/basic_server.py#L82) `@app.websocket("/asr")`.
-  - 내장 UI의 URL 구성 예: [live_transcription.js:180-190](../whisperlivekit/web/live_transcription.js#L180-L190).
-- `GET /`는 내장 데모 UI(HTML 1파일)를 서빙한다([basic_server.py:48-50](../whisperlivekit/basic_server.py#L48-L50)). **React 배포 시엔 사용하지 않는다** — `/asr`만 쓰면 된다.
+  - 핸들러: [basic_server.py:91-92](../whisperlivekit/basic_server.py#L91-L92) `@app.websocket("/asr")`.
+  - 내장 UI의 URL 구성 예: [live_transcription.js:178-192](../whisperlivekit/web/live_transcription.js#L178-L192).
+- `GET /`는 내장 데모 UI(HTML 1파일)를 서빙한다([basic_server.py:57-59](../whisperlivekit/basic_server.py#L57-L59)). **React 배포 시엔 사용하지 않는다** — `/asr`만 쓰면 된다.
+- `GET /health`는 헬스체크용(§9) — React가 연결 전 서버 기동 확인에 활용 가능.
 - 쿼리 파라미터(선택):
-  - `?language=ko` — 세션별 소스 언어 강제([basic_server.py:87](../whisperlivekit/basic_server.py#L87)). 생략 시 서버 `--lan` 기본값/auto.
+  - `?language=ko` — 세션별 소스 언어 강제([basic_server.py:96](../whisperlivekit/basic_server.py#L96)). 생략 시 서버 `--lan` 기본값/auto.
   - `?mode=diff` — 증분(diff) 프로토콜 옵트인(§6). 생략 시 `mode=full`(기본·권장).
 
 ### 1.2 시퀀스 (React 구현 순서)
@@ -47,13 +55,13 @@ React가 반드시 새로 구현할 것: ① WS 연결·종료 시퀀스 ② con
 
 - **연결 직후 서버가 config 메시지를 1회 전송**:
   ```python
-  # basic_server.py:106
+  # basic_server.py:115
   await websocket.send_json({"type": "config", "useAudioWorklet": bool(config.pcm_input), "mode": mode})
   ```
-  클라이언트는 이 config를 받은 **뒤에** 녹음을 시작해야 한다(송신 방식이 여기서 정해짐). 내장 UI는 `configReady` Promise로 대기([live_transcription.js:265-274, 733-738](../whisperlivekit/web/live_transcription.js#L265-L274)).
-- **오디오 수신 루프**(서버): [basic_server.py:113-116](../whisperlivekit/basic_server.py#L113-L116) — `receive_bytes()`로 바이너리만 받는다.
-- **종료**: 빈 프레임 `new ArrayBuffer(0)` 송신([live_transcription.js:652-654](../whisperlivekit/web/live_transcription.js#L652-L654)) → 서버가 `is_stopping` 처리·잔여 flush([audio_processor.py:722-736](../whisperlivekit/audio_processor.py#L722-L736)).
-- **완료 신호**: 서버가 처리 끝나면 `{"type":"ready_to_stop"}` 전송([basic_server.py:74-75](../whisperlivekit/basic_server.py#L74-L75)). 받으면 마지막 상태 렌더 후 `close()`.
+  클라이언트는 이 config를 받은 **뒤에** 녹음을 시작해야 한다(송신 방식이 여기서 정해짐). 내장 UI는 `configReady` Promise로 대기([live_transcription.js:267-276, 739-743](../whisperlivekit/web/live_transcription.js#L267-L276)).
+- **오디오 수신 루프**(서버): [basic_server.py:122-125](../whisperlivekit/basic_server.py#L122-L125) — `receive_bytes()`로 바이너리만 받는다.
+- **종료**: 빈 프레임 `new ArrayBuffer(0)` 송신([live_transcription.js:659](../whisperlivekit/web/live_transcription.js#L659)) → 서버가 `is_stopping` 처리·잔여 flush([audio_processor.py:734-744](../whisperlivekit/audio_processor.py#L734-L744)).
+- **완료 신호**: 서버가 처리 끝나면 `{"type":"ready_to_stop"}` 전송([basic_server.py:83-84](../whisperlivekit/basic_server.py#L83-L84)). 받으면 마지막 상태 렌더 후 `close()`.
 
 ---
 
@@ -69,7 +77,7 @@ React가 반드시 새로 구현할 것: ① WS 연결·종료 시퀀스 ② con
 | `snapshot`/`diff` | `?mode=diff`일 때만 | §6 | 증분 프로토콜(full 모드엔 안 옴) |
 
 ### 2.2 상태 스냅샷 메시지 (`type` 없음 — full 모드 기본)
-`FrontData.to_dict()`가 생성([timed_objects.py:201-214](../whisperlivekit/timed_objects.py#L201-L214)). 매 사이클(~50ms) 중 **직전과 다를 때만** 전송([audio_processor.py:585-595](../whisperlivekit/audio_processor.py#L585-L595)).
+`FrontData.to_dict()`가 생성([timed_objects.py:220-244](../whisperlivekit/timed_objects.py#L220-L244)). 매 사이클(~50ms) 중 **직전과 다를 때만** 전송([audio_processor.py:587-599](../whisperlivekit/audio_processor.py#L587-L599)).
 
 ```jsonc
 {
@@ -86,18 +94,18 @@ React가 반드시 새로 구현할 것: ① WS 연결·종료 시퀀스 ② con
 
 | 최상위 필드 | 타입 | 항상? | 의미 | 근거 |
 |---|---|---|---|---|
-| `status` | str | O | `active_transcription`/`no_audio_detected`/`error` | [audio_processor.py:571-576](../whisperlivekit/audio_processor.py#L571-L576) |
+| `status` | str | O | `active_transcription`/`no_audio_detected`/`error` | [audio_processor.py:583-585](../whisperlivekit/audio_processor.py#L583-L585)(`error`는 L563) |
 | `lines` | Segment[] | O(빈 배열 가능) | 확정/진행중 세그먼트 | §2.3 |
 | `buffer_transcription` | str | O | 아직 확정 안 된 진행중 전사. **마지막 줄에 "진행중" 스타일로 표시** | |
-| `buffer_diarization` | str | O | diar 지연으로 아직 화자배정 안 된 텍스트(diar 모드만 의미) | [tokens_alignment.py:184-214](../whisperlivekit/tokens_alignment.py#L184-L214) |
-| `buffer_translation` | str | O | 진행중(미확정) 번역 | [tokens_alignment.py:276](../whisperlivekit/tokens_alignment.py#L276) |
-| `remaining_time_transcription` | float(초) | O | 전사 처리 지연(랙) | [audio_processor.py:233-235](../whisperlivekit/audio_processor.py#L233-L235) |
-| `remaining_time_diarization` | float(초) | O | 화자분할 처리 지연(diar off면 0) | [audio_processor.py:582](../whisperlivekit/audio_processor.py#L582) |
-| `error` | str | status=="error"만 | 오류 메시지(FFmpeg 등) | [timed_objects.py:212-213](../whisperlivekit/timed_objects.py#L212-L213) |
+| `buffer_diarization` | str | O | diar 지연으로 아직 화자배정 안 된 텍스트(diar 모드만 의미) | [tokens_alignment.py:379-429](../whisperlivekit/tokens_alignment.py#L379-L429) `get_lines_diarization()` |
+| `buffer_translation` | str | O | 진행중(미확정) 번역 | [tokens_alignment.py:562](../whisperlivekit/tokens_alignment.py#L562) |
+| `remaining_time_transcription` | float(초) | O | 전사 처리 지연(랙) | [audio_processor.py:244-259](../whisperlivekit/audio_processor.py#L244-L259) `get_current_state()` |
+| `remaining_time_diarization` | float(초) | O | 화자분할 처리 지연(diar off면 0) | [audio_processor.py:594](../whisperlivekit/audio_processor.py#L594) |
+| `error` | str | status=="error"만 | 오류 메시지(FFmpeg 등) | [timed_objects.py:242-243](../whisperlivekit/timed_objects.py#L242-L243) |
 
 ### 2.3 `lines[]` 세그먼트 필드 (`Segment.to_dict()`)
 ```python
-# timed_objects.py:161-176
+# timed_objects.py:189-205
 _dict = {
   'speaker': int(self.speaker) if self.speaker != -1 else 1,
   'text':    self.text,
@@ -105,8 +113,8 @@ _dict = {
   'end':     format_time(self.end),
   'finalized': self.finalized,
   'completed': self.finalized,          # React 호환 별칭
-  'finalize_trigger': self.finalize_trigger,  # 확정 트리거(silence/punctuation/language_switch/speaker_change|null)
 }
+_dict['finalize_trigger'] = self.finalize_trigger  # None이어도 항상 방출(silence/punctuation/language_switch/speaker_change|null)
 if self.translation:        _dict['translation'] = self.translation
 if self.detected_language:  _dict['detected_language'] = ...; _dict['lang'] = ...
 ```
@@ -117,14 +125,14 @@ if self.detected_language:  _dict['detected_language'] = ...; _dict['lang'] = ..
 | `text` | str·null | O | `"안녕하세요"` | 전사 텍스트(침묵이면 `null`/`""`) |
 | `start` | str | O | `"0:00:03.42"` | **포맷 문자열**(H:MM:SS.cc) — float 아님 ([format_time](../whisperlivekit/timed_objects.py#L6-L15)) |
 | `end` | str | O | `"0:00:05.10"` | 동상 |
-| `finalized` | bool | O | `true`/`false` | 문장 확정 여부. **diar 모드에선 항상 false(§3.4 제약)** |
+| `finalized` | bool | O | `true`/`false` | 문장 확정 여부. **(정정) diar 모드에서도 이제 정상 갱신됨** — 화자전환 등으로 줄이 닫히면 `true`(§3.4) |
 | `completed` | bool | O | `finalized`와 동일 | React 호환 별칭 |
-| `finalize_trigger` | str·null | O | `silence`/`punctuation`/`language_switch`/`speaker_change`/`null` | 문장이 어떤 로직으로 확정·분리됐는지. `null`=미확정. **additive** 필드 — 프론트에서 확정 트리거 배지 표시에 활용 가능(필수 아님) |
-| `translation` | str | 번역 있을 때만 | `"Hello"` | 인라인 번역(§5). 확정+번역활성 세그먼트만 |
+| `finalize_trigger` | str·null | O | `silence`/`punctuation`/`language_switch`/`speaker_change`/`null` | 문장이 어떤 로직으로 확정·분리됐는지. `null`=미확정. 항상 방출되는 필드 — 프론트에서 확정 트리거 배지 표시에 활용 가능(필수 아님) |
+| `translation` | str | 번역 있을 때만 | `"Hello"` | 인라인 번역(§5). 확정+번역활성 세그먼트만(diar ON에서도 이제 동작, §3.4) |
 | `detected_language` | str | 감지됐을 때만 | `"ko"`,`"en"` | 언어 코드 |
 | `lang` | str | detected_language 있을 때만 | 동일 값 | React 호환 별칭 |
 
-> ⚠️ `text`가 없고 `speaker != -2`인 줄은 직렬화에서 빠진다([timed_objects.py:205](../whisperlivekit/timed_objects.py#L205) `line.text or line.speaker==-2`).
+> ⚠️ `text`가 없고 `speaker != -2`인 줄은 직렬화에서 빠진다([timed_objects.py:235](../whisperlivekit/timed_objects.py#L235) `line.text or line.speaker==-2`).
 
 ### 2.4 기존 ↔ 신규 필드 매핑
 | 기존(whisperlive SSE) | 신규(whisperlivekit WS) | 비고 |
@@ -146,29 +154,38 @@ if self.detected_language:  _dict['detected_language'] = ...; _dict['lang'] = ..
 기존 `whisperlive`에 **없던 기능**이다. 서버를 `--diarization`으로 켜면 각 세그먼트에 화자 번호가 붙는다.
 
 ### 3.1 활성화
-서버 플래그 `--diarization`([parse_args.py:34-39](../whisperlivekit/parse_args.py#L34-L39)), 기본 백엔드 sortformer. config 메시지에는 화자분할 여부 플래그가 따로 없으므로 **프론트는 `speaker` 값으로 다화자 여부를 추론**한다.
+서버 플래그 `--diarization`([parse_args.py:41-46](../whisperlivekit/parse_args.py#L41-L46)), 기본 백엔드 sortformer. **⚠️(정정) `--diarization`은 이제 기본값이 `True`(ON)다** — 서버를 끄려면 명시적으로 `--no-diarization`을 줘야 한다. 즉 **React가 별도 조치를 하지 않아도 기본적으로 화자 배정이 붙는다.** config 메시지에는 화자분할 여부 플래그가 따로 없으므로 **프론트는 `speaker` 값으로 다화자 여부를 추론**한다.
 
 ### 3.2 speaker 값 의미
 | `speaker` | 의미 |
 |---|---|
-| `1,2,3,…` | 화자 번호(diar on이면 **1-base**: sortformer speaker+1, [tokens_alignment.py:200](../whisperlivekit/tokens_alignment.py#L200)) |
-| `1` | diar off일 때 **모든** 세그먼트(원래 -1 → 1로 매핑, [timed_objects.py:164](../whisperlivekit/timed_objects.py#L164)) |
+| `1,2,3,…` | 화자 번호(diar on이면 **1-base**: sortformer speaker+1, [tokens_alignment.py:395](../whisperlivekit/tokens_alignment.py#L395)) |
+| `1` | diar off일 때 **모든** 세그먼트(원래 -1 → 1로 매핑, [timed_objects.py:192](../whisperlivekit/timed_objects.py#L192)) |
 | `-2` | **침묵 세그먼트**(SilentSegment) — 침묵 아이콘으로 렌더 |
 | `0` | (UI 한정) "화자분할 진행중" 로딩 표식([live_transcription.js:390-393](../whisperlivekit/web/live_transcription.js#L390-L393)) |
 
 ### 3.3 화자 라벨/색 (내장 UI 레퍼런스)
 ```js
-// live_transcription.js:394-401
+// live_transcription.js:397-398
 const speakerNum = `<span class="speaker-badge">${item.speaker}</span>`;
-// + 사람 아이콘 + (선택)언어 배지(item.detected_language)
+// + 사람 아이콘 + (선택)언어 배지(item.detected_language) + (선택)finalize_trigger 배지
 ```
-⚠️ **내장 UI엔 화자별 색상 매핑이 없다**(단일 `speaker-badge` 클래스). 다화자 구분색이 필요하면 **React가 `speaker` 번호→색 매핑을 직접 구현**해야 한다. 침묵(`-2`)은 silence 아이콘, diar 진행중(`0`)은 스피너로 렌더([live_transcription.js:388-393](../whisperlivekit/web/live_transcription.js#L388-L393)).
+⚠️ **내장 UI엔 화자별 색상 매핑이 없다**(단일 `speaker-badge` 클래스). 다화자 구분색이 필요하면 **React가 `speaker` 번호→색 매핑을 직접 구현**해야 한다. 침묵(`-2`)은 silence 아이콘, diar 진행중(`0`)은 스피너로 렌더([live_transcription.js:389-406](../whisperlivekit/web/live_transcription.js#L389-L406)). 문서 작성 이후 `finalize_trigger` 값을 배지로 표시하는 코드가 추가됐다(`item.finalize_trigger`, 같은 블록 404-405행) — React에서도 §2.3 필드를 그대로 활용해 동일 UX를 구현할 수 있다.
 
-### 3.4 ⚠️ [핵심 제약] diar 모드에서 `finalized` 항상 false → 인라인 번역 미동작
-- **원인**: 화자분할 경로 `get_lines_diarization()`는 세그먼트에 `finalized=True`를 **한 번도 설정하지 않는다**([tokens_alignment.py:184-214](../whisperlivekit/tokens_alignment.py#L184-L214)). 비-diar 경로만 침묵 토큰에서 `finalized=True`를 명시한다([tokens_alignment.py:242-244](../whisperlivekit/tokens_alignment.py#L242-L244)). dataclass 기본값은 `False`([timed_objects.py:127](../whisperlivekit/timed_objects.py#L127)).
-- **영향 1**: diar 모드에서 `finalized`/`completed`가 신뢰 불가(항상 false).
-- **영향 2**: LLM 인라인 번역이 diar 모드에서 **안 붙는다**. 번역 매니저가 `not seg.finalized`면 건너뛰기 때문([llm_translation/manager.py:38](../whisperlivekit/llm_translation/manager.py#L38)).
-- **프론트 대응**: 화자분할 + 번역 동시 표시는 현재 백엔드가 지원하지 않는다(Phase 5 이후 개선 예정, [SCHEMA_CHANGES.md:96-114](SCHEMA_CHANGES.md)). 번역 UI는 diar OFF 운용을 전제하거나, 백엔드 보강 전까지 diar 모드에서 번역 영역을 비활성 처리.
+### 3.4 ✅ [해소됨] diar 모드에서도 `finalized` 정상 동작 → 인라인 번역 동작
+> 최초 작성 당시엔 diar 모드에서 `finalized`가 항상 false라 인라인 번역이 붙지 않는 제약이 있었다. **커밋 `2af2765`(`fix(diar+translation): 화자전환 세그먼트 finalized=True 마킹`, `6a1458b`로 master 머지)로 해소됐다.** 아래는 현재 동작이다.
+
+- **현재 동작**: `get_lines_diarization()`이 화자 전환 등으로 한 줄이 닫히면(=다음 줄로 넘어가면) **마지막 세그먼트(현재 발화 중)를 제외한 나머지 전부**에 `finalized=True`를 설정한다:
+  ```python
+  # tokens_alignment.py:425-427
+  # 화자 전환이 발생한 세그먼트는 확정 완료 — 마지막 세그먼트(현재 발화 중)는 제외
+  for seg in segments[:-1]:
+      seg.finalized = True
+  ```
+  어떤 트리거로 닫혔는지는 같은 함수의 `finalize_trigger` 결정 로직 참고([tokens_alignment.py:410-423](../whisperlivekit/tokens_alignment.py#L410-L423) — `language_switch`/`silence`/`punctuation`/`speaker_change`).
+- **비-diar 경로**도 동일하게 침묵·언어전환·온점분할 시점에 `finalized=True`를 설정한다(`get_lines()` 내 [tokens_alignment.py:504](../whisperlivekit/tokens_alignment.py#L504), [522](../whisperlivekit/tokens_alignment.py#L522), [534](../whisperlivekit/tokens_alignment.py#L534)행). dataclass 기본값은 `False`([timed_objects.py:154](../whisperlivekit/timed_objects.py#L154)).
+- **번역**: LLM 번역 매니저는 여전히 `not seg.finalized`면 건너뛰지만([llm_translation/manager.py:38](../whisperlivekit/llm_translation/manager.py#L38)), 이제 diar 모드에서도 `finalized=True`가 정상적으로 세팅되므로 **화자분할 + 인라인 번역 동시 사용이 가능하다.**
+- **프론트 대응**: 더 이상 diar/번역을 상호 배타로 다룰 필요 없음. `finalized`/`completed`를 diar on/off 관계없이 그대로 신뢰해서 렌더링하면 된다.
 
 ---
 
@@ -177,26 +194,27 @@ const speakerNum = `<span class="speaker-badge">${item.speaker}</span>`;
 `config` 메시지의 `useAudioWorklet`(= 서버 `--pcm-input` 여부)로 분기한다.
 
 ### 4.1 PCM 모드 (`useAudioWorklet === true`, 서버 `--pcm-input`)
-1. AudioWorklet `pcm-forwarder` 로드([live_transcription.js:573-579](../whisperlivekit/web/live_transcription.js#L573-L579)).
+1. AudioWorklet `pcm-forwarder` 로드([live_transcription.js:579-585](../whisperlivekit/web/live_transcription.js#L579-L585)).
 2. `pcm_worklet.js`: 마이크 mono Float32를 메인스레드로 postMessage([pcm_worklet.js:1-16](../whisperlivekit/web/pcm_worklet.js#L1-L16)).
 3. `recorder_worker.js`: 네이티브 SR→**16kHz 리샘플**, **s16le(Int16 little-endian) PCM** 변환, 0.5초 단위 ArrayBuffer 전송([recorder_worker.js:26-92](../whisperlivekit/web/recorder_worker.js#L26-L92), `view.setInt16(..., true)`).
-4. 워커 출력 ArrayBuffer를 그대로 `websocket.send`([live_transcription.js:589-593](../whisperlivekit/web/live_transcription.js#L589-L593)).
+4. 워커 출력 ArrayBuffer를 그대로 `websocket.send`([live_transcription.js:595-611](../whisperlivekit/web/live_transcription.js#L595-L611)).
 
 ### 4.2 WebM 모드 (`useAudioWorklet === false`, 기본)
-`MediaRecorder(stream, {mimeType:"audio/webm"})`, 100ms 청크마다 Blob을 `websocket.send`([live_transcription.js:606-619](../whisperlivekit/web/live_transcription.js#L606-L619)). 서버가 FFmpeg로 디코딩.
+`MediaRecorder(stream, {mimeType:"audio/webm"})`, 청크마다 Blob을 `websocket.send`([live_transcription.js:612-626](../whisperlivekit/web/live_transcription.js#L612-L626)). 서버가 FFmpeg로 디코딩.
 
 ### 4.3 React 주의
 - 폐쇄망 운용이 `--pcm-input`이면 React도 **AudioWorklet+Worker(16kHz/s16le 변환)를 미러링** 해야 한다 — `pcm_worklet.js`/`recorder_worker.js` 로직을 그대로 포팅 권장. AudioWorklet 미지원 브라우저에선 throw.
-- 마이크는 `autoGainControl/noiseSuppression/echoCancellation` 전부 false로 getUserMedia([live_transcription.js:561-563](../whisperlivekit/web/live_transcription.js#L561-L563)).
+- 마이크는 `autoGainControl/noiseSuppression/echoCancellation` 전부 false로 getUserMedia([live_transcription.js:560-570](../whisperlivekit/web/live_transcription.js#L560-L570)).
 - 종료 프레임 `new ArrayBuffer(0)`은 두 모드 공통.
+- (참고) 내장 UI에는 브라우저 **확장(extension)** 실행 시에만 동작하는 `chrome.tabCapture` 탭오디오 캡처 경로도 있다(`isExtension` 분기) — 일반 웹앱(React)에는 해당 없음, 무시해도 된다.
 
 ---
 
 ## 5. 번역(translation) 전달
 
 - **세그먼트별 확정 번역**: `lines[].translation`(str). 조건: 번역 활성 + 해당 세그먼트 `finalized=true`. LLM 경로는 캐시 히트 시 채워지고, 미스면 비차단 task 생성 후 **다음 스냅샷부터** 채워진다([llm_translation/manager.py:35-50](../whisperlivekit/llm_translation/manager.py#L35-L50)).
-- **진행중 번역**: 최상위 `buffer_translation`(str) — 마지막 줄에 "진행중" 스타일로([live_transcription.js:440-445](../whisperlivekit/web/live_transcription.js#L440-L445)).
-- ⚠️ **diar 모드 제약**: §3.4대로 화자분할 ON이면 인라인 번역이 안 붙는다.
+- **진행중 번역**: 최상위 `buffer_translation`(str) — 마지막 줄에 "진행중" 스타일로 표시([live_transcription.js:446-449](../whisperlivekit/web/live_transcription.js#L446-L449)).
+- ✅ **(정정) diar 모드 제약 해소**: §3.4대로 화자분할 ON에서도 이제 `finalized=true`가 정상 세팅되어 인라인 번역이 정상 동작한다(과거엔 안 붙었음).
 
 ---
 
@@ -215,7 +233,8 @@ const speakerNum = `<span class="speaker-badge">${item.speaker}</span>`;
 - [ ] 필드 타입 변경: `start`/`end`는 `"H:MM:SS.cc"` 문자열, `finalized`(=completed) bool, 언어는 `detected_language`(=lang).
 - [ ] 화자 UI: `speaker` 배지/색 직접 구현, `-2`=침묵, `0`=diar 진행중, `buffer_diarization` 표시.
 - [ ] 종료: `send(new ArrayBuffer(0))` → `ready_to_stop` 수신 → `close()`.
-- [ ] 번역 표시: 인라인 `translation` + `buffer_translation`. **diar+번역 동시 미지원** 주의(§3.4).
+- [ ] 번역 표시: 인라인 `translation` + `buffer_translation`. diar ON에서도 이제 정상 동작(§3.4, 과거엔 미지원이었음).
+- [ ] (선택) 단어교정 사전 관리 UI가 필요하면 `/api/corrections` REST 호출(§9) — 필수는 아님.
 
 ---
 
@@ -226,4 +245,31 @@ const speakerNum = `<span class="speaker-badge">${item.speaker}</span>`;
 2. **`speaker === -2`(침묵)·`speaker === 0`(diar 진행중)** 특수값: 문서는 "미사용 시 1"만 언급 — 렌더에 필수.
 3. **`?mode=diff`** 증분 프로토콜 존재(문서엔 없음).
 4. **`?language=` 쿼리**로 세션별 언어 강제 가능(문서엔 없음).
-5. 화자분할 finalized=false / 인라인 번역 미동작 제약은 SCHEMA_CHANGES §6과 코드가 **정확히 일치**(신뢰 가능).
+5. **(정정, 2026-07-10 재대조)** 화자분할 finalized=false / 인라인 번역 미동작 제약은 SCHEMA_CHANGES §6·본 문서 최초판 작성 시점 기준으로는 코드와 일치했으나, **그 뒤 커밋 `2af2765`로 해소됐다**(§3.4). SCHEMA_CHANGES.md 해당 절도 이 문서와 함께 갱신이 필요하다.
+6. **`/api/corrections`·`/health`·`/v1/listen`·`/v1/audio/transcriptions`·`/v1/models` REST/WS 엔드포인트**는 SCHEMA_CHANGES.md에도 없다(§9 참고).
+
+---
+
+## 9. (신규, 2026-07-10 추가) `/asr` 외 엔드포인트 — 문서 작성 이후 신설
+
+`/asr` WebSocket이 React 메인 연동 대상이라는 결론은 그대로다. 아래는 그 이후 `basic_server.py`에 추가된
+엔드포인트로, **React의 핵심 전사 흐름엔 필수가 아니지만** 운영 UI(사전 관리)·서드파티 클라이언트 호환에 쓰인다.
+
+### 9.1 단어교정 사전 관리 REST — `/api/corrections` (§3.5·§3.6 관련, 실사용 가능성 높음)
+CLAUDE.md §3.5·§3.6이 요구하는 "동적 단어교정 사전"에 대응하는 실제 REST API다([basic_server.py:361-381](../whisperlivekit/basic_server.py#L361-L381)):
+
+| 메서드/경로 | 요청 | 응답 | 비고 |
+|---|---|---|---|
+| `GET /api/corrections` | — | `{"틀린단어": "교정단어", ...}` (`word_manager.user_replacements` dict 그대로) | 사전 전체 조회 |
+| `POST /api/corrections` | `{"wrong_word": "6군", "correct_word": "육군"}` | `{"status": "success"}` | 추가, **즉시 반영**(다음 전사부터) |
+| `DELETE /api/corrections/{wrong_word}` | — (path param) | `{"status": "success"}` | 삭제, **즉시 반영** |
+
+React에 운영자용 사전 관리 화면이 필요하면 이 3개 엔드포인트로 충분하다. 번역 glossary(예 `공군`→`ROKAF`) 동적 관리 API는 **아직 이 REST 세트에 없다** — §3.6의 glossary 요구는 현재 코드 조사 시점(2026-07-10) 기준 미구현.
+
+### 9.2 헬스체크 — `GET /health`
+`{"status":"ok","backend":"whisper","ready":true}`([basic_server.py:62-71](../whisperlivekit/basic_server.py#L62-L71)). React가 WS 연결 전 서버 기동 여부를 폴링하는 용도로 쓸 수 있음(선택).
+
+### 9.3 서드파티 호환 API (React 메인 연동과 무관, 참고용)
+- **Deepgram 호환 WebSocket** `/v1/listen`([basic_server.py:154-159](../whisperlivekit/basic_server.py#L154-L159), 구현은 `whisperlivekit/deepgram_compat.py`) — Deepgram SDK를 쓰는 외부 클라이언트가 서버를 drop-in 교체할 수 있게 하는 경로. 인증 없음, 신뢰도 점수 0.0 고정 등 Deepgram과 차이 있음.
+- **OpenAI 호환 REST** `POST /v1/audio/transcriptions`(파일 업로드 1회성 전사, `response_format`으로 `json`/`text`/`verbose_json`/`srt`/`vtt` 지원)와 `GET /v1/models`([basic_server.py:270-354](../whisperlivekit/basic_server.py#L270-L354)) — OpenAI Whisper API 클라이언트 호환용 배치 전사 엔드포인트. **실시간 스트리밍이 아니다**(파일 전체를 받아 처리 후 응답) — React 실시간 UI에는 해당 없음.
+- 이 세 엔드포인트는 CLAUDE.md §3.1(폐쇄망) 제약과 무관하게 로컬 파이프라인만 태운다(외부 네트워크 호출 없음).
