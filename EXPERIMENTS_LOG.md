@@ -2921,3 +2921,100 @@ Exp-172 Stage 0 계측으로 규명된 ① 코드스위칭 서두유실의 잔�
 3. **측정 프로토콜**: 3파일 배치 후미의 sbs1 상승(측정 순서 효과) — 채택확정 N=3의 파일 순서 로테이션 또는 파일별 격리 측정 검토 가치.
 
 **JSON**: `worktrees/script-anchor-redetect/.omc/benchmarks/eval_20260709_0853_scriptanchor_screen.json`(스크리닝) · `eval_20260709_0904_scriptanchor_adoptN3.json`(채택확정) · `eval_20260709_0928_scriptanchor_heldout.json`(held-out) · `eval_20260709_0948_scriptanchor_sbs1_isolatedN3.json`(sbs1 격리) · `eval_20260709_0956_scriptanchor_sweepN2.json`(N=2 스윕) · 메인 `.omc/benchmarks/eval_20260709_0932_masterbaseline_sameday.json`·`eval_20260709_0945_masterbaseline_sbs1_trace2.json`(같은날 기준선)
+
+---
+
+## Exp-176 — 문법-조건부 침묵 경계 게이트 (Case B 단어중간분절 방지)
+
+**날짜**: 2026-07-12 | **Epoch**: E5 (유지 — 출력 조립 계층 변경, 디코더 파라미터 무영향)
+
+### 가설
+
+VAD가 짧은 침묵(0.4s 초과)을 검출하면 `tokens_alignment.py`가 문법 판단 없이 **무조건** 세그먼트를 닫아, 같은 화자·같은 언어 연속 발화 중 문장이 **단어 중간**에서 잘리는 과분할(Case B, 예 "올렸"⏎"습니다", "관련"⏎"해서")이 발생한다. 온점 분할 경로에는 이미 문법 판별기 `is_genuine_sentence_end()`가 연결돼 있으나 침묵 경로엔 미연결이었다(근본원인 규명 = `docs/GOAL_SILENCE_GRAMMAR_GATE.md` §1). 이 판별기를 침묵 경로에도 연결하면 Case B를 제거하면서 화자/코드스위칭 경계는 그대로 보존할 수 있을 것이다.
+
+### 변경 내용
+
+- `whisperlivekit/sentence_boundary.py`: `should_split_after_silence()`(분할/병합/보류 3치 판정 — 기존 `is_sentence_final_ko` 재사용), `last_word()` 공개 래퍼 추가.
+- `whisperlivekit/timed_objects.py`: `PuncSegment.gate_pending` 필드(게이트 보류 상태 전파).
+- `whisperlivekit/tokens_alignment.py` (핵심, 약 +350줄):
+  - `SILENCE_HARD_SECS=0.8`(안전망 — 이 이상 침묵은 문법 무관 항상 분할), `PENDING_RESOLVE_CAP=2.0`(B 대기 상한, silence.end 기준) 신설.
+  - **decide-late**: 게이트 판정을 침묵 도착 시점이 아니라 B(다음 발화) 확정 시점/캡 만료 시점에 내림 — diar 경로(무상태 재계산)는 자동 충족, 비-diar 경로는 `_nondiar_pending_silence` 상태로 재귀속 꼬리 vs 새 발화 B를 구분해 구현.
+  - **확정 유예 이원화**: 게이트 대상 침묵은 기존 `_apply_finalize_grace`(silence.**start** 기준)를 우회하고 `PENDING_RESOLVE_CAP`(silence.**end** 기준)만 적용 — B 디코드 지연 중 조기 finalized=True로 인한 번역 오발사 방지.
+  - **메모**(`resolved_split_silences`): diar 무상태 재계산에서 캡 만료로 분할 확정된 침묵이 이후 재계산에서 병합으로 되돌아가는 플래핑 방지.
+  - **hard_boundary 스탬프 수정**: `[SIL, LanguageSwitch]` 빈 스팬에서 소실되던 `hard_boundary`를 직전 침묵 PuncSegment에 스탬프 — 언어전환 경계를 넘는 병합을 구조적으로 차단.
+  - 병합 실행 3중 조건(같은 화자 ∧ hard_boundary 아님 ∧ 언어 동일)이 문법 판정보다 항상 우선.
+  - `[SilenceGate]` 판정 로그(모든 merge/split/pending 판정 기록).
+- `whisperlivekit/parse_args.py`/`config.py`: `--silence-grammar-gate`/`--no-silence-grammar-gate` 롤백 플래그(기본 ON).
+- `scripts/eval.py`: 플래그 패스스루.
+- `tests/test_silence_grammar_gate.py`(신규): 26개 테스트(한국어 종결/미종결, 영어 대소문자, HARD 안전망, 구두점 경계 비대상, hard_boundary/화자 차단, 연속침묵 누적, 캡+메모, flush, 무력화 플래그 등).
+- 커밋: `d8ebaaf`(`exp/silence-split-koen-gate`, master 미머지).
+
+### 테스트 설정
+
+경로 C(VBCable 루프백), 화자분할 ON(Sortformer), CRT=3.0, beams=2, PLC=None, audio_max_len=15.0(기본). 게이트 ON/OFF **짝지음**(같은 세션·같은 코드, 플래그만 상이). 스크리닝 `--repeat 1`(파일 3종 + HARD 스윕 0.6/1.0), 채택확정 `--repeat 3`(fail-fast 금지, 파일별 개별 호출로 측정).
+
+### 정량 결과
+
+**스크리닝(--repeat 1, 방향신호)** — ON vs OFF: bong1 WER 26.6→OFF32.3%(개선), ytn2 23.2→OFF18.2%(악화), sbs1 10.1→OFF8.3%(악화이나 화자F1은 100%→OFF66.7% 대폭개선). `[SilenceGate]` 고유판정 28건 중 오탐 0건(진짜종결 오병합 없음), d_eff merge/split_grammar 구간(0.42~0.74s)과 split_hard(0.80~2.08s)가 명확히 분리 — HARD=0.8이 문법판정과 상보적으로 작동함을 확인.
+
+**HARD 스윕(0.6/0.8/1.0, 스크리닝)**: 0.6→sbs1 화자F1 100%→80% 하락, 1.0→bong1 WER 26.6→36.9%(+10.3pt, 반복환각 유발 추정) — 0.8이 두 회귀를 모두 피해 최적, **변경 없이 유지**.
+
+**채택확정(--repeat 3, N=3 median/min/max/stdev)**:
+
+| 파일 | 조건 | WER median/min/max/stdev | 화자분리F1 median/min/max | 문장분리F1 median |
+|---|---|---|---|---|
+| bong1 | ON | 29.3%/28.1%/38.7%/5.8% | 54.1%/52.4%/70.3% | 21.1% |
+| bong1 | OFF | 28.7%/27.8%/36.9%/5.0% | 56.4%/51.3%/60.0% | 17.4% |
+| ytn2 | ON | 16.7%/13.8%/**29.6%**/8.4% | 70.0%/60.9%/94.7% | N/A |
+| ytn2 | OFF | 19.7%/18.2%/20.2%/1.0% | 64.0%/52.2%/66.7% | N/A |
+| sbs1 | ON | 11.9%/9.5%/13.1%/1.8% | **100%/100%/100%** | 94.7% |
+| sbs1 | OFF | 20.2%/14.9%/30.4%/7.9% | 57.1%/50.0%/66.7% | 78.3% |
+
+참고게이트(Exp-161 max, 구regime): bong1≤30.5%/ytn2≤34.5%/sbs1≤16.1% — sbs1 ON은 크게 하회(개선), bong1/ytn2는 median은 이내이나 3회 편차가 커 max가 근접·초과(OFF도 유사 편차 — 파일 고유 고분산 특성).
+
+**held-out(단회)**: ytn1 WER 10.4%(STATE baseline 21.5% 대비 대폭개선), 화자F1 88.9%. eng1 WER 3.8%(baseline 4.8% 대비 개선), 화자F1은 정답 포맷 특성(단일블록)으로 0%(회귀 아님) — hyp_lines 검사 결과 영어 대문자 시작 판정에 의한 과병합/과분할 없음, 회귀 없음.
+
+**kinno(정성 sanity)**: WER 48.4%는 정답 부정확으로 게이팅 제외 대상. 대규모 누락·환각 없음, 한/영 외 언어 혼입 없음, 화자전환 대체로 합리적 지점에서 분리, Case B 징후 없음.
+
+### 분석 (전사 내용 정성 대조)
+
+**bong1** (N=3 전 회차 확인):
+- **단어중간분절(Case B) 해소**: OFF `"...하고 자빠졌." / "는데, 솔직히."`(침묵으로 강제분할) → ON `"...하고 자빠졌는데,."` 한 줄 병합. **N=3 전 회차 재현** — run1/2/3 전부 `"자빠졌는데,"` 형태 유지, 재발 0건.
+- 그 외 주요 실패 없음. 화자전환 경계는 ON/OFF 동일 유지.
+
+**ytn2** (R_max=run3 기준, catastrophic 패턴 확인용):
+- **환각 폭주(게이트 무관 추정)**: run3 원문에 `"we remain We remain resolute"`, `"Security Council Security Council"`, `"committed to close coordination committed to close coordination"` 등 토큰 반복(디코더 stutter)이 다발 — run1/run2엔 없음. WER max를 크게 끌어올린 원인으로 추정되나, 경계 배치 로직(이 게이트의 관장 범위)과의 인과관계는 **확증되지 않음**(회차성 디코더 변동 가능성). 별도 조사 필요(다음 가설 참조).
+- **구중간 과분할 해소**: OFF `"...입장을 고소하고." / "있습니다."` → ON `"...입장을 고소하고 있습니다."` 병합. `"operational" / "control transition"` 류 분절도 ON에서 병합 유지.
+- **[hard-fail 단서, silence 트리거 무관]**: run2에 `"왕성한 연."`→`"Thank you very."`(환각)→`"방위태세를..."`로 "연합"이 쪼개지는 사례 1건 관측되나, 이 경계의 trigger는 `language_switch`(이 게이트가 관장하는 `silence` 트리거가 아님)이며 OFF/ON run1·3에서는 해당 단어가 항상 온전 — 게이트와 상관관계 없는 기존 확률적 변동으로 판단.
+
+**sbs1** (N=3 전 회차 확인):
+- **화자분리 압도적 개선**: OFF 화자분리F1 50~66.7%(median 57.1%) → ON **100%(3회차 전부)**.
+- **단어중간분절(Case B) 해소**: OFF `"...것으로." / "보입니다."` → ON `"...것으로 보입니다."` 병합. OFF `"...사령관. 자신의...올렸습니다."`(구간 분절) → ON 병합.
+- 그 외 주요 실패 없음.
+
+**이번 변경 영향 총평**: 목표(Case B 제거)를 게이트 통제범위(`silence` 트리거) 내에서 N=3 전 회차 재현 없이 완전 달성. 화자분리 F1이 최우선 지표에서 3파일 전부 worst-case 개선(특히 sbs1 50%→100%). WER은 median 기준 중립~대폭개선(sbs1)이나, ytn2 1파일의 max에서 토큰반복 환각으로 추정되는 변동이 관찰돼 게이트와의 완전한 무관성은 미확증 상태로 남긴다.
+
+### 채택 조건 판정 (GOAL_SILENCE_GRAMMAR_GATE.md §4, 우선순위 순)
+
+| # | 조건 | 판정 |
+|---|------|------|
+| ① Case B(단어중간분절) 0건 — hard-fail | 게이트 통제범위(silence 트리거) 내 N=3 전 회차 재발 0건. 목표 사례("자빠졌"⏎"는데,") 완전 해소 | ✅ |
+| ② 화자분리 F1 worst-case 미회귀 | 3파일 전부 ON min ≥ OFF min (sbs1 50%→100% 압도적 개선) | ✅ |
+| ③ WER max 미회귀 | bong1·sbs1 문제없음(sbs1 대폭개선). **ytn2만 ON 29.6% > OFF 20.2%(+9.4pt)** — 참고게이트(34.5%) 이내이나 원인(토큰반복 환각)이 경계로직과 무관한지 미확증 | 🟡 |
+| ④ WER median 개선/중립 | 3파일 전부 개선 또는 중립 | ✅ |
+| ⑤ 문장분리 F1(후순위) | bong1·sbs1 개선, ytn2 N/A(포맷 특성) | ✅ |
+| ⑥ held-out(ytn1+eng1) 미회귀 | ytn1 대폭개선(21.5→10.4%), eng1 개선(4.8→3.8%), 영어 대문자 규칙 회귀 없음 | ✅ |
+| ⑦ 코드스위칭/화자경계 무결성 | trigger 분포 대체로 유지, 구조적 소실 사례 없음(위 ytn2 run2 사례는 언어전환 트리거로 게이트 무관) | ✅ |
+
+**판정: 🟡 채택 권고 (사용자 승인 대기, master 미머지)** — 7항 중 6항 명확 통과, 1항(③ ytn2 WER max)은 참고게이트는 충족하나 원인 미확증이라 조건부. §4 "정량이 애매하면 자율 기각/채택 대신 판단 유보 + 사용자 질의" 원칙에 따라 최종 채택 여부는 사용자 확인 후 확정.
+
+**Epoch 판단**: E5 유지 — 세그먼트 조립(출력) 계층 변경으로 디코더 파라미터 트레이드오프에 영향 없음(Exp-170 온점분할 도입 시 선례와 동일 성격).
+
+### 다음 가설 (백로그)
+
+1. **ytn2 반복환각(디코더 stutter) 원인 규명**: 게이트 ON/OFF 무관 여부 재현측정(OFF에서도 유사 패턴이 나오는지) — ③ 조건부 판정 해소용.
+2. **`[SilenceGate]` 로깅 최적화**: `_apply_silence_grammar_gate`가 매 틱 미해소 침묵을 반복 로깅해 로그량 과다(bong1 17707줄 vs 고유판정 13건) — 상태 변화 시에만 로그하도록 개선 검토.
+3. **비-diar 경로 실측 검증**(GOAL §3.5): 이번 라운드는 diar 경로만 정량측정 — 비-diar(`get_lines`)도 동일 게이트가 구현·TDD는 됐으나 경로 A/내장 UI로 정성 검증 필요.
+4. **화이트리스트 보강 검토**: `KO_FINAL_SUFFIXES`/`KO_EXCLUDE_SUFFIXES`("습니까" 등) 확장 여지 — 이번 스코프에서는 미변경.
+
+**JSON** (전부 `worktrees/silence-split-koen-gate/.omc/benchmarks/` 기준): 스크리닝 `eval_20260712_1700_gateON.json`·`eval_20260712_1700_gateOFF.json` · HARD스윕 `eval_20260712_1731_hard0p6.json`·`eval_20260712_1739_hard1p0.json`(0.8은 gateON.json 재사용) · 채택확정 `eval_20260712_stage3ON_{bong1,ytn2,sbs1}.json`·`eval_20260712_stage3OFF_{bong1,ytn2,sbs1}.json` · held-out `eval_20260712_heldout_{ytn1,eng1}.json` · kinno `eval_20260712_qual_kinno.json`. HTML 비교 리포트: `.omc/transcripts/eval_report_silencegate_koen.html`.
