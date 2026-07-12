@@ -17,6 +17,7 @@ sys.path.insert(0, str(_SCRIPTS_DIR))
 
 from render_eval_report import (  # noqa: E402
     _CSS,
+    DiffSpan,
     FileGroup,
     _esc,
     _normalize_text,
@@ -735,3 +736,83 @@ def test_render_diff_line_break_after_case_b_block():
     html_out = render_diff(diff_spans, line_spans, case_b_hits)
 
     assert re.search(r"⟩</span><br>", html_out)
+
+
+# ---------------------------------------------------------------------------
+# 카테고리 10: eq/ins span이 여러 hyp_line 경계를 가로지를 때 칩·줄바꿈이 뭉치는 버그 수정
+# ---------------------------------------------------------------------------
+
+
+def test_diff_tokens_merges_three_sentence_lines_into_single_eq_span():
+    """3개 hyp_line 텍스트를 이어붙인 것이 정답과 정확히 일치하면, difflib이 이를 hyp_line
+    경계를 무시한 채 hyp 토큰 전체를 가로지르는 단 하나의 eq span으로 묶는다 — 이것이
+    render_diff()가 반드시 처리해야 하는 전제 상황임을 diff_tokens() 레벨에서 확정한다."""
+    ref = tokenize("song what did you think 누가 주인공일까 The thought that")
+    hyp_lines = [
+        {"text": "song what did you think", "trigger": "silence"},
+        {"text": "누가 주인공일까", "trigger": "language_switch"},
+        {"text": "The thought that", "trigger": "silence"},
+    ]
+    hyp_toks, _line_spans = build_hyp_layout(hyp_lines)
+    spans = diff_tokens(ref, hyp_toks)
+
+    assert len(spans) == 1
+    assert spans[0].kind == "eq"
+
+
+def test_render_diff_splits_eq_span_at_each_hyp_line_boundary():
+    """3문장이 정답과 정확히 일치해 diff_spans가 eq 하나로 묶여도, render_diff()는 각
+    hyp_line 경계마다 텍스트를 끊고 그 자리에서 트리거 칩+<br>을 즉시 삽입해야 한다 —
+    칩 3개가 전부 맨 뒤에 뭉쳐 나오면 안 되고, 각 줄 텍스트 사이사이에 끼어야 한다."""
+    ref = tokenize("song what did you think 누가 주인공일까 The thought that")
+    hyp_lines = [
+        {"text": "song what did you think", "trigger": "silence"},
+        {"text": "누가 주인공일까", "trigger": "language_switch"},
+        {"text": "The thought that", "trigger": "silence"},
+    ]
+    hyp_toks, line_spans = build_hyp_layout(hyp_lines)
+    diff_spans = diff_tokens(ref, hyp_toks)
+    assert len(diff_spans) == 1 and diff_spans[0].kind == "eq"  # 사전 조건(버그 재현 전제)
+
+    html_out = render_diff(diff_spans, line_spans)
+
+    # 칩 3개가 모두 생성돼야 한다.
+    chip_line_breaks = re.findall(r"⟩</span><br>", html_out)
+    assert len(chip_line_breaks) == 3
+
+    # 각 줄의 텍스트와 그 줄의 트리거 칩이 나오는 순서를 검증한다: line0 텍스트 -> silence 칩
+    # -> line1 텍스트 -> language_switch 칩 -> line2 텍스트 -> 마지막 silence 칩.
+    idx_line0_text = html_out.index("think")
+    idx_chip1 = html_out.index("trigger--silence")
+    idx_line1_text = html_out.index("주인공일까")
+    idx_chip2 = html_out.index("trigger--language_switch")
+    idx_line2_text = html_out.index("thought")
+    idx_chip3 = html_out.index("trigger--silence", idx_chip1 + 1)
+
+    assert idx_line0_text < idx_chip1 < idx_line1_text < idx_chip2 < idx_line2_text < idx_chip3
+
+    # 칩들이 한꺼번에 뭉쳐 나오지 않는다는 것을 명시적으로 확인: 첫 칩과 둘째 칩 사이에
+    # 둘째 줄 텍스트("주인공일까")가 반드시 끼어 있어야 한다(뭉치면 idx_chip2 < idx_line1_text가 됨).
+    assert idx_chip1 < idx_line1_text
+
+
+def test_render_diff_splits_ins_span_at_each_hyp_line_boundary():
+    """ins(전사에만 있음=환각) span이 여러 hyp_line에 걸쳐도 동일하게 줄 경계마다 쪼개져야
+    한다 — 정답이 비어 있어(reference 없음) 전체가 하나의 ins span으로 처리되는 상황을 재현."""
+    hyp_lines = [
+        {"text": "hello world", "trigger": "silence"},
+        {"text": "foo bar", "trigger": "punctuation"},
+    ]
+    hyp_toks, line_spans = build_hyp_layout(hyp_lines)
+    diff_spans = [
+        DiffSpan(kind="ins", ref_toks=[], hyp_toks=hyp_toks, ref_start=0, ref_end=0, hyp_start=0, hyp_end=len(hyp_toks))
+    ]
+
+    html_out = render_diff(diff_spans, line_spans)
+
+    chip_line_breaks = re.findall(r"⟩</span><br>", html_out)
+    assert len(chip_line_breaks) == 2
+    idx_line0_text = html_out.index("world")
+    idx_chip1 = html_out.index("trigger--silence")
+    idx_line1_text = html_out.index("foo")
+    assert idx_line0_text < idx_chip1 < idx_line1_text

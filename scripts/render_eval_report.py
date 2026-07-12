@@ -253,10 +253,15 @@ def render_diff(diff_spans: List[DiffSpan], line_spans: List[LineSpan], case_b_h
 
     hyp 관점(무엇이 전사됐는지)을 기본 흐름으로 삼는다: eq는 평문, del(정답에만 있음)은 취소선,
     ins(전사에만 있음=환각)은 강조, sub(치환)는 ref/hyp을 나란히 보여준다. detect_case_b가 찾은
-    span은 굵은 빨강 테두리(.caseb)를 추가로 두른다. 각 hyp_line이 끝나는 지점마다 확정 트리거
-    칩을 삽입한다 — 정확히 토큰 사이에 끼워 넣지 않고, 그 줄의 마지막 토큰을 포함하는 span이
-    끝난 직후 배치한다(대부분의 줄 경계는 긴 eq run 내부에 있어 실질적으로 정확한 위치이고,
-    Case B처럼 sub span 내부에 경계가 있는 드문 경우도 재구성된 단어 블록 바로 뒤에 붙는다).
+    span은 굵은 빨강 테두리(.caseb)를 추가로 두른다.
+
+    eq/ins span은 hyp 토큰을 실제로 소비하므로(정답·전사가 여러 문장에 걸쳐 정확히 일치하면
+    difflib가 이를 hyp_line 여러 개를 가로지르는 하나의 span으로 묶어버릴 수 있다), 그런 경우
+    span을 통째로 렌더링한 뒤 flush하면 문장 사이 트리거 칩이 전부 몰려 나오고 문장 구분
+    `<br>`이 사라지는 버그가 생긴다 — 그래서 `_emit_hyp_run()`이 hyp_line 경계마다 텍스트를
+    끊어 그 자리에서 즉시 칩을 삽입한다. del(hyp 토큰 소비 없음)과 sub(치환, Case B 포함)는
+    원자적으로 유지한다 — del은 애초에 경계를 가로지를 hyp 토큰이 없고, sub는 재구성된 단어
+    블록 바로 뒤에 칩이 붙는 게 의도된 설계(버그 아님)이기 때문이다.
     """
     case_b_hyp_starts = {c["hyp_start"] for c in (case_b_hits or [])}
     parts: List[str] = []
@@ -269,19 +274,36 @@ def render_diff(diff_spans: List[DiffSpan], line_spans: List[LineSpan], case_b_h
             parts.append(_render_trigger_chip(line_spans[line_ptr].trigger))
             line_ptr += 1
 
+    def _emit_hyp_run(css_class: str, toks: List[Tok], abs_start: int) -> None:
+        """hyp 토큰 연속 구간(eq/ins)을 hyp_line 경계마다 쪼개 렌더링하고, 경계마다 그 자리에서
+        바로 트리거 칩을 삽입한다 — span이 여러 hyp_line에 걸쳐 있어도 문장별 줄바꿈이 산다."""
+        nonlocal line_ptr
+        _flush_chips_up_to(abs_start)  # abs_start 지점에 걸린 폭0(빈 텍스트) 줄 방어
+        seg: List[str] = []
+        pos = abs_start
+        for tok in toks:
+            seg.append(tok.display)
+            pos += 1
+            if line_ptr < n_lines and line_spans[line_ptr].end == pos:
+                text = " ".join(seg)
+                if text:
+                    parts.append(f'<span class="{css_class}">{_esc(text)}</span> ')
+                seg = []
+                _flush_chips_up_to(pos)
+        if seg:
+            text = " ".join(seg)
+            if text:
+                parts.append(f'<span class="{css_class}">{_esc(text)}</span> ')
+
     for span in diff_spans:
         if span.kind == "eq":
-            text = " ".join(t.display for t in span.hyp_toks)
-            if text:
-                parts.append(f'<span class="eq">{_esc(text)}</span> ')
+            _emit_hyp_run("eq", span.hyp_toks, span.hyp_start)
         elif span.kind == "del":
             text = " ".join(t.display for t in span.ref_toks)
             if text:
                 parts.append(f'<span class="del">{_esc(text)}</span> ')
         elif span.kind == "ins":
-            text = " ".join(t.display for t in span.hyp_toks)
-            if text:
-                parts.append(f'<span class="ins">{_esc(text)}</span> ')
+            _emit_hyp_run("ins", span.hyp_toks, span.hyp_start)
         elif span.kind == "sub":
             ref_text = " ".join(t.display for t in span.ref_toks)
             hyp_text = " ".join(t.display for t in span.hyp_toks)
