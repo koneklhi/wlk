@@ -205,6 +205,13 @@ def create_parser():
     parser.add_argument("--ssl-keyfile", type=str, help="Path to the SSL private key file.", default=None)
     parser.add_argument("--forwarded-allow-ips", type=str, help="Allowed ips for reverse proxying.", default=None)
     parser.add_argument(
+        "--transcript-save-dir",
+        type=str,
+        default="transcripts",
+        dest="transcript_save_dir",
+        help="종료 시 전사 .txt를 저장할 서버 로컬 폴더 (기본값: ./transcripts). 없으면 자동 생성.",
+    )
+    parser.add_argument(
         "--pcm-input",
         action="store_true",
         default=False,

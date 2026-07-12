@@ -95,6 +95,12 @@ React가 반드시 새로 구현할 것: ① WS 연결·종료 시퀀스 ② con
 | `remaining_time_diarization` | float(초) | O | 화자분할 처리 지연(diar off면 0) | [audio_processor.py:582](../whisperlivekit/audio_processor.py#L582) |
 | `error` | str | status=="error"만 | 오류 메시지(FFmpeg 등) | [timed_objects.py:212-213](../whisperlivekit/timed_objects.py#L212-L213) |
 
+> ⚠️ **서버는 5분 슬라이딩 윈도우만 유지한다** — `lines[]`는 무제한 누적이 아니라 최근 구간만 담겨 온다.
+> React도 내장 UI([live_transcription.js:27-30, 370-376](../whisperlivekit/web/live_transcription.js#L27-L30))처럼
+> **`finalized`(=`completed`) `true`인 줄을 별도 상태(예: Map, key=`start`)에 직접 누적**하고 화면엔
+> "누적 history + 아직 미확정인 최신 줄"만 합쳐 렌더해야 한다. 매 스냅샷을 그대로 전체교체(§0 TL;DR)만 하면
+> 5분이 지난 확정 자막이 화면에서 사라진다.
+
 ### 2.3 `lines[]` 세그먼트 필드 (`Segment.to_dict()`)
 ```python
 # timed_objects.py:161-176
@@ -211,6 +217,8 @@ const speakerNum = `<span class="speaker-badge">${item.speaker}</span>`;
 - [ ] `EventSource`/`POST start|stop` 제거 → `new WebSocket(".../asr")`.
 - [ ] 첫 `{"type":"config"}` 처리 → `useAudioWorklet` 분기 후 녹음 시작.
 - [ ] 매 스냅샷 메시지에서 transcript **전체 교체** 렌더(append/patch 아님). `lines[]` + `buffer_transcription`(마지막 줄 미확정) 합성.
+- [ ] **확정(`finalized`) 줄 누적**: 서버 5분 슬라이딩 윈도우 대응 — 확정 줄은 프론트 상태에 누적, 미확정 줄만 매번 교체(§2 참조).
+- [ ] 녹음 종료 시 `POST /api/save-transcript` 호출(§9) — 내장 UI와 동일하게 자동 저장하면 저장 로직이 통일된다.
 - [ ] 오디오 캡처 구현: PCM(AudioWorklet+Worker) 또는 WebM(MediaRecorder).
 - [ ] 필드 타입 변경: `start`/`end`는 `"H:MM:SS.cc"` 문자열, `finalized`(=completed) bool, 언어는 `detected_language`(=lang).
 - [ ] 화자 UI: `speaker` 배지/색 직접 구현, `-2`=침묵, `0`=diar 진행중, `buffer_diarization` 표시.
@@ -227,3 +235,22 @@ const speakerNum = `<span class="speaker-badge">${item.speaker}</span>`;
 3. **`?mode=diff`** 증분 프로토콜 존재(문서엔 없음).
 4. **`?language=` 쿼리**로 세션별 언어 강제 가능(문서엔 없음).
 5. 화자분할 finalized=false / 인라인 번역 미동작 제약은 SCHEMA_CHANGES §6과 코드가 **정확히 일치**(신뢰 가능).
+
+---
+
+## 9. REST API — 전사 저장 (`/api/save-transcript`)
+
+WS `/asr`와 별개로, 녹음 종료 시 누적 전사를 **서버 로컬 파일**로 저장하는 REST 엔드포인트다
+(브라우저 다운로드가 아니라 서버 프로세스가 디스크에 씀). 단어 교정 API(`/api/corrections`,
+[SCHEMA_CHANGES.md](SCHEMA_CHANGES.md) §4)와 동일한 REST 계열이며, 내장 UI는 `ready_to_stop` 수신 직후
+자동 호출한다([live_transcription.js:307-320](../whisperlivekit/web/live_transcription.js#L307-L320)).
+
+| 메서드/경로 | 요청 body | 응답 | 비고 |
+|---|---|---|---|
+| `POST /api/save-transcript` | `{"lines":[{"speaker":int,"text":str,"translation":str\|undefined}, ...]}` | `{"status":"success","path":str,"line_count":int}` | 저장 경로는 서버 `--transcript-save-dir`(기본 `./transcripts`); 파일명 `transcript_YYYYMMDD_HHMMSS.txt` |
+
+- 서버 구현: [basic_server.py](../whisperlivekit/basic_server.py) `save_transcript()`.
+- txt 형식은 화자+텍스트(+번역)만 담는다(타임스탬프 없음): `[화자 N] 텍스트` 다음 줄에 `    ↳ 번역`(있을 때만).
+- **React 권장 흐름**: `ready_to_stop` 처리 시 §2의 누적 history(`finalized` 줄 전체) + 마지막 미확정 줄을 합쳐
+  `lines` payload로 구성해 fire-and-forget으로 호출(await/블로킹 금지 — 실패해도 녹음 종료 흐름을 막지 않아야 함).
+  이렇게 하면 내장 UI와 React의 저장 로직이 통일된다.

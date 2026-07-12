@@ -24,6 +24,10 @@ let animationFrame = null;
 let waitingForStop = false;
 let lastReceivedData = null;
 let lastSignature = null;
+// 확정(finalized)된 줄 누적 기록. key=line.start(문자열), value=원본 line 객체.
+// 서버는 5분 슬라이딩 윈도우만 유지하므로, 확정된 줄은 서버가 다음 스냅샷에서
+// 빼버려도 화면에 계속 남아있도록 프론트에서 직접 누적한다.
+let finalizedHistory = new Map();
 let availableMicrophones = [];
 let selectedMicrophoneId = null;
 let serverUseAudioWorklet = null;
@@ -300,6 +304,21 @@ function setupWebSocket() {
         statusText.textContent = "Finished processing audio! Ready to record again.";
         recordButton.disabled = false;
 
+        // 종료 시 누적 전사를 서버 로컬 폴더에 자동 저장 (fire-and-forget, 실패해도 종료 흐름 유지)
+        const payload = [...finalizedHistory.values(), ...((lastReceivedData && lastReceivedData.lines) || []).filter((l) => !l.finalized)]
+          .filter((l) => l.speaker !== -2 && (l.text || l.translation))
+          .map((l) => ({ speaker: l.speaker, text: (l.text || "").trim(), translation: (l.translation || "").trim() || undefined }));
+        if (payload.length) {
+          fetch("/api/save-transcript", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ lines: payload }),
+          })
+            .then((r) => r.json())
+            .then((d) => { statusText.textContent = `전사 기록 저장됨: ${d.path}`; })
+            .catch((e) => { console.error("전사 저장 실패:", e); });
+        }
+
         if (websocket) {
           websocket.close();
         }
@@ -348,11 +367,18 @@ function renderLinesWithBuffer(
     return;
   }
 
+  // 확정된 줄은 history에 누적하고, 화면엔 history + 아직 미확정인 최신 줄만 합쳐서 그린다.
+  // 서버의 5분 슬라이딩 윈도우로 확정 줄이 다음 스냅샷에서 빠져도 화면에서 사라지지 않게 함.
+  for (const ln of (lines || [])) {
+    if (ln.finalized && (ln.text || ln.speaker === -2)) finalizedHistory.set(ln.start, ln);
+  }
+  const mergedLines = [...finalizedHistory.values(), ...(lines || []).filter((l) => !l.finalized)];
+
   const showLoading = !isFinalizing && (lines || []).some((it) => it.speaker == 0);
   const showTransLag = !isFinalizing && remaining_time_transcription > 0;
   const showDiaLag = !isFinalizing && !!buffer_diarization && remaining_time_diarization > 0;
   const signature = JSON.stringify({
-    lines: (lines || []).map((it) => ({ speaker: it.speaker, text: it.text, start: it.start, end: it.end, detected_language: it.detected_language, finalize_trigger: it.finalize_trigger })),
+    lines: mergedLines.map((it) => ({ speaker: it.speaker, text: it.text, start: it.start, end: it.end, detected_language: it.detected_language, finalize_trigger: it.finalize_trigger })),
     buffer_transcription: buffer_transcription || "",
     buffer_diarization: buffer_diarization || "",
     buffer_translation: buffer_translation,
@@ -375,9 +401,9 @@ function renderLinesWithBuffer(
 
   // When there are no committed lines yet but buffer text exists (common with
   // slow backends like voxtral on MPS), render the buffer as a standalone line.
-  const effectiveLines = (lines || []).length === 0 && (buffer_transcription || buffer_diarization)
+  const effectiveLines = mergedLines.length === 0 && (buffer_transcription || buffer_diarization)
     ? [{ speaker: 1, text: "" }]
-    : (lines || []);
+    : mergedLines;
 
   const linesHtml = effectiveLines
     .map((item, idx) => {
@@ -524,6 +550,8 @@ function drawWaveform() {
 }
 
 async function startRecording() {
+  finalizedHistory.clear();
+  lastSignature = "";
   try {
     try {
       wakeLock = await navigator.wakeLock.request("screen");

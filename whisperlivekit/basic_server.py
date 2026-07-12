@@ -6,6 +6,8 @@ os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
 import asyncio
 import logging
 from contextlib import asynccontextmanager
+from datetime import datetime
+from pathlib import Path
 from typing import List, Optional
 
 from fastapi import FastAPI, File, Form, UploadFile, WebSocket, WebSocketDisconnect
@@ -37,6 +39,16 @@ transcription_engine = None
 class CorrectionUpdate(BaseModel):
     wrong_word: str
     correct_word: str
+
+
+class TranscriptLine(BaseModel):
+    speaker: int
+    text: str
+    translation: Optional[str] = None
+
+
+class SaveTranscriptRequest(BaseModel):
+    lines: List[TranscriptLine]
 
 
 @asynccontextmanager
@@ -379,6 +391,28 @@ async def delete_correction(wrong_word: str):
     word_manager = get_word_manager()
     word_manager.delete_user_word(wrong_word)
     return {"status": "success"}
+
+
+# ---------------------------------------------------------------------------
+# Transcript Save API  (/api/save-transcript) — 녹음 종료 시 프론트가 자동 호출
+# ---------------------------------------------------------------------------
+
+@app.post("/api/save-transcript")
+async def save_transcript(req: SaveTranscriptRequest):
+    """종료 시 누적 전사를 서버 로컬 폴더에 .txt로 저장 (화자+텍스트+번역)."""
+    save_dir = Path(config.transcript_save_dir)
+    save_dir.mkdir(parents=True, exist_ok=True)
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    path = save_dir / f"transcript_{ts}.txt"
+    out = []
+    for ln in req.lines:
+        if not ln.text:
+            continue
+        out.append(f"[화자 {ln.speaker}] {ln.text}")
+        if ln.translation:
+            out.append(f"    ↳ {ln.translation}")
+    path.write_text("\n".join(out) + "\n", encoding="utf-8")
+    return {"status": "success", "path": str(path.resolve()), "line_count": len(req.lines)}
 
 
 def main():
