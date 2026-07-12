@@ -196,7 +196,7 @@ Phase 4 사전 준비 — 번역 모델 테스트 환경 (2026-06-21 완료)
 → 호환 별칭 추가: completed←finalized, lang←detected_language (Segment.to_dict)
  ✅ 4-2. whisperlivekit 기반 API 서버 구현 [이식 + 신규]
 → /api/corrections GET/POST/DELETE 연결 완료 (WordCorrectionManager)
-→ /api/save-transcript POST 연결 완료 (녹음 종료 시 전사 .txt 자동 저장, `--transcript-save-dir`)
+→ /api/save-transcript POST 연결 완료 (UI 저장 버튼 클릭 시 전사 .txt 저장, `--transcript-save-dir`)
 → /api/recordings, /api/prompts — React 소스 확보 후 4-7과 함께 처리 예정
  ✅ 4-3. 번역 모델(OSS 20B LLM) 로컬 경로 및 파일 존재 확인
 → 배포: gpt-oss-20b @ llama.cpp:2010, 개발: qwen2.5:7b @ Ollama:11434 (docs/TRANSLATION_SETUP.md)

@@ -248,7 +248,7 @@ const speakerNum = `<span class="speaker-badge">${item.speaker}</span>`;
 - [ ] 첫 `{"type":"config"}` 처리 → `useAudioWorklet` 분기 후 녹음 시작.
 - [ ] 매 스냅샷 메시지에서 transcript **전체 교체** 렌더(append/patch 아님). `lines[]` + `buffer_transcription`(마지막 줄 미확정) 합성.
 - [ ] **확정(`finalized`) 줄 누적**: 서버 5분 슬라이딩 윈도우 대응 — 확정 줄은 프론트 상태에 누적, 미확정 줄만 매번 교체(§2 참조).
-- [ ] 녹음 종료 시 `POST /api/save-transcript` 호출(§10) — 내장 UI와 동일하게 자동 저장하면 저장 로직이 통일된다.
+- [ ] 저장 버튼 클릭 시 `POST /api/save-transcript` 호출(§10) — 내장 UI와 동일하게 버튼 클릭으로만 저장하면 저장 로직이 통일된다(자동 저장 아님).
 - [ ] 오디오 캡처 구현: PCM(AudioWorklet+Worker) 또는 WebM(MediaRecorder).
 - [ ] 필드 타입 변경: `start`/`end`는 `"HH:MM:SS"` 문자열(PC 실제 벽시계 시각 — 녹음 시작 시점이 아니라 발화 시각, 센티초 없음), `finalized`(=completed) bool, 언어는 `detected_language`(=lang). history Map 키는 `start` 단독이 아니라 `start`+`end`+`speaker` 복합키(같은 초 충돌 방지).
 - [ ] 화자 UI: `speaker` 배지/색 직접 구현, `-2`=침묵, `0`=diar 진행중, `buffer_diarization` 표시.
@@ -298,10 +298,12 @@ React에 운영자용 사전 관리 화면이 필요하면 이 3개 엔드포인
 
 ## 10. REST API — 전사 저장 (`/api/save-transcript`)
 
-WS `/asr`와 별개로, 녹음 종료 시 누적 전사를 **서버 로컬 파일**로 저장하는 REST 엔드포인트다
-(브라우저 다운로드가 아니라 서버 프로세스가 디스크에 씀). 단어 교정 API(`/api/corrections`,
-[SCHEMA_CHANGES.md](SCHEMA_CHANGES.md) §4)와 동일한 REST 계열이며, 내장 UI는 `ready_to_stop` 수신 직후
-자동 호출한다([live_transcription.js:307-320](../whisperlivekit/web/live_transcription.js#L307-L320)).
+WS `/asr`와 별개로, 사용자가 UI의 저장 버튼을 눌렀을 때 누적 전사를 **서버 로컬 파일**로 저장하는
+REST 엔드포인트다(브라우저 다운로드가 아니라 서버 프로세스가 디스크에 씀). 단어 교정 API
+(`/api/corrections`, [SCHEMA_CHANGES.md](SCHEMA_CHANGES.md) §4)와 동일한 REST 계열이며, 내장 UI는
+저장 버튼(`#saveTranscriptButton`) 클릭 시에만 호출한다(`live_transcription.js`의
+`buildTranscriptPayload()` + 클릭 핸들러). **녹음 종료(`ready_to_stop`) 시 자동 호출하지 않는다** —
+버튼을 누르지 않으면 저장되지 않는다.
 
 | 메서드/경로 | 요청 body | 응답 | 비고 |
 |---|---|---|---|
@@ -309,6 +311,9 @@ WS `/asr`와 별개로, 녹음 종료 시 누적 전사를 **서버 로컬 파�
 
 - 서버 구현: [basic_server.py](../whisperlivekit/basic_server.py) `save_transcript()`.
 - txt 형식은 화자+텍스트(+번역)만 담는다(타임스탬프 없음): `[화자 N] 텍스트` 다음 줄에 `    ↳ 번역`(있을 때만).
-- **React 권장 흐름**: `ready_to_stop` 처리 시 §2의 누적 history(`finalized` 줄 전체) + 마지막 미확정 줄을 합쳐
-  `lines` payload로 구성해 fire-and-forget으로 호출(await/블로킹 금지 — 실패해도 녹음 종료 흐름을 막지 않아야 함).
-  이렇게 하면 내장 UI와 React의 저장 로직이 통일된다.
+- 저장 버튼은 녹음 중에도 클릭 가능하며, 클릭 시점까지의 전체 누적 내용을 매번 새 타임스탬프 파일로
+  저장한다(직전 저장 이후 증분만 골라내지 않음 — 같은 문장이 여러 파일에 중복 저장될 수 있음, 의도된
+  동작).
+- **React 권장 흐름**: 저장 버튼(또는 동등 UI)을 두고, 클릭 시 §2의 누적 history(`finalized` 줄 전체) +
+  마지막 미확정 줄을 합쳐 `lines` payload로 구성해 호출한다. `ready_to_stop`에 자동 연결하지 않는다 —
+  이렇게 하면 내장 UI와 React의 저장 로직(버튼 트리거)이 통일된다.

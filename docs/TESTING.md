@@ -36,7 +36,7 @@
 - 마이크에 직접 말하면서 전사 결과를 실시간 확인 (정성적 평가)
 - 서버 기동: `whisperlivekit-server` (모든 인자가 parse_args.py 기본값 — `--lan auto` + simulstreaming. `--periodic-lang-check` 기본 None(비활성 — turbo 기질 Exp-160 채택, PLC=4.0이 ytn2에서 스퓨리어스 전환→환각 유발 확인); 탐색 시 다른 값 명시. 상세는 [OPEN_QUESTIONS.md](OPEN_QUESTIONS.md) 참조)
 - 목적: 실제 마이크 입력에 대한 정성적 평가 (경로 C 정량 평가와 병행)
-- 녹음 종료 시 내장 UI가 누적 전사를 `--transcript-save-dir`(기본값 `./transcripts`) 폴더에 `.txt`로 자동 저장한다 (`POST /api/save-transcript`).
+- 저장 버튼 클릭 시 내장 UI가 그 시점까지의 누적 전사를 `--transcript-save-dir`(기본값 `./transcripts`) 폴더에 `.txt`로 저장한다 (`POST /api/save-transcript`, 녹음 중에도 클릭 가능, 녹음 종료 시 자동 저장 아님).
 
 ### 경로 C — 오디오 루프백 (1차 정량 성능 기준, Phase 2 도입)
 

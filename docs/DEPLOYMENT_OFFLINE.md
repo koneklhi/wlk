@@ -377,7 +377,7 @@ whisperlivekit-server
 → 브라우저 **http://localhost:8900/** 접속(내장 UI) → 마이크 권한 허용 후 한·영 섞어 발화.
 - **통과 기준**: 발화가 끊김·환각 없이 실시간 전사되고, 화자가 바뀌면 화자 배지(1·2·3…)가 분리된다.
 - 음성 파일로 보려면 VBCable 재생장치를 통해 틀거나(경로 C), 빠른 방법은 마이크 앞에서 직접 발화.
-- 녹음을 멈추면 내장 UI가 누적 전사를 서버 로컬 폴더(`--transcript-save-dir`, 기본값 `./transcripts`)에 `.txt`로 자동 저장한다.
+- 저장 버튼을 누르면 내장 UI가 그 시점까지의 누적 전사를 서버 로컬 폴더(`--transcript-save-dir`, 기본값 `./transcripts`)에 `.txt`로 저장한다(녹음 종료 시 자동 저장되지 않음).
 
 #### 2단계 — whisperlive React 프론트 UI 연결
 같은 서버(`/asr`)에 기존 whisperlive React UI를 붙인다. 기존 whisperlive와 **달라진 점**만 맞추면 된다 — 상세·코드 위치는 [FRONTEND_HANDOFF.md](FRONTEND_HANDOFF.md):
