@@ -567,6 +567,14 @@ def main() -> None:
         help="빔서치 빔 개수(서버 기본 2). P3 파라미터 재검증용. 지정 시 서버에 --beams 전달.",
     )
     parser.add_argument(
+        "--silence-grammar-gate",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        dest="silence_grammar_gate",
+        help="문법-조건부 침묵 경계 게이트(서버 기본 ON). 미지정 시 서버 기본값 사용(전달 안 함). "
+        "A/B 비교용: --no-silence-grammar-gate로 롤백, --silence-grammar-gate로 명시 ON.",
+    )
+    parser.add_argument(
         "--expect-code-root",
         type=Path,
         default=None,
@@ -637,6 +645,10 @@ def main() -> None:
         extra_server_args.extend(["--frame-threshold", str(args.frame_threshold)])
     if args.beams is not None:
         extra_server_args.extend(["--beams", str(args.beams)])
+    if args.silence_grammar_gate is not None:
+        extra_server_args.append(
+            "--silence-grammar-gate" if args.silence_grammar_gate else "--no-silence-grammar-gate"
+        )
 
     for f in args.files:
         if not f.exists():
