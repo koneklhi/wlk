@@ -395,12 +395,12 @@ async def delete_correction(wrong_word: str):
 
 
 # ---------------------------------------------------------------------------
-# Transcript Save API  (/api/save-transcript) — 녹음 종료 시 프론트가 자동 호출
+# Transcript Save API  (/api/save-transcript) — 저장 버튼 클릭 시 프론트가 호출
 # ---------------------------------------------------------------------------
 
 @app.post("/api/save-transcript")
 async def save_transcript(req: SaveTranscriptRequest):
-    """종료 시 누적 전사를 서버 로컬 폴더에 .txt로 저장 (화자+텍스트+번역)."""
+    """저장 버튼 클릭 시 누적 전사를 서버 로컬 폴더에 .txt로 저장 (화자+텍스트+번역)."""
     save_dir = Path(config.transcript_save_dir)
     save_dir.mkdir(parents=True, exist_ok=True)
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
