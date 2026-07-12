@@ -241,6 +241,15 @@ body {
   height: 20px;
 }
 
+.settings-toggle:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.settings-toggle:disabled:hover {
+  background-color: var(--button-bg);
+}
+
 @media (max-width: 10000px) {
   .settings-toggle {
     display: flex;
