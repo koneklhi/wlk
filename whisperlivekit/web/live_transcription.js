@@ -370,7 +370,9 @@ function renderLinesWithBuffer(
   // 확정된 줄은 history에 누적하고, 화면엔 history + 아직 미확정인 최신 줄만 합쳐서 그린다.
   // 서버의 5분 슬라이딩 윈도우로 확정 줄이 다음 스냅샷에서 빠져도 화면에서 사라지지 않게 함.
   for (const ln of (lines || [])) {
-    if (ln.finalized && (ln.text || ln.speaker === -2)) finalizedHistory.set(ln.start, ln);
+    if (ln.finalized && (ln.text || ln.speaker === -2)) {
+      finalizedHistory.set(`${ln.start}|${ln.end}|${ln.speaker}`, ln);
+    }
   }
   const mergedLines = [...finalizedHistory.values(), ...(lines || []).filter((l) => !l.finalized)];
 

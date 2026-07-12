@@ -83,14 +83,15 @@ async def health():
     })
 
 
-async def handle_websocket_results(websocket, results_generator, diff_tracker=None):
+async def handle_websocket_results(websocket, results_generator, diff_tracker=None, audio_processor=None):
     """Consumes results from the audio processor and sends them via WebSocket."""
     try:
         async for response in results_generator:
+            session_start = getattr(audio_processor, "beg_loop", None)
             if diff_tracker is not None:
-                await websocket.send_json(diff_tracker.to_message(response))
+                await websocket.send_json(diff_tracker.to_message(response, session_start))
             else:
-                await websocket.send_json(response.to_dict())
+                await websocket.send_json(response.to_dict(session_start))
         # when the results_generator finishes it means all audio has been processed
         logger.info("Results generator finished. Sending 'ready_to_stop' to client.")
         await websocket.send_json({"type": "ready_to_stop"})
@@ -129,7 +130,7 @@ async def websocket_endpoint(websocket: WebSocket):
         logger.warning(f"Failed to send config to client: {e}")
 
     results_generator = await audio_processor.create_tasks()
-    websocket_task = asyncio.create_task(handle_websocket_results(websocket, results_generator, diff_tracker))
+    websocket_task = asyncio.create_task(handle_websocket_results(websocket, results_generator, diff_tracker, audio_processor))
 
     try:
         while True:

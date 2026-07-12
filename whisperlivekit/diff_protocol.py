@@ -23,7 +23,7 @@ The client reconstructs state by:
 """
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from whisperlivekit.timed_objects import FrontData
 
@@ -36,14 +36,14 @@ class DiffTracker:
     _prev_lines: List[Dict[str, Any]] = field(default_factory=list)
     _sent_snapshot: bool = False
 
-    def to_message(self, front_data: FrontData) -> Dict[str, Any]:
+    def to_message(self, front_data: FrontData, session_start: Optional[float] = None) -> Dict[str, Any]:
         """Convert a FrontData into a diff or snapshot message.
 
         First call returns a full snapshot. Subsequent calls return diffs
         containing only changed/new data.
         """
         self.seq += 1
-        full = front_data.to_dict()
+        full = front_data.to_dict(session_start)
         current_lines = full["lines"]
 
         if not self._sent_snapshot:

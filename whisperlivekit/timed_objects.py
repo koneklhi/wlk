@@ -1,4 +1,5 @@
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any, Dict, List, Optional, Union
 
 PUNCTUATION_MARKS = {'.', '!', '?', '。', '！', '？'}
@@ -13,6 +14,10 @@ def format_time(seconds: float) -> str:
     m = total_m % 60
     h = total_m // 60
     return f"{h}:{m:02d}:{s:02d}.{cs:02d}"
+
+def format_walltime(session_start: float, offset: float) -> str:
+    """세션 시작 epoch(session_start)에 offset(경과초)을 더한 실제 시각을 HH:MM:SS로 포맷."""
+    return datetime.fromtimestamp(session_start + offset).strftime("%H:%M:%S")
 
 @dataclass
 class Timed:
@@ -186,13 +191,23 @@ class Segment(TimedText):
         """True when this segment represents a silence gap."""
         return self.speaker == -2
 
-    def to_dict(self) -> Dict[str, Any]:
-        """Serialize the segment for frontend consumption."""
+    def to_dict(self, session_start: Optional[float] = None) -> Dict[str, Any]:
+        """Serialize the segment for frontend consumption.
+
+        session_start(에폭초)가 주어지면 start/end를 실제 벽시계 시각(HH:MM:SS)으로,
+        생략되면 기존처럼 세션 상대 경과시간(H:MM:SS.cc)으로 포맷한다.
+        """
+        if session_start is not None:
+            start_str = format_walltime(session_start, self.start)
+            end_str = format_walltime(session_start, self.end)
+        else:
+            start_str = format_time(self.start)
+            end_str = format_time(self.end)
         _dict: Dict[str, Any] = {
             'speaker': int(self.speaker) if self.speaker != -1 else 1,
             'text': self.text,
-            'start': format_time(self.start),
-            'end': format_time(self.end),
+            'start': start_str,
+            'end': end_str,
             'finalized': self.finalized,
             'completed': self.finalized,          # React 호환 별칭
         }
@@ -228,11 +243,11 @@ class FrontData():
     remaining_time_transcription: float = 0.
     remaining_time_diarization: float = 0.
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self, session_start: Optional[float] = None) -> Dict[str, Any]:
         """Serialize the front-end data payload."""
         _dict: Dict[str, Any] = {
             'status': self.status,
-            'lines': [line.to_dict() for line in self.lines if (line.text or line.speaker == -2)],
+            'lines': [line.to_dict(session_start) for line in self.lines if (line.text or line.speaker == -2)],
             'buffer_transcription': self.buffer_transcription,
             'buffer_diarization': self.buffer_diarization,
             'buffer_translation': self.buffer_translation,

@@ -386,7 +386,7 @@ whisperlivekit-server
 |---|---|
 | 엔드포인트 | WebSocket **`ws://<host>:<port>/asr`** (기존 SSE/REST 아님) |
 | 메시지 모델 | 50ms마다 **전체 스냅샷** `lines[]`(델타 아님) |
-| 시간 필드 | `start`/`end`가 **문자열 `"H:MM:SS.cc"`**(기존 float 아님) |
+| 시간 필드 | `start`/`end`가 **문자열 `"HH:MM:SS"`**(기존 float 아님) — PC 실제 벽시계 시각(녹음 시작 0초 기준 경과시간 아님) |
 | 확정 표시 | `finalized`(별칭 `completed`) bool |
 | 화자 | `lines[].speaker` int(−2=침묵, 0=diar 로딩중, 1·2·3…=화자) |
 | 오디오 송신 | 서버 `config` 메시지의 `useAudioWorklet` 분기 — PCM AudioWorklet(16kHz s16le) 또는 WebM MediaRecorder |
