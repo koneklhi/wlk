@@ -389,6 +389,15 @@ def create_parser():
         help="언어 자동감지 후보를 {ko, en}으로 제한. 기본 ON. 끄려면 --no-lang-restrict-koen.",
     )
 
+    simulstreaming_group.add_argument(
+        "--silence-grammar-gate",
+        action=BooleanOptionalAction,
+        default=True,
+        dest="silence_grammar_gate",
+        help="문법-조건부 침묵 경계 게이트(과분할 억제, Case B 방지). 기본 ON. "
+        "롤백/A-B 비교용으로 끄려면 --no-silence-grammar-gate.",
+    )
+
     # LLM 번역 인자
     parser.add_argument(
         "--llm-translation",

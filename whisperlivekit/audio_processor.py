@@ -566,11 +566,13 @@ class AudioProcessor:
                     continue
 
                 self.tokens_alignment.update()
+                _flush = self.is_stopping and self._processing_tasks_done()
                 lines, buffer_diarization_text, buffer_translation_text = self.tokens_alignment.get_lines(
                     diarization=self.args.diarization,
                     translation=bool(self.translation),
                     current_silence=self.current_silence,
                     audio_time=self.total_pcm_samples / self.sample_rate if self.sample_rate else None,
+                    flush=_flush,
                 )
                 lines = filter_segments(lines)
                 _append_terminal_punctuation(lines)

@@ -3,7 +3,7 @@ import re
 from time import time
 from typing import Any, List, Optional, Tuple, Union
 
-from whisperlivekit.sentence_boundary import is_genuine_sentence_end
+from whisperlivekit.sentence_boundary import is_genuine_sentence_end, last_word, should_split_after_silence
 from whisperlivekit.simul_whisper.align_att_base import LANG_SWITCH_KEEP_SECS
 from whisperlivekit.timed_objects import (
     ASRToken,
@@ -57,6 +57,18 @@ RETRACT_EPS: float = 0.05
 _HANGUL_PATTERN = re.compile(r'[가-힣]')
 _LATIN_PATTERN = re.compile(r'[A-Za-z]')
 
+# 문법-조건부 침묵 경계(silence-grammar-gate) 상수.
+# SILENCE_HARD_SECS: 이 이상 침묵이면 문법 판정 없이 항상 분할(안전망).
+# 불변식: <= 2.0 — 이를 넘기면 backend.py 쪽 long-silence 하드리셋 구간과 겹쳐 디코더 문맥
+# 연속성이 끊기므로, 병합으로 이어붙인 텍스트의 자연스러움을 더는 보증할 수 없다.
+SILENCE_HARD_SECS: float = 0.8
+assert SILENCE_HARD_SECS <= 2.0, "SILENCE_HARD_SECS는 backend.py long-silence 하드리셋 상한(2.0s)을 넘을 수 없다"
+
+# PENDING_RESOLVE_CAP: 게이트가 다음 발화(B) 도착을 기다리는 최대 시간(초, silence.end 기준).
+# 이 시간을 넘기면 문법 판정 없이 분할 확정(safety valve) — FINALIZE_GRACE_SECS(침묵 start 기준)와는
+# 앵커·용도가 달라 별도 상수로 둔다(§확정 유예 이원화, 게이트 대상 침묵은 이 캡만 적용받는다).
+PENDING_RESOLVE_CAP: float = 2.0
+
 
 def _is_opposite_script(text: str, prev_lang: Optional[str]) -> bool:
     """prev_lang의 정상 스크립트와 반대 스크립트로만 구성된 텍스트인지 판정.
@@ -77,6 +89,13 @@ class TokensAlignment:
     def __init__(self, state: Any, args: Any, sep: Optional[str]) -> None:
         self.state = state
         self.diarization = args.diarization
+        # 문법-조건부 침묵 경계 게이트. 기본 ON — --no-silence-grammar-gate(parse_args.py)로 롤백.
+        self.gate_enabled: bool = bool(getattr(args, "silence_grammar_gate", True))
+        # diar 경로(무상태 재계산) 플래핑 방지 메모 — 한 번 캡 만료로 분할 확정된 침묵은
+        # 이후 재계산에서도 병합으로 되돌리지 않는다. 키 = round(silence.start, 2).
+        self.resolved_split_silences: set = set()
+        # 비-diar 경로(상태 보유) 전용 — 게이트 판정을 보류 중인 침묵(누적 span 포함).
+        self._nondiar_pending_silence: Optional[Silence] = None
 
         self.all_tokens: List[ASRToken] = []
         self.all_diarization_segments: List[SpeakerSegment] = []
@@ -230,6 +249,9 @@ class TokensAlignment:
         if idx:
             self.validated_segments = self.validated_segments[idx:]
 
+        if self.resolved_split_silences:
+            self.resolved_split_silences = {k for k in self.resolved_split_silences if k >= cutoff}
+
     def add_translation(self, segment: Segment) -> None:
         """Append translated text segments that overlap with a segment."""
         if segment.translation is None:
@@ -302,6 +324,11 @@ class TokensAlignment:
                 if previous_segment:
                     previous_segment.hard_boundary = True
                     segments.append(previous_segment)
+                elif segments and segments[-1].is_silence():
+                    # [SIL, LS] 순서로 빈 스팬(직전 침묵 바로 뒤 경계)일 때 hard_boundary가
+                    # 소실되지 않도록 직전 침묵 PuncSegment 자체에 스탬프한다 — 이 침묵이
+                    # silence-grammar-gate 3중 조건 (b)에서 항상 걸려 병합되지 않게 하기 위함.
+                    segments[-1].hard_boundary = True
                 segment_start_idx = i+1
             else:
                 if token.has_punctuation() and self._punct_split_here(i, segment_start_idx):
@@ -318,6 +345,150 @@ class TokensAlignment:
         if final_segment:
             segments.append(final_segment)
         return segments
+
+    @staticmethod
+    def _pending_key(silence_segment: TimedText) -> Any:
+        """캡 만료 플래핑 방지 메모의 키. round(start, 2) — 프레임 지터에 안정적."""
+        return round(silence_segment.start, 2) if silence_segment.start is not None else id(silence_segment)
+
+    def _log_silence_gate(
+        self, silence_start, silence_end, d_eff, last_w, next_w, speakers, langs, decision, path,
+    ) -> None:
+        """[SilenceGate] 태그 로그 — Stage 0 오탐 감사용. 억제되든 안 되든 모든 게이트 판정에 남긴다."""
+        logger.info(
+            "[SilenceGate] start=%.2f end=%.2f d_eff=%s last_word=%r next_word=%r "
+            "speakers=%s langs=%s decision=%s path=%s",
+            silence_start if silence_start is not None else -1.0,
+            silence_end if silence_end is not None else -1.0,
+            f"{d_eff:.2f}" if d_eff is not None else "?",
+            last_w, next_w, speakers, langs, decision, path,
+        )
+
+    def _gate_decide(
+        self,
+        closing: TimedText,
+        silence_seg: TimedText,
+        next_seg: Optional[TimedText],
+        audio_time: Optional[float],
+        flush: bool,
+        diar_mode: bool,
+    ) -> Tuple[str, str]:
+        """짧은 침묵 경계를 병합할지 분할할지 판정. 반환: (decision, resolution_path).
+
+        decision ∈ {"merge", "split", "pending"}.
+        path ∈ {"merge", "split_grammar", "split_hard", "split_cap", "split_memo", "pending"}.
+        """
+        d_eff = None
+        if silence_seg.start is not None and silence_seg.end is not None:
+            d_eff = silence_seg.end - silence_seg.start
+
+        if d_eff is not None and d_eff >= SILENCE_HARD_SECS:
+            return "split", "split_hard"
+
+        key = self._pending_key(silence_seg)
+        if key in self.resolved_split_silences:
+            return "split", "split_memo"
+
+        b_unresolved = next_seg is None or (diar_mode and getattr(next_seg, "speaker", -1) == -1)
+        if b_unresolved:
+            cap_expired = (
+                audio_time is not None and silence_seg.end is not None
+                and (audio_time - silence_seg.end) >= PENDING_RESOLVE_CAP
+            )
+            if flush or cap_expired:
+                self.resolved_split_silences.add(key)
+                return "split", "split_cap"
+            return "pending", "pending"
+
+        # B 확정 — 병합 실행 필수 3중 조건(화자/hard_boundary/언어)을 문법 판정보다 먼저 본다.
+        if silence_seg.hard_boundary or getattr(closing, "hard_boundary", False):
+            return "split", "split_grammar"
+        if diar_mode and next_seg.speaker != closing.speaker:
+            return "split", "split_grammar"
+        if closing.detected_language != next_seg.detected_language:
+            return "split", "split_grammar"
+
+        verdict = should_split_after_silence(closing.text, next_seg.text)
+        if verdict is None:
+            verdict = True  # B가 이미 확정됐는데 None이면 방어적으로 분할(도달하지 않아야 정상)
+        return ("split", "split_grammar") if verdict else ("merge", "merge")
+
+    def _apply_silence_grammar_gate(
+        self,
+        punctuation_segments: List[PuncSegment],
+        audio_time: Optional[float],
+        flush: bool,
+    ) -> List[PuncSegment]:
+        """구두점 없이 닫히려는 짧은 침묵 경계에 문법 게이트를 적용해 과분할을 억제한다.
+
+        각 침묵 후보에 대해 merge(리스트에서 제거 — 이후 병합루프가 같은 화자 텍스트를 자연
+        병합)/split(그대로 두어 기존 로직이 분할)/pending(그대로 두되 gate_pending 태그로 하류
+        확정을 보류)을 결정한다. all_tokens/Silence 토큰 자체는 건드리지 않는다 — 이 리스트는
+        매 틱 compute_punctuations_segments()가 새로 만드는 조립 계층 산출물이다.
+        """
+        if not punctuation_segments:
+            return punctuation_segments
+        result: List[PuncSegment] = []
+        n = len(punctuation_segments)
+        i = 0
+        while i < n:
+            seg = punctuation_segments[i]
+            if not seg.is_silence():
+                result.append(seg)
+                i += 1
+                continue
+
+            prev_text = result[-1] if result and not result[-1].is_silence() else None
+            if prev_text is None or getattr(prev_text, "punct_boundary", False):
+                # 게이트 비대상: 앞에 텍스트가 없거나 이미 온점으로 진짜 종결됨(현행 유지).
+                result.append(seg)
+                i += 1
+                continue
+
+            # 연속 침묵 span 누적 — 다음 non-silence까지 훑는다.
+            span_end_idx = i
+            while span_end_idx + 1 < n and punctuation_segments[span_end_idx + 1].is_silence():
+                span_end_idx += 1
+            if span_end_idx == i:
+                merged_silence = seg
+            else:
+                merged_silence = PuncSegment(
+                    start=seg.start, end=punctuation_segments[span_end_idx].end, text=None, speaker=-2,
+                )
+                merged_silence.hard_boundary = any(
+                    punctuation_segments[k].hard_boundary for k in range(i, span_end_idx + 1)
+                )
+            next_idx = span_end_idx + 1
+            next_seg = (
+                punctuation_segments[next_idx]
+                if next_idx < n and not punctuation_segments[next_idx].is_silence()
+                else None
+            )
+
+            decision, path = self._gate_decide(prev_text, merged_silence, next_seg, audio_time, flush, self.diarization)
+            d_eff = (
+                merged_silence.end - merged_silence.start
+                if merged_silence.start is not None and merged_silence.end is not None else None
+            )
+            self._log_silence_gate(
+                merged_silence.start, merged_silence.end, d_eff,
+                last_word(prev_text.text), last_word(next_seg.text) if next_seg is not None else None,
+                (prev_text.speaker, next_seg.speaker if next_seg is not None else None),
+                (prev_text.detected_language, next_seg.detected_language if next_seg is not None else None),
+                decision, path,
+            )
+
+            if decision == "merge":
+                i = next_idx  # 침묵 생략 — next_seg(있다면)는 다음 반복에서 그대로 append
+                continue
+            if decision == "pending":
+                merged_silence.gate_pending = True
+                prev_text.gate_pending = True
+                result.append(merged_silence)
+            else:
+                result.append(merged_silence)
+            i = span_end_idx + 1
+        return result
 
     def compute_new_punctuations_segments(self) -> List[PuncSegment]:
         new_punc_segments = []
@@ -376,7 +547,9 @@ class TokensAlignment:
 
         return max(0, end - start)
 
-    def get_lines_diarization(self) -> Tuple[List[Segment], str]:
+    def get_lines_diarization(
+        self, audio_time: Optional[float] = None, flush: bool = False
+    ) -> Tuple[List[Segment], str]:
         """Build segments when diarization is enabled and track overflow buffer."""
         diarization_buffer = ''
         punctuation_segments = self.compute_punctuations_segments()
@@ -394,6 +567,10 @@ class TokensAlignment:
                             max_overlap = intersec
                             max_overlap_speaker = diarization_segment.speaker + 1
                     punctuation_segment.speaker = max_overlap_speaker
+
+        if self.gate_enabled:
+            # 화자 배정이 끝난 뒤에 게이트를 적용 — (a)같은 화자 조건 판정에 실제 화자값이 필요.
+            punctuation_segments = self._apply_silence_grammar_gate(punctuation_segments, audio_time, flush)
 
         segments = []
         if punctuation_segments:
@@ -413,7 +590,10 @@ class TokensAlignment:
                         if getattr(closing, "hard_boundary", False):
                             closing.finalize_trigger = "language_switch"
                         elif segment.is_silence():
-                            closing.finalize_trigger = "punctuation" if closing.has_punctuation() else "silence"
+                            if getattr(closing, "gate_pending", False):
+                                pass  # 게이트 보류 — trigger 미설정(하류 확정 억제, §확정 유예 이원화)
+                            else:
+                                closing.finalize_trigger = "punctuation" if closing.has_punctuation() else "silence"
                         elif segment.speaker != closing.speaker:
                             closing.finalize_trigger = "speaker_change"
                         elif getattr(closing, "punct_boundary", False):
@@ -425,6 +605,13 @@ class TokensAlignment:
         # 화자 전환이 발생한 세그먼트는 확정 완료 — 마지막 세그먼트(현재 발화 중)는 제외
         for seg in segments[:-1]:
             seg.finalized = True
+
+        # 게이트 보류 중인 세그먼트(텍스트·침묵 모두)는 블랭킷 확정을 되돌린다 — B 미도착/미귀속
+        # 상태라 이 세그먼트가 리스트 마지막이 아니어도(예: 화자 미귀속 B가 이미 별도로 붙은 경우)
+        # 확정해서는 안 된다.
+        for seg in segments:
+            if getattr(seg, "gate_pending", False):
+                seg.finalized = False
 
         return segments, diarization_buffer
 
@@ -456,24 +643,171 @@ class TokensAlignment:
             return False
         return is_genuine_sentence_end(line_text, getattr(next_token, "text", None))
 
-    def _apply_finalize_grace(self, segments: List[Segment], audio_time: Optional[float]) -> None:
+    def _apply_finalize_grace(
+        self, segments: List[Segment], audio_time: Optional[float], flush: bool = False
+    ) -> None:
         """침묵 직후 유예 창 안에서는 직전 텍스트 세그먼트 확정을 보류(꼬리 도착 대기).
 
         마지막 세그먼트가 침묵이고 그 앞이 텍스트일 때, audio_time - silence.start가
         FINALIZE_GRACE_SECS 미만이면 finalized=False로 되돌린다(유예). 경과했으면 True로
         확정한다. 후속 발화 토큰이 도착하면 마지막 세그먼트가 침묵이 아니게 되므로
-        (텍스트) 즉시 확정 상태가 유지된다.
+        (텍스트) 즉시 확정 상태가 유지된다. flush=True(스트림 종료 — 더 이상 꼬리가
+        오지 않음)면 유예를 기다리지 않고 즉시 확정한다.
         """
         if audio_time is None or len(segments) < 2:
             return
         last = segments[-1]
         prev = segments[-2]
+        if getattr(last, "gate_pending", False):
+            # 게이트가 관여하는 침묵은 PENDING_RESOLVE_CAP(silence.end 기준) 별도 경로로만
+            # 해소한다 — 여기서 silence.start 기준 grace로 앞질러 확정하면 §확정 유예
+            # 이원화가 깨진다(B 디코드 지연 중 조기 finalized=True → 번역 오발사).
+            return
         if last.is_silence() and not prev.is_silence() and prev.text:
-            prev.finalized = (audio_time - last.start) >= FINALIZE_GRACE_SECS
+            prev.finalized = flush or (audio_time - last.start) >= FINALIZE_GRACE_SECS
             prev.finalize_trigger = (
                 ("punctuation" if prev.has_punctuation() else "silence")
                 if prev.finalized else None
             )
+
+    # ─── 비-diar 경로 헬퍼(게이트 decide-late 지원) ──────────────────────────
+
+    def _close_current_line(self, trigger: Optional[str]) -> None:
+        """current_line_tokens를 확정해 validated_segments에 커밋하고 비운다."""
+        if self.current_line_tokens:
+            seg = Segment.from_tokens(self.current_line_tokens)
+            if seg is not None:
+                seg.finalized = True
+                seg.finalize_trigger = trigger
+                self.validated_segments.append(seg)
+            self.current_line_tokens = []
+
+    def _current_line_text(self) -> str:
+        return ''.join(t.text for t in self.current_line_tokens)
+
+    def _extend_silence_segment_nondiar(self, start: Optional[float], end: Optional[float]) -> None:
+        """validated_segments 말미에 SilentSegment를 추가하거나(없으면) 연장한다."""
+        if self.validated_segments and self.validated_segments[-1].is_silence():
+            self.validated_segments[-1].end = end
+        else:
+            self.validated_segments.append(SilentSegment(start=start, end=end))
+
+    def _gate_intake_nondiar_silence(self, token: Silence) -> None:
+        """게이트 활성 + 구두점 없이 끝난 현재 줄 뒤에 Silence 도착.
+
+        누적 d_eff가 SILENCE_HARD_SECS를 넘기면(연속 침묵 포함) 안전망으로 즉시 분할
+        확정하고, 아니면 다음 토큰(B 또는 재귀속 꼬리) 도착까지 보류(pending)한다.
+        """
+        pending = self._nondiar_pending_silence
+        start = pending.start if pending is not None else token.start
+        end = token.end
+        d_eff = (end - start) if (start is not None and end is not None) else None
+        closing_text = self._current_line_text()
+        if d_eff is not None and d_eff >= SILENCE_HARD_SECS:
+            self._log_silence_gate(start, end, d_eff, last_word(closing_text), None,
+                                    None, None, "split", "split_hard")
+            self._close_current_line("silence")
+            self._nondiar_pending_silence = None
+            self._extend_silence_segment_nondiar(start, end)
+            return
+        self._nondiar_pending_silence = Silence(start=start, end=end, has_ended=True)
+        self._log_silence_gate(start, end, d_eff, last_word(closing_text), None,
+                                None, None, "pending", "pending")
+
+    def _handle_nondiar_silence(self, token: Silence, silence_now: float) -> None:
+        if self.current_line_tokens:
+            already_punctuated = TimedText(text=self._current_line_text()).has_punctuation()
+            if self.gate_enabled and not already_punctuated:
+                self._gate_intake_nondiar_silence(token)
+                return
+            self._close_current_line("punctuation" if already_punctuated else "silence")
+
+        end_silence = token.end if token.has_ended else silence_now
+        self._extend_silence_segment_nondiar(token.start, end_silence)
+
+    def _handle_nondiar_boundary(self) -> None:
+        """언어 전환 경계: 보류 중인 게이트가 있으면 hard_boundary로 즉시 분할 확정."""
+        if self._nondiar_pending_silence is not None:
+            pending = self._nondiar_pending_silence
+            d_eff = (
+                pending.end - pending.start
+                if (pending.start is not None and pending.end is not None) else None
+            )
+            self._log_silence_gate(pending.start, pending.end, d_eff, last_word(self._current_line_text()),
+                                    None, None, None, "split", "split_grammar")
+            self._nondiar_pending_silence = None
+        # 언어 전환 경계는(기존 동작대로) 침묵 세그먼트를 만들지 않는다.
+        self._close_current_line("language_switch")
+
+    def _resolve_nondiar_pending(self, token: ASRToken) -> None:
+        """decide-late: 도착한 토큰이 재귀속 꼬리(start < silence.start)인지 새 발화 B인지
+        구분해, B라면 문법 게이트로 병합/분할을 판정한다(§decide-late 원칙)."""
+        pending = self._nondiar_pending_silence
+        if (token.start is not None and pending.start is not None
+                and token.start + TAIL_REATTACH_EPS < pending.start):
+            # 재귀속된 꼬리 — 원래 이 줄에 속한다. 현재 줄로 흡수하고 게이트는 계속 보류.
+            self.current_line_tokens.append(token)
+            d_eff = (
+                pending.end - pending.start
+                if (pending.start is not None and pending.end is not None) else None
+            )
+            self._log_silence_gate(pending.start, pending.end, d_eff, last_word(self._current_line_text()),
+                                    token.text, None, None, "pending", "pending")
+            return
+
+        closing_text = self._current_line_text()
+        closing_lang = self.current_line_tokens[0].detected_language if self.current_line_tokens else None
+        same_lang = closing_lang == token.detected_language
+        verdict = should_split_after_silence(closing_text, token.text)
+        if verdict is None:
+            verdict = True  # 방어적 기본값 — 도달 시 next_text는 이미 확정 상태라야 정상
+        decision = "split" if (not same_lang or verdict) else "merge"
+        path = "split_grammar" if decision == "split" else "merge"
+        d_eff = (
+            pending.end - pending.start
+            if (pending.start is not None and pending.end is not None) else None
+        )
+        self._log_silence_gate(pending.start, pending.end, d_eff, last_word(closing_text), last_word(token.text),
+                                None, (closing_lang, token.detected_language), decision, path)
+
+        self._nondiar_pending_silence = None
+        if decision == "split":
+            self._close_current_line("silence")
+            self._extend_silence_segment_nondiar(pending.start, pending.end)
+        self.current_line_tokens.append(token)
+
+    def _handle_nondiar_text(self, token: ASRToken) -> None:
+        if self._nondiar_pending_silence is not None:
+            self._resolve_nondiar_pending(token)
+            return
+        # 유보됐던 꼬리 토큰은 침묵 앞의 확정 세그먼트로 되붙인다(CASE1 교정).
+        if not self._reattach_tail_nondiar(token):
+            # 형태소 종결 온점 분할: 직전 줄이 종결 온점으로 끝났고 이 토큰이
+            # 발화를 이으면, 새 토큰을 넣기 전에 현재 줄을 확정해 닫는다.
+            if self.current_line_tokens and self._nondiar_punct_split_pending(token):
+                self._close_current_line("punctuation")
+            self.current_line_tokens.append(token)
+
+    def _check_nondiar_pending_cap(self, audio_time: Optional[float], flush: bool) -> None:
+        """PENDING_RESOLVE_CAP(또는 flush) 만료 시 보류 중인 게이트를 분할로 강제 해소."""
+        pending = self._nondiar_pending_silence
+        if pending is None:
+            return
+        cap_expired = (
+            audio_time is not None and pending.end is not None
+            and (audio_time - pending.end) >= PENDING_RESOLVE_CAP
+        )
+        if not (flush or cap_expired):
+            return
+        d_eff = (
+            pending.end - pending.start
+            if (pending.start is not None and pending.end is not None) else None
+        )
+        self._log_silence_gate(pending.start, pending.end, d_eff, last_word(self._current_line_text()), None,
+                                None, None, "split", "split_cap")
+        self._close_current_line("silence")
+        self._extend_silence_segment_nondiar(pending.start, pending.end)
+        self._nondiar_pending_silence = None
 
     def get_lines(
             self,
@@ -481,6 +815,7 @@ class TokensAlignment:
             translation: bool = False,
             current_silence: Optional[Silence] = None,
             audio_time: Optional[float] = None,
+            flush: bool = False,
         ) -> Tuple[List[Segment], str, Union[str, TimedText]]:
         """Return the formatted segments plus buffers, optionally with diarization/translation.
 
@@ -488,54 +823,25 @@ class TokensAlignment:
             audio_time: Current audio stream position in seconds. Used as fallback
                 for ongoing silence end time instead of wall-clock (which breaks
                 when audio is fed faster or slower than real-time).
+            flush: 스트림 종료 시 True — silence-grammar-gate가 보류 중인 판정을
+                (다음 발화가 더는 오지 않으므로) 즉시 분할로 강제 해소한다.
         """
         # Fallback for ongoing silence: prefer audio stream time over wall-clock
         _silence_now = audio_time if audio_time is not None else (time() - self.beg_loop)
 
         if diarization:
-            segments, diarization_buffer = self.get_lines_diarization()
+            segments, diarization_buffer = self.get_lines_diarization(audio_time=audio_time, flush=flush)
         else:
             diarization_buffer = ''
             for token in self.new_tokens:
                 if isinstance(token, Silence):
-                    if self.current_line_tokens:
-                        seg = Segment.from_tokens(self.current_line_tokens)
-                        if seg is not None:
-                            seg.finalized = True
-                            seg.finalize_trigger = "punctuation" if seg.has_punctuation() else "silence"
-                            self.validated_segments.append(seg)
-                        self.current_line_tokens = []
-
-                    end_silence = token.end if token.has_ended else _silence_now
-                    if self.validated_segments and self.validated_segments[-1].is_silence():
-                        self.validated_segments[-1].end = end_silence
-                    else:
-                        self.validated_segments.append(SilentSegment(
-                            start=token.start,
-                            end=end_silence
-                        ))
+                    self._handle_nondiar_silence(token, _silence_now)
                 elif token.is_boundary():
-                    # 언어 전환 경계: 현재 줄을 확정해 닫되 침묵 세그먼트는 만들지 않는다.
-                    if self.current_line_tokens:
-                        seg = Segment.from_tokens(self.current_line_tokens)
-                        if seg is not None:
-                            seg.finalized = True
-                            seg.finalize_trigger = "language_switch"
-                            self.validated_segments.append(seg)
-                        self.current_line_tokens = []
+                    self._handle_nondiar_boundary()
                 else:
-                    # 유보됐던 꼬리 토큰은 침묵 앞의 확정 세그먼트로 되붙인다(CASE1 교정).
-                    if not self._reattach_tail_nondiar(token):
-                        # 형태소 종결 온점 분할: 직전 줄이 종결 온점으로 끝났고 이 토큰이
-                        # 발화를 이으면, 새 토큰을 넣기 전에 현재 줄을 확정해 닫는다.
-                        if self.current_line_tokens and self._nondiar_punct_split_pending(token):
-                            seg = Segment.from_tokens(self.current_line_tokens)
-                            if seg is not None:
-                                seg.finalized = True
-                                seg.finalize_trigger = "punctuation"
-                                self.validated_segments.append(seg)
-                            self.current_line_tokens = []
-                        self.current_line_tokens.append(token)
+                    self._handle_nondiar_text(token)
+
+            self._check_nondiar_pending_cap(audio_time, flush)
 
             segments = list(self.validated_segments)
             if self.current_line_tokens:
@@ -543,7 +849,7 @@ class TokensAlignment:
 
         # 침묵 직후 확정 유예: 유보 꼬리가 아직 도착하지 않았을 수 있으므로
         # 유예 창(FINALIZE_GRACE_SECS) 안에서는 직전 텍스트 세그먼트 확정을 보류한다.
-        self._apply_finalize_grace(segments, audio_time)
+        self._apply_finalize_grace(segments, audio_time, flush)
 
         if current_silence:
             end_silence = current_silence.end if current_silence.has_ended else _silence_now

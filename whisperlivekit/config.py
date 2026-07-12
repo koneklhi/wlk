@@ -68,6 +68,7 @@ class WhisperLiveKitConfig:
     trace_tokens: bool = False
     periodic_lang_check_secs: Optional[float] = None
     lang_restrict_koen: bool = True
+    silence_grammar_gate: bool = True
 
     # Diarization — Sortformer
     sortformer_model: str = "nvidia/diar_streaming_sortformer_4spk-v2"

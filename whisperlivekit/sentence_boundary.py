@@ -70,6 +70,32 @@ def is_abbreviation_en(word: str) -> bool:
     return core.lower() in EN_ABBREV
 
 
+def last_word(text: str) -> str:
+    """닫히는 텍스트의 마지막 어절(공개 래퍼) — 게이트 로깅·판정에서 재사용."""
+    return _last_word(text)
+
+
+def should_split_after_silence(closing_text: str, next_text=None):
+    """구두점 없이 끝난 짧은 침묵(silence-grammar-gate 전용) 경계를 분할할지 판정.
+
+    온점 경로(is_genuine_sentence_end)와 달리 이 함수가 다루는 closing_text는
+    애초에 종결 구두점이 없는 상태(호출부가 그 조건을 보장)를 전제로 한다.
+    반환값은 3치(tri-state): True=분할, False=병합, None=아직 판정 불가
+    (영어인데 다음 어절이 아직 도착하지 않음 — decide-late로 호출부가 보류해야 함).
+    """
+    word = _last_word(closing_text)
+    if not word:
+        return True  # 판정 근거 없음 — 기존(무조건 분할) 동작을 안전하게 보존
+    if _has_hangul(word):
+        return is_sentence_final_ko(word)
+    if next_text is None:
+        return None
+    nxt = next_text.strip()
+    if not nxt:
+        return None
+    return nxt[0].isupper()
+
+
 def is_genuine_sentence_end(closing_text: str, next_text=None) -> bool:
     """닫히는 세그먼트 텍스트가 '진짜 문장 종결'인지 판정.
 
