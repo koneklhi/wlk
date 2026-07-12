@@ -42,6 +42,7 @@ waveCtx.scale(window.devicePixelRatio || 1, window.devicePixelRatio || 1);
 
 const statusText = document.getElementById("status");
 const recordButton = document.getElementById("recordButton");
+const saveTranscriptButton = document.getElementById("saveTranscriptButton");
 const chunkSelector = document.getElementById("chunkSelector");
 const websocketInput = document.getElementById("websocketInput");
 const websocketDefaultSpan = document.getElementById("wsDefaultUrl");
@@ -218,6 +219,18 @@ websocketInput.addEventListener("change", () => {
   statusText.textContent = "WebSocket URL updated. Ready to connect.";
 });
 
+// 클릭 시점까지 확정된 누적 전사 + 최신 미확정 줄을 저장 payload로 변환.
+// 저장 버튼 클릭 핸들러와 활성/비활성 상태 판정(updateSaveButtonState) 양쪽에서 재사용한다.
+function buildTranscriptPayload() {
+  return [...finalizedHistory.values(), ...((lastReceivedData && lastReceivedData.lines) || []).filter((l) => !l.finalized)]
+    .filter((l) => l.speaker !== -2 && (l.text || l.translation))
+    .map((l) => ({ speaker: l.speaker, text: (l.text || "").trim(), translation: (l.translation || "").trim() || undefined }));
+}
+
+function updateSaveButtonState() {
+  saveTranscriptButton.disabled = buildTranscriptPayload().length === 0;
+}
+
 function setupWebSocket() {
   return new Promise((resolve, reject) => {
     try {
@@ -304,20 +317,8 @@ function setupWebSocket() {
         statusText.textContent = "Finished processing audio! Ready to record again.";
         recordButton.disabled = false;
 
-        // 종료 시 누적 전사를 서버 로컬 폴더에 자동 저장 (fire-and-forget, 실패해도 종료 흐름 유지)
-        const payload = [...finalizedHistory.values(), ...((lastReceivedData && lastReceivedData.lines) || []).filter((l) => !l.finalized)]
-          .filter((l) => l.speaker !== -2 && (l.text || l.translation))
-          .map((l) => ({ speaker: l.speaker, text: (l.text || "").trim(), translation: (l.translation || "").trim() || undefined }));
-        if (payload.length) {
-          fetch("/api/save-transcript", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ lines: payload }),
-          })
-            .then((r) => r.json())
-            .then((d) => { statusText.textContent = `전사 기록 저장됨: ${d.path}`; })
-            .catch((e) => { console.error("전사 저장 실패:", e); });
-        }
+        // 자동 저장은 하지 않는다 — 저장은 사용자가 저장 버튼을 눌렀을 때만 수행한다(buildTranscriptPayload 참조).
+        updateSaveButtonState();
 
         if (websocket) {
           websocket.close();
@@ -375,6 +376,7 @@ function renderLinesWithBuffer(
     }
   }
   const mergedLines = [...finalizedHistory.values(), ...(lines || []).filter((l) => !l.finalized)];
+  updateSaveButtonState();
 
   const showLoading = !isFinalizing && (lines || []).some((it) => it.speaker == 0);
   const showTransLag = !isFinalizing && remaining_time_transcription > 0;
@@ -554,6 +556,7 @@ function drawWaveform() {
 async function startRecording() {
   finalizedHistory.clear();
   lastSignature = "";
+  updateSaveButtonState();
   try {
     try {
       wakeLock = await navigator.wakeLock.request("screen");
@@ -831,6 +834,26 @@ navigator.mediaDevices.addEventListener('devicechange', async () => {
 settingsToggle.addEventListener("click", () => {
 settingsDiv.classList.toggle("visible");
 settingsToggle.classList.toggle("active");
+});
+
+saveTranscriptButton.addEventListener("click", async () => {
+  const payload = buildTranscriptPayload();
+  if (!payload.length) return;
+  saveTranscriptButton.disabled = true;
+  try {
+    const res = await fetch("/api/save-transcript", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ lines: payload }),
+    });
+    const data = await res.json();
+    statusText.textContent = `전사 기록 저장됨: ${data.path}`;
+  } catch (e) {
+    console.error("전사 저장 실패:", e);
+    statusText.textContent = "전사 저장 실패. 콘솔을 확인하세요.";
+  } finally {
+    updateSaveButtonState();
+  }
 });
 
 if (isExtension) {
