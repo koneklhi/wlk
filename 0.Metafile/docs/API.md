@@ -434,7 +434,7 @@ All messages after the initial snapshot are diffs.
 | `seq`                          | int    | Always      | Sequence number. |
 | `status`                       | string | Always      | Same as full mode. |
 | `n_lines`                      | int    | Always      | Total number of lines the client should have after applying this diff. Use this to verify sync. |
-| `lines_pruned`                 | int    | Conditional | Number of lines to remove from the **front** of the client's line list. Only present when > 0. |
+| `lines_pruned`                 | int    | Conditional | Number of lines to remove from the **front** of the client's line list. Only present when > 0. With the server's current unlimited retention setting, age-based pruning no longer happens, so in practice this field is always `0` (i.e. absent). |
 | `new_lines`                    | array  | Conditional | Lines to append to the **end** of the client's line list. Only present when there are new lines. |
 | `buffer_transcription`         | string | Always      | Replaces the previous buffer value. |
 | `buffer_diarization`           | string | Always      | Replaces the previous buffer value. |

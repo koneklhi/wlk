@@ -18,7 +18,8 @@ from whisperlivekit.timed_objects import (
 
 logger = logging.getLogger(__name__)
 
-_DEFAULT_RETENTION_SECONDS: float = 300.0
+_DEFAULT_RETENTION_SECONDS: float = float("inf")  # 로컬 패치: 세션 전체 윈도우 유지
+# (upstream 기본값 300.0=5분 — 서버 메모리/CPU/대역폭이 세션 길이에 비례해 증가하는 트레이드오프 감수)
 
 # CASE1 문장 꼬리 분리 교정 상수.
 # AlignAtt가 유보한 마지막 단어(꼬리)가 재디코딩 후 Silence 마커 뒤로 들어가

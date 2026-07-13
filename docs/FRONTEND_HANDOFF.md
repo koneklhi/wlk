@@ -113,11 +113,13 @@ React가 반드시 새로 구현할 것: ① WS 연결·종료 시퀀스 ② con
 | `remaining_time_diarization` | float(초) | O | 화자분할 처리 지연(diar off면 0) | [audio_processor.py:594](../whisperlivekit/audio_processor.py#L594) |
 | `error` | str | status=="error"만 | 오류 메시지(FFmpeg 등) | [timed_objects.py:242-243](../whisperlivekit/timed_objects.py#L242-L243) |
 
-> ⚠️ **서버는 5분 슬라이딩 윈도우만 유지한다** — `lines[]`는 무제한 누적이 아니라 최근 구간만 담겨 온다.
-> React도 내장 UI([live_transcription.js:27-30, 370-376](../whisperlivekit/web/live_transcription.js#L27-L30))처럼
-> **`finalized`(=`completed`) `true`인 줄을 별도 상태(예: Map, key=`${start}|${end}|${speaker}` 복합키)에 직접 누적**하고 화면엔
-> "누적 history + 아직 미확정인 최신 줄"만 합쳐 렌더해야 한다. 매 스냅샷을 그대로 전체교체(§0 TL;DR)만 하면
-> 5분이 지난 확정 자막이 화면에서 사라진다.
+> ⚠️ **서버는 세션 전체 확정 히스토리를 무제한 유지한다** — 매 스냅샷마다 `lines[]`를 그대로 재전송한다
+> (5분 등 시간 제한으로 잘려나가지 않음). React는 `lines[]`를 받은 그대로 전체교체 렌더만 해도(§0 TL;DR)
+> 세션 전체 히스토리가 유지된다 — **`finalized`(=`completed`) `true`인 줄을 별도 상태(Map)에 직접 누적하는
+> 방식은 더 이상 필수가 아니다**(내장 UI([live_transcription.js:27-30, 370-376](../whisperlivekit/web/live_transcription.js#L27-L30))는
+> 이 변경 이전의 Map 누적 코드를 아직 그대로 쓰고 있으나, 동작엔 무해한 참고용 레퍼런스일 뿐 필수 패턴은
+> 아니다). 단, 장시간 세션에서 리스트가 계속 길어지므로 렌더 성능이 걱정되면 선택적으로 가상 스크롤을
+> 고려할 수 있다.
 > ⚠️ `start`가 초 단위 벽시계 시각(`HH:MM:SS`)으로 바뀌면서 같은 초에 여러 세그먼트가 시작될 수 있다(빠른 화자전환·코드스위칭) —
 > `start` 단독을 키로 쓰면 충돌로 항목이 덮어써진다. 반드시 `start`+`end`+`speaker` 복합키를 쓸 것
 > ([live_transcription.js:370-376](../whisperlivekit/web/live_transcription.js#L370-L376) 참고).
@@ -260,7 +262,7 @@ const speakerNum = `<span class="speaker-badge">${item.speaker}</span>`;
 - [ ] `EventSource`/`POST start|stop` 제거 → `new WebSocket(".../asr")`.
 - [ ] 첫 `{"type":"config"}` 처리 → `useAudioWorklet` 분기 후 녹음 시작.
 - [ ] 매 스냅샷 메시지에서 transcript **전체 교체** 렌더(append/patch 아님). `lines[]` + `buffer_transcription`(마지막 줄 미확정) 합성.
-- [ ] **확정(`finalized`) 줄 누적**: 서버 5분 슬라이딩 윈도우 대응 — 확정 줄은 프론트 상태에 누적, 미확정 줄만 매번 교체(§2 참조).
+- [ ] **확정(`finalized`) 줄 처리**: 서버가 세션 전체를 무제한 유지하므로 프론트 누적이 필수는 아니다(선택: 렌더 최적화용 안정 key 용도로는 여전히 유용, §2 참조).
 - [ ] 저장 버튼 클릭 시 `POST /api/save-transcript` 호출(§10) — 내장 UI와 동일하게 버튼 클릭으로만 저장하면 저장 로직이 통일된다(자동 저장 아님).
 - [ ] 오디오 캡처 구현: PCM(AudioWorklet+Worker) 또는 WebM(MediaRecorder).
 - [ ] 필드 타입 변경: `start`/`end`는 `"HH:MM:SS"` 문자열(PC 실제 벽시계 시각 — 녹음 시작 시점이 아니라 발화 시각, 센티초 없음), `finalized`(=completed) bool, 언어는 `detected_language`(=lang). history Map 키는 `start` 단독이 아니라 `start`+`end`+`speaker` 복합키(같은 초 충돌 방지).

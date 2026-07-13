@@ -43,9 +43,9 @@ React가 반드시 새로 구현할 것: ① WS 연결·종료 시퀀스 ② con
 |---|---|---|---|
 | 전송 계층 | SSE(전사 `/api/recordings`) + 별도 SSE(번역 `/api/translate`) + REST(start/stop/status) | 단일 WebSocket `/asr`(수신·제어·오디오 통합) | `EventSource` 2개·`fetch(start/stop)` 제거 → **`WebSocket` 하나로 통합** |
 | 오디오 캡처 | **서버가 PyAudio로 로컬 마이크 캡처**(브라우저 미전송) | 브라우저 `getUserMedia`로 캡처해 WS로 전송 | **신규 개발.** 주 경로 = **WebM(`MediaRecorder`)**, 이게 기본·배포. PCM(AudioWorklet+16kHz 리샘플)은 `--pcm-input` 옵트인 시만(§6) |
-| 메시지 모델 | 커서 기반 **문장 1개 델타** | 매 ~50ms **전체 상태 스냅샷**(`lines[]` 전체) | 이벤트 append → **전체교체 렌더 + 확정 줄 프론트 누적**(5분 윈도우, §4.2) |
+| 메시지 모델 | 커서 기반 **문장 1개 델타** | 매 ~50ms **전체 상태 스냅샷**(`lines[]` 전체) | 이벤트 append → **전체교체 렌더**(확정 줄 프론트 누적은 필수 아님 — 선택적 렌더 최적화, §4.2) |
 | 필드명 | `content` / `language` / `status:"process"·"complete"` | `text` / `detected_language`(별칭 `lang`) / `finalized`(bool) | 파싱 필드명·타입 교체(§9.4 매핑표) |
-| 확정/미확정 표시 | 문장 단위 `status` 회색↔진하게 | 의미가 다름 → **§2.2 참조** | `lines[]`=진하게 / `buffer_*`=연하게 **2단계**. `finalized`는 색 아닌 히스토리 누적용(§2.2) |
+| 확정/미확정 표시 | 문장 단위 `status` 회색↔진하게 | 의미가 다름 → **§2.2 참조** | `lines[]`=진하게 / `buffer_*`=연하게 **2단계**. `finalized`는 색 아닌 리렌더 최적화(안정 key)용(§2.2) |
 | 번역 | 문장마다 **별도 `POST /api/translate` SSE**(토큰 스트리밍) | `lines[].translation` **인라인**(확정 후 통째로) | `/api/translate` 호출·SSE 제거 → `lines[].translation` 읽기. **스트리밍 타이핑 UX는 사라짐.** `buffer_translation`은 미구현(§7) |
 | 화자분할 | 없음 | `lines[].speaker`(int), `-2`=침묵/`0`=진행중 | **신규 UI**(배지·색 직접 구현, §5) |
 | 타임스탬프 | SSE에 없음(내부만 float 초) | `start`/`end` = 벽시계 `"HH:MM:SS"` 문자열 | 표시에 사용 가능. history 키는 `start\|end\|speaker` 복합키 |
@@ -83,8 +83,9 @@ rows.map((line, i) => (
 .buffer { opacity: 0.4; }   /* 또는 회색 */
 ```
 
-- **`finalized`는 여전히 필요하다 — 색이 아니라 "히스토리 누적"에.** `finalized === true`인 줄만
-  `finalizedHistory`(§4.2)에 쌓고, `false`인 줄은 매 스냅샷 새로 그린다. 스타일링에서만 안 쓸 뿐이다.
+- **`finalized`는 여전히 필요하다 — 색이 아니라 "어떤 줄을 다시 안 그릴지" 판단에.** `finalized === true`인
+  줄은 리렌더 최적화(안정 key)에 활용할 수 있고, `false`인 줄만 매 스냅샷 새로 그리면 된다. 스타일링에서만
+  안 쓸 뿐이다.
 - **트레이드오프**: wl처럼 "문장 전체가 회색이었다가 확정 시 진해지는" 단계는 없다. 단어는 검증돼
   `lines[]`에 들어오는 즉시 진하게 굳는다(드물게 언어전환 경계에서 이미 진한 단어가 철회될 수
   있으나 실사용에선 거의 없음). 이 방식이 가장 단순하고 내장 UI와 동일하다.
@@ -182,11 +183,10 @@ React가 직접 구현**해야 한다(`onclose`/`onerror`에서 code 확인 후 
 | `remaining_time_diarization` | float(초) | O | 화자분할 처리 지연(diar off면 0) |
 | `error` | str | status=="error"만 | 오류 메시지(FFmpeg 등) |
 
-> ⚠️ **서버는 5분 슬라이딩 윈도우만 유지한다** — `lines[]`는 무제한 누적이 아니라 최근 구간만
-> 담겨 온다. React는 **`finalized`(=`completed`) `true`인 줄을 별도 상태(예: Map)에 직접
-> 누적**하고 화면엔 "누적 history + 아직 미확정인 최신 줄"만 합쳐 렌더해야 한다. 매 스냅샷을
-> 그대로 전체교체만 하면 5분이 지난 확정 자막이 화면에서 사라진다. **이 누적 state는 새 녹음을
-> 시작할 때 반드시 비운다**(내장 UI는 startRecording에서 clear) — 안 비우면 새 세션에 이전 자막이 남는다.
+> ⚠️ **서버는 세션 전체 확정 히스토리를 무제한 유지하며 매 스냅샷마다 그대로 재전송한다.** React는
+> `lines[]`를 받은 그대로 전체교체 렌더만 해도 히스토리가 유지된다 — 별도 Map 누적은 더 이상 필수가
+> 아니다(단, 장시간 세션에서 리스트가 계속 길어지므로 렌더 성능이 걱정되면 선택적으로 가상 스크롤을
+> 고려할 수 있다).
 > ⚠️ `start`가 초 단위 벽시계 시각(`HH:MM:SS`)이라 같은 초에 여러 세그먼트가 시작될 수 있다
 > (빠른 화자전환·코드스위칭) — `start` 단독을 키로 쓰면 충돌로 항목이 덮어써진다. 반드시
 > `start`+`end`+`speaker` 복합키를 쓸 것.
@@ -372,8 +372,8 @@ WS `/asr`와 별개로, 사용자가 UI의 **저장 버튼을 눌렀을 때**만
 - [ ] 첫 `{"type":"config"}` 처리 → `useAudioWorklet` 분기 후 녹음 시작.
 - [ ] 매 스냅샷 메시지에서 transcript **전체 교체** 렌더(append/patch 아님). `lines[]` +
       `buffer_transcription`(마지막 줄 미확정) 합성.
-- [ ] **확정(`finalized`) 줄 누적**: 서버 5분 슬라이딩 윈도우 대응 — 확정 줄은 프론트 상태에
-      누적, 미확정 줄만 매번 교체(§4.2 참조). **새 녹음 시작 시 누적 state를 clear**(세션 간 잔존 방지).
+- [ ] **확정(`finalized`) 줄 처리**: 서버가 세션 전체를 무제한 유지하므로 프론트 누적이 필수는
+      아니다(선택: 렌더 최적화용 안정 key 용도로는 여전히 유용, §4.2 참조).
 - [ ] 저장 버튼 클릭 시 `POST /api/save-transcript` 호출(§8) — 자동 저장 아님.
 - [ ] 오디오 캡처 구현: **WebM(MediaRecorder) 기본**, 또는 PCM(AudioWorklet+Worker, 서버
       `--pcm-input` 시). 재사용 가능한 내장 코드는 §6.4 참고.
