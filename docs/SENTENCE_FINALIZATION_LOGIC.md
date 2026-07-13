@@ -171,7 +171,7 @@ Whisper가 찍는 마침표(`.`/`。`)를 문장 분할 신호로 쓰되, **진�
 | 확정 유예 `_apply_finalize_grace` | `tokens_alignment.py:331-348` (`FINALIZE_GRACE_SECS=2.0`, `:20`) | 타이밍 수정자 | 침묵 직후 유예창 내 직전 세그먼트 `finalized`를 False로 되돌리고 trigger 무효화(None). 경계 위치 불변, 확정 타이밍만 조정 |
 | 꼬리 재귀속(비-diar) `_reattach_tail_nondiar` | `tokens_alignment.py:312-329` (`TAIL_REATTACH_EPS=0.05`, `:19`) | 병합(이동) | 유보된 꼬리 단어를 침묵 앞 세그먼트로 되붙임. 경계 개수 불변 |
 | 삽입 재귀속 `_insert_with_reattachment` | `tokens_alignment.py:81-103` (`TAIL_REATTACH_MAX_LOOKBACK_SECS=1.5`, `:25`) | 타이밍 수정자 | Silence 앞 꼬리 토큰 재정렬. is_boundary 만나면 중단(경계 넘김 금지) |
-| 과거분 제거 `_prune` | `tokens_alignment.py:105-136` | 드롭(과거) | 오래된 세그먼트 제거. 신규 경계 무관 |
+| 과거분 제거 `_prune` | `tokens_alignment.py:220-254` (`_DEFAULT_RETENTION_SECONDS=inf`, `:21`) | 제거됨(no-op) | 무제한 리텐션으로 변경(`300.0`→`inf` 패치)되어 상시 조기 반환 — 더 이상 세그먼트를 드롭하지 않음. 신규 경계 무관 |
 | `filter_segments` | `whisperlivekit/filtering/__init__.py` | 드롭/치환 | CJK·가나·비음성주석·환각·구두점-only 세그먼트 드롭 + 단어 치환. 라인이 사라질 순 있으나 새 경계 생성 안 함 |
 | `_append_terminal_punctuation` | `audio_processor.py:32-43` | 표시 수정자 | finalized 세그먼트 끝에 온점 부착(멱등, WER·경계 무영향) |
 | 환각/반복 필터 (BatchRepeat/CrossBatch/단일음절/ScriptMismatch/AnchorStorm) | `backend.py:354-413, 448-465, 505-548` | 드롭 | 토큰/배치 드롭. Silence/LanguageSwitch 마커 미방출 → 경계 직접 생성 안 함(텍스트 억제로 간접 영향) |

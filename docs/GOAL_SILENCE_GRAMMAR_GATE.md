@@ -79,7 +79,10 @@
    현행 start 기준대로 두면 B 디코드 지연(1~2s) 중 grace가 만료→finalized=True 방출→번역 발사([llm_translation/manager.py](../whisperlivekit/llm_translation/manager.py) `:38`,
    캐시 키 `:21-22`)→다음 틱 병합으로 텍스트 변경 = **확정 계약 위반**.
 3. **결정 메모(diar)**: diar 무상태 재계산에서 캡 만료로 분할 확정한 뒤 B가 늦게 도착하면 병합으로 뒤집히는 플래핑을 막는다 —
-   `resolved_split_silences: set`(키 `round(S.start,2)`), `_prune`(`:200-231`) 연동. ~15줄.
+   `resolved_split_silences: set`(키 `round(S.start,2)`), `_prune`(`:220-254`) 연동. ~15줄.
+   **[알려진 이슈]** `_prune()`이 과거엔 `_DEFAULT_RETENTION_SECONDS`(5분) 경과분을 주기적으로 정리하며
+   이 set도 함께 청소했으나, 리텐션이 무제한(`inf`)으로 바뀌며 이 정리가 더 이상 일어나지 않는다 — 세션이
+   매우 길어지면 `resolved_split_silences`가 무제한 증가할 수 있다(문서화만, 코드 수정 지시 아님).
 4. **hard_boundary 스탬프**: 토큰 순서 `[A…, SIL, LS, B…]`에서 SIL~LS 빈 스팬이 `previous_segment=None`이 되어
    `hard_boundary`가 소실된다(`compute_punctuations_segments` `:297-305`) → boundary 토큰이 빈 스팬을 닫을 때
    **직전 침묵 PuncSegment에 hard_boundary를 스탬프**해 언어전환을 넘는 병합을 구조적으로 차단.

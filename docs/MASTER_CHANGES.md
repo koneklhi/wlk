@@ -262,6 +262,19 @@ upstream whisperlivekit에는 `new_speaker()` → `refresh_segment()` 뼈대가 
 
 ---
 
+### 3-10. 세션 라인 리텐션 무제한화 (로컬 패치, 2026-07-13)
+
+[`tokens_alignment.py`](../whisperlivekit/tokens_alignment.py)의 `_DEFAULT_RETENTION_SECONDS`(5분 →
+무제한, `300.0`→`float("inf")`)를 벤더링된 upstream 코드에 로컬 패치했다. upstream을 재설치/업데이트하면
+이 패치가 사라지므로 재적용이 필요하다.
+
+- **혼동 주의**: ASR 디코더 버퍼 트리밍(`--buffer_trimming_sec`, 별개 15초 메커니즘,
+  [`parse_args.py`](../whisperlivekit/parse_args.py))과는 무관한 별개 메커니즘이다 — 전자는 디코더
+  오디오 버퍼 트리밍, 후자(이번 변경)는 서버가 보관하는 확정 라인(`lines[]`) 히스토리 보존 기간이다.
+- **트레이드오프**: 서버 메모리/CPU/대역폭이 세션 길이에 비례해 무제한 증가한다.
+
+---
+
 ## 4. 필터링 / 단어 교정
 
 > **이식 기준**: [../CLAUDE.md](../CLAUDE.md) §3.5/§3.6 — `whisperlive_code/`에서 **그대로 이식**, 임의 개선 금지.
