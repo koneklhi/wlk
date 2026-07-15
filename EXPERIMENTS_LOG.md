@@ -3018,3 +3018,234 @@ VAD가 짧은 침묵(0.4s 초과)을 검출하면 `tokens_alignment.py`가 문�
 4. **화이트리스트 보강 검토**: `KO_FINAL_SUFFIXES`/`KO_EXCLUDE_SUFFIXES`("습니까" 등) 확장 여지 — 이번 스코프에서는 미변경.
 
 **JSON** (전부 `worktrees/silence-split-koen-gate/.omc/benchmarks/` 기준): 스크리닝 `eval_20260712_1700_gateON.json`·`eval_20260712_1700_gateOFF.json` · HARD스윕 `eval_20260712_1731_hard0p6.json`·`eval_20260712_1739_hard1p0.json`(0.8은 gateON.json 재사용) · 채택확정 `eval_20260712_stage3ON_{bong1,ytn2,sbs1}.json`·`eval_20260712_stage3OFF_{bong1,ytn2,sbs1}.json` · held-out `eval_20260712_heldout_{ytn1,eng1}.json` · kinno `eval_20260712_qual_kinno.json`. HTML 비교 리포트: `.omc/transcripts/eval_report_silencegate_koen.html`.
+
+---
+
+## Exp-177 — 배포 증상 재현 계측: 필러 삼킴 Type A/B 분류 + 경계 QG 버퍼 폐기 유실 신규 규명 (코드 무변경)
+
+**날짜**: 2026-07-13 · **Epoch**: E5 (master `6df6e2f`, Exp-176 머지 포함 — 코드 무변경 계측/재현 전용) · **브랜치**: master (main cwd)
+
+### 가설 (계측 목적)
+
+폐쇄망 배포 PC(최신 코드 반입 확인됨)에서 보고된 두 증상 — ① "Thank you very much / 고맙습니다"류 환각이 실제 전사를 먹어버림(삼킴) ② 문장 중간 단어·글자 유실 반복 — 이 dev 환경에서 재현되는지 확인하고, 재현 시 서버 로그(trace-tokens)로 원인 경로를 귀속한다. 재현되면 "반입/배포 환경 문제"가 배제되고 코드의 구조적 실패 모드로 확정된다. 침묵·화자교대가 많은 배포 실사용 조건의 대리로 **kinno(순차통역, 통역 대기 침묵 다수)를 최초로 N=3 측정**한다.
+
+### 변경 내용
+
+**코드 무변경.** `--trace-tokens` 계측만. goal 문서 신설: [docs/GOAL_BOUNDARY_QG_PRESERVE.md](docs/GOAL_BOUNDARY_QG_PRESERVE.md)(Type B 수정 설계 — §결론 참조).
+
+### 테스트 설정
+
+경로 C, diar-ON(Sortformer), CRT=3.0, PLC=None, beams=2, turbo, `--repeat 3 --trace-tokens`. 테스트 3파일(bong1+ytn2+sbs1) + **kinno 별도 N=3**(정성 sanity — WER/F1 게이팅 제외). provenance `vbcable=ok`(RMS 0.145/0.139) 육안 확인.
+
+### 정량 결과 (N=3 — 코드 무변경이므로 채택/기각 비대상, 현행 master 상태 기록)
+
+> **regime v2 2-F1의 최초 N=3 기록**(Exp-176 머지 후 master). STATE "2-F1 신 베이스라인 재측정" 후보 데이터로 쓸 수 있음.
+
+| 파일 | WER med | WER max | WER min | stdev | 화자분리F1 med | 문장분리F1 med |
+|------|---------|---------|---------|-------|---------------|---------------|
+| bong1 | 34.1% | 36.9% | 29.6% | 3.7% | 51.3% | 8.7% |
+| ytn2 | 21.2% | 24.1% | 19.7% | 2.3% | 76.2% | N/A |
+| sbs1 | 13.1% | 13.7% | 13.1% | 0.3% | 100.0% | 94.7% |
+| kinno | 30.5% | **72.0%** | 22.0% | **26.7%** | 69.0% | 37.5% |
+
+**핵심**: 테스트 3파일(연속 방송음원)은 stdev 0.3~3.7%로 안정적인데, **kinno(침묵 다수)만 worst-case 폭발**(R3 72.0%) — 배포 증상의 dev 재현이자, "배포에서 더 심한 이유 = 입력에 침묵/비발화 구간이 많아서"의 직접 증거.
+
+### 산출물 (a) — 증상 재현 및 Type 분류
+
+두 증상 모두 재현 확정. 삼킴은 메커니즘이 다른 **2종**으로 분류됨:
+
+| | **Type A: 반대 스크립트 변주형 필러 storm** | **Type B: 같은 스크립트 환각 삼킴 (신규 규명)** |
+|---|---|---|
+| 실측 사례 | kinno R3 `"Thank you very much for joining us today. We will continue to join us today on our website, …"`(생성 루프) · ytn2 R2 `"Thank you very much. … Thank, everyone. Thank"` · bong1 R1 `"This. map Thank you. Thank you."` | ytn2 R1: 정답 `"해서 한국군 사령관 조건을 기초로 한 전작권 전환을 …합의를 했습니다"`(EN→KO 통역)가 통유실되고 `"예수님과 관련 네, 감사합니다. 네, 네, 감사합니다."`로 대체 |
+| 게이트 반응 | `AnchorRepeatFilter` 12run 합계 14회 발동에도 필러 잔존 — kinno R3는 서버로그 "Thank you" **663줄** vs 발동 **4회**(변주구가 gap>5로 클러스터 쪼갬 = **Exp-169 사각지대 재확인**). `ScriptMismatchFilter` **0회**(변주 필러는 TTR 안 무너짐) | 반대 스크립트 아님(ko 감지 중 ko 환각) — 스크립트 계열 게이트 **원리상 무반응** |
+| 원인 | 침묵/비발화 구간 turbo 필러 생성(Exp-159 계열) + 출력 게이트 사각지대 | 경계 QG streak refresh 버퍼 폐기(아래 (b)) |
+
+### 산출물 (b) — Type B 인과 사슬 (ytn2 R1 로그 라인 ~6460–6560, 전 단계 실측)
+
+1. 화자전환 eager 감지 실패: `[ShortSilenceLangCheck] 최근 1.5s → en (p=0.54)` < 0.85 → None(경계 오디오 EN꼬리+KO서두 혼합). `keep_secs=1.34 kept=1.53s`.
+2. **폴백 감지는 곧 성공**: 다음 infer `Detected language: ko with p=0.9064` → 토크나이저 ko 적용 — 감지 실패 자체는 치명 아님.
+3. 혼합 경계 오디오 1.53s의 ko 디코드가 저신뢰 파편(`어`/`이`/`그`, avg_logprob −3.284) → `[QualityGate]` 억제 3연속.
+4. **★ 비가역 유실**: `_on_quality_suppressed`([align_att_base.py:653-671](whisperlivekit/simul_whisper/align_att_base.py))가 `refresh_segment(complete=True)` 호출 → `state.segments=[]` **버퍼 전량 폐기** — 이 1.53s가 새 화자 문장의 서두 오디오.
+5. 서두 없이 문장 중간부터 맨땅 디코드 → `"예수님과 관련…"` 환각 방출 = 삼킴 완성.
+
+**빈도**: QG streak refresh 12run 합계 **25회**(bong1 2–4/run, ytn2 2–3, sbs1 1–2, kinno 0–3). kinno는 발생수-WER 강상관(R1 0회→22.0% / R3 3회→72.0%). **기존 결론과의 관계**: Exp-154(E4)·Exp-173(E5)의 "QG 부당드롭 ≈0~1%"는 **텍스트 억제(suppress)만** 전수 분석 — streak refresh의 **오디오 폐기 경로는 스코프 밖**이었다(신규 규명). Exp-172의 ③ 유실 경로 귀속에 "경계 QG streak refresh 버퍼 폐기"가 추가됨.
+
+### 분석 (전사 내용 정성 대조)
+
+**bong1** (R1 34.1%):
+- **환각 폭주(Type A)**: 전사 `"This. map Thank you. Thank you."` / 정답 해당 구간 발화 사이 — 웃음/비발화 구간 필러(기존 실패모드 잔존).
+- **화자 혼동·경계**: 화자분리F1 51.3%로 3파일 중 최저 — 다화자 짧은 교대 미분리 잔존.
+
+**ytn2** (R1 21.2%):
+- **삼킴(Type B)**: 전사 `"Let's. 예수님과 관련 네, 감사합니다."` / 정답 `"해서 한국군 사령관 …합의를 했습니다"` — KO 통역문 통유실+환각 대체(위 (b) 사슬).
+- **재디코딩 churn 중복**: 전사 `"왕성한 왕성한 연합 방위 연합 방위태세"` / 정답 `"왕성한 연합 방위태세"`.
+- **오인식(③계열)**: 전사 `"변환 없는 입장을 고소"` / 정답 `"변함 없는 입장을 고수"`.
+
+**sbs1** (R1 13.7%):
+- 주요 실패 없음. 화자분리F1 100%(Exp-176 효과 유지), Case B 미발생.
+
+**kinno** (R3 72.0% — catastrophic 회차):
+- **환각 생성 루프(Type A 극단형)**: 전사 `"We will continue to join us today on our website, but we will be able to watch it on our website. …"`(변주 문장 연쇄 생성) / 정답 `"다만 ITS 홈페이지를 통해서 온라인으로 시청을 …부탁드리겠습니다"` — KO 발화 통째 대체.
+- **음차 깨짐(①′계열, 글자 유실)**: R1 전사 `"시 이스투데이 이스턴 손진희 아임 인터페이 러"` / 정답 `"She is today's MC 손진희. I am interpreter"` — locked-lang 음차 환각.
+- **통역 대기 침묵 구간에 필러 집중**: `"…online streaming Thank you very much Thank you very much."` — 배포 실사용 조건과 동일 구조.
+
+**총평**: 배포 두 증상 모두 dev 재현 — 반입 문제 아님 확정. 삼킴 = Type A(출력 게이트 사각지대·원천 미차단, 기지) + Type B(경계 QG 버퍼 폐기, **신규**). 유실 = Type B 폐기 + 재디코딩 churn + 음차 환각. kinno가 배포 조건(침묵-heavy)의 유효한 대리 재현체임이 확인됨.
+
+### 채택 조건 판정
+
+**비대상** (코드 무변경 계측). 하니스 정상(provenance/vbcable 전 회차 ok).
+
+### 결론
+
+**계측/재현 완료** — ① 배포 증상 dev 완전 재현(반입/환경 문제 배제), ② 삼킴 Type A/B 분류 확정, ③ Type B의 비가역 유실 지점(`refresh_segment(complete=True)` 버퍼 폐기, 경계 보호창 부재) 신규 규명, ④ 수정 설계를 goal로 산출: **[docs/GOAL_BOUNDARY_QG_PRESERVE.md](docs/GOAL_BOUNDARY_QG_PRESERVE.md)** (P1 경계 보호 보존형 refresh — 보호창 내 1회 오디오 보존+상태만 리셋, 재발 시 기존 폐기 폴백으로 비회귀 보증; 짝지음 A/B 채택 게이트 포함).
+
+### 다음 가설
+
+1. **Type B 수정 (goal 실행)**: GOAL_BOUNDARY_QG_PRESERVE.md 자율 루프 — 기대효과 = kinno류 worst-case 완화 + 코드스위칭 경계 삼킴/유실 감소. 비회귀 제약(사용자 명시) 하 짝지음 A/B로 검증.
+2. **Type A 후속 (별도 goal)**: 앵커 반복 게이트를 "근접 시간창 내 앵커 총 등장" 기반으로 재설계(Exp-169 제안 방향) — 단 kinno R3의 변주 생성 루프형은 앵커 카운트로도 불완전, 원천(비음성 게이팅) 필요성 재확인.
+3. **kinno류(침묵-heavy) 음원 테스트셋 편입 검토**: 현행 테스트 3파일은 이 실패 모드를 게이트에 노출하지 못함 — 배포 대리 재현체로 정량 세트 추가 제안(§3.8 회귀 감시 정합, 사용자 결정 사항).
+
+**JSON**: `.omc/benchmarks/eval_20260713_1928_deploy_symptom_repro_N3.json`(테스트 3파일 N=3) · `.omc/benchmarks/eval_20260713_1952_kinno_symptom_repro_N3.json`(kinno N=3) · **로그**: `.omc/server_logs/server_{bong1,ytn2,sbs1,kinno}_C_R{1..3}_20260713_19*.log`(TokenTrace DEBUG 포함; Type B 사례 = `server_ytn2_C_R1_20260713_193831.log` 라인 ~6460–6560) · **전사**: `.omc/transcripts/{파일}_C_R{n}.txt`
+
+---
+
+## Exp-178 — 한국어 단독 데이터(kor1~3) 신규 측정: 배포 성능저하 dev 재현 계측 (코드 무변경)
+
+**날짜**: 2026-07-15 · **Epoch**: E5 (master `606ecac`, Exp-176 머지 포함 — 코드 무변경 계측/재현 전용) · **브랜치**: master (main cwd)
+
+### 가설 (계측 목적)
+
+기존 테스트/held-out 세트에 **한국어 단독** 자료가 없었고, 배포 PC에서 한국어 단독 음성에 대해 ① 영어가 아닌데 영어로 전사 ② "Thank you"류 환각의 실발화 삼킴 ③ 서두/중간 단어 유실이 보고됐다. 한국어 단독 데이터 kor1~3(단일 화자 군 브리핑 낭독체, 각 109~126s)을 신규 추가해 dev에서 재현되는지 확인하고 서버 로그로 원인을 귀속한다. 비교군(ytn2=한영 코드스위칭·eng1=영어·sbs1=한국어 위주 방송)을 **동일 런에 포함**해(사용자 제안) 하니스 정상 여부와 "한국어 단독 고유 실패"를 동시에 분리 판정한다.
+
+### 변경 내용
+
+**코드 무변경.** 데이터 신규: `test_data/kor{1,2,3}.wav` + 정답 `kor{1,2,3}.txt`(사용자 추가, `[spk1]` 헤더+빈 줄 문장 구분) → 내용이 신형식 문법과 일치해 canonical `kor{1,2,3}_speak,sentence_sperate.txt`로 복사 생성(구형식 폴백 시 `[spk1]` 문자열이 WER 정답에 오염되는 것 방지). `kor4.txt`는 대응 음원 없음(미측정).
+
+### 테스트 설정
+
+경로 C, diar-ON(Sortformer), CRT=3.0, PLC=None, beams=2, turbo, `--repeat 1`(스크리닝 — trace-tokens 없음). provenance `vbcable=ok`(RMS 0.144) 육안 확인.
+
+### 정량 결과 (N=1 스크리닝 — 코드 무변경이므로 채택/기각 비대상)
+
+| 파일 | WER | 화자분리F1 | 문장분리F1 | 비고 |
+|------|-----|-----------|-----------|------|
+| **kor1** | **62.0%** | 0.0%※ | 50.0% (P0.80/R0.36) | 서두+중간 ~44s 통유실 |
+| **kor2** | **47.9%** | 0.0%※ | 50.0% (P0.67/R0.40) | 서두 유실+중복 확정 2건×2회 |
+| **kor3** | **49.7%** | 0.0%※ | 78.8% (P0.93/R0.68) | **Case B 3건(hard-fail)**+중복 1건×3회 |
+| ytn2(비교) | 13.8% | 85.7% | N/A | baseline med 21.2 이내(양호 회차) |
+| eng1(비교) | 4.8% | 0.0%※ | 66.7% | held-out 전례 3.8~5.7 정합 |
+| sbs1(비교) | 14.9% | 80.0% | 90.0% | baseline med 13.1 근접 |
+
+※ 단일 화자 파일(정답 화자전환 경계 0개)이라 화자분리 F1은 정의상 무의미(0.0=degenerate, 미측정으로 해석). kor 정답 txt의 줄바꿈은 절(연결어미) 단위라 문장분리 F1 Recall도 엄격 상한으로 해석(참고: 이 절 단위 미분리는 Case A 계열로 허용).
+
+**핵심**: 비교군 3파일이 전부 베이스라인 수준 → 하니스/VBCable 정상. **kor1~3만 WER 48~62%로 붕괴** — 배포 보고 성능저하의 dev 완전 재현(반입/배포 환경 문제 배제), 기존 테스트셋(방송·인터뷰)이 커버하지 못한 **한국어 단독 낭독체(긴 호흡 pause + 군 전문용어) 스트레스 프로파일** 확인.
+
+### 분석 (전사 내용 정성 대조 + 서버 로그 귀속)
+
+**kor1** (62.0% — 유실 지배):
+- **서두 유실(Type B, 세션 초입)**: 정답 `"전투발전부장 최창수 육군 소장입니다"` 통유실. 로그: 초입 저신뢰 영어/기호 디코드(`"-"`, `"-"`, `"The"` avg_logprob −5.6~−6.0) → `[QualityGate]` 3연속 → `refresh_segment` 버퍼 폐기.
+- **★ 중간 통유실 ~44s (신규 실패 모드 — stall 연쇄 웨지)**: 정답 `"순서는 보시는 바와 같습니다"`~`"이는 먼 미래가 아니라 …현재라는 절박한 인식"` 문단 전체(정답의 약 절반) 무전사. 로그: `last_end=7.314` 고착 상태로 `SimulStreaming stall recovery: 10.4s without output — forcing segment refresh`가 **5연발**(end=26.4/38.7/49.0/59.8/70.7s) — 강제 refresh가 매번 버퍼를 폐기해도 디코더가 계속 저신뢰(QG 억제 파편 `"고려한"`, `"특히"`)로 재웨지, 복구 실패. WER 62%의 주인.
+- 전사된 후반부는 비교적 정확(치환 `러우전`→`로전`, `종심`→`중심` 수준).
+
+**kor2** (47.9% — 서두 유실+중복):
+- **서두 유실(Type B) + 사용자 보고 증상의 정체**: 정답 `"먼저 육군은 두 개의 작전사를 유지한 상태에서"` 유실. 로그: 초입 **영어 환각** `"we have"`/`"the aim is to make"`/`"Thank"` QG 억제 → 3연속 → refresh 폐기. **배포 보고 "영어 전사·Thank you 환각"과 동일 근원** — dev에선 QG가 텍스트를 억제해 출력에 안 보이지만 그 대가로 서두 오디오가 비가역 폐기됨(배포에선 환각이 살아남아 표시된 형태로 추정).
+- **중복 확정(재디코딩 churn)**: `"GPGOP, 유무인 GPGOP에 대한 …창설하고"` 2회, `"봉원사단은 사단과 여단 지휘부는 …전환"` 2회 확정.
+- **한국어 필러 환각 삽입**: 전사 `"…가능하도록 공개하였습니다"`/`"…보장하고 확인되고 있습니다"`/`"…전투부대를 이루어졌습니다"` — 정답에 없는 종결어미형 필러.
+- stall recovery 2회(91.8/102.8s).
+
+**kor3** (49.7% — Case B hard-fail):
+- **Case B(단어 중간 분절) 3건**: `"…통합."`⏎`"하고 방공간제전대…"`(정답 `"통합하고"`), `"…창설."`⏎`"하고평시…"`(정답 `"창설하고"`), `"…비행대대 창."`(정답 `"창설"` 잘림). **Exp-176 SilenceGate가 master에 머지된 상태에서 발생** — 낭독체 호흡 pause가 `SILENCE_HARD_SECS=0.8` 안전망을 트리거해 문법 판정을 우회(Exp-167 "호흡성 pause 정책" 사안의 재등장, 이번엔 단어 중간).
+- **중복 확정**: `"또한 전투기 협업, 무인기 운영을 위해 전투비행대대를 개편"` 3회(1회는 문장 내부 중복 포함). `[AnchorRepeatFilter]` 1회만 발동 — Exp-169 사각지대 잔존.
+- **서두 영어 환각**: 로그 초입 `"I"`/`"'m sorry"` QG 억제 → streak refresh(서두는 대체로 보존됐으나 `해역 함대`→`해쭨대` 등 저신뢰 치환).
+
+**비교군**: ytn2/eng1/sbs1 주요 신규 실패 없음 — 실패는 한국어 단독 낭독체 고유.
+
+**총평**: 배포 보고 3증상 모두 dev 재현·귀속 완료 — ① "영어 전사·Thank you 환각" = 세션 초입/저신뢰 구간 반대언어 필러(QG가 억제하면 Type B 서두 폐기로, 못 막으면 출력 노출로 발현), ② "서두 유실" = QG streak refresh 버퍼 폐기(Exp-177 Type B, kor 3/3), ③ "중간 유실" = **stall recovery 연쇄 웨지(신규 규명 후보)** — Exp-177 분류에 없던 모드로, 10s+ 무출력→강제 refresh 반복에도 저신뢰 재웨지가 반복돼 kor1에서 44s 통유실.
+
+### 채택 조건 판정
+
+**비대상** (코드 무변경 계측). 단 **kor3 Case B 3건은 hard-fail flag** — 원인(0.8s 안전망 우회) 수정 대상으로 기록.
+
+### 결론
+
+**계측/재현 완료** — 한국어 단독 낭독체에서 WER 48~62% 붕괴를 dev 재현(비교군 정상 = 하니스 무결·데이터 고유 실패 확정). 원인 3갈래: ① 경계/초입 QG streak refresh 버퍼 폐기(Exp-177 Type B — 서두 유실 3/3), ② stall recovery 연쇄 웨지(신규 — 중간 통유실), ③ SilenceGate 0.8s 안전망의 낭독체 pause 우회(Case B 재발). 부기: 재디코딩 churn 중복 확정, 한국어 종결어미형 필러 환각.
+
+### 다음 가설
+
+1. **[docs/GOAL_BOUNDARY_QG_PRESERVE.md](docs/GOAL_BOUNDARY_QG_PRESERVE.md) 루프 착수**: Type B 보존형 refresh가 kor 서두 유실 3/3을 직접 표적 — kor1~3을 검증 데이터로 편입해 A/B.
+2. **stall 연쇄 웨지 규명**: kor1을 `--trace-tokens`로 재측정해 웨지 구간(7.3~71s) 디코더 상태(QG streak·refresh 상호작용, 왜 refresh 후에도 미복구인지) 귀속 — Exp-177 Type 분류에 "Type C(웨지형 통유실)" 추가 여부 판단.
+3. **SILENCE_HARD_SECS 정책 재검토**: 낭독체 pause(0.8s+)가 단어 중간에 걸릴 때 문법 게이트가 무력화 — 안전망 상향/문법 판정 우선 순위 재조정(Exp-176 후속, Case B hard-fail 해소).
+4. **kor1~3 테스트셋/held-out 편입 여부 = 사용자 결정 사항**(regime 변경): 한국어 단독 커버리지 공백을 메우는 후보. kor4 음원 확보 여부도 확인 필요.
+
+**JSON**: `.omc/benchmarks/eval_20260715_0846_kor_baseline.json`(6파일 N=1) · **로그**: `.omc/server_logs/server_{kor1,kor2,kor3,ytn2,eng1,sbs1}_C_R1_20260715_08*.log` · **전사**: `.omc/transcripts/{파일}_C_R1.txt`
+
+---
+
+## Exp-179 — 세션 초입 언어 프로브: 콜드스타트 데드락 해소 (+ScriptAnchor 철자낭독 사각지대 신규 규명)
+
+**날짜**: 2026-07-15 · **Epoch**: E5 · **브랜치**: `exp/session-start-lang-probe@b842c6f` (worktree, **master 미머지 — 사용자 승인 대기**)
+
+### 가설
+
+Exp-178 trace 재측정으로 규명한 **세션 초입 언어감지 콜드스타트 데드락**(감지가 first_timestamp=첫 커밋을 기다림 ↔ 커밋은 정상 디코드 필요 ↔ 미감지 기본 토크나이저 `<|en|>`이 한국어를 garbage로 디코드 → QG 억제 → 커밋 불가; 그 사이 QG streak refresh·long-silence 리셋이 서두 오디오 반복 폐기, 탈출 시점 확률적 25~71s)를, **2.0s 오디오 누적 시 커밋 없이 감지를 시도하고 p≥0.85일 때만 적용**하는 프로브로 끊는다. p 미달 시 기존 커밋 기반 경로가 그대로 폴백(무조건 적용 없음 — 회귀 위험 차단).
+
+### 변경 내용
+
+- [align_att_base.py](whisperlivekit/simul_whisper/align_att_base.py) `_detect_language_if_needed()`의 무기한 보류 else 분기(구 252~278행)에 프로브 삽입 + 모듈 상수 `SESSION_START_LANG_PROBE_ENABLED=True`(롤백 플래그)·`SESSION_START_LANG_MIN_PROB=0.85`. 로그 `[SessionStartLangProbe]`. first_timestamp/eager 기존 경로 무변경.
+- `tests/test_session_start_lang_probe.py` 신설 10건(적용/보류/플래그OFF/기존경로 불간섭/no_grad 회귀방지) — 전체 스위트 372 passed. no_grad 이중 확인(infer `@torch.no_grad()` + `lang_id` 자체 데코레이트). `<|en|>` 기본값 출처 = `_init_state_common`→`create_tokenizer(None)`→`tokenizer.py:389 language or "en"`.
+
+### 테스트 설정
+
+경로 C, diar-ON, CRT=3.0, PLC=None, beams=2, turbo, `--trace-tokens`. **짝지음 A/B**: OFF=master@606ecac kor1~3 ×2(+동일 오전 회차 2런), ON=워크트리 kor1~3 ×2 + 비교군(bong1/ytn2/sbs1/eng1) ×1. provenance `vbcable=ok` 전 회차 확인. (첫 ON 런 1회는 브라우저 컨텍스트 hang으로 폐기·재실행 — 하니스 이슈, 데이터 미포함.)
+
+### 정량 결과 (스크리닝)
+
+| 파일 | OFF(master) WER | ON(프로브) WER | 프로브 발동 | 판독 |
+|------|----------------|---------------|------------|------|
+| kor1 | 62.0/22.8/57.9/45.0 (med~51.5) | **34.5/21.1 (med 27.8)** | 3/3 (ko p 0.95~0.996 @2.0~2.5s) | **개선 — med·max 모두** |
+| kor2 | 70.1/71.5 (med 70.8) | 102.8/109.0 | R1 2회(ko)·R2 0회 | 양팔 catastrophic — 별개 결함 지배(아래) |
+| kor3 | 49.7/77.5/62.3 (med 69.9) | 57.0/63.6 (med 60.3) | 0회(서두 조기 커밋) | 중립(변동 범위 내) |
+| bong1 | (기준 med 34.1/max 36.9) | 27.2 | 0회(en 조기 커밋) | 무회귀 |
+| ytn2 | (기준 med 21.2/max 24.1) | 20.7 | 0회 | 무회귀 (화자F1 56.0 — N=1, 기준 med 76.2보다 낮음 → 확정단계 확인) |
+| sbs1 | (기준 med 13.1/max 13.7) | **9.5** | 1회(ko p=0.997) | 무회귀 (화자F1 40.0 — N=1 변동, Exp-176 전례 50~100 요동) |
+| eng1 | (전례 3.8~5.7) | 4.8 | 1회(**en** p=0.998) | 무회귀 — 영어에 en 정적용 실증 |
+
+### 분석 (정성)
+
+- **kor1 서두 2문장("전투발전부장 최창수…"/"미래 합동작전…") 복구 2/2** — OFF 전 회차(6런) 유실이던 구간. 중간 통유실도 소멸. 잔여 오류 = 치환·중복 1건 수준.
+- **프로브 발동 전수 정당**: 발동 6건 전부 정답 언어(ko×4·en×2), p 0.95~0.999. 미발동 파일은 분기 자체가 실행되지 않아 **코드 경로상 완전 중립**.
+- **[신규 규명 ①] ScriptAnchorRedetect(Exp-175) 철자낭독 사각지대 = kor2 폭주(70~109%)의 주범 (OFF/ON 공통, 프로브 무관)**: 한국어 문장 내 영문 약어 철자 낭독("GP·GOP")이 Latin 3단어 streak을 만들어 `[ScriptAnchorRedetect] ko→en` 오전환 → **전환 트림이 직전 오디오 9.68~12.02s 폐기** → 곧바로 en→ko 복귀 전환(추가 2.4~2.7s 트림) → 재디코딩 중복 확정 폭주("GPGOP에 대한…" 프리픽스 4~5회 누진 재확정, WER>100%). Exp-175 A/B에선 게이트 발동 0회라 노출되지 않았던 결함. ON이 OFF보다 나쁘게 보이는 것(105.9 vs 70.8)은 프로브가 서두를 살려 **폐기 전 커밋량이 늘어난 만큼 중복 삽입도 증가**한 2차 효과 + 회차 변동.
+- **[신규 규명 ②] long-silence 리셋이 detected_language까지 초기화** → 세션 중간에도 데드락 재진입 가능. kor2 R1에서 리셋 후 프로브가 2차 발동(2.13s)해 재감지로 커버됨을 실증 — 프로브가 초입뿐 아니라 중간 재진입도 방어.
+- Case B(kor3 "통합."⏎"하고"·"창.")·중복 확정 churn은 프로브 무관 잔존(Exp-178 진단 유지).
+
+### 채택 조건 판정
+
+스크리닝 단계(채택 확정 N=3 미실시). 표적(kor1 데드락) med·max 개선 + 비교군 WER 무회귀 + 발동 전수 정당. 화자분리 F1(1순위 게이트)의 ytn2/sbs1 N=1 저하는 프로브 미발동 런이라 인과 없음이 유력하나 **채택 확정 짝지음 N=3에서 확인 필요**.
+
+### 결론
+
+**채택 후보 — 사용자 승인 대기** (§3.2 두 언어 환경의 기반 기능 성격). 승인 시 채택 확정 측정(테스트 3파일+kor1~3 짝지음 `--repeat 3`, held-out ytn1+eng1 단회) 후 머지.
+
+### 다음 가설
+
+1. **ScriptAnchorRedetect 철자낭독 가드** — 약어 철자 시퀀스(무모음 대문자 연쇄 등)를 streak 산입에서 제외 또는 재감지 결과 적용 전 전환 트림 억제. kor2 주범 제거.
+2. 중복 확정 churn(전환/refresh 후 재디코딩 타임스탬프 재앵커) — Exp-177 Bug1 계열, GOAL_BOUNDARY_QG_PRESERVE와 연계.
+3. Case B — SILENCE_HARD_SECS 낭독체 pause 정책(Exp-178 ③).
+
+### 채택 확정 측정 (N=3, 2026-07-15 오후 — 사용자 지시로 kinno 포함)
+
+| 파일 | WER med/max/min (stdev) | 화자F1 med | 프로브 발동 | 판독 |
+|------|------------------------|-----------|------------|------|
+| bong1 | 34.4/39.9/28.1 (5.9) | 60.5 (60.5/63.2/59.5) | **0/0/0** | 코드경로 master 동일 — max 39.9는 변동 귀속(화자F1은 기준 51.3보다 상회) |
+| ytn2 | 17.7/30.0/15.3 (7.9) | 72.7 | **0/0/0** | 동일 논리 — STATE 게이트(34.5) 이내 |
+| sbs1 | 10.1/15.5/8.9 (3.5) | 80.0 (R2 28.6 1회) | **1/1/1 (ko)** | 발동 3/3에도 WER 게이트(16.1) 이내·같은날 OFF 화자F1 80과 동일 |
+| kor1 | 44.4/46.2/23.4 (12.7) | — | 1/1/1 (ko) | OFF med 51.5/max 62.0 대비 **med −7.1·max −15.8pp** |
+| kor2 | 95.8/101.4 (3.4) | — | 1/1/2 | ScriptAnchor 철자낭독 결함 지배(프로브 무관) |
+| kor3 | 68.9/73.5 (8.5) | — | 1/0/0 | 중립 |
+| kinno | 31.7/**39.4**/31.3 (4.6) | 71.0 | 0/0/0 | OFF(Exp-177) max **72.0**→39.4·stdev 26.7→4.6 — 단 발동 0회라 프로브 귀속 불가(catastrophic 미재현 관찰) |
+| ytn1(held-out) | 12.3 | 73.7 | 0 | 미회귀 |
+| eng1(held-out) | 2.9 | 100.0 | 1 (**en**) | 미회귀 — en 정적용 |
+
+**게이트 판정**: ① 화자분리 F1 — 발동 런(sbs1) 같은날 OFF와 동일(80), 미발동 런 인과 없음 → 통과. ② WER max — 발동 런 전부 게이트 이내(sbs1 15.5<16.1)·표적(kor1) max 대폭 개선; bong1 39.9는 미발동 런 변동(Exp-177 max 36.9와 3.0pp 차) → 통과(유보 각주). ③ 발동 전수 정당(확정 라운드 포함 ko×8·en×1, 오적용 0). ④ held-out 미회귀. → **채택 권고** (머지 = 사용자 승인).
+
+**JSON**: OFF `.omc/benchmarks/eval_20260715_0940_kor_trace_x2.json` · ON `worktrees/session-start-lang-probe/.omc/benchmarks/eval_20260715_0958_kor_probe_on_x2.json`·`eval_20260715_1031_regress_probe_on.json`·`eval_confirm_{test3_N3,kor_N3,kinno_N3,heldout}.json` · **로그**: 각 `.omc/server_logs/server_*_20260715_*.log`(trace ON) · **전사**: 각 `.omc/transcripts/`

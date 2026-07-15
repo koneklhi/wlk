@@ -36,25 +36,26 @@ upstream 기본값만으로는 반복 아티팩트(`바 바 바`), 언어 고착
 
 ---
 
-## 2. 현재 채택 베이스라인 수치 (Exp-175 — 2026-07-09, E5 turbo·diar-ON)
+## 2. 현재 채택 베이스라인 수치 (Exp-179 — 2026-07-15, E5 turbo·diar-ON)
 
 > **채택 기준** (CLAUDE.md §4): **1순위 = max(최악 케이스) 미회귀, 2순위 = median 개선**.
 > 수치는 경로 C(VBCable 루프백) **채택 확정(N≥3) 반복 측정 결과** — `median / max / stdev`.
 > 현행 regime: **테스트 = bong1+ytn2+sbs1(diar-ON, Sortformer, CRT=3.0, PLC=None, turbo)**,
-> **held-out = ytn1+eng1(단회)**. 중간 채택 이력(Exp-106~174)은 [../EXPERIMENTS.md](../EXPERIMENTS.md) 참조.
-> JSON: 워크트리 `script-anchor-redetect/.omc/benchmarks/eval_20260709_0904_scriptanchor_adoptN3.json`.
+> **held-out = ytn1+eng1(단회) + kinno(정성 sanity)**. 중간 채택 이력은 [../EXPERIMENTS.md](../EXPERIMENTS.md) 참조.
+> JSON: 워크트리 `session-start-lang-probe/.omc/benchmarks/eval_confirm_{test3_N3,kor_N3,kinno_N3,heldout}.json`.
 
-| 파일 | 설정 | WER median | WER max | stdev | 문장분리 F1 |
-|---|---|---|---|---|---|
-| bong1 | diar-on | **30.8%** | 36.0%\*\* | 3.7% | 54.5% |
-| ytn2 | diar-on | **17.2%** | 18.2% | 2.3% | **69.6%** |
-| sbs1 | diar-on | **16.7%**\* | 17.9%\* | 1.2% | 23.5% |
-| ytn1 (held-out, 단회) | diar-on | **16.0%** | — | — | 61.5% |
-| eng1 (held-out, 단회) | diar-on | **5.7%** | — | — | 0.0%\*\*\* |
+| 파일 | 설정 | WER median | WER max | stdev | 화자분리 F1 med | 문장분리 F1 med |
+|---|---|---|---|---|---|---|
+| bong1 | diar-on | **34.4%** | 39.9%\* | 5.9% | 60.5% | 23.1% |
+| ytn2 | diar-on | **17.7%** | 30.0% | 7.9% | 72.7% | N/A |
+| sbs1 | diar-on | **10.1%** | 15.5% | 3.5% | 80.0% | 84.2% |
+| kinno (정성 sanity, 게이팅 제외) | diar-on | 31.7% | 39.4%\*\* | 4.6% | 71.0% | 40.0% |
+| ytn1 (held-out, 단회) | diar-on | **12.3%** | — | — | 73.7% | 50.0% |
+| eng1 (held-out, 단회) | diar-on | **2.9%** | — | — | 100.0% | 100.0% |
 
-\* sbs1은 3파일 배치 후미 측정의 부하 효과 포함 수치 — 같은 코드 **격리 N=3 = 10.1% / max 12.5%**(Exp-175에서 측정순서 효과 분리 실증).
-\*\* bong1 max 36.0은 기존 필러/웃음 환각 변동(같은 날 master 단독 39.3) — Exp-159/168/171/174 반복 관측 모드.
-\*\*\* eng1 F1=0%는 단일 세그먼트 구조 특성(ref_sentences=1 지표한계) — WER 자체는 우수.
+\* bong1 max 39.9는 기존 필러/웃음 환각 변동 모드(Exp-159/168/171/174 반복 관측) — 해당 3회차 전부 프로브 발동 0회(코드 경로 master 동일)로 Exp-179 변경과 무관.
+\*\* kinno는 Exp-177(N=3) max 72.0%였던 catastrophic이 본 라운드에서 미재현(단 프로브 발동 0회라 개선 귀속은 불가).
+> 신규 진단 데이터 **kor1~3**(한국어 단독 낭독체, 정식 테스트셋 미편입): kor1 44.4/46.2%(프로브 표적 — OFF 51.5/62.0 대비 개선), kor2 95.8%(§8 철자낭독 결함 지배), kor3 68.9%.
 
 **참고: upstream 0.2.20 기본값 (Exp-000 베이스라인, 2026-06-04)**
 
@@ -225,6 +226,27 @@ N 스윕: N=2 오트리거(정상 2단어 삽입) 실증·N=4 미발동(커버�
 
 ---
 
+### 3-6d. 세션 초입 언어 프로브 (Exp-179, E5)
+
+**upstream/기존 동작**: `--lan auto`에서 언어감지가 `first_timestamp`(첫 토큰 커밋)를 기다리는 동안 토크나이저가
+`<|en|>` 기본값으로 고정([`whisper/tokenizer.py:389`](../whisperlivekit/whisper/tokenizer.py) `language or "en"`).
+한국어 단독 음성은 en 디코드가 garbage("The President"·"Thank you" 스톰)→QualityGate 억제→커밋 불가→감지 영구 보류의
+**콜드스타트 데드락**에 빠져, QG streak refresh·long-silence 리셋이 서두 오디오를 반복 폐기 — 세션 서두 25~71s 통유실
+(kor1 실측 WER 45~62%, 탈출 시점 확률적). long-silence 리셋이 `detected_language`를 초기화하므로 세션 중간 재진입도 가능.
+
+**우리 변경** ([`align_att_base.py`](../whisperlivekit/simul_whisper/align_att_base.py) `_detect_language_if_needed` 보류 분기):
+- 미감지+미커밋 상태에서 **오디오 2.0s 누적 시 커밋 없이 `lang_id` 감지 시도, p≥`SESSION_START_LANG_MIN_PROB`(0.85)일 때만 적용**.
+  미달이면 다음 infer 사이클 재시도(무조건 적용 폴백 없음 — 기존 커밋 기반 경로가 폴백). 롤백 플래그
+  `SESSION_START_LANG_PROBE_ENABLED`. 로그 `[SessionStartLangProbe]`. first_timestamp/eager 기존 경로 무변경.
+  no_grad 이중 보호(infer 데코레이터 + `lang_id` 자체) — Exp-158 유형 사고 방지 회귀 테스트 포함.
+
+**성능/이유**: 표적 kor1 med 51.5→44.4%·max 62.0→46.2%(서두 2문장 복구), 발동 전수 정당(확정 라운드 ko×8·en×1, 오적용 0),
+미발동 시 코드 경로 master 동일(구조적 무회귀 — bong1/ytn2/kinno 전 회차 미발동). held-out ytn1 12.3/eng1 2.9% 미회귀.
+long-silence 리셋 후 재발동으로 중간 데드락 재진입도 방어(kor2 실측). 단위테스트 `tests/test_session_start_lang_probe.py`(10).
+**도입 Exp-179** (머지 `27f3f3c`).
+
+---
+
 ### 3-7. 문장 확정 + 종료 부호 (Exp-104)
 
 | 항목 | 파일 | 동작 |
@@ -345,7 +367,14 @@ upstream에는 정량 평가 도구가 없었다. 아래 모듈을 새로 추가
 
 ### 단기 (다음 실험 후보 — 상세: [BACKLOG_CODESWITCH_FOLLOWUP.md](BACKLOG_CODESWITCH_FOLLOWUP.md), Exp-175 탐사 산출물)
 
-- **미방출형 전환 서두 유실**(최우선): 구언어 잠금 중 디코더 비-fire로 반전 streak 자체가 없어 3-6c 게이트
+- **ScriptAnchorRedetect 철자낭독 오발동 가드**(최우선, Exp-179 신규 규명): 한국어 문장 내 영문 약어 철자 낭독("GP·GOP")이
+  Latin 3단어 streak을 만들어 §3-6c 게이트가 ko→en 오전환 + **전환 트림 9.7~12s 오디오 폐기** + 복귀 전환 + 재디코딩
+  중복 확정 폭주(kor2 WER 70~101%). 약어 철자 시퀀스(무모음 대문자 연쇄 등) streak 산입 제외 또는 재감지 적용 전 트림 억제 검토.
+- **재디코딩 중복 확정 churn**(kor2/kor3 실측): 전환/refresh 후 같은 문장 프리픽스가 누진 재확정(×3~5회) — Exp-177 Bug1
+  (타임스탬프 재앵커) 계열, [GOAL_BOUNDARY_QG_PRESERVE.md](GOAL_BOUNDARY_QG_PRESERVE.md)와 연계.
+- **Case B — SILENCE_HARD_SECS 낭독체 pause 우회**(kor3 실측): 단어 중간 0.8s+ 호흡이 문법 게이트(Exp-176)를 우회해
+  단어 중간 분절("통합."⏎"하고") — 안전망 정책 재검토.
+- **미방출형 전환 서두 유실**: 구언어 잠금 중 디코더 비-fire로 반전 streak 자체가 없어 3-6c 게이트
   스코프 밖(ytn2 "There is more work"·sbs1 "From a satellite image" 실측). 재디코딩 창 하한을 마지막 방출 토큰
   끝으로 당기거나 경량 비-fire 워치독 검토.
 - **①′ locked-lang 음차 환각**: 반대 언어 발화가 잠긴 언어 음차로 환각 디코딩(bong1 "mallang mallang") —
