@@ -13,6 +13,14 @@ from .config import AlignAttConfig
 DEC_PAD = 50257
 LANG_SWITCH_KEEP_SECS = 2.5  # 언어 전환 시 유지할 최근 오디오(초): 감지창 2.0s + 완충 0.5s
 
+# 세션 초입 언어 프로브 (콜드스타트 데드락 해소): --lan auto에서 first_timestamp(첫 토큰 커밋)
+# 설정 전엔 감지가 무기한 보류되는데, 미감지 토크나이저 기본값 <|en|>으로 한국어 단독 음성을
+# 디코드하면 garbage → QualityGate 억제 → 커밋 불가 → first_timestamp 영원히 None(데드락).
+# 그 사이 refresh/리셋이 서두 오디오를 반복 폐기해 세션 서두 25~71초가 통유실됐다(kor1).
+# 2.0s 누적 시 lang_id로 감지를 시도하되 p>=MIN_PROB일 때만 적용 — 미달이면 계속 보류(재시도).
+SESSION_START_LANG_PROBE_ENABLED = True  # False = 완전 기존 동작(무기한 보류) — 짝지음 A/B 롤백 플래그
+SESSION_START_LANG_MIN_PROB = 0.85  # 프로브 적용 확신도 게이트(틀린 언어 커밋 방지, 무조건 적용 폴백 없음)
+
 # QG 억제가 구두점/공백만 담고 있으면 refresh streak에 산입하지 않기 위한 문자 집합.
 # 실단어가 하나도 없는 억제는 버퍼 폐기(단어 유실) 위험을 감수할 만한 garbage가 아니다.
 _PUNCT_ONLY_CHARS = frozenset({'.', '?', '!', '。', '！', '？', ',', ';', ':'})
@@ -241,7 +249,27 @@ class AlignAttBase(ABC):
                 # eager(화자전환) 경로만 first_timestamp 없이 오디오 누적량 기준으로 빠르게 감지
                 seconds_since_start = self.segments_len()
             else:
-                # diar-off silence 경로: first_timestamp 설정 전엔 감지 보류 (Exp-093 안정 동작 — 잦은 _apply_detected_language 리셋으로 인한 반복 폭주 방지)
+                # 세션 초입 언어 프로브: first_timestamp 설정 전 무기한 보류(Exp-093)는
+                # <|en|> 기본 토크나이저 → garbage → QG 억제 → 커밋 불가의 데드락을 만든다.
+                # 2.0s 누적 시 감지를 시도하되 고확신(p>=MIN_PROB)일 때만 적용 — 미달이면
+                # 다음 infer 사이클에서 재시도(무조건 적용 폴백 없음; p 미달이 지속되면
+                # 기존 커밋 기반 경로가 그대로 폴백으로 작동한다).
+                if SESSION_START_LANG_PROBE_ENABLED and self.segments_len() >= 2.0:
+                    _, language_probs = self.lang_id(encoder_feature)
+                    top_lan, p = max(language_probs[0].items(), key=lambda x: x[1])
+                    if p >= SESSION_START_LANG_MIN_PROB:
+                        logger.info(
+                            "[SessionStartLangProbe] 세션 초입 감지 적용: %s (p=%.4f, segments_len=%.2fs)",
+                            top_lan, p, self.segments_len(),
+                        )
+                        self._apply_detected_language(top_lan)
+                    else:
+                        logger.debug(
+                            "[SessionStartLangProbe] p=%.4f < %.2f — 보류, 다음 사이클 재시도 (top=%s, segments_len=%.2fs)",
+                            p, SESSION_START_LANG_MIN_PROB, top_lan, self.segments_len(),
+                        )
+                    return
+                # 프로브 비활성 또는 2.0s 미만: 기존 보류 동작 (Exp-093 안정 동작 — 잦은 _apply_detected_language 리셋으로 인한 반복 폭주 방지)
                 logger.debug(
                     "[LangDetectDeferred] 감지 보류: first_timestamp=None, eager_lang_detect=False (segments_len=%.2fs)",
                     self.segments_len(),
