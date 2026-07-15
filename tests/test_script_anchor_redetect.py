@@ -16,10 +16,13 @@ from unittest.mock import MagicMock
 
 import whisperlivekit.simul_whisper.backend as backend_module
 from whisperlivekit.simul_whisper.backend import (
+    _ACRONYM_MAX_ALLCAPS_LEN,
+    _ACRONYM_MAX_SINGLE_LEN,
     _SCRIPT_ANCHOR_N_WORDS,
     _SCRIPT_ANCHOR_T_SECS,
     MIN_DURATION_REAL_SILENCE,
     SimulStreamingOnlineProcessor,
+    _is_acronym_like_latin,
 )
 from whisperlivekit.timed_objects import ASRToken, ChangeSpeaker
 
@@ -257,3 +260,140 @@ def test_anchor_repeat_gate_fire_resets_streak():
     result, _ = proc.process_iter()
     assert result == []
     assert proc._script_anchor_streak == []
+
+
+# ── 약어/철자낭독 가드 (GOAL_SCRIPTANCHOR_ACRONYM_GUARD) ─────────────────────
+#
+# 한국어 낭독 중 영문 약어 철자 낭독("GP·GOP") 방출이 재감지 streak을 오염시켜
+# ko→en 오전환 + 전환 트림으로 직전 오디오 비가역 폐기를 일으키는 사각지대(Exp-179
+# 규명)를 메우는 가드. 낱글자 철자낭독·ALL-CAPS 약어 덩어리라는 표기 속성만으로
+# 라틴 토큰을 증거 집계에서 중립 스킵한다(소문자 자연 영단어·두문자 대문자는
+# 기존대로 산입 — Exp-175 커버리지 보존).
+
+def test_acronym_helper_single_letter():
+    """(18) 낱글자(길이<=_ACRONYM_MAX_SINGLE_LEN)는 구두점 유무와 무관하게 약어로 판정."""
+    assert _ACRONYM_MAX_SINGLE_LEN == 2  # 테스트 전제(초안값) 확인
+    assert _is_acronym_like_latin("G") is True
+    assert _is_acronym_like_latin("P") is True
+    assert _is_acronym_like_latin("A.") is True  # 구두점 제거 후 길이 1
+
+
+def test_acronym_helper_allcaps_chunk():
+    """(19) 전부대문자 && 길이<=_ACRONYM_MAX_ALLCAPS_LEN 은 약어 덩어리로 판정."""
+    assert _ACRONYM_MAX_ALLCAPS_LEN == 6  # 테스트 전제(초안값) 확인
+    assert _is_acronym_like_latin("GOP") is True
+    assert _is_acronym_like_latin("GPGOP") is True
+    assert _is_acronym_like_latin("NATO") is True
+    assert _is_acronym_like_latin("AI") is True
+
+
+def test_acronym_helper_natural_word_not_acronym():
+    """(20) 길이>=3인 소문자 자연 단어·두문자 대문자 단어는 약어 판정에서 제외."""
+    assert _is_acronym_like_latin("There") is False
+    assert _is_acronym_like_latin("goes") is False
+    assert _is_acronym_like_latin("work") is False
+    assert _is_acronym_like_latin("Thank") is False
+
+
+def test_acronym_helper_short_natural_word_known_limitation():
+    """(20b) 알려진 한계: 길이<=2인 자연 단어("is"/"to"/"of")도 규칙①(길이 기준)에
+    걸려 약어로 판정된다 — 스펙(GOAL 문서 §2 P1)이 낱글자 판정을 케이스 구분 없이
+    길이만으로 정의하기 때문(초안값). 결과적으로 streak 산입에서 중립 스킵되지만
+    리셋은 하지 않으므로 실사용 영향은 "카운트 지연"에 그친다(§4 게이트 4c 오스킵
+    감사 대상 — Stage 1/3 ytn2 로그로 실측 검증)."""
+    assert _is_acronym_like_latin("is") is True
+    assert _is_acronym_like_latin("to") is True
+    assert _is_acronym_like_latin("of") is True
+
+
+def test_acronym_helper_allcaps_too_long_not_acronym():
+    """(21) 전부대문자여도 길이가 상한을 넘으면(일반 ALL-CAPS 강조 단어 등) 약어 아님."""
+    assert _is_acronym_like_latin("ABCDEFG") is False  # 7자 > 6
+
+
+def test_acronym_helper_no_letters_not_acronym():
+    """(22) 알파벳이 전혀 없으면(숫자만) False — 별도로 중립 스킵되는 경로와 구분."""
+    assert _is_acronym_like_latin("123") is False
+
+
+def test_single_letter_spellout_skipped_no_trigger():
+    """(23) ko 잠금 중 낱글자 철자낭독(G/P/G) 연속 방출 — streak 미산입·재감지 미호출."""
+    proc = _make_processor(locked_lang="ko")
+    tokens = [_tok(" G", 0.0, 0.1), _tok(" P", 0.2, 0.3), _tok(" G", 0.4, 0.5)]
+    result = proc._apply_script_anchor_redetect(tokens)
+    assert result == tokens
+    proc.model.detect_current_language.assert_not_called()
+    assert proc._script_anchor_streak == []
+
+
+def test_allcaps_acronym_chunk_skipped_no_trigger():
+    """(24) ko 잠금 중 ALL-CAPS 약어 덩어리(GOP/GPGOP/AI) 연속 방출 — streak 미산입."""
+    proc = _make_processor(locked_lang="ko")
+    tokens = [_tok(" GOP", 0.0, 0.1), _tok(" GPGOP", 0.2, 0.3), _tok(" AI", 0.4, 0.5)]
+    result = proc._apply_script_anchor_redetect(tokens)
+    assert result == tokens
+    proc.model.detect_current_language.assert_not_called()
+    assert proc._script_anchor_streak == []
+
+
+def test_natural_english_words_still_trigger_with_guard_on():
+    """(25) 가드 ON이어도 길이>=3 자연 영단어 3연속은 기존대로 재감지 발동(Exp-175 커버리지 보존)."""
+    proc = _make_processor(locked_lang="ko")
+    proc.model.detect_current_language = MagicMock(return_value="en")
+    tokens = [_tok(" There", 0.0, 0.1), _tok(" goes", 0.2, 0.3), _tok(" more", 0.4, 0.5)]
+    result = proc._apply_script_anchor_redetect(tokens)
+    assert result == []
+    proc.model.detect_current_language.assert_called_once_with(window_secs=2.0, min_prob=0.90)
+    proc.model._apply_detected_language.assert_called_once_with("en")
+
+
+def test_acronym_mixed_with_natural_words_only_natural_counted():
+    """(26) 약어+자연단어 혼합 배치 — 약어는 스킵되고 자연단어만 카운트되어 발동."""
+    proc = _make_processor(locked_lang="ko")
+    tokens = [
+        _tok(" GOP", 0.0, 0.1),   # 스킵(약어) — 카운트 안 됨
+        _tok(" There", 0.2, 0.3),  # 1
+        _tok(" goes", 0.4, 0.5),   # 2
+        _tok(" more", 0.6, 0.7),   # 3 → 발동
+    ]
+    proc._apply_script_anchor_redetect(tokens)
+    proc.model.detect_current_language.assert_called_once()
+    assert len(proc._script_anchor_streak) == 3  # 약어 토큰은 streak에 없음
+
+
+def test_acronym_skip_does_not_reset_existing_streak():
+    """(27) 약어 토큰은 중립 스킵 — 이미 쌓인 자연단어 streak을 리셋하지 않는다."""
+    proc = _make_processor(locked_lang="ko")
+    proc._apply_script_anchor_redetect([_tok(" There", 0.0, 0.1), _tok(" goes", 0.2, 0.3)])
+    proc.model.detect_current_language.assert_not_called()
+    assert len(proc._script_anchor_streak) == 2
+    # 약어 토큰 삽입 — streak 유지(리셋도 산입도 안 함)
+    proc._apply_script_anchor_redetect([_tok(" GOP", 0.4, 0.5)])
+    proc.model.detect_current_language.assert_not_called()
+    assert len(proc._script_anchor_streak) == 2
+    # 세 번째 자연단어로 발동
+    proc._apply_script_anchor_redetect([_tok(" more", 0.6, 0.7)])
+    proc.model.detect_current_language.assert_called_once()
+
+
+def test_hangul_word_still_resets_streak_with_acronym_in_between():
+    """(28) 약어 스킵과 무관하게 한글(잠긴 스크립트) 단어는 여전히 streak을 리셋한다."""
+    proc = _make_processor(locked_lang="ko")
+    tokens = [
+        _tok(" GOP", 0.0, 0.1),    # 스킵(약어)
+        _tok(" There", 0.2, 0.3),  # 1
+        _tok(" 그리고", 0.4, 0.5),  # 잠긴 스크립트(ko) → 리셋
+    ]
+    result = proc._apply_script_anchor_redetect(tokens)
+    assert result == tokens
+    proc.model.detect_current_language.assert_not_called()
+    assert proc._script_anchor_streak == []
+
+
+def test_acronym_guard_kill_switch_restores_legacy_counting(monkeypatch):
+    """(29) SCRIPT_ANCHOR_ACRONYM_GUARD_ENABLED=False 시 약어도 기존대로 streak 산입(완전 기존 동작)."""
+    monkeypatch.setattr(backend_module, "SCRIPT_ANCHOR_ACRONYM_GUARD_ENABLED", False)
+    proc = _make_processor(locked_lang="ko")
+    tokens = [_tok(" GOP", 0.0, 0.1), _tok(" GPGOP", 0.2, 0.3), _tok(" AI", 0.4, 0.5)]
+    proc._apply_script_anchor_redetect(tokens)
+    proc.model.detect_current_language.assert_called_once_with(window_secs=2.0, min_prob=0.90)

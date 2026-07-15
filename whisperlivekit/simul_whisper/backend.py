@@ -187,6 +187,38 @@ _SCRIPT_ANCHOR_T_SECS = 1.0   # 반전 지속 시간 문턱 (Exp-172 실측 T≈
 _SCRIPT_ANCHOR_REDETECT_WINDOW_SECS = 2.0  # 재감지 창
 _SCRIPT_ANCHOR_REDETECT_MIN_PROB = 0.90    # 재감지 확신 문턱 (미달 시 None → 미적용)
 
+# 약어/철자낭독 가드 (GOAL_SCRIPTANCHOR_ACRONYM_GUARD — 한국어 발화 중 영문 약어 철자
+# 낭독을 코드스위칭으로 오인하는 사각지대 수정). 배경: "GP·GOP 유무인 GP·GOP에 대한"
+# 같은 한국어 낭독에서 디코더가 라틴 낱글자/ALL-CAPS 약어 토큰(G/P/GOP/GPGOP류)을
+# 연속 방출하면 위 재감지 streak이 이를 "반대스크립트 N단어"로 오집계 → en 오전환 →
+# 직전 오디오 9~12s 비가역 트림 폐기 → 복귀 전환 → 중복 재확정 폭주(kor2 실측
+# WER 70~101%, Exp-179 규명). 소문자 자연 영단어(There/is/work)와 두문자 대문자
+# (The/Thank)는 기존대로 streak 산입(Exp-175 코드스위칭 커버리지 보존) — 이 가드는
+# "낱글자 철자낭독"·"ALL-CAPS 약어 덩어리"라는 표기 속성만으로 라틴 토큰을 증거
+# 집계에서 중립 스킵한다(숫자·기호와 동일 취급 — 산입도 리셋도 안 함). 데이터 특화
+# 문자열 매칭 금지(§3.8) — 길이·대소문자만 판정에 쓴다. 한글 방향(en 잠금 중 한글
+# 방출)은 대소문자 개념이 없어 이 가드의 영향을 받지 않는다(비대칭 의도).
+SCRIPT_ANCHOR_ACRONYM_GUARD_ENABLED = True  # 롤백 장치: False면 기존 동작(약어도 streak 산입)
+_ACRONYM_MAX_SINGLE_LEN = 2     # 낱글자 철자 낭독 길이 상한 (G/P/A. 류)
+_ACRONYM_MAX_ALLCAPS_LEN = 6    # 전부대문자 약어 덩어리 길이 상한 (GOP/NATO/AI/DUP 류)
+_ACRONYM_LETTERS_RE = re.compile(r'[A-Za-z]')
+
+
+def _is_acronym_like_latin(text: str) -> bool:
+    """약어/철자 낭독처럼 생긴 라틴 토큰인지 판정 (표기 속성만 사용 — §3.8 하드코딩 금지).
+
+    구두점·공백·숫자를 제거하고 남은 알파벳만으로 판정한다.
+    ① 알파벳 길이 <= _ACRONYM_MAX_SINGLE_LEN: 낱글자 철자 낭독(`G`, `P`, `A.`류).
+    ② 전부 대문자 && 알파벳 길이 <= _ACRONYM_MAX_ALLCAPS_LEN: 약어 덩어리(`GOP`, `NATO`, `AI`).
+    알파벳이 전혀 없으면(빈 문자열) False — 이 함수는 라틴 토큰 판정 후에만 호출된다.
+    """
+    letters = ''.join(_ACRONYM_LETTERS_RE.findall(text))
+    if not letters:
+        return False
+    if len(letters) <= _ACRONYM_MAX_SINGLE_LEN:
+        return True
+    return letters.isupper() and len(letters) <= _ACRONYM_MAX_ALLCAPS_LEN
+
 
 class SimulStreamingOnlineProcessor:
     """Online processor for SimulStreaming ASR."""
@@ -543,6 +575,12 @@ class SimulStreamingOnlineProcessor:
         라틴/한글이 전혀 없는 토큰(숫자·기호)은 중립으로 스킵한다. 배치 끝 기준
         판정이라 배치 내에서 문턱을 넘었다가 잠긴 스크립트로 되돌아간 경우(정상
         혼용)는 발동하지 않는다.
+
+        약어/철자낭독 가드(GOAL_SCRIPTANCHOR_ACRONYM_GUARD): 잠긴 언어가 ko이고 반대
+        스크립트(라틴) 판정된 토큰이 낱글자 철자낭독 또는 ALL-CAPS 약어 덩어리(표기
+        속성 — _is_acronym_like_latin)면 증거로 세지 않는다(숫자·기호와 동일하게
+        중립 스킵 — 산입도 리셋도 안 함). 소문자 자연 영단어·두문자 대문자 단어는
+        기존대로 산입해 Exp-175 코드스위칭 커버리지를 유지한다.
         """
         if not SCRIPT_ANCHOR_REDETECT_ENABLED:
             return False
@@ -552,6 +590,13 @@ class SimulStreamingOnlineProcessor:
         for t in tokens:
             text = t.text or ""
             if _is_opposite_script(text, lang):
+                if (
+                    SCRIPT_ANCHOR_ACRONYM_GUARD_ENABLED
+                    and lang == "ko"
+                    and _is_acronym_like_latin(text)
+                ):
+                    logger.debug("[ScriptAnchorRedetect] acronym-skip: %.50s", text.strip())
+                    continue  # 중립 스킵 — 산입도 리셋도 안 함(숫자·기호와 동일 취급)
                 if not self._script_anchor_streak:
                     self._script_anchor_streak_start = t.start
                 self._script_anchor_streak.append(text.strip())
