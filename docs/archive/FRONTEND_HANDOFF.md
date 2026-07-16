@@ -22,8 +22,10 @@
 > 2. **`start`/`end` 필드가 PC 벽시계 시각(`"HH:MM:SS"`)으로 변경**(§2.3).
 > 3. **전사 저장이 "녹음 종료 자동 저장"에서 "저장 버튼 클릭 저장"으로 변경**(§10) — `POST /api/save-transcript`는
 >    버튼을 눌러야만 호출된다.
-> 4. **(신규 발견, 미구현 상태) `buffer_translation`(중간/미확정 번역) 필드가 아직 LLM 번역 파이프라인에 연결되지
->    않았다** — §5 참고. 확정 문장 번역(`lines[].translation`)만 실제로 동작한다.
+> 4. **(2026-07-13 발견, 2026-07-16 해소) `buffer_translation`(중간/미확정 번역) 필드** — 발견 시점엔 LLM
+>    번역 파이프라인에 연결되지 않아 항상 빈 문자열이었으나, `feat/interim-translation` 브랜치에서
+>    `TranslationManager.apply_interim_translation()`이 추가되며 **연결 완료됐다** — §5 참고. 확정 문장
+>    번역(`lines[].translation`)과 함께 정상 동작한다.
 
 ---
 
@@ -34,7 +36,7 @@
 | 전송 프로토콜 | SSE (`GET`, `text/event-stream`) + REST start/stop | **WebSocket** `ws://host:port/asr` |
 | 전송 모델 | 이벤트 단위(세그먼트 1개 델타) | **전체 상태 스냅샷**(매 ~50ms `lines[]` 전체) — 매 메시지를 transcript 통째 교체로 처리 |
 | 녹음 시작/종료 | `POST /api/recordings/start`·`/stop` | WS 연결=시작, **빈 프레임 `ArrayBuffer(0)`**=종료 |
-| 번역 | 별도 `POST /api/translate` SSE | `lines[].translation` **인라인**(동작) + `buffer_translation`(⚠️ 미구현, §5) |
+| 번역 | 별도 `POST /api/translate` SSE | `lines[].translation` **인라인**(동작) + `buffer_translation`(진행중 번역, 동작·§5) |
 | 화자분할 | 없음 | **신규** `lines[].speaker`(int) + `buffer_diarization` |
 | 시간 필드 | `start`/`end` float(초) | `start`/`end` **문자열** `"HH:MM:SS"` — **PC 실제 벽시계 시각**(녹음 시작 0초 기준 경과시간 아님) |
 | 확정 표시 | `status: "process"/"complete"` | `finalized: bool`(별칭 `completed`) |
@@ -97,7 +99,7 @@ React가 반드시 새로 구현할 것: ① WS 연결·종료 시퀀스 ② con
   "lines": [ /* Segment[] (§2.3) */ ],
   "buffer_transcription": "진행중 미확정 전사 텍스트",
   "buffer_diarization": "",           // 화자 배정 대기중 텍스트(diar 모드)
-  "buffer_translation": "",           // 진행중(미확정) 번역
+  "buffer_translation": "In progress...", // LLM 번역기가 채우는 진행중(미확정) 번역 — 번역 비활성 시 ""
   "remaining_time_transcription": 1.2,
   "remaining_time_diarization": 0.0,
   "error": "..."                      // status=="error"일 때만 존재
@@ -110,7 +112,7 @@ React가 반드시 새로 구현할 것: ① WS 연결·종료 시퀀스 ② con
 | `lines` | Segment[] | O(빈 배열 가능) | 확정/진행중 세그먼트 | §2.3 |
 | `buffer_transcription` | str | O | 아직 확정 안 된 진행중 전사. **마지막 줄에 "진행중" 스타일로 표시** | |
 | `buffer_diarization` | str | O | diar 지연으로 아직 화자배정 안 된 텍스트(diar 모드만 의미) | [tokens_alignment.py:379-429](../whisperlivekit/tokens_alignment.py#L379-L429) `get_lines_diarization()` |
-| `buffer_translation` | str | O | 진행중(미확정) 번역 — **⚠️ 현재 항상 `""`(미구현)**, §5 참고 | [tokens_alignment.py:562](../whisperlivekit/tokens_alignment.py#L562) |
+| `buffer_translation` | str | O | LLM 번역기(`TranslationManager.apply_interim_translation()`)가 채우는 진행중(미확정) 번역. 확정 문장이 없어 `lines[].translation`이 아직 없을 때 표시용. 번역 비활성(`--llm-translation` OFF)이면 항상 `""`. §5 참고 | [llm_translation/manager.py](../whisperlivekit/llm_translation/manager.py) `apply_interim_translation()`, [audio_processor.py:583-594](../whisperlivekit/audio_processor.py#L583-L594) |
 | `remaining_time_transcription` | float(초) | O | 전사 처리 지연(랙) | [audio_processor.py:244-259](../whisperlivekit/audio_processor.py#L244-L259) `get_current_state()` |
 | `remaining_time_diarization` | float(초) | O | 화자분할 처리 지연(diar off면 0) | [audio_processor.py:594](../whisperlivekit/audio_processor.py#L594) |
 | `error` | str | status=="error"만 | 오류 메시지(FFmpeg 등) | [timed_objects.py:242-243](../whisperlivekit/timed_objects.py#L242-L243) |
@@ -247,9 +249,19 @@ const speakerNum = `<span class="speaker-badge">${item.speaker}</span>`;
 - **활성화**: 서버 플래그 `--llm-translation`(기본 **OFF**, [parse_args.py:409-415](../whisperlivekit/parse_args.py#L409-L415)). 켜지 않으면 `lines[].translation`·`buffer_translation` 모두 항상 비어 있다. `--translation-serve`(`ollama`/`llama`)·`--translation-endpoint`·`--translation-model`로 백엔드를 고른다 — 개발 PC 기본값은 Ollama `qwen2.5:7b`(`http://localhost:11434`), 배포 PC는 llama.cpp `gpt-oss-20b`(`http://localhost:2010`)로 플래그만 바꿔 낀다([DEPLOYMENT_OFFLINE.md](DEPLOYMENT_OFFLINE.md) §5).
 - **세그먼트별 확정 번역**: `lines[].translation`(str). 조건: 번역 활성 + 해당 세그먼트 `finalized=true`. LLM 경로는 캐시 히트 시 채워지고, 미스면 비차단 task 생성 후 **다음 스냅샷부터** 채워진다([llm_translation/manager.py:35-50](../whisperlivekit/llm_translation/manager.py#L35-L50)). **이 경로는 정상 동작한다.**
 - ✅ **(정정) diar 모드 제약 해소**: §3.4대로 화자분할 ON에서도 이제 `finalized=true`가 정상 세팅되어 인라인 번역이 정상 동작한다(과거엔 안 붙었음).
-- ⚠️ **(신규 발견, 2026-07-13) 진행중(미확정) 번역 `buffer_translation`은 아직 미구현 — 항상 `""`다.** 스키마상 필드는 존재하고 내장 UI에도 렌더 코드가 있지만([live_transcription.js:446-449](../whisperlivekit/web/live_transcription.js#L446-L449)), 실제 값을 채우는 소스는 우리가 이식한 `TranslationManager`(LLM)가 아니라 **whisperlivekit 상위 라이브러리의 미완성 NLLB 스텁**이다([core.py:225-232, 297-302](../whisperlivekit/core.py#L225-L232)) — 이 경로는 외부 `nllw` 패키지가 필요하고(`--target-language` 지정 시에만 활성화, 미지정이 기본) 폐쇄망에 설치돼 있지 않으므로 **`--llm-translation`을 켜도 `buffer_translation`은 채워지지 않는다.**
-  - 확정 문장 번역(`lines[].translation`)을 LLM 경로가 매 사이클 채우는 것과 별개로, "확정 전 중간중간 번역"을 LLM 경로로 채우는 기능은 **설계만 완료되고 아직 구현되지 않았다** — 설계 문서: [docs/superpowers/specs/2026-07-12-translation-pipeline-design.md](superpowers/specs/2026-07-12-translation-pipeline-design.md)(`TranslationManager.apply_interim_translation()` 신설 + `audio_processor.py` 훅 추가 예정).
-  - **React 대응**: 지금 연동한다면 `buffer_translation`이 항상 빈 문자열이라고 가정하고 UI를 만들어도 무방하다(렌더 코드를 넣어둬도 해는 없음 — 값이 결국 안 채워질 뿐). 이 기능이 구현되면 본 절과 §2.2 표를 갱신할 예정이니, 연동 직전에 최신 코드/문서를 다시 확인할 것.
+- ✅ **(2026-07-16 구현 완료) 진행중(미확정) 번역 `buffer_translation`도 이제 동작한다.** 발견 당시(2026-07-13)엔
+  스키마상 필드만 존재하고 whisperlivekit 상위 라이브러리의 미완성 NLLB 스텁에만 배선돼 있어 `--llm-translation`을
+  켜도 항상 `""`였으나, `feat/interim-translation` 브랜치에서 우리가 이식한 `TranslationManager`에
+  `apply_interim_translation(text, src_lang)`을 추가하고 `audio_processor.py`의 `results_formatter()`가
+  매 사이클(~50ms) `lines[]`의 마지막 `finalized:false` 세그먼트(아직 확정 안 된 자라나는 문장) 텍스트를
+  이 메서드에 넘겨 `buffer_translation`을 채우도록 연결했다([llm_translation/manager.py](../whisperlivekit/llm_translation/manager.py)
+  `apply_interim_translation()`, [audio_processor.py:583-594](../whisperlivekit/audio_processor.py#L583-L594)).
+  확정 문장 번역(`lines[].translation`)과 동일한 `TranslationManager`/번역기 백엔드를 공유하며,
+  스로틀은 "이전 요청 완료 전엔 새 요청 안 보냄"(in-flight 가드) 하나뿐 — 고정 시간 간격은 없다. 설계 문서:
+  [docs/superpowers/specs/2026-07-12-translation-pipeline-design.md](superpowers/specs/2026-07-12-translation-pipeline-design.md).
+  - **React 대응**: 별도 코드 변경 불필요 — 렌더 코드가 이미 있다면(`live_transcription.js:446-449` 패턴)
+    이제 값이 실제로 채워진다. 문장이 확정되는 순간 그 진행중 세그먼트가 사라지므로 `buffer_translation`도
+    함께 리셋된다(stale한 이전 중간 번역이 화면에 남지 않음).
 
 ---
 
@@ -270,7 +282,7 @@ const speakerNum = `<span class="speaker-badge">${item.speaker}</span>`;
 - [ ] 필드 타입 변경: `start`/`end`는 `"HH:MM:SS"` 문자열(PC 실제 벽시계 시각 — 녹음 시작 시점이 아니라 발화 시각, 센티초 없음), `finalized`(=completed) bool, 언어는 `detected_language`(=lang). history Map 키는 `start` 단독이 아니라 `start`+`end`+`speaker` 복합키(같은 초 충돌 방지).
 - [ ] 화자 UI: `speaker` 배지/색 직접 구현, `-2`=침묵, `0`=diar 진행중, `buffer_diarization` 표시.
 - [ ] 종료: `send(new ArrayBuffer(0))` → `ready_to_stop` 수신 → `close()`.
-- [ ] 번역 표시: 인라인 `lines[].translation`(정상 동작, diar ON에서도 §3.4). `buffer_translation`은 **아직 미구현**(항상 `""`) — 렌더 코드는 넣어둬도 되지만 값이 채워질 것을 기대하지 말 것(§5).
+- [ ] 번역 표시: 인라인 `lines[].translation`(정상 동작, diar ON에서도 §3.4) + `buffer_translation`(진행중 번역, 2026-07-16 구현 완료 — 별도 React 작업 불필요, §5).
 - [ ] (선택) 단어교정 사전 관리 UI가 필요하면 `/api/corrections` REST 호출(§9) — 필수는 아님.
 
 ---
@@ -284,7 +296,7 @@ const speakerNum = `<span class="speaker-badge">${item.speaker}</span>`;
 4. **`?language=` 쿼리**로 세션별 언어 강제 가능(문서엔 없음).
 5. **(정정, 2026-07-10 재대조)** 화자분할 finalized=false / 인라인 번역 미동작 제약은 SCHEMA_CHANGES §6·본 문서 최초판 작성 시점 기준으로는 코드와 일치했으나, **그 뒤 커밋 `2af2765`로 해소됐다**(§3.4). SCHEMA_CHANGES.md 해당 절도 이 문서와 함께 갱신이 필요하다.
 6. **`/api/corrections`·`/health`·`/v1/listen`·`/v1/audio/transcriptions`·`/v1/models`·`/api/save-transcript` REST/WS 엔드포인트**는 SCHEMA_CHANGES.md에도 없다(§9·§10 참고).
-7. **(2026-07-13 발견)** SCHEMA_CHANGES.md도 `buffer_translation`을 일반 `str` 필드로만 선언하고 있어([SCHEMA_CHANGES.md:32](SCHEMA_CHANGES.md#L32)) 이 문서 §5와 마찬가지로 "현재 미구현·항상 빈 문자열" 캐비어트가 빠져 있다 — SCHEMA_CHANGES.md 갱신 시 함께 정정 필요.
+7. **(2026-07-13 발견, 2026-07-16 해소)** SCHEMA_CHANGES.md도 `buffer_translation`을 일반 `str` 필드로만 선언해([SCHEMA_CHANGES.md:32](SCHEMA_CHANGES.md#L32)) 출처 캐비어트가 빠져 있었으나, `feat/interim-translation` 구현과 함께 "LLM 번역기가 채우는 진행중 번역"으로 정정했다.
 
 ---
 

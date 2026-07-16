@@ -416,6 +416,7 @@ whisperlivekit-server `
 
 ### 5.1 결론
 현재 이식된 번역기(`LlamaTranslator`)는 **프로토콜상 gpt-oss-20b와 호환**된다(`/v1/completions` + harmony 프롬프트 + 완성형 응답 파싱이 원본 whisperlive와 동일, [translator.py:58-93](../whisperlivekit/llm_translation/translator.py#L58-L93)). 다만 **그대로는 켜지지 않는 차단 버그가 있어 선결 수정이 필요**하다.
+확정 문장 번역(`lines[].translation`)뿐 아니라 **중간(미확정) 번역(`buffer_translation`, `TranslationManager.apply_interim_translation()`)도 동일한 `TranslationManager`/`--translation-serve`·`--translation-endpoint`·`--translation-model` 설정으로 동작**하므로, 배포 전환 시 별도 설정 없이 §5.3 플래그 그대로 중간 번역도 gpt-oss-20b로 붙는다.
 
 ### 5.2 [수정 완료] config.py LLM 4필드 누락 — master 머지됨
 - **버그(과거)**: `parse_args.py`는 `--llm-translation`/`--translation-serve`/`--translation-endpoint`/`--translation-model`을 파싱하지만([parse_args.py:375-404](../whisperlivekit/parse_args.py#L375-L404)), `WhisperLiveKitConfig`에 해당 4필드가 없어 `from_namespace`가 버렸다 → `TranslationManager`가 생성되지 않아 **번역이 절대 안 켜졌다**(코드로 4단 체인 확인).

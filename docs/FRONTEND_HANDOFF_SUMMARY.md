@@ -14,7 +14,7 @@
 | 전송 프로토콜 | SSE (`GET`, `text/event-stream`) + REST start/stop | **WebSocket** `ws://host:port/asr` |
 | 전송 모델 | 이벤트 단위(세그먼트 1개 델타) | **전체 상태 스냅샷**(매 ~50ms `lines[]` 전체) — 매 메시지를 transcript 통째 교체로 처리 |
 | 녹음 시작/종료 | `POST /api/recordings/start`·`/stop` | WS 연결=시작, **빈 프레임 `ArrayBuffer(0)`**=종료 |
-| 번역 | 별도 `POST /api/translate` SSE | `lines[].translation` **인라인**(동작) + `buffer_translation`(⚠️ 미구현, §7) |
+| 번역 | 별도 `POST /api/translate` SSE | `lines[].translation` **인라인**(동작) + `buffer_translation`(진행중 번역, 동작·§7) |
 | 화자분할 | 없음 | **신규** `lines[].speaker`(int) + `buffer_diarization` |
 | 시간 필드 | `start`/`end` float(초) | `start`/`end` **문자열** `"HH:MM:SS"` — **PC 실제 벽시계 시각**(녹음 시작 0초 기준 경과시간 아님) |
 | 확정 표시 | `status: "process"/"complete"` | `finalized: bool`(별칭 `completed`) |
@@ -46,7 +46,7 @@ React가 반드시 새로 구현할 것: ① WS 연결·종료 시퀀스 ② con
 | 메시지 모델 | 커서 기반 **문장 1개 델타** | 매 ~50ms **전체 상태 스냅샷**(`lines[]` 전체) | 이벤트 append → **전체교체 렌더**(확정 줄 프론트 누적은 필수 아님 — 선택적 렌더 최적화, §4.2) |
 | 필드명 | `content` / `language` / `status:"process"·"complete"` | `text` / `detected_language`(별칭 `lang`) / `finalized`(bool) | 파싱 필드명·타입 교체(§9.4 매핑표) |
 | 확정/미확정 표시 | 문장 단위 `status` 회색↔진하게 | 의미가 다름 → **§2.2 참조** | `lines[]`=진하게 / `buffer_*`=연하게 **2단계**. `finalized`는 색 아닌 리렌더 최적화(안정 key)용(§2.2) |
-| 번역 | 문장마다 **별도 `POST /api/translate` SSE**(토큰 스트리밍) | `lines[].translation` **인라인**(확정 후 통째로) | `/api/translate` 호출·SSE 제거 → `lines[].translation` 읽기. **스트리밍 타이핑 UX는 사라짐.** `buffer_translation`은 미구현(§7) |
+| 번역 | 문장마다 **별도 `POST /api/translate` SSE**(토큰 스트리밍) | `lines[].translation` **인라인**(확정 후 통째로) + `buffer_translation`(진행중 번역) | `/api/translate` 호출·SSE 제거 → `lines[].translation` 읽기. **스트리밍 타이핑 UX는 사라짐.** `buffer_translation`도 동작(§7) |
 | 화자분할 | 없음 | `lines[].speaker`(int), `-2`=침묵/`0`=진행중 | **신규 UI**(배지·색 직접 구현, §5) |
 | 타임스탬프 | SSE에 없음(내부만 float 초) | `start`/`end` = 벽시계 `"HH:MM:SS"` 문자열 | 표시에 사용 가능. history 키는 `start\|end\|speaker` 복합키 |
 | 녹음 제어 | start/stop/status — **stop=캡처만 정지, WS 연결 유지(재개 가능)**, stop 시 화면도 클리어 | 연결=시작 / 빈 프레임=**종료(되돌릴 수 없음)**, status·재개 없음 | start=WS 열기+캡처 시작 / stop=빈 프레임+`close()`. **pause/resume 버튼이 있었다면 wlk는 resume 불가 → 제거·비활성**(재시작=`close()` 후 새 WS 연결=서버 세션 초기화). wl stop은 화면을 지웠으나 wlk는 프론트 누적분이 남음 |
@@ -65,7 +65,7 @@ buffer_* 꼬리     → 연하게 (opacity ~0.4)
 ```
 
 `buffer_*`는 별도 줄이 아니라 **맨 아래(현재 진행) 줄의 꼬리**에 이어붙인다: 전사 꼬리 =
-`buffer_diarization` → `buffer_transcription` 순, 번역 꼬리 = `buffer_translation`(현재 항상 `""`).
+`buffer_diarization` → `buffer_transcription` 순, 번역 꼬리 = `buffer_translation`(번역 활성 시 진행중 번역, 비활성 시 `""`).
 
 ```jsx
 const rows = [...finalizedHistory, ...lines.filter(l => !l.finalized)];
@@ -165,7 +165,7 @@ React가 직접 구현**해야 한다(`onclose`/`onerror`에서 code 확인 후 
   "lines": [ /* Segment[] (§4.3) */ ],
   "buffer_transcription": "진행중 미확정 전사 텍스트",
   "buffer_diarization": "",           // 화자 배정 대기중 텍스트(diar 모드)
-  "buffer_translation": "",           // 진행중(미확정) 번역
+  "buffer_translation": "In progress...", // LLM 번역기가 채우는 진행중(미확정) 번역 — 번역 비활성 시 ""
   "remaining_time_transcription": 1.2,
   "remaining_time_diarization": 0.0,
   "error": "..."                      // status=="error"일 때만 존재
@@ -178,7 +178,7 @@ React가 직접 구현**해야 한다(`onclose`/`onerror`에서 code 확인 후 
 | `lines` | Segment[] | O(빈 배열 가능) | 확정/진행중 세그먼트 |
 | `buffer_transcription` | str | O | 아직 확정 안 된 진행중 전사(디코딩 꼬리). **마지막 줄에 이어붙여 표시**(§2.2) |
 | `buffer_diarization` | str | O | diar 지연으로 아직 화자배정 안 된 최근 발화. **마지막 줄 꼬리에 연하게 표시**(diar ON이면 빼지 말 것, §2.2) |
-| `buffer_translation` | str | O | 진행중(미확정) 번역 — **⚠️ 현재 항상 `""`(미구현)**, §7 참고 |
+| `buffer_translation` | str | O | LLM 번역기(`TranslationManager.apply_interim_translation()`)가 채우는 진행중(미확정) 번역. 확정 문장이 없어 `lines[].translation`이 아직 없을 때 표시용. 번역 비활성(`--llm-translation` OFF)이면 항상 `""`, §7 참고 |
 | `remaining_time_transcription` | float(초) | O | 전사 처리 지연(랙) |
 | `remaining_time_diarization` | float(초) | O | 화자분할 처리 지연(diar off면 0) |
 | `error` | str | status=="error"만 | 오류 메시지(FFmpeg 등) |
@@ -298,11 +298,13 @@ React가 직접 구현**해야 한다(`onclose`/`onerror`에서 code 확인 후 
 - **세그먼트별 확정 번역** `lines[].translation`(str): 번역 활성 + 해당 세그먼트
   `finalized=true`일 때 채워진다. 캐시 미스면 비차단으로 번역 요청 후 **다음 스냅샷부터**
   채워진다(확정 후 문장 통째로 등장 — wl처럼 토큰 단위로 흐르지 않음). **이 경로는 정상 동작한다.**
-- ⚠️ **진행중(미확정) 번역 `buffer_translation`은 아직 미구현 — 항상 `""`다.** 이 필드는
-  레거시 NLLB 경로(`--target-language`, 기본 비활성)에만 배선돼 있고, 우리가 쓰는
-  `--llm-translation` 경로는 이 필드를 채우지 않는다 → 배포 설정에선 항상 `""`. **React는 이 필드가 항상 빈
-  문자열이라고 가정하고 만들어도 무방하다**(렌더 코드를 넣어둬도 무해함 — 값이 채워지지 않을
-  뿐). 구현되면 이 절과 §4.2 표를 갱신할 예정이니, 연동 직전에 최신 문서를 다시 확인할 것.
+- ✅ **(2026-07-16 구현 완료) 진행중(미확정) 번역 `buffer_translation`도 이제 동작한다.** `TranslationManager`에
+  `apply_interim_translation(text, src_lang)`이 추가돼, 확정 세그먼트 번역과 **동일한 `--llm-translation`
+  경로/번역기 백엔드**로 `lines[]`의 마지막 `finalized:false` 세그먼트(아직 확정 안 된 자라나는 문장) 텍스트를
+  번역해 채운다(레거시 NLLB 경로와는 무관 — 그쪽은 여전히 미완성 스텁으로 남아 있다). 스로틀은 "이전 요청
+  완료 전엔 새 요청 안 보냄" 하나뿐이라 값은 다소 지연(stale)될 수 있고, 문장이 확정되는 순간 그 진행중
+  세그먼트가 사라지므로 `buffer_translation`도 함께 리셋된다. **React는 별도 변경 없이 그대로 렌더하면 된다**
+  (이미 넣어둔 렌더 코드가 있다면 이제 실제로 값이 채워짐).
 
 ---
 
@@ -368,7 +370,7 @@ WS `/asr`와 별개로, 사용자가 UI의 **저장 버튼을 눌렀을 때**만
 | `end`(float) | `lines[].end`(str) | **타입 변경** — 위와 동일 |
 | (이벤트 단위 1개) | `lines[]`(전체 배열) | 매 메시지 전체교체 |
 | — | `lines[].speaker` | **신규(화자분할)** |
-| 별도 `POST /api/translate` | `lines[].translation` + `buffer_translation` | 인라인화(단, `buffer_translation`은 §7대로 미구현) |
+| 별도 `POST /api/translate` | `lines[].translation` + `buffer_translation` | 인라인화(둘 다 동작, §7) |
 | — | `buffer_transcription` | 진행중 미확정 텍스트 |
 
 ---
@@ -392,6 +394,6 @@ WS `/asr`와 별개로, 사용자가 UI의 **저장 버튼을 눌렀을 때**만
 - [ ] 화자 UI: `speaker` 배지/색 직접 구현, `-2`=침묵, `0`=diar 진행중, `buffer_diarization` 표시.
 - [ ] 종료: `send(new ArrayBuffer(0))` → `ready_to_stop` 수신 → `close()`. 종료 flush 중엔 새 녹음 시작 금지(§3.2).
 - [ ] 녹음 상태 표시는 wl의 `GET /api/recordings/status` 폴링 대신 **WS `readyState`/`onopen`·`onclose`**로 대체(대응 엔드포인트 없음). 비정상 종료 시 자동 재연결은 없으니 필요하면 직접 구현(§3.3).
-- [ ] 번역 표시: 인라인 `lines[].translation`(정상 동작). `buffer_translation`은 **아직
-      미구현**(항상 `""`) — 렌더 코드는 넣어둬도 되지만 값이 채워질 것을 기대하지 말 것(§7).
+- [ ] 번역 표시: 인라인 `lines[].translation`(정상 동작) + `buffer_translation`(진행중 번역, 2026-07-16
+      구현 완료 — 별도 React 작업 불필요, §7).
 - [ ] (선택) 단어교정 사전 관리 UI가 필요하면 `/api/corrections` REST 호출(§9.1).

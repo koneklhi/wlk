@@ -576,11 +576,23 @@ class AudioProcessor:
                 )
                 lines = filter_segments(lines)
                 _append_terminal_punctuation(lines)
-                if self.llm_translation_manager is not None:
-                    self.llm_translation_manager.apply_translations(lines)
                 state = await self.get_current_state()
 
                 buffer_transcription_text = state.buffer_transcription.text if state.buffer_transcription else ''
+
+                if self.llm_translation_manager is not None:
+                    self.llm_translation_manager.apply_translations(lines)
+                    interim_line = next(
+                        (seg for seg in reversed(lines) if not seg.is_silence() and not seg.finalized and seg.text),
+                        None
+                    )
+                    if interim_line is not None:
+                        src_lang = interim_line.detected_language or "ko"
+                        buffer_translation_text = self.llm_translation_manager.apply_interim_translation(
+                            interim_line.text, src_lang
+                        )
+                    else:
+                        buffer_translation_text = self.llm_translation_manager.apply_interim_translation("", "ko")
 
                 response_status = "active_transcription"
                 if not lines and not buffer_transcription_text and not buffer_diarization_text:
