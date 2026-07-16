@@ -54,7 +54,7 @@
 **인과 사슬 (kor2, 두 런 모두 동일)**:
 
 1. 한국어 낭독 중 "GP·GOP 유무인 GP·GOP에 대한 …" 구간에서 디코더가 라틴 토큰(`G`/`P`/`GOP`/`GPGOP`류)을 연속 방출.
-2. `[ScriptAnchorRedetect]`(Exp-175, [backend.py](../whisperlivekit/simul_whisper/backend.py) `_update_script_anchor_streak`)가
+2. `[ScriptAnchorRedetect]`(Exp-175, [backend.py](../../whisperlivekit/simul_whisper/backend.py) `_update_script_anchor_streak`)가
    이를 "잠긴 언어(ko)와 반대 스크립트 3단어 연속"으로 집계 → streak 충족 → `detect_current_language(2.0s, p≥0.90)` 재감지.
 3. 재감지 창(2.0s)이 철자 낭독 음향으로 지배돼 **en 고확신 반환** — 음향적으로는 "정당"하므로 확신도 강화로는 못 막는다.
 4. `_apply_detected_language(en)` → **전환 트림이 직전 오디오 9.68~12.02s 절단 폐기**(진짜 전환에선 재디코딩 세금 절감용 정상 동작).
@@ -79,7 +79,7 @@
 
 ### P1 (핵심) — `_update_script_anchor_streak` 집계 규칙 수정
 
-[backend.py](../whisperlivekit/simul_whisper/backend.py)의 streak 집계에서, 반대 스크립트(Latin) 판정된 토큰이
+[backend.py](../../whisperlivekit/simul_whisper/backend.py)의 streak 집계에서, 반대 스크립트(Latin) 판정된 토큰이
 아래 중 하나면 **중립 스킵**:
 
 1. **알파벳 길이 ≤ `ACRONYM_MAX_SINGLE_LEN`(초안 2)** — 낱글자 철자 낭독(`G`, `P`, `A.`류). 구두점·공백 제거 후 판정.
@@ -160,6 +160,6 @@ P1 후에도 kor2류 오발동이 잔존하면(예: 소문자 혼합 철자 방�
 ## 7. 기록·연동 문서 (채택 시 사용자 승인 후 동일 작업 단위)
 
 - `EXPERIMENTS_LOG.md` 전체 서술 + `EXPERIMENTS.md` 빠른참조 1행(`/log-experiment`).
-- [MASTER_CHANGES.md](MASTER_CHANGES.md) §3-6c(스크립트-앵커 게이트)에 가드 추가 서술 + §8 TODO 최우선 항목 제거 — `/update-master-changes`.
-- [SENTENCE_FINALIZATION_LOGIC.md](SENTENCE_FINALIZATION_LOGIC.md) §5 파라미터 표에 신설 상수 추가(잠정 태그).
+- [MASTER_CHANGES.md](../MASTER_CHANGES.md) §3-6c(스크립트-앵커 게이트)에 가드 추가 서술 + §8 TODO 최우선 항목 제거 — `/update-master-changes`.
+- [SENTENCE_FINALIZATION_LOGIC.md](../SENTENCE_FINALIZATION_LOGIC.md) §5 파라미터 표에 신설 상수 추가(잠정 태그).
 - **epoch 판단**: 발동 조건을 좁히는 가드(미발동 시 수동)이므로 **미bump 예상**(Exp-175/179 전례) — 머지 시 최종 판단.

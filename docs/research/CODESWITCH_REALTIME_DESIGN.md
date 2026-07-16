@@ -1,6 +1,6 @@
 # 코드스위칭 실시간 전사 설계 보고서
 
-> **범위**: 현재 `master` 브랜치에 머지된 STT 파이프라인이 **① WER(전사 정확도) ② 문장 분리/확정 ③ 한↔영 코드스위칭**을 각각 어떤 로직으로 처리하는지 코드 레벨로 정리한다. 값·라인의 단일 진실원(SoT)은 코드다 — 본문 `file:line`은 작성 시점 실측값이며, 개념 레퍼런스는 [SENTENCE_FINALIZATION_LOGIC.md](SENTENCE_FINALIZATION_LOGIC.md)·[MASTER_CHANGES.md](MASTER_CHANGES.md), 시행착오는 [../EXPERIMENTS_LOG.md](../EXPERIMENTS_LOG.md)에 있다.
+> **범위**: 현재 `master` 브랜치에 머지된 STT 파이프라인이 **① WER(전사 정확도) ② 문장 분리/확정 ③ 한↔영 코드스위칭**을 각각 어떤 로직으로 처리하는지 코드 레벨로 정리한다. 값·라인의 단일 진실원(SoT)은 코드다 — 본문 `file:line`은 작성 시점 실측값이며, 개념 레퍼런스는 [SENTENCE_FINALIZATION_LOGIC.md](../SENTENCE_FINALIZATION_LOGIC.md)·[MASTER_CHANGES.md](../MASTER_CHANGES.md), 시행착오는 [../../EXPERIMENTS_LOG.md](../../EXPERIMENTS_LOG.md)에 있다.
 >
 > **핵심 배경**: 상위 라이브러리 `whisperlivekit 0.2.20`을 벤더링하고 디코딩 정책을 **SimulStreaming(AlignAtt)** 으로 고정했다. AlignAtt 실출력 토큰엔 **구두점이 없어** 구두점 기반 확정이 원천적으로 안 되고, 언어가 한 번 잠기면 고착되는 성질이 있다 — 아래 로직들은 대부분 이 두 성질에 대한 대응이다.
 
@@ -286,7 +286,7 @@ AlignAtt가 문장 마지막 음절을 유보했다가 Silence 마커 **뒤**에
 
 ## 6. 알려진 한계 / 후속 백로그 (Exp-175 탐사 산출물)
 
-상세: [BACKLOG_CODESWITCH_FOLLOWUP.md](BACKLOG_CODESWITCH_FOLLOWUP.md). 우선순위 순:
+상세: [BACKLOG_CODESWITCH_FOLLOWUP.md](../backlog/BACKLOG_CODESWITCH_FOLLOWUP.md). 우선순위 순:
 1. **미방출형 전환 서두 유실(최우선)**: 구언어 잠금 중 디코더가 서두를 **아예 방출 안 함**(비-fire) → 반전 streak 자체가 없어 §1.4로 원리상 포착 불가(ytn2 "There is more work"·sbs1 "From a satellite image" 실측). 제안: 재디코딩 창 하한을 마지막 방출 토큰 끝으로 당기거나 경량 비-fire 워치독.
 2. **①′ locked-lang 음차 환각**: 반대 언어를 잠긴 언어 음차로 환각(bong1 "말랑말랑"→"mallang mallang") — 출력 스크립트 반전이 없어 §1.4 스코프 밖. 제안: 저신뢰+lang-id 확률 경합 보조 트리거(단 Exp-160 스퓨리어스 리스크 주의).
 3. **세션초입 buffer 유실**: 언어 미확정(감지 문턱 2.0s 대기) 동안 서두 유실(sbs1 3/3).
@@ -298,6 +298,6 @@ AlignAtt가 문장 마지막 음절을 유보했다가 Silence 마커 **뒤**에
 
 ## 7. 참고
 
-- 개념 레퍼런스: [SENTENCE_FINALIZATION_LOGIC.md](SENTENCE_FINALIZATION_LOGIC.md)(문장 확정·§7 갱신 규약) · [MASTER_CHANGES.md](MASTER_CHANGES.md)(upstream 대비 변경) · 시행착오 [../EXPERIMENTS_LOG.md](../EXPERIMENTS_LOG.md)(Exp-167~175).
+- 개념 레퍼런스: [SENTENCE_FINALIZATION_LOGIC.md](../SENTENCE_FINALIZATION_LOGIC.md)(문장 확정·§7 갱신 규약) · [MASTER_CHANGES.md](../MASTER_CHANGES.md)(upstream 대비 변경) · 시행착오 [../../EXPERIMENTS_LOG.md](../../EXPERIMENTS_LOG.md)(Exp-167~175).
 - **라인번호 정정**: `SENTENCE_FINALIZATION_LOGIC.md`의 일부 `file:line`은 코드 성장으로 뒤처짐(예: `get_lines_diarization` 문서 :266 → 실측 :379, `_punct_split_here` 문서 :169 → :263). 본 보고서 수치는 세 Explore 에이전트의 master 워킹트리 실측값.
 - 핵심 파일: `simul_whisper/{backend,align_att_base,decoder_state,simul_whisper}.py` · `tokens_alignment.py` · `sentence_boundary.py` · `timed_objects.py` · `filtering/__init__.py` · `audio_processor.py` · `parse_args.py` · `config.py`.

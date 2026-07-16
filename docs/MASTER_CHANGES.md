@@ -271,7 +271,7 @@ upstream whisperlivekit에는 `new_speaker()` → `refresh_segment()` 뼈대가 
 - `new_speaker()`: `process_iter(is_last=True)` flush 생략 + `refresh_segment(complete=False)` (경계 오디오 유지) + `detect_current_language(1.5, 0.85)` 즉시 재감지
 
 사용 예시: `--diarization --sortformer-model <경로>/sortformer-4spk-v2.nemo`
-상세는 [DIARIZATION_SPIKE.md](DIARIZATION_SPIKE.md) 참조.
+상세는 [DIARIZATION_SPIKE.md](research/DIARIZATION_SPIKE.md) 참조.
 
 ---
 
@@ -323,9 +323,9 @@ upstream whisperlivekit에는 `new_speaker()` → `refresh_segment()` 뼈대가 
 | 번역 관리자 | [`llm_translation/manager.py`](../whisperlivekit/llm_translation/manager.py) `TranslationManager` | 확정 세그먼트 수신 시 비차단 번역 캐시. 번역 결과를 세그먼트에 부착 |
 | 번역 트리거 | [`audio_processor.py`](../whisperlivekit/audio_processor.py) | 문장 `finalized = True` 시점에 번역 큐에 enqueue |
 
-**환경별 엔드포인트** (상세: [TRANSLATION_SETUP.md](TRANSLATION_SETUP.md)):
-- 배포: `gpt-oss-20b` @ `llama.cpp:2010`
-- 개발: `qwen2.5:7b` @ `Ollama:11434`
+**환경별 엔드포인트** (상세: [DEPLOYMENT_OFFLINE.md §5](DEPLOYMENT_OFFLINE.md)):
+- 배포: `gpt-oss-20b` @ `llama.cpp:2010` (2026-07-16~ **기본값**)
+- 개발: `qwen2.5:7b` @ `Ollama:11434` (재정의 필요)
 
 ---
 
@@ -365,13 +365,13 @@ upstream에는 정량 평가 도구가 없었다. 아래 모듈을 새로 추가
 
 ## 8. 향후 개선점 (TODO)
 
-### 단기 (다음 실험 후보 — 상세: [BACKLOG_CODESWITCH_FOLLOWUP.md](BACKLOG_CODESWITCH_FOLLOWUP.md), Exp-175 탐사 산출물)
+### 단기 (다음 실험 후보 — 상세: [BACKLOG_CODESWITCH_FOLLOWUP.md](backlog/BACKLOG_CODESWITCH_FOLLOWUP.md), Exp-175 탐사 산출물)
 
 - **ScriptAnchorRedetect 철자낭독 오발동 가드**(최우선, Exp-179 신규 규명): 한국어 문장 내 영문 약어 철자 낭독("GP·GOP")이
   Latin 3단어 streak을 만들어 §3-6c 게이트가 ko→en 오전환 + **전환 트림 9.7~12s 오디오 폐기** + 복귀 전환 + 재디코딩
   중복 확정 폭주(kor2 WER 70~101%). 약어 철자 시퀀스(무모음 대문자 연쇄 등) streak 산입 제외 또는 재감지 적용 전 트림 억제 검토.
 - **재디코딩 중복 확정 churn**(kor2/kor3 실측): 전환/refresh 후 같은 문장 프리픽스가 누진 재확정(×3~5회) — Exp-177 Bug1
-  (타임스탬프 재앵커) 계열, [GOAL_BOUNDARY_QG_PRESERVE.md](GOAL_BOUNDARY_QG_PRESERVE.md)와 연계.
+  (타임스탬프 재앵커) 계열, [GOAL_BOUNDARY_QG_PRESERVE.md](goal_prompt/GOAL_BOUNDARY_QG_PRESERVE.md)와 연계.
 - **Case B — SILENCE_HARD_SECS 낭독체 pause 우회**(kor3 실측): 단어 중간 0.8s+ 호흡이 문법 게이트(Exp-176)를 우회해
   단어 중간 분절("통합."⏎"하고") — 안전망 정책 재검토.
 - **미방출형 전환 서두 유실**: 구언어 잠금 중 디코더 비-fire로 반전 streak 자체가 없어 3-6c 게이트
@@ -386,7 +386,7 @@ upstream에는 정량 평가 도구가 없었다. 아래 모듈을 새로 추가
 ### 중기 (다음 Phase)
 
 - **diarization → finalized 마킹 완전 연결**: ChangeSpeaker 경로는 활성화됐으나 화자분할 기반 finalized 마킹이 아직 완전히 React까지 연결되지 않음. ([SCHEMA_CHANGES.md](SCHEMA_CHANGES.md) §6 참조)
-- **번역 React 연결 완성**: `TranslationManager`는 구현됐으나 번역 결과의 실시간 React 반영 경로가 Phase 4+ 작업으로 남아 있음. ([TRANSLATION_SETUP.md](TRANSLATION_SETUP.md) 참조)
+- **번역 React 연결 완성**: `TranslationManager`는 구현됐으나 번역 결과의 실시간 React 반영 경로가 Phase 4+ 작업으로 남아 있음. ([DEPLOYMENT_OFFLINE.md §5](DEPLOYMENT_OFFLINE.md) 참조)
 - **§3 도메인 서술 백필**: 이 문서의 §3-6b 이후 채택분 중 Exp-158(turbo 기질 전환)·160(PLC 기본 None)·161(audio_max_len 15.0)·167/168/170/171/173/174가 도메인 섹션에 미반영 — §2 수치는 최신이나 서술 백필 필요(이력 자체는 [../EXPERIMENTS.md](../EXPERIMENTS.md)에 완비).
 
 ### 장기 / 설계 제약 (§3.8)

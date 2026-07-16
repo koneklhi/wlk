@@ -19,14 +19,14 @@
 
 ## 1. ⚠️ 발견된 긴급 이슈 — 배포 설정과 하드웨어 VRAM 불일치
 
-[docs/TRANSLATION_SETUP.md:55](TRANSLATION_SETUP.md#L55)는 "RTX 5090 환경에서만 gpt-oss-20b-F16.gguf
-(~40GB) 적재 가능"이라고 되어 있으나, **RTX 5090의 VRAM은 32GB**다. F16 gguf(~40GB)는 5090 한 장에
-**단독으로도 적재 불가능**하다.
+[docs/DEPLOYMENT_OFFLINE.md](../DEPLOYMENT_OFFLINE.md)(구 `TRANSLATION_SETUP.md`, §5로 통합됨)는 "RTX 5090
+환경에서만 gpt-oss-20b-F16.gguf (~40GB) 적재 가능"이라고 되어 있으나, **RTX 5090의 VRAM은 32GB**다.
+F16 gguf(~40GB)는 5090 한 장에 **단독으로도 적재 불가능**하다.
 
 - gpt-oss-20b의 네이티브 포맷은 **MXFP4(~16GB)**다. 배포를 F16 → MXFP4 빌드로 전환하면
   Whisper-large-v3-turbo(+Sortformer 화자분할)와 32GB 안에서 공존 가능해진다.
 - **이건 모델 교체 이전에 먼저 처리해야 할 선결 항목이다.** 착수 전 실물 GPU로 VRAM 재확인 필요.
-- 관련 문서(TRANSLATION_SETUP.md, ROADMAP.md:164, docs/DEPLOYMENT_OFFLINE.md)의 "~40GB" 서술도
+- 관련 문서(docs/DEPLOYMENT_OFFLINE.md §1·§5, ROADMAP.md:164)의 "~40GB" 서술도
   전환 시 함께 갱신해야 한다 (CLAUDE.md §4 "코드 변경 시 연동 갱신 문서" 표 참조).
 
 ---
@@ -35,7 +35,7 @@
 
 ### 2.1 문제 정의
 
-현재 [whisperlive_code/translator.py:115](../whisperlive_code/translator.py#L115)의
+현재 [whisperlive_code/translator.py:115](../../whisperlive_code/translator.py#L115)의
 `get_relevant_glossary()`는 `origin.lower() in input_lower` 단순 in-매칭이다. 두 가지 문제:
 
 - **(1) 매칭 견고성**: STT가 "공군"을 "공궁"으로 오전사하면 in-매칭 실패 → 용어쌍이 프롬프트에서 누락.
@@ -197,7 +197,7 @@
 
 ```
 1. [선결] 배포 gpt-oss-20b: F16(~40GB) → MXFP4(~16GB) 빌드 전환
-   ← 이거 안 하면 RTX 5090(32GB)에 안 올라감. TRANSLATION_SETUP.md/ROADMAP.md/DEPLOYMENT_OFFLINE.md
+   ← 이거 안 하면 RTX 5090(32GB)에 안 올라감. ROADMAP.md/DEPLOYMENT_OFFLINE.md(§1·§5)
      동반 갱신 필요 (CLAUDE.md §4 연동 갱신 표)
 
 2. [아키텍처] cascaded 유지 확정. e2e 통합 모델(SeamlessM4T 등) 도입 안 함.

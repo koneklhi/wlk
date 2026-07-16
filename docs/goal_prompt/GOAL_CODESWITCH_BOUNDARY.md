@@ -16,7 +16,7 @@
 
 - **master = Epoch 5 (E5, turbo 기질)**. 최근 채택: Exp-167(문장꼬리분리) → Exp-168(CASE2 서두유실:
   스크립트 불일치 게이트+since_offset) → Exp-170(온점 형태소 분할) → Exp-171(경계 철회+keep_secs).
-- **게이트(max)**: [EXPERIMENTS.md](../EXPERIMENTS.md) STATE 상단 확정 게이트를 따른다
+- **게이트(max)**: [EXPERIMENTS.md](../../EXPERIMENTS.md) STATE 상단 확정 게이트를 따른다
   (작성 시점: bong1≤30.5% / ytn2≤34.5% / sbs1≤16.1%, Exp-161 N=3 기준 — STATE가 갱신되면 STATE 우선).
   Exp-171 채택 확정치(참고): bong1 28.1/max43.5(R2 이상치) · ytn2 18.7/max18.7 · sbs1 13.1/max15.5.
 - **잔존 증상 (사용자 실사용 보고, 2026-07-08)**:
@@ -32,7 +32,7 @@
 
 - `LanguageSwitch` 마커(문장경계)는 `_apply_detected_language`의
   `is_switch = prev_lang is not None and prev_lang != lang`일 때만 arm된다
-  ([align_att_base.py](../whisperlivekit/simul_whisper/align_att_base.py) `:207, :218-224`).
+  ([align_att_base.py](../../whisperlivekit/simul_whisper/align_att_base.py) `:207, :218-224`).
 - 이를 호출하는 상시 경로 `_detect_language_if_needed`는 **`detected_language is None`일 때만 동작**
   (`align_att_base.py:229-233`). 즉 **최초 언어 확정 후에는 상시 재감지가 없다.**
 - 중간 재감지 트리거는 4종뿐: 짧은침묵(≥0.5s, `backend.py:262-281`) · 긴침묵(≥2.0s, `backend.py:242-259`)
@@ -46,8 +46,8 @@
 
 ### ③ = 다수 드롭 경로 후보 (계측으로 범인 특정 필요)
 
-우선순위 후보 (전부 [backend.py](../whisperlivekit/simul_whisper/backend.py) /
-[align_att_base.py](../whisperlivekit/simul_whisper/align_att_base.py)):
+우선순위 후보 (전부 [backend.py](../../whisperlivekit/simul_whisper/backend.py) /
+[align_att_base.py](../../whisperlivekit/simul_whisper/align_att_base.py)):
 1. **CrossBatchFilter 정확일치 드롭** `backend.py:441-443` — 자연발화 정당 연속중복("네 네")을 무조건 제거.
 2. **AnchorRepeatFilter storm 배치 통째 드롭** `backend.py:560-583`, `:127-166`.
 3. **`_split_tokens` held 단어 + refresh/버퍼트림 소실** — `align_att_base.py:489`(마지막 단어 유보),
@@ -78,7 +78,7 @@
 - **테스트셋 = bong1 + ytn2 + sbs1** (새 음성 파일 미도입 — 사용자 결정. ytn2가 무휴지 코드스위칭 대표).
 - 스크리닝 `--repeat 1`(방향 신호) → 채택확정 `--repeat 3`(max 1순위, fail-fast 금지) →
   held-out(ytn1+eng1) 단회. 매 측정 provenance 첫 줄(`vbcable=ok`) 육안 확인.
-- 측정 명령은 [.claude/commands/eval.md](../.claude/commands/eval.md) 기본 사용법 + **`--trace-tokens`**
+- 측정 명령은 [.claude/commands/eval.md](../../.claude/commands/eval.md) 기본 사용법 + **`--trace-tokens`**
   (서버에 전달됨, `eval.py:435-439,530-531` — 서버 로그에 TokenTrace/RetractScan 등 진단 태그 기록).
 - 워크트리 규약: 코드 수정 Stage는 새 워크트리 + 메인 `.venv` Junction 공유(`mklink /J .venv ..\..\.venv`),
   **`uv run`/`uv sync` 금지**, 측정·import는 cwd=워크트리. Stage 0(코드 무변경)은 main cwd 측정 가능.
@@ -175,7 +175,7 @@ F1 변동은 §3.3 지표한계 감안(WER 우선). **①②는 §3.2 불변 제
 
 - 각 Stage 종료 시 `/log-experiment` — EXPERIMENTS_LOG 전체 서술 + EXPERIMENTS.md 빠른참조 1행
   (Exp-160/163/169 회귀 교훈 대비 결과 포함).
-- Stage 1 채택 시: [docs/SENTENCE_FINALIZATION_LOGIC.md](SENTENCE_FINALIZATION_LOGIC.md) §3.2
+- Stage 1 채택 시: [docs/SENTENCE_FINALIZATION_LOGIC.md](../SENTENCE_FINALIZATION_LOGIC.md) §3.2
   (`_apply_detected_language` 진입점 4종→5종에 "스크립트-앵커 재감지" 추가)·§5(N·T·streak 상수 행 추가).
 - Stage 2 채택 시: 같은 문서 §4 표(해당 필터 행 갱신).
 - master 머지 후 `/update-master-changes`. epoch 판단은 Exp-168/171 전례(경계 서브시스템 수정 = E5 유지)

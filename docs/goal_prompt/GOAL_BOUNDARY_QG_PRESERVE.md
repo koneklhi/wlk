@@ -49,15 +49,15 @@
 `예수님과 관련 네, 감사합니다. 네, 네, 감사합니다.` 환각으로 대체됐다. 인과 사슬(로그 순서 그대로):
 
 1. **화자전환 eager 언어감지 실패**: diar `ChangeSpeaker` 도착 → `new_speaker()`가 경계창 1.5s로 감지
-   ([backend.py](../whisperlivekit/simul_whisper/backend.py) `:337-339`, `min_prob=0.85`) →
+   ([backend.py](../../whisperlivekit/simul_whisper/backend.py) `:337-339`, `min_prob=0.85`) →
    `[ShortSilenceLangCheck] 최근 1.5s → en (p=0.54)` → **None**(경계 오디오가 EN 꼬리+KO 서두 혼합이라 확신도 붕괴).
    `[NewSpeaker] det_after=None keep_secs=1.34 kept_segments_len=1.53s`.
 2. **폴백 감지는 곧 성공 — 감지 실패 자체는 치명 아님**: 다음 infer의 지연 감지
-   ([align_att_base.py](../whisperlivekit/simul_whisper/align_att_base.py) `_detect_language_if_needed` `:233-263`, eager 문턱 1.5s)가
+   ([align_att_base.py](../../whisperlivekit/simul_whisper/align_att_base.py) `_detect_language_if_needed` `:233-263`, eager 문턱 1.5s)가
    `Detected language: ko with p=0.9064` → `[LangSwitch] 토크나이저 적용: ko (prev=en, switch=True)` — 올바른 언어를 빠르게 잡았다.
 3. **경계 오디오 저신뢰 디코드 → QG 연속 억제**: 유지된 1.53s 혼합 경계 오디오를 ko로 디코드 → `어`/`이`/`그` 파편,
    `avg_logprob -3.284 < -2.0` → `[QualityGate]` 억제 3연속(`quality_gate_reset_after=3`,
-   [simul_whisper/config.py](../whisperlivekit/simul_whisper/config.py) `:26`).
+   [simul_whisper/config.py](../../whisperlivekit/simul_whisper/config.py) `:26`).
 4. **★ 비가역 유실 지점**: `_on_quality_suppressed`(`:653-671`)가 `refresh_segment(complete=True)`(`:670`) 호출 →
    `state.segments = []` **버퍼 전량 폐기**(`refresh_segment` 폐기 분기 `:148-150`). **이 1.53s가 새 화자 문장의 서두 오디오다** —
    재디코딩으로 복구 불가능한 순유실.
@@ -87,7 +87,7 @@ Exp-169 사각지대)은 별도 goal(앵커 총량 게이트 재설계)로 다�
   1. `_on_quality_suppressed`의 streak 문턱 도달(현행 3회) 시점이 **경계 보호창 이내**:
      `self.end(오디오 절대시각) - state.last_boundary_event_at <= BOUNDARY_PROTECT_SECS`(신설 상수, 초안 **5.0s** — Stage 0 실측으로 확정).
      `last_boundary_event_at`은 `new_speaker()` 및 `_apply_detected_language(is_switch=True)`에서 스탬프(신설 state 필드,
-     [decoder_state.py](../whisperlivekit/simul_whisper/decoder_state.py)).
+     [decoder_state.py](../../whisperlivekit/simul_whisper/decoder_state.py)).
   2. 이 경계에서 보존 재시도 미소진: `state.qg_preserve_used == False`(경계 이벤트 스탬프 시 리셋).
 - **동작**: `refresh_segment(complete=True)` 대신 `refresh_segment(complete=False, keep_secs=self.segments_len())` —
   기존 함수 재사용(키 유지 루프 `:136-145`가 전량 보존), 신규 경로 최소. 토큰/컨텍스트/`last_attend_frame`은 기존과 동일하게 리셋.
@@ -122,9 +122,9 @@ garbage 원인이 "오디오 난이도"가 아니라 "언어 오픽"일 때를 �
   확인하고, 초기화한다면 보존 경로에서 승계(유닛테스트로 고정). ⑤ 번역/확정(finalized) 계약 — 이 변경은 디코더 내부 계층이라
   이미 방출·확정된 토큰을 재변경하지 않는다.
 
-**구현 위치·규모**: [align_att_base.py](../whisperlivekit/simul_whisper/align_att_base.py) `_on_quality_suppressed` 분기 ~15줄 +
-상수 2개, [decoder_state.py](../whisperlivekit/simul_whisper/decoder_state.py) state 필드 2개(`last_boundary_event_at`,
-`qg_preserve_used`), [backend.py](../whisperlivekit/simul_whisper/backend.py) `new_speaker` 스탬프 ~3줄,
+**구현 위치·규모**: [align_att_base.py](../../whisperlivekit/simul_whisper/align_att_base.py) `_on_quality_suppressed` 분기 ~15줄 +
+상수 2개, [decoder_state.py](../../whisperlivekit/simul_whisper/decoder_state.py) state 필드 2개(`last_boundary_event_at`,
+`qg_preserve_used`), [backend.py](../../whisperlivekit/simul_whisper/backend.py) `new_speaker` 스탬프 ~3줄,
 `_apply_detected_language` 스탬프 ~3줄, P1b ~10줄. 합계 ≈35–50줄.
 
 ## 3. 실행 계획 (자율 — 순서대로, 각 단계 판단 근거를 기록하며)
@@ -206,7 +206,7 @@ garbage 원인이 "오디오 난이도"가 아니라 "언어 오픽"일 때를 �
 ## 7. 기록·연동 문서 (채택 시 사용자 승인 후 동일 작업 단위 — 보고서에 체크리스트로만 포함)
 
 - `EXPERIMENTS_LOG.md` 전체 서술 + `EXPERIMENTS.md` 빠른참조 1행(`/log-experiment`).
-- [docs/SENTENCE_FINALIZATION_LOGIC.md](SENTENCE_FINALIZATION_LOGIC.md): 직접 대상 아님(문장 확정 로직 무변경)이나,
+- [docs/SENTENCE_FINALIZATION_LOGIC.md](../SENTENCE_FINALIZATION_LOGIC.md): 직접 대상 아님(문장 확정 로직 무변경)이나,
   경계 복구 서술에 영향 있으면 §7 규약대로 갱신.
 - **epoch 판단**: 디코더 실패 모드(경계 유실)를 바꾸는 구조 변경이므로 **bump 후보** — STATE "세대 경계 규칙"으로 머지 시 최종 판단.
 - master 머지 후 `/update-master-changes`.

@@ -92,13 +92,13 @@
 
 | 변경한 코드 | 반드시 함께 갱신할 문서 |
 |---|---|
-| `parse_args.py` 기본값 (포트·모델경로·warmup·플래그·threshold) | `docs/TESTING.md` (경로 A/B/C 명령·URL), `ROADMAP.md`, `docs/FRONTEND_HANDOFF_SUMMARY.md`, `docs/DEPLOYMENT_OFFLINE.md` §3-4 |
+| `parse_args.py` 기본값 (포트·모델경로·warmup·플래그·threshold) | `docs/TESTING.md` (경로 A/B/C 명령·URL), `ROADMAP.md`, `docs/FRONTEND_HANDOFF_SUMMARY.md`, `docs/API_SPEC.md`, `docs/DEPLOYMENT_OFFLINE.md` §3-4 |
 | `scripts/eval.py` `SERVER_PORT` 또는 측정 기본 설정 | `docs/TESTING.md` 경로 C, `.claude/commands/eval.md` |
 | `whisperlivekit/test_client.py` 기본 URL | `docs/TESTING.md` 경로 A |
 | `config.py` `WhisperLiveKitConfig` 필드 (WebSocket 메시지 스키마 영향) | `docs/SCHEMA_CHANGES.md`, `docs/FRONTEND_HANDOFF_SUMMARY.md` |
 | 문장 확정·분리 로직 변경 (`tokens_alignment.py` 확정 지점·`finalize_trigger` 라벨·경계 신호 조건·관련 임계치) | `docs/SENTENCE_FINALIZATION_LOGIC.md` (§7 갱신 규약 표대로 해당 절 갱신) |
 | `pyproject.toml` extras 추가/제거 | `docs/DEPLOYMENT_OFFLINE.md` §2.1 기능별 extra 표 및 §2.2 export 명령 |
-| 번역 파이프라인 변경 (`translator.py`, config 번역 필드) | `docs/DEPLOYMENT_OFFLINE.md` §5, `docs/FRONTEND_HANDOFF_SUMMARY.md` |
+| 번역 파이프라인 변경 (`translator.py`, config 번역 필드) | `docs/DEPLOYMENT_OFFLINE.md` §5, `docs/FRONTEND_HANDOFF_SUMMARY.md`, `docs/API_SPEC.md` |
 | `test_data/` 파일 추가 또는 정답 .txt 추가(구/신형식 `_speak,sentence_sperate.txt`) | `docs/TESTING.md` 파일 목록, `CLAUDE.md` §4 측정 기본 설정(테스트셋 변경 시), `docs/TRANSCRIPTION_REQUIREMENTS.md` §2(정답 형식) |
 | 측정 지표(WER·화자분리 F1·문장분리 F1) 정의·정답 파서·2지표 산출 (`scripts/eval.py`·`whisperlivekit/metrics.py`) | `docs/TRANSCRIPTION_REQUIREMENTS.md`(§2 형식·§3 측정·§4 분석·§5 구현), `.claude/commands/eval.md` 결과 해석 기준, `docs/TESTING.md` 경로 C |
 | 실패 모드를 바꾸는 **구조적** 코드 변경의 master 머지 (언어고정·비음성억제·디코더/VAD 파이프라인 등) | `EXPERIMENTS.md`(STATE) "코드 세대(Epoch)" 절 — epoch 마커 +1, 이전 세대 파라미터 결론에 `[E?·재검증]` 부여 |
@@ -130,6 +130,9 @@
 - 문장 확정·분리 로직 상세(경계 원인 3종+온점 형태소 분할[Exp-170]·`punctuation` 라벨·파라미터·`finalize_trigger` 계측) → [docs/SENTENCE_FINALIZATION_LOGIC.md](docs/SENTENCE_FINALIZATION_LOGIC.md)
 - Phase 정의·태스크·완료 기준 → [ROADMAP.md](ROADMAP.md) / 실험 기록 3계층 → [EXPERIMENTS.md](EXPERIMENTS.md)(STATE·항상읽음) · [EXPERIMENTS_LOG.md](EXPERIMENTS_LOG.md)(LOG·온디맨드 Exp-131~) · [PHASE2_EXPERIMENTS.md](PHASE2_EXPERIMENTS.md)(ARCHIVE·Exp-001~130 동결)
 - master 최종본 upstream 대비 전체 변경 + 향후 개선 → [docs/MASTER_CHANGES.md](docs/MASTER_CHANGES.md)
+- **docs/ 유형별 하위 디렉토리**: 필수 참조 문서가 아닌 일회성 산출물은 유형별로 분리한다. 리서치·설계 조사 결과 →
+  [docs/research/](docs/research/), 자율 루프 goal 프롬프트 → [docs/goal_prompt/](docs/goal_prompt/)(완료분은
+  [docs/archive/](docs/archive/)로), 개선 백로그 → [docs/backlog/](docs/backlog/). 신규 문서 생성 시 이 규칙을 따른다.
 
 <!-- memorize:ground-rule v=1 start -->
 ## Memorize ground rule

@@ -2892,7 +2892,7 @@ Exp-172 Stage 0 계측으로 규명된 ① 코드스위칭 서두유실의 잔�
 **ytn2** (R1=median 17.2 기준):
 - **발동 정당성**: 스크리닝 회차 streak 3단어/0.36s → 재감지 ko→en(p=1.00) — 배치 드롭 "There is more" → 트림 12.52s→2.32s 유지, 재디코딩 "There is more work to be done..." 완전 복구(선두 "-" 흔적만).
 - **방송클로징 환각·필러 storm**: 전 회차 재발 0건. 코드스위칭 경계 마커 정상.
-- **미방출형 서두유실(신규 분류, 게이트 스코프 밖)**: R3 "There is more work" 유실 — 발동 0회 회차로, 구언어 잠금 중 디코더가 해당 오디오에서 토큰을 아예 방출하지 않아(비-fire) 반전 streak 자체가 없던 케이스. docs/BACKLOG_CODESWITCH_FOLLOWUP.md §1로 카탈로그.
+- **미방출형 서두유실(신규 분류, 게이트 스코프 밖)**: R3 "There is more work" 유실 — 발동 0회 회차로, 구언어 잠금 중 디코더가 해당 오디오에서 토큰을 아예 방출하지 않아(비-fire) 반전 streak 자체가 없던 케이스. docs/backlog/BACKLOG_CODESWITCH_FOLLOWUP.md §1로 카탈로그.
 
 **sbs1** (R2=median 기준):
 - 주요 실패 = 세션초입 서두 통유실("현지 시간 5일 미국 육군 전쟁 대학…" 3/3, Exp-172 ⑶ 기존 모드) + 문장 중복 재방출 1건. 발동 0회 — 게이트 무관. 격리 N=3에선 "From a satellite image" 포함 전환 정상.
@@ -2914,7 +2914,7 @@ Exp-172 Stage 0 계측으로 규명된 ① 코드스위칭 서두유실의 잔�
 
 **Epoch 판단**: E5 유지 — Exp-168/171/174와 동일한 언어전환 경계 서브시스템 내 트리거 추가, 디코더 파라미터 트레이드오프 무영향(발동 없으면 완전 수동 관찰자).
 
-### 다음 가설 (docs/BACKLOG_CODESWITCH_FOLLOWUP.md 상세)
+### 다음 가설 (docs/backlog/BACKLOG_CODESWITCH_FOLLOWUP.md 상세)
 
 1. **미방출형 전환 서두 유실**(최우선): 비-fire 구간은 반전 streak이 없어 본 게이트 스코프 밖 — 재디코딩 창 하한을 마지막 방출 토큰 끝으로 당기거나 경량 비-fire 워치독 검토.
 2. **①′ locked-lang 음차 환각**: 저신뢰+언어확률 경합 보조 트리거 별도 설계(Exp-160 스퓨리어스 리스크 주의).
@@ -3031,7 +3031,7 @@ VAD가 짧은 침묵(0.4s 초과)을 검출하면 `tokens_alignment.py`가 문�
 
 ### 변경 내용
 
-**코드 무변경.** `--trace-tokens` 계측만. goal 문서 신설: [docs/GOAL_BOUNDARY_QG_PRESERVE.md](docs/GOAL_BOUNDARY_QG_PRESERVE.md)(Type B 수정 설계 — §결론 참조).
+**코드 무변경.** `--trace-tokens` 계측만. goal 문서 신설: [docs/goal_prompt/GOAL_BOUNDARY_QG_PRESERVE.md](docs/goal_prompt/GOAL_BOUNDARY_QG_PRESERVE.md)(Type B 수정 설계 — §결론 참조).
 
 ### 테스트 설정
 
@@ -3097,7 +3097,7 @@ VAD가 짧은 침묵(0.4s 초과)을 검출하면 `tokens_alignment.py`가 문�
 
 ### 결론
 
-**계측/재현 완료** — ① 배포 증상 dev 완전 재현(반입/환경 문제 배제), ② 삼킴 Type A/B 분류 확정, ③ Type B의 비가역 유실 지점(`refresh_segment(complete=True)` 버퍼 폐기, 경계 보호창 부재) 신규 규명, ④ 수정 설계를 goal로 산출: **[docs/GOAL_BOUNDARY_QG_PRESERVE.md](docs/GOAL_BOUNDARY_QG_PRESERVE.md)** (P1 경계 보호 보존형 refresh — 보호창 내 1회 오디오 보존+상태만 리셋, 재발 시 기존 폐기 폴백으로 비회귀 보증; 짝지음 A/B 채택 게이트 포함).
+**계측/재현 완료** — ① 배포 증상 dev 완전 재현(반입/환경 문제 배제), ② 삼킴 Type A/B 분류 확정, ③ Type B의 비가역 유실 지점(`refresh_segment(complete=True)` 버퍼 폐기, 경계 보호창 부재) 신규 규명, ④ 수정 설계를 goal로 산출: **[docs/goal_prompt/GOAL_BOUNDARY_QG_PRESERVE.md](docs/goal_prompt/GOAL_BOUNDARY_QG_PRESERVE.md)** (P1 경계 보호 보존형 refresh — 보호창 내 1회 오디오 보존+상태만 리셋, 재발 시 기존 폐기 폴백으로 비회귀 보증; 짝지음 A/B 채택 게이트 포함).
 
 ### 다음 가설
 
@@ -3172,7 +3172,7 @@ VAD가 짧은 침묵(0.4s 초과)을 검출하면 `tokens_alignment.py`가 문�
 
 ### 다음 가설
 
-1. **[docs/GOAL_BOUNDARY_QG_PRESERVE.md](docs/GOAL_BOUNDARY_QG_PRESERVE.md) 루프 착수**: Type B 보존형 refresh가 kor 서두 유실 3/3을 직접 표적 — kor1~3을 검증 데이터로 편입해 A/B.
+1. **[docs/goal_prompt/GOAL_BOUNDARY_QG_PRESERVE.md](docs/goal_prompt/GOAL_BOUNDARY_QG_PRESERVE.md) 루프 착수**: Type B 보존형 refresh가 kor 서두 유실 3/3을 직접 표적 — kor1~3을 검증 데이터로 편입해 A/B.
 2. **stall 연쇄 웨지 규명**: kor1을 `--trace-tokens`로 재측정해 웨지 구간(7.3~71s) 디코더 상태(QG streak·refresh 상호작용, 왜 refresh 후에도 미복구인지) 귀속 — Exp-177 Type 분류에 "Type C(웨지형 통유실)" 추가 여부 판단.
 3. **SILENCE_HARD_SECS 정책 재검토**: 낭독체 pause(0.8s+)가 단어 중간에 걸릴 때 문법 게이트가 무력화 — 안전망 상향/문법 판정 우선 순위 재조정(Exp-176 후속, Case B hard-fail 해소).
 4. **kor1~3 테스트셋/held-out 편입 여부 = 사용자 결정 사항**(regime 변경): 한국어 단독 커버리지 공백을 메우는 후보. kor4 음원 확보 여부도 확인 필요.

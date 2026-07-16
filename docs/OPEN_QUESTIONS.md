@@ -13,7 +13,7 @@
 ## 2. 한·영 Code-Switching 검출·문장 분할 트리거 — 해소 (개선 지속)
 
 - 언어 전환 마커·retraction·script-anchor 재감지(Exp-168~175)로 구현. 짧은 텀 코드스위칭(ytn2)·다화자(bong1) 역량은 Phase 2 개선 루프에서 지속 향상 대상.
-- 정본 = [CODESWITCH_REALTIME_DESIGN.md](CODESWITCH_REALTIME_DESIGN.md), [SENTENCE_FINALIZATION_LOGIC.md](SENTENCE_FINALIZATION_LOGIC.md).
+- 정본 = [CODESWITCH_REALTIME_DESIGN.md](research/CODESWITCH_REALTIME_DESIGN.md), [SENTENCE_FINALIZATION_LOGIC.md](SENTENCE_FINALIZATION_LOGIC.md).
 
 ## 3. React UI 연결 범위 — 스키마 해소, 통합 검증만 대기
 
