@@ -224,8 +224,10 @@ Phase 5 — Glossary 동적 관리
 
  5-1. 단어 교정 사전 동적 추가/삭제 기능 이식 [이식]
 → whisperlive_code/manager.py 기반 그대로
- 5-2. 번역 Glossary 동적 추가/삭제 기능 이식 [이식]
-→ whisperlive_code/manager.py 기반 그대로
+ ✅ 5-2. 번역 Glossary 동적 추가/삭제 기능 이식 [이식] (Stage 1 완료 — glossary_block+sentence_block)
+→ whisperlive_code/prompt_manager.py 기반(TranslationPromptManager), whisperlivekit/llm_translation/에
+  filtering/ 콜로케이션 패턴으로 이식. Qdrant RAG(유사 예시 검색)는 Stage 2로 별도 진행 예정
+  (docs/superpowers/specs/2026-07-16-translation-glossary-design.md §8).
  5-3. 사전 갱신 즉시 반영 확인 (다음 전사/번역부터 새 사전 적용)
 
 완료 기준

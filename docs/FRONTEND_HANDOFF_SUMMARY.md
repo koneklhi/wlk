@@ -51,7 +51,7 @@ React가 반드시 새로 구현할 것: ① WS 연결·종료 시퀀스 ② con
 | 타임스탬프 | SSE에 없음(내부만 float 초) | `start`/`end` = 벽시계 `"HH:MM:SS"` 문자열 | 표시에 사용 가능. history 키는 `start\|end\|speaker` 복합키 |
 | 녹음 제어 | start/stop/status — **stop=캡처만 정지, WS 연결 유지(재개 가능)**, stop 시 화면도 클리어 | 연결=시작 / 빈 프레임=**종료(되돌릴 수 없음)**, status·재개 없음 | start=WS 열기+캡처 시작 / stop=빈 프레임+`close()`. **pause/resume 버튼이 있었다면 wlk는 resume 불가 → 제거·비활성**(재시작=`close()` 후 새 WS 연결=서버 세션 초기화). wl stop은 화면을 지웠으나 wlk는 프론트 누적분이 남음 |
 | 단어교정 | `/api/corrections`(GET/POST/DELETE) | **거의 동일** | 사전 관리 화면 **거의 1:1 재사용**(§9.1) |
-| glossary | `/api/prompts`(glossary/sentence 블록) | **미구현(404)** | glossary 관리 화면이 있으면 **연결할 백엔드 없음** — 제거하거나 대기 |
+| glossary | `/api/prompts`(glossary/sentence 블록) | **구현됨**(GET 조회·POST add-item·POST delete-item) | 단어교정(§9.1)과 유사하게 연결 가능 — 상세는 §9.1 참조 |
 
 ### 2.2 확정/미확정 표시 (진하게 vs 연하게) — 채택 방식
 
@@ -100,9 +100,9 @@ rows.map((line, i) => (
 > 2. **`buffer_*`는 `lines[]`에 아직 없는 "선행 텍스트"다.** 연하게 꼬리로 붙이면 되지만(§2.2),
 >    특히 **diar 기본 ON에선 `buffer_diarization`을 빼면 최근 발화가 몇 초간 화면에서 사라진다**
 >    (화자배정 지연 구간).
-> 3. **wl에 있던 것들의 상실.** 번역 스트리밍 UX(확정 후 통째로 나타남·토큰 스트리밍 아님),
->    glossary 관리 API(`/api/prompts`, wlk 미구현 404), 그리고 **pause/resume**(wlk는 종료가
->    되돌릴 수 없어 재개 불가 → pause 버튼 제거·비활성, §2.1).
+> 3. **wl에 있던 것들의 상실.** 번역 스트리밍 UX(확정 후 통째로 나타남·토큰 스트리밍 아님)와
+>    **pause/resume**(wlk는 종료가 되돌릴 수 없어 재개 불가 → pause 버튼 제거·비활성, §2.1).
+>    glossary 관리 API(`/api/prompts`)는 **구현됨**(§9.1) — 더 이상 상실 항목 아님.
 
 ---
 
@@ -329,9 +329,11 @@ WS `/asr`와 별개로, 사용자가 UI의 **저장 버튼을 눌렀을 때**만
 
 ## 9. 부록 (선택 기능)
 
-### 9.1 단어교정 사전 관리 REST — `/api/corrections`
-운용 중 단어 교정 사전을 동적으로 추가/삭제하는 API. wl의 사전 관리 API와 형식이 **거의
-동일**하므로 기존 UI 화면을 그대로 재사용할 수 있다(필수 아님).
+### 9.1 단어교정/번역 Glossary 관리 REST — `/api/corrections`, `/api/prompts`
+운용 중 단어 교정 사전 + 번역 glossary(예 `공군`→`ROKAF`)를 동적으로 추가/삭제하는 API. wl의
+사전 관리 API와 형식이 **거의 동일**하므로 기존 UI 화면을 그대로 재사용할 수 있다(필수 아님).
+
+**단어교정 — `/api/corrections`**
 
 | 메서드/경로 | 요청 | 응답 | 비고 |
 |---|---|---|---|
@@ -339,8 +341,13 @@ WS `/asr`와 별개로, 사용자가 UI의 **저장 버튼을 눌렀을 때**만
 | `POST /api/corrections` | `{"wrong_word": "6군", "correct_word": "육군"}` | `{"status": "success"}` | 추가, **즉시 반영**(다음 전사부터) |
 | `DELETE /api/corrections/{wrong_word}` | — (path param) | `{"status": "success"}` | 삭제, **즉시 반영** |
 
-> 번역 glossary(예 `공군`→`ROKAF`) 동적 관리 API(wl의 `/api/prompts`)는 wlk에 **아직 없다(미구현)**.
-> wl UI에 glossary 관리 화면이 있었다면 연결할 백엔드가 없으니 제거하거나 구현될 때까지 대기.
+**번역 Glossary — `/api/prompts`** (구현 완료 — 이전 버전 이 문서는 미구현으로 표기했으나 정정됨)
+
+| 메서드/경로 | 요청 | 응답 | 비고 |
+|---|---|---|---|
+| `GET /api/prompts` | — | `{"glossary_block": {"공군":"ROKAF", ...}, "sentence_block": {...}}` | `glossary_block`은 **사용자 추가분만** 반환(내장 기본 용어집 숨김), `sentence_block`은 기본+사용자 **전체** 반환 |
+| `POST /api/prompts/add-item` | `{"block_key": "glossary_block", "origin": "공군", "translation": "ROKAF"}` | `{"status": "success"}` | `block_key`는 `"glossary_block"` 또는 `"sentence_block"`, `translation` 필수(누락 시 400). 추가, **즉시 반영**(다음 번역부터) |
+| `POST /api/prompts/delete-item` | `{"block_key": "glossary_block", "origin": "공군"}` | `{"status": "success"}` 또는 `{"status": "warning", "message": "..."}` | 대상 없거나 내장 기본 항목이라 삭제 불가면 warning(에러 아님, HTTP 200) |
 
 ### 9.2 헬스체크 — `GET /health`
 `{"status":"ok","backend":"whisper","ready":true}`. (`backend`는 서버 `--backend`에 따른 동적값, 기본 `whisper`.) React가 WS 연결 전 서버 기동 여부를
