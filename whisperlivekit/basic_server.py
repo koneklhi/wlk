@@ -415,6 +415,8 @@ async def add_prompt_item(request: PromptItemRequest):
     """glossary_block 또는 sentence_block에 항목 추가. 즉시 반영."""
     if request.block_key not in ("glossary_block", "sentence_block"):
         raise HTTPException(status_code=400, detail="Invalid block key")
+    if request.translation is None:
+        raise HTTPException(status_code=400, detail="translation is required for add-item")
     get_prompt_manager().add_item(request.block_key, request.origin, request.translation)
     return {"status": "success"}
 

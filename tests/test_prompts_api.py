@@ -37,6 +37,8 @@ def create_test_app():
     async def add_prompt_item(request: PromptItemRequest):
         if request.block_key not in ("glossary_block", "sentence_block"):
             raise HTTPException(status_code=400, detail="Invalid block key")
+        if request.translation is None:
+            raise HTTPException(status_code=400, detail="translation is required for add-item")
         get_prompt_manager().add_item(request.block_key, request.origin, request.translation)
         return {"status": "success"}
 
@@ -158,5 +160,14 @@ def test_delete_item_invalid_block_key(client, isolated_prompt_manager):
     response = client.post(
         "/api/prompts/delete-item",
         json={"block_key": "invalid_block", "origin": "x"},
+    )
+    assert response.status_code == 400
+
+
+def test_add_item_missing_translation_returns_400(client, isolated_prompt_manager):
+    """POST /api/prompts/add-item - translation 누락 시 400을 반환한다(AttributeError 방지)."""
+    response = client.post(
+        "/api/prompts/add-item",
+        json={"block_key": "glossary_block", "origin": "해군"},
     )
     assert response.status_code == 400
