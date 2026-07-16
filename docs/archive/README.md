@@ -23,3 +23,4 @@
 | [WL_VS_WLK_COMPARISON.md](WL_VS_WLK_COMPARISON.md) | 구/신 STT 엔진 확정정책·문장분리 비교 리포트 (특정 시점 1회성, 재참조 없음) | `docs/` |
 | [FRONTEND_HANDOFF.md](FRONTEND_HANDOFF.md) | React 연동 상세본(코드 근거·이력) — 더 이상 갱신 안 함, 내용은 `docs/FRONTEND_HANDOFF_SUMMARY.md`로 대체됨 | `docs/` |
 | [explanation_phase3_biasing.md](explanation_phase3_biasing.md) | Phase 3 바이어싱 설명 자료 (COLLAB_GEMINI.md 회신파일 명명규칙 확립 이전 유물) | `docs/reviews/` |
+| [GOAL_SILENCE_GRAMMAR_GATE.md](GOAL_SILENCE_GRAMMAR_GATE.md) | 문법-조건부 침묵 경계 게이트 goal (Exp-176으로 완료, master `c1f5884` 머지) | `docs/` |
