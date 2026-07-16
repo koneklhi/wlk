@@ -111,3 +111,46 @@ N=2 스크리닝은 방향 신호일 뿐이므로 **Stage 3 ON N=3 완주 전에
 - VBCable 단일 자원 — 동시 측정 금지, 시작 전 프로세스 확인.
 - Stage 3(채택 확정)는 fail-fast 금지 — N=3 전부 측정, 중간에 나빠도 멈추지 않음(이번처럼 **환경 문제로 중단된 경우는 예외** — 그 경우 처음부터 다시).
 - master 머지 금지, 브랜치 커밋만.
+
+## 7. 재개 시도 기록 (2026-07-16, 이번 세션) — 공유 `.venv` 파손으로 재차 중단
+
+**결론: 이번 세션에서 Stage 3 ON 측정에 착수조차 못 함.** 측정 시작 전 상태 확인 순서(§4)를 따르던 중
+`.venv\Scripts\python.exe -m pytest tests/test_script_anchor_redetect.py -q` 1단계에서 즉시
+`No pyvenv.cfg file` 에러로 실패.
+
+**진단**:
+- 메인 저장소 공유 `.venv`(`C:\Users\A040-000-0001\Desktop\260605wlk\wlk\.venv`, 이 워크트리는 Junction 공유)가
+  **`Lib` 디렉터리 자체가 통째로 없음** — 루트에 `Scripts`(28개 항목만, 대부분 실행파일 자체는 남아있으나
+  `pyvenv.cfg` 없음)와 `share`만 존재. `python.exe`를 직접 실행해도 `No pyvenv.cfg file`로 즉시 실패 —
+  즉 torch/whisperlivekit/transformers 등 **패키지 전부 증발**, 인터프리터 자체가 기동 불가.
+- `.venv` 폴더 mtime = `2026-07-16 12:38`(Scripts), `13:04`(venv 루트) — **오늘, 이 세션 시작 직전**. 이 goal
+  루프와 무관한 **다른 세션의 작업(추정: 배포/wheelhouse 패키징 등에서 공유 venv에 실수로 `uv venv --clear`류를
+  실행)이 원인일 가능성이 높음** — CLAUDE.md §4에 명시된 기지 사고 패턴("배포/wheelhouse 작업을 공유 Junction
+  `.venv`에 실행 → clobber")과 정확히 일치. 단, IDE Jedi 언어서버 잠금으로 인한 반쪽 손상(memory
+  `venv-clear-ide-lock` 케이스)보다 **더 심함** — 그때는 `pyvenv.cfg`만 소실됐지만 이번은 `Lib` 전체 소실.
+- 확인한 것: 현재 `uv venv`/`uv sync`/`uv pip` 관련 프로세스는 **실행 중이 아님**(전체 프로세스 목록 조회,
+  ouroboros mcp serve 프로세스들만 다수 — 무관). 즉 복구 작업이 진행 중도 아니고 그냥 깨진 채 방치된 상태.
+  디스크 용량 문제 징후는 없음(`Get-PSDrive C` 조회, 특이사항 없음).
+- 이 워크트리 자체 상태는 §0 기록 그대로 클린(`git status` 재확인 — untracked `.omc/**` 스크래치만, 커밋
+  `ae8dd48` HEAD 동일). **이번 세션에서 코드/문서/커밋 변경 없음**(이 pause note 갱신 1건 제외) — Stage 3 ON
+  측정을 포함해 아무 실행도 하지 못했다.
+
+**시도하지 않은 것(의도적)**: `uv sync`로 직접 복구 시도 — 하지 않았다. 이유:
+1. 이 goal의 가드레일과 CLAUDE.md §4가 공유 `.venv`에 대한 `uv run`/`uv sync`/`uv pip`를 **절대 금지**하고,
+   복구 필요 시에도 **"사용자 확인 후"**로 명시.
+2. 공유 자원이라 다른 워크트리/세션에 영향 — 내가 일방적으로 복구를 시도하다 실패하면 피해가 더 커질 수 있음
+   (특히 IDE가 아직 옛 인터프리터를 물고 있다면 재손상 위험 — CLAUDE.md §4 캐비어트).
+3. 원인이 확인되지 않은 채(어느 세션이 언제 무엇을 실행했는지 모름) 성급히 재생성하면 그 세션이 다시
+   충돌할 수 있음.
+
+**재개 시 필요 조치 (사람/사용자 판단 필요 — 다음 세션이 자율로 실행하지 말 것)**:
+1. 사용자에게 공유 `.venv` 파손 사실 보고 및 복구 승인 요청.
+2. 복구 시 CLAUDE.md §4 절차 준수: IDE(Antigravity/Jedi) Python 인터프리터를 공유 `.venv`에서 먼저 분리(또는
+   IDE 종료) → 독립적인 위치(가급적 배포용 워크트리 등)에서 `uv sync --extra diarization-sortformer
+   --extra vbcable --extra cu128`로 메인 `.venv` 재생성.
+3. 복구 후 `.venv\Scripts\python.exe -m pytest tests/test_script_anchor_redetect.py -q`로 30 passed 재확인 —
+   그 다음에만 §4의 3번(Stage 3 ON 전체 재실행)으로 진행.
+4. 복구 전까지 이 goal 루프(및 이 `.venv`를 공유하는 다른 모든 워크트리)는 **측정 불가 상태**임을 인지.
+
+이 goal 자체의 설계·게이트·§1~§5 내용은 전부 그대로 유효 — 재설계 불필요. 막힌 지점은 순수 인프라(공유
+`.venv`) 문제다.
