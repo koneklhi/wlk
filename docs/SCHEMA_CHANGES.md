@@ -56,6 +56,10 @@ React UI 연결 시 이 문서를 기준으로 수정 범위를 결정한다.
 신규: `lines[]`는 확정 세그먼트들, `buffer_transcription`은 아직 확정 안 된 진행중 텍스트.
 React는 `buffer_transcription`을 마지막 줄에 `"진행중"` 스타일로 표시해야 함.
 
+`buffer_translation`(str)은 **LLM 번역기(`TranslationManager.apply_interim_translation()`)가 채우는 진행중
+번역**이다 — 아직 확정되지 않은 마지막 진행중 문장(`lines[]`의 `finalized:false` 항목)에 대응하는 번역이
+필요할 때 이 필드가 대신 채워진다. 번역 비활성(`--llm-translation` OFF)이면 항상 `""`.
+
 ---
 
 ## 3. 연결 초기화 메시지 (WebSocket)

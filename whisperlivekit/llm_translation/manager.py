@@ -15,6 +15,9 @@ class TranslationManager:
         self.translator = translator
         self._cache: dict[tuple, str] = {}        # (start_rounded, text) -> 번역 결과
         self._in_flight: set[tuple] = set()       # 번역 중인 키 집합
+        self._interim_source: str = ""            # 마지막 번역 요청한 버퍼 텍스트
+        self._interim_result: str = ""            # 마지막 완료된 번역 결과
+        self._interim_in_flight: bool = False      # 번역 중 여부
 
     def _cache_key(self, seg) -> tuple:
         """캐시 키: (시작시간 반올림, 텍스트)."""
@@ -48,3 +51,33 @@ class TranslationManager:
                 src_lang = seg.detected_language or "ko"
                 self._in_flight.add(key)
                 asyncio.ensure_future(self._translate_and_cache(key, seg.text, src_lang))
+
+    async def _translate_interim_and_store(self, text: str, src_lang: str) -> None:
+        """중간(미확정) 버퍼 번역 완료 후 결과 저장. 에러 시 로그만 남기고 삼킴."""
+        try:
+            result = await self.translator.translate_sentence(text, src_lang)
+            if result:
+                self._interim_result = result
+        except Exception as e:
+            logger.warning(f"중간 번역 실패: {e}")
+        finally:
+            self._interim_in_flight = False
+
+    def apply_interim_translation(self, text: str, src_lang: str) -> str:
+        """미확정 버퍼 텍스트를 번역해 최신 결과를 반환 (self-throttle: in-flight 가드 하나뿐).
+
+        확정 번역용 _cache/_in_flight와는 완전히 독립된 상태.
+        """
+        if not text:
+            # 문장 확정으로 버퍼가 막 비워진 경우 — 내부 상태 리셋
+            self._interim_source = ""
+            self._interim_result = ""
+            self._interim_in_flight = False
+            return ""
+
+        if not self._interim_in_flight and text != self._interim_source:
+            self._interim_in_flight = True
+            self._interim_source = text
+            asyncio.ensure_future(self._translate_interim_and_store(text, src_lang))
+
+        return self._interim_result
