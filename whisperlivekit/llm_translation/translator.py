@@ -1,5 +1,7 @@
 import httpx
 
+from whisperlivekit.llm_translation import get_prompt_manager
+
 
 class TranslatorBase:
     def __init__(self, model_name: str, endpoint: str):
@@ -37,6 +39,29 @@ class TranslatorBase:
             8. \"sir\" is only a politeness marker. Ignore it and do not translate it.
             """
 
+    @staticmethod
+    def get_glossary_rules_text(to_lang: str) -> str:
+        return (
+            "9. GLOSSARY PRIORITY: Strictly follow the provided GLOSSARY for technical military terms to ensure consistency.\n"
+            f"10. Contextual Translation: While following the glossary, ensure the overall sentence structure is grammatically correct in {to_lang}."
+        )
+
+    def build_system_blocks(self, from_lang: str, to_lang: str, content: str) -> list:
+        """정적 프롬프트 + (매칭 시) glossary 블록 + (존재 시) sentence 예시 블록 조립."""
+        blocks = [self.get_static_system_text(from_lang, to_lang)]
+
+        prompt_manager = get_prompt_manager()
+        glossary_part = prompt_manager.get_relevant_glossary(content)
+        if glossary_part:
+            blocks.append(self.get_glossary_rules_text(to_lang))
+            blocks.append(glossary_part)
+
+        sentence_part = prompt_manager.get_sentence_block()
+        if sentence_part:
+            blocks.append(sentence_part)
+
+        return blocks
+
     def build_prompt(self, content: str, system_blocks: list) -> str:
         """system_blocks 리스트를 받아서 최종 프롬프트 문자열 생성"""
         full_system_content = "\n\n".join(system_blocks)
@@ -61,7 +86,7 @@ class LlamaTranslator(TranslatorBase):
     async def translate_sentence(self, content: str, src_lang: str) -> str:
         from_lang = self.convert_lang_formal(src_lang)
         to_lang = self.convert_lang_formal(self.get_to_lang(src_lang))
-        system_blocks = [self.get_static_system_text(from_lang, to_lang)]
+        system_blocks = self.build_system_blocks(from_lang, to_lang, content)
         prompt = self.build_prompt(content, system_blocks)
         return await self._call_completions(prompt)
 
@@ -99,7 +124,8 @@ class OllamaTranslator(TranslatorBase):
     async def translate_sentence(self, content: str, src_lang: str) -> str:
         from_lang = self.convert_lang_formal(src_lang)
         to_lang = self.convert_lang_formal(self.get_to_lang(src_lang))
-        system_text = self.get_static_system_text(from_lang, to_lang)
+        system_blocks = self.build_system_blocks(from_lang, to_lang, content)
+        system_text = "\n\n".join(system_blocks)
         return await self._call_chat(system_text, content)
 
     async def _call_chat(self, system_text: str, content: str) -> str:

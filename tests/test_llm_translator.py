@@ -98,3 +98,73 @@ async def test_close_terminates_client():
     t = OllamaTranslator(model_name="qwen2.5:7b", endpoint="http://localhost:11434")
     await t.close()
     assert t.client.is_closed
+
+
+def _make_prompt_manager_mock(glossary_result: str = "", sentence_result: str = ""):
+    mock_pm = MagicMock()
+    mock_pm.get_relevant_glossary.return_value = glossary_result
+    mock_pm.get_sentence_block.return_value = sentence_result
+    return mock_pm
+
+
+@pytest.mark.anyio
+async def test_llama_includes_glossary_block_when_matched():
+    """glossary가 매칭되면 프롬프트에 GLOSSARY 블록이 포함된다."""
+    translator = LlamaTranslator("gpt-oss-20b", "http://localhost:2010")
+    mock_resp = _make_completions_response("번역결과")
+    mock_pm = _make_prompt_manager_mock(glossary_result="GLOSSARY(Term:Translation)\n공군 : ROKAF")
+
+    with patch("whisperlivekit.llm_translation.translator.get_prompt_manager", return_value=mock_pm), \
+         patch.object(translator.client, "post", new=AsyncMock(return_value=mock_resp)) as mock_post:
+        await translator.translate_sentence("우리 공군은", "ko")
+
+    sent_prompt = mock_post.call_args.kwargs["json"]["prompt"]
+    assert "GLOSSARY(Term:Translation)" in sent_prompt
+    assert "공군 : ROKAF" in sent_prompt
+    assert "GLOSSARY PRIORITY" in sent_prompt
+
+
+@pytest.mark.anyio
+async def test_llama_omits_glossary_block_when_no_match():
+    """glossary 매칭이 없으면 GLOSSARY 블록이 프롬프트에 포함되지 않는다."""
+    translator = LlamaTranslator("gpt-oss-20b", "http://localhost:2010")
+    mock_resp = _make_completions_response("번역결과")
+    mock_pm = _make_prompt_manager_mock(glossary_result="")
+
+    with patch("whisperlivekit.llm_translation.translator.get_prompt_manager", return_value=mock_pm), \
+         patch.object(translator.client, "post", new=AsyncMock(return_value=mock_resp)) as mock_post:
+        await translator.translate_sentence("오늘 날씨가 좋다", "ko")
+
+    sent_prompt = mock_post.call_args.kwargs["json"]["prompt"]
+    assert "GLOSSARY" not in sent_prompt
+
+
+@pytest.mark.anyio
+async def test_llama_always_includes_sentence_block_when_present():
+    """sentence_block이 존재하면 항상 프롬프트에 포함된다."""
+    translator = LlamaTranslator("gpt-oss-20b", "http://localhost:2010")
+    mock_resp = _make_completions_response("번역결과")
+    mock_pm = _make_prompt_manager_mock(sentence_result="### EXAMPLES\n- INPUT : x\n- OUTPUT : y")
+
+    with patch("whisperlivekit.llm_translation.translator.get_prompt_manager", return_value=mock_pm), \
+         patch.object(translator.client, "post", new=AsyncMock(return_value=mock_resp)) as mock_post:
+        await translator.translate_sentence("아무 문장", "ko")
+
+    sent_prompt = mock_post.call_args.kwargs["json"]["prompt"]
+    assert "### EXAMPLES" in sent_prompt
+
+
+@pytest.mark.anyio
+async def test_ollama_includes_glossary_in_joined_system_text():
+    """OllamaTranslator: glossary 매칭 시 system 메시지에 GLOSSARY 블록이 합쳐져 포함된다."""
+    translator = OllamaTranslator("qwen2.5:7b", "http://localhost:11434")
+    mock_resp = _make_chat_response("번역결과")
+    mock_pm = _make_prompt_manager_mock(glossary_result="GLOSSARY(Term:Translation)\n공군 : ROKAF")
+
+    with patch("whisperlivekit.llm_translation.translator.get_prompt_manager", return_value=mock_pm), \
+         patch.object(translator.client, "post", new=AsyncMock(return_value=mock_resp)) as mock_post:
+        await translator.translate_sentence("우리 공군은", "ko")
+
+    sent_messages = mock_post.call_args.kwargs["json"]["messages"]
+    system_message = next(m["content"] for m in sent_messages if m["role"] == "system")
+    assert "공군 : ROKAF" in system_message
