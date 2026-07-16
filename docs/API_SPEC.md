@@ -2,13 +2,13 @@
 
 > **범위**: 배포 React UI가 실제로 사용하는 백엔드 계약만 정식 명세로 정리한다 —
 > 실시간 전사 WebSocket `/asr` 1개 + 애플리케이션 REST 엔드포인트(`/health`,
-> `/api/save-transcript`, `/api/corrections`). OpenAI/Deepgram 호환 계층
+> `/api/save-transcript`, `/api/corrections`, `/api/prompts`). OpenAI/Deepgram 호환 계층
 > (`/v1/audio/transcriptions`, `/v1/listen` 등)은 이 프론트와 무관하며 상세는
 > [0.Metafile/docs/API.md](../0.Metafile/docs/API.md) 참조.
 > **연동 개요·마이그레이션 가이드·코드 근거 상세**는 [FRONTEND_HANDOFF_SUMMARY.md](FRONTEND_HANDOFF_SUMMARY.md)
 > 참조(구 상세본 FRONTEND_HANDOFF.md는 `docs/archive/`로 이동, 내용은 SUMMARY로 대체).
 >
-> 문서 기준: master `606ecac` 시점(전사 라인 리텐션 = **무제한**). 값·기본값은 §6 참조.
+> 문서 기준: master `534bad1` 시점(전사 라인 리텐션 = **무제한**, 번역 glossary 관리 API·진행중 번역 구현 완료). 값·기본값은 §6 참조.
 
 ---
 
@@ -25,7 +25,7 @@
 | 문자 인코딩            | UTF-8                                                     |
 
 **구성**: 전사·화자분할·번역 실시간 스트림은 전부 **단일 WebSocket `/asr`** 로 흐른다
-(제어·오디오 송신·결과 수신 통합). REST는 부가 기능(헬스체크·단어교정 사전 등)만 담당한다.
+(제어·오디오 송신·결과 수신 통합). REST는 부가 기능(헬스체크·단어교정 사전·번역 glossary 등)만 담당한다.
 
 ### 1.1 연결 대상 · 배포 방식 (방법 A)
 
@@ -143,7 +143,7 @@ Client                                   Server
 | `lines`                        | Segment[]  | O(빈 배열 가능) | 확정·진행 중 세그먼트 목록(§2.4.3)                                                |
 | `buffer_transcription`         | string     |        O        | 아직 확정 안 된 진행 중 전사(디코딩 꼬리). 맨 아래 줄 꼬리에 이어붙여 표시        |
 | `buffer_diarization`           | string     |        O        | 화자배정 지연으로 `lines[]`에 아직 없는 최근 발화(diar 모드). 표시에서 빼지 말 것 |
-| `buffer_translation`           | string     |        O        | 진행 중 번역 — **현재 미구현, 항상 `""`**(§4)                                     |
+| `buffer_translation`           | string     |        O        | 진행 중(미확정) 번역. 번역 활성 시 `lines[]`의 마지막 `finalized:false` 세그먼트를 번역해 채움(§4) |
 | `remaining_time_transcription` | number(초) |        O        | 전사 처리 지연(랙). 표시용 참고값                                                 |
 | `remaining_time_diarization`   | number(초) |        O        | 화자분할 처리 지연. diar off면 `0`                                                |
 | `error`                        | string     |        ✕        | `status=="error"`일 때만 존재. 오류 메시지(FFmpeg 등)                             |
@@ -330,9 +330,66 @@ Segment 예시:
 { "status": "success" }
 ```
 
-### 3.4 (미구현) 번역 glossary — `/api/prompts`
+### 3.4 번역 glossary — `/api/prompts`
 
-번역 glossary 관리 API(`/api/prompts` 계열)는 **wlk 미구현 — 호출 시 404**.
+번역 프롬프트에 주입되는 용어집(`glossary_block`)·예시 문장(`sentence_block`)을 운용 중 동적으로
+조회·추가·삭제. 변경은 **즉시 반영**(다음 번역 요청부터) — 입력 문장에 실제 등장하는 용어만
+번역 프롬프트에 골라 주입되는 방식이라 §3.3 단어교정 사전과 별개로 동작한다.
+
+#### `GET /api/prompts`
+
+**응답 200**
+
+```json
+{
+  "glossary_block": { "해군": "ROKN" },
+  "sentence_block": { "보고를 드리기 전 안내 말씀드리겠습니다.": "Before we begin, a brief notice." }
+}
+```
+
+| 필드 | 타입 | 의미 |
+|---|---|---|
+| `glossary_block` | object | **사용자가 추가한 항목만** 반환(서버 내장 기본 용어집은 숨김 — §3.3 corrections와 동일한 정책) |
+| `sentence_block` | object | 개발자 기본값 + 사용자 추가분을 **합쳐서** 반환 |
+
+#### `POST /api/prompts/add-item`
+
+**요청**
+
+```json
+{ "block_key": "glossary_block", "origin": "해군", "translation": "ROKN" }
+```
+
+| 필드 | 타입 | 필수 | 의미 |
+|---|---|:--:|---|
+| `block_key` | string | O | `"glossary_block"` 또는 `"sentence_block"`. 그 외 값은 400 |
+| `origin` | string | O | 원어 용어(glossary) 또는 원문(sentence) |
+| `translation` | string | O | 대역어(glossary) 또는 번역문(sentence). 누락 시 400 |
+
+**응답 200**
+```json
+{ "status": "success" }
+```
+
+#### `POST /api/prompts/delete-item`
+
+**요청**
+```json
+{ "block_key": "glossary_block", "origin": "해군" }
+```
+
+**응답 200**
+```json
+{ "status": "success" }
+```
+또는(대상이 없거나 삭제 불가한 항목일 때 — **에러 아님, HTTP 200**)
+```json
+{ "status": "warning", "message": "Item not found or cannot delete default glossary item" }
+```
+
+> `glossary_block`은 사용자가 추가한 항목만 삭제 대상이다(서버 내장 기본 용어집은 애초에 GET에도
+> 안 잡히므로 삭제 요청도 warning으로 끝난다). `sentence_block`은 기본 예시 문장도 삭제 가능(최초
+> 수정 시 기본값을 사용자 버전으로 복제 후 편집).
 
 ---
 
@@ -343,7 +400,13 @@ Segment 예시:
   서버 플래그만 다르고 프론트 계약은 동일.)
 - **확정 문장 번역** `lines[].translation`: 번역 활성 + 해당 세그먼트 `finalized=true`일 때 채워진다.
   캐시 미스면 비차단으로 요청 후 **다음 스냅샷부터** 채워진다(문장 통째로 등장, 토큰 스트리밍 아님).
-- **진행 중 번역** `buffer_translation`: **미구현 — 항상 `""`**(값이 채워질 것을 기대하지 말 것).
+- **진행 중 번역** `buffer_translation`: 번역 활성 시 `lines[]`의 마지막 `finalized:false` 세그먼트를
+  같은 번역기로 번역해 채운다. 이전 요청이 끝나기 전엔 새 요청을 보내지 않는 단순 스로틀이라 값이
+  다소 지연(stale)될 수 있고, 문장이 확정되는 순간 그 세그먼트가 사라지므로 함께 `""`로 리셋된다.
+  확정 번역(`lines[].translation`)과는 독립된 캐시/상태를 쓴다.
+- **번역 glossary**(§3.4): 입력 문장에 실제 등장하는 용어만 골라 매 번역 요청 프롬프트에 동적으로
+  주입된다(`glossary_block`) — 예시 문장(`sentence_block`)도 함께 주입. `/api/prompts`로 추가한
+  항목은 **다음 번역 요청부터 즉시 반영**된다.
 
 ---
 
