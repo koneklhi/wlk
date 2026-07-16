@@ -6,7 +6,7 @@
 > 폐쇄망에선 Claude 자동화가 불가하므로 **모든 명령을 복붙 가능**하게 정리했다.
 >
 > 관련 문서: [TESTING.md](TESTING.md)(경로 정의) · [MASTER_CHANGES.md](MASTER_CHANGES.md)(master 변경요약) ·
-> [TRANSLATION_SETUP.md](TRANSLATION_SETUP.md)(번역) · [FRONTEND_HANDOFF.md](FRONTEND_HANDOFF.md)(React 연결).
+> [TRANSLATION_SETUP.md](TRANSLATION_SETUP.md)(번역) · [FRONTEND_HANDOFF_SUMMARY.md](FRONTEND_HANDOFF_SUMMARY.md)(React 연결).
 
 ---
 
@@ -380,7 +380,7 @@ whisperlivekit-server
 - 저장 버튼을 누르면 내장 UI가 그 시점까지의 누적 전사를 서버 로컬 폴더(`--transcript-save-dir`, 기본값 `./transcripts`)에 `.txt`로 저장한다(녹음 종료 시 자동 저장되지 않음).
 
 #### 2단계 — whisperlive React 프론트 UI 연결
-같은 서버(`/asr`)에 기존 whisperlive React UI를 붙인다. 기존 whisperlive와 **달라진 점**만 맞추면 된다 — 상세·코드 위치는 [FRONTEND_HANDOFF.md](FRONTEND_HANDOFF.md):
+같은 서버(`/asr`)에 기존 whisperlive React UI를 붙인다. 기존 whisperlive와 **달라진 점**만 맞추면 된다 — 상세·코드 위치는 [FRONTEND_HANDOFF_SUMMARY.md](FRONTEND_HANDOFF_SUMMARY.md):
 
 | 맞출 항목 | 신규 whisperlivekit |
 |---|---|
@@ -436,7 +436,7 @@ whisperlivekit-server `
 ### 5.4 [수정 완료] 화자분할 ON + 번역 동시 가능
 - **과거 버그**: 화자분할 경로가 `finalized=True`를 설정하지 않아 번역 매니저가 모든 세그먼트를 건너뛰어, `--diarization`과 `--llm-translation`을 함께 쓰면 번역이 안 붙었다.
 - **수정(완료)**: `get_lines_diarization()`이 화자 전환이 끝난 세그먼트(`segments[:-1]`)에 `finalized=True`를 부여한다([tokens_alignment.py:214-216](../whisperlivekit/tokens_alignment.py#L214-L216)). master 머지 완료 → **§5.3처럼 `--diarization` + `--llm-translation` 동시 기동 가능.**
-- **한 가지 한계**: 현재 발화 중인 마지막 세그먼트(`segments[-1]`)는 아직 미확정이라, **다음 화자로 전환되는 순간** 확정되며 번역이 붙는다(화자가 계속 말하는 동안엔 그 문장 번역이 한 박자 늦게 표시됨). 실사용엔 무방하나 동작 특성으로 알아둘 것. (스키마 영향은 [FRONTEND_HANDOFF.md §3](FRONTEND_HANDOFF.md))
+- **한 가지 한계**: 현재 발화 중인 마지막 세그먼트(`segments[-1]`)는 아직 미확정이라, **다음 화자로 전환되는 순간** 확정되며 번역이 붙는다(화자가 계속 말하는 동안엔 그 문장 번역이 한 박자 늦게 표시됨). 실사용엔 무방하나 동작 특성으로 알아둘 것. (스키마 영향은 [FRONTEND_HANDOFF_SUMMARY.md §5](FRONTEND_HANDOFF_SUMMARY.md))
 
 ### 5.5 배포 전 점검
 ```powershell

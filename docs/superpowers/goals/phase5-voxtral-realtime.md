@@ -49,12 +49,12 @@ Voxtral은 코드스위칭 축(늦은 확정·언어 무고정)을 공짜로 이
 | sbs1 | 14.9% | 16.1% | 16.7% |
 held-out 단회: ytn1 21.5% / eng1 4.8%
 
-### 공정 비교 기준: AlignAtt diar-OFF (Gate 2에서 `--repeat 3` 측정 후 기입)
+### 공정 비교 기준: AlignAtt diar-OFF (2026-07-08 측정, N=3, master@53553d6, `.omc/benchmarks/eval_alignatt_diaroff_gate2.json`)
 | 파일 | WER med | WER max | F1 med |
 |---|---|---|---|
-| bong1 | (측정) | (측정) | (측정) |
-| ytn2 | (측정) | (측정) | (측정) |
-| sbs1 | (측정) | (측정) | (측정) |
+| bong1 | 29.6% | 51.7% | 35.0% |
+| ytn2 | 47.8% | 53.7% | 51.9% |
+| sbs1 | 12.5% | 17.3% | 22.2% |
 
 ### 성공 기준 (사용자 확정)
 - **M1 (마일스톤, 비차단 알림)**: 테스트 3종 모두 median WER ≤ AlignAtt diar-OFF AND max ≤ diar-OFF max +5%p

@@ -17,3 +17,9 @@
 | [steady-splashing-marshmallow.md](steady-splashing-marshmallow.md) | CASE1 문장 꼬리 분리 수정 계획 노트 (일회성) | 루트 |
 | [phase2-wer-f1-improvement.md](phase2-wer-f1-improvement.md) | Phase 2 WER/F1 개선 goal (구 단일 F1 regime — 현행 2지표로 대체됨) | `docs/superpowers/goals/` |
 | [phase4-late-commit-codeswitch.md](phase4-late-commit-codeswitch.md) | Phase 4 late-commit 코드스위칭 goal (phase5-voxtral-realtime로 대체됨) | `docs/superpowers/goals/` |
+| [GOAL_SCRIPT_ANCHOR_REDETECT.md](GOAL_SCRIPT_ANCHOR_REDETECT.md) | 코드스위칭 경계 스크립트-앵커 재감지 Stage 1 goal (Exp-175로 완료, master `c3302a2` 머지) | `docs/` |
+| [GOAL_SCRIPT_ANCHOR_REDETECT_REPORT.md](GOAL_SCRIPT_ANCHOR_REDETECT_REPORT.md) | 위 Stage 1 최종 결과보고 (채택 권고) | `docs/` |
+| [DIAG_CODESWITCH_TRANSLATED_PREFIX.md](DIAG_CODESWITCH_TRANSLATED_PREFIX.md) | 코드스위칭 경계 오언어 서두조각 진단 스냅샷 (1회성, GOAL_BOUNDARY_QG_PRESERVE.md에 내용 흡수) | `docs/` |
+| [WL_VS_WLK_COMPARISON.md](WL_VS_WLK_COMPARISON.md) | 구/신 STT 엔진 확정정책·문장분리 비교 리포트 (특정 시점 1회성, 재참조 없음) | `docs/` |
+| [FRONTEND_HANDOFF.md](FRONTEND_HANDOFF.md) | React 연동 상세본(코드 근거·이력) — 더 이상 갱신 안 함, 내용은 `docs/FRONTEND_HANDOFF_SUMMARY.md`로 대체됨 | `docs/` |
+| [explanation_phase3_biasing.md](explanation_phase3_biasing.md) | Phase 3 바이어싱 설명 자료 (COLLAB_GEMINI.md 회신파일 명명규칙 확립 이전 유물) | `docs/reviews/` |

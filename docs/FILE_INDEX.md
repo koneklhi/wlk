@@ -54,14 +54,14 @@
 
 - [docs/MASTER_CHANGES.md](MASTER_CHANGES.md) — master 최종본 upstream 대비 전체 변경 요약 + 향후 개선 (채택 실험 증류본)
 - [docs/SCHEMA_CHANGES.md](SCHEMA_CHANGES.md) — React 메시지 스키마 변경 이력
-- [docs/FRONTEND_HANDOFF.md](FRONTEND_HANDOFF.md) — React UI ↔ 백엔드 WebSocket 메시지 계약·화자분할(speaker) 인계 (SCHEMA_CHANGES 상위 확장본)
+- [docs/API_SPEC.md](API_SPEC.md) — React가 실제 사용하는 WebSocket `/asr` + REST 엔드포인트 정식 명세 (최신 정본)
+- [docs/FRONTEND_HANDOFF_SUMMARY.md](FRONTEND_HANDOFF_SUMMARY.md) — React 연동 정본 (TL;DR 변경표·화자분할 인계·SCHEMA_CHANGES 상위 확장본; 구 상세본 FRONTEND_HANDOFF.md는 archive로 이동, 내용 대체)
 - [docs/DEPLOYMENT_OFFLINE.md](DEPLOYMENT_OFFLINE.md) — 폐쇄망 오프라인 반입·서버 기동·경로 C 자동/경로 B 테스트 + 단어집·번역 배포 설정
 - [docs/TRANSLATION_SETUP.md](TRANSLATION_SETUP.md) — 번역 파이프라인 환경별 설정
 - [docs/DIARIZATION_SPIKE.md](DIARIZATION_SPIKE.md) — Sortformer 화자분할 스파이크 상세
 - [docs/CODESWITCH_REALTIME_DESIGN.md](CODESWITCH_REALTIME_DESIGN.md) — 현행 master 실시간 코드스위칭 파이프라인 코드레벨 정리
 - [docs/PHASE3_TRANSLATION_RESEARCH.md](PHASE3_TRANSLATION_RESEARCH.md) — Phase 3 번역 파이프라인 연구 기록
 - [docs/PHASE3_WORD_REPLACEMENT_RESEARCH.md](PHASE3_WORD_REPLACEMENT_RESEARCH.md) — Phase 3 단어 교정(디코더 바이어싱·퍼지 후처리) 연구 기록
-- [docs/SETUP_NEW_PC.md](SETUP_NEW_PC.md) — 신규 개발 PC 셋업 가이드
 - [docs/OPEN_QUESTIONS.md](OPEN_QUESTIONS.md) — 설계 결정 이력 (대부분 해소 — 정본 문서 링크)
 - [docs/TESTING.md](TESTING.md) — 실행 명령어·검증 순서·test_data 구조
 

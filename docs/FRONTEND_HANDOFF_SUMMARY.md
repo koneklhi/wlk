@@ -1,8 +1,8 @@
 # 프론트엔드 연동 요약 — React UI ↔ whisperlivekit 백엔드
 
 > **대상 독자**: React UI를 백엔드에 연결할 프론트엔드 개발자.
-> 이 문서 하나로 연동을 시작할 수 있도록 핵심만 정리했다. 코드 근거·상세 이력이 필요하면
-> [FRONTEND_HANDOFF.md](FRONTEND_HANDOFF.md)(상세본)를 참고할 것.
+> 이 문서 하나로 연동을 시작할 수 있도록 핵심만 정리한 **정본**이다(구 상세본 `FRONTEND_HANDOFF.md`는
+> `docs/archive/`로 이동, 더 이상 갱신하지 않음 — 내용은 이 문서로 대체됨).
 > **기존 whisperlive UI 코드를 개조**해 만든다면 스키마 상세(§3~)에 들어가기 전에 **§2를 먼저** 읽을 것.
 
 ---
