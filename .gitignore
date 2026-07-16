@@ -165,6 +165,7 @@ whisperlivekit/model/Voxtral-Mini-4B-Realtime-2602/
 
 # Phase 3 필터링 사용자 DB (런타임 자동 생성)
 whisperlivekit/filtering/*.db
+whisperlivekit/llm_translation/*.db
 
 # 폐쇄망 배포 산출물 (개발 PC에서 생성 → USB 반입, git 비추적; docs/DEPLOYMENT_OFFLINE.md §1.1·§2)
 deploy/
