@@ -154,3 +154,9 @@ N=2 스크리닝은 방향 신호일 뿐이므로 **Stage 3 ON N=3 완주 전에
 
 이 goal 자체의 설계·게이트·§1~§5 내용은 전부 그대로 유효 — 재설계 불필요. 막힌 지점은 순수 인프라(공유
 `.venv`) 문제다.
+
+**추기 (같은 날, 복구 완료·재개함)**: 오케스트레이터가 사용자 확인 거쳐 공유 `.venv` 복구 완료
+(IDE Jedi 프로세스 종료 → `uv sync --extra diarization-sortformer --extra vbcable --extra cu128 --inexact` →
+`pyvenv.cfg` 수동 작성). 이 워크트리에서 `torch 2.11.0+cu128 cuda=True`/`transformers 4.53.3`/
+`whisperlivekit`(워크트리 경로) import 정상 + `pytest tests/test_script_anchor_redetect.py -q` 30 passed
+재확인. §4 재개 절차(Stage 3 ON 전체 재실행)로 진행한다.
