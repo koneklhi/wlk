@@ -10,13 +10,14 @@ from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
 
-from fastapi import FastAPI, File, Form, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 from pydantic import BaseModel
 
 from whisperlivekit import AudioProcessor, TranscriptionEngine, get_inline_ui_html, parse_args
 from whisperlivekit.filtering import get_word_manager
+from whisperlivekit.llm_translation import get_prompt_manager
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logging.getLogger().setLevel(logging.WARNING)
@@ -39,6 +40,12 @@ transcription_engine = None
 class CorrectionUpdate(BaseModel):
     wrong_word: str
     correct_word: str
+
+
+class PromptItemRequest(BaseModel):
+    block_key: str            # "glossary_block" 또는 "sentence_block"
+    origin: str
+    translation: Optional[str] = None
 
 
 class TranscriptLine(BaseModel):
@@ -190,7 +197,6 @@ async def _convert_to_pcm(audio_bytes: bytes) -> bytes:
     )
     stdout, stderr = await proc.communicate(input=audio_bytes)
     if proc.returncode != 0:
-        from fastapi import HTTPException
         raise HTTPException(status_code=400, detail=f"Audio conversion failed: {stderr.decode().strip()}")
     return stdout
 
@@ -392,6 +398,36 @@ async def delete_correction(wrong_word: str):
     word_manager = get_word_manager()
     word_manager.delete_user_word(wrong_word)
     return {"status": "success"}
+
+
+# ---------------------------------------------------------------------------
+# Translation Glossary Management REST API  (/api/prompts)
+# ---------------------------------------------------------------------------
+
+@app.get("/api/prompts")
+async def get_prompts():
+    """사용자 뷰: glossary는 사용자 추가분만, sentence는 전체(기본+사용자) 반환."""
+    return get_prompt_manager().get_user_view_settings()
+
+
+@app.post("/api/prompts/add-item")
+async def add_prompt_item(request: PromptItemRequest):
+    """glossary_block 또는 sentence_block에 항목 추가. 즉시 반영."""
+    if request.block_key not in ("glossary_block", "sentence_block"):
+        raise HTTPException(status_code=400, detail="Invalid block key")
+    get_prompt_manager().add_item(request.block_key, request.origin, request.translation)
+    return {"status": "success"}
+
+
+@app.post("/api/prompts/delete-item")
+async def delete_prompt_item(request: PromptItemRequest):
+    """glossary_block 또는 sentence_block에서 항목 삭제. 즉시 반영."""
+    if request.block_key not in ("glossary_block", "sentence_block"):
+        raise HTTPException(status_code=400, detail="Invalid block key")
+    success = get_prompt_manager().remove_item(request.block_key, request.origin)
+    if success:
+        return {"status": "success"}
+    return {"status": "warning", "message": "Item not found or cannot delete default glossary item"}
 
 
 # ---------------------------------------------------------------------------
