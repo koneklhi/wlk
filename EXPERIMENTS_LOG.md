@@ -3313,3 +3313,50 @@ Exp-179가 신규 규명한 kor2 폭주(70~109%) 원인 — 한국어 문장 내
 3. held-out eng1·ytn1 N≥2 보강.
 
 **JSON**: `.omc/benchmarks/eval_20260716_stage3_OFF_adoptN3.json` · `eval_20260716_151459_stage3_ON_adoptN3.json` · `eval_20260716_180014_heldout_ON_R1.json` · `eval_20260716_180920_kinno_ON_R2R3.json` · **로그**: `server_kor2_C_R{1,2,3}_20260716_15{4703,4918,5134}.log`(ON)·`server_kor2_C_R{1,2,3}_20260716_10{1646,1904,2119}.log`(OFF)·`server_ytn2_C_R{1,2,3}_20260716_15{2534,2750,3006}.log` · **최종보고서**: [docs/archive/GOAL_SCRIPTANCHOR_ACRONYM_GUARD_REPORT.md](docs/archive/GOAL_SCRIPTANCHOR_ACRONYM_GUARD_REPORT.md)
+
+---
+
+## Exp-181 — kor2/kor3 silence-churn(growing-prefix 중복) 근본원인 규명: 프런트 `finalizedHistory` Map 키 충돌 [E5, 코드 무변경, 계측]
+
+**날짜**: 2026-07-17 · **Epoch**: E5 · **브랜치**: master(코드 무변경, 순수 계측) — Exp-180 다음 가설 1번 후속
+
+### 가설
+
+Exp-180에서 확인한 kor2/kor3 WER 악화의 별개 원인("finalize_trigger=silence growing-prefix 중복 확정")이 정확히 어느 코드 경로에서 발생하는지 규명한다. Exp-179 "다음 가설"이 "Exp-177 Bug1 계열(재디코딩 타임스탬프 재앵커)"로 추정했던 것이 맞는지도 확인한다.
+
+### 조사 방법
+
+1. `whisperlivekit/tokens_alignment.py`에서 `finalize_trigger` 설정 지점(4곳: :597·:669-671·:710·:809) 및 diar 경로 세그먼트 조립 로직(`get_lines_diarization`:551, `compute_punctuations_segments`:303) 정독.
+2. kor2+kor3에 `--trace-tokens`(Stage 0, N=1) 재측정해 오늘 코드(master@0499957) 기준 현상 재현 확인.
+3. 백엔드 `get_lines()` 호출부(`audio_processor.py:558` `results_formatter`) → 프런트 렌더 로직(`whisperlivekit/web/live_transcription.js`)까지 데이터 흐름 추적.
+
+### 규명된 메커니즘 (코드 근거 확정)
+
+- `tokens_alignment.py:303-348` `compute_punctuations_segments()`는 매 틱(0.05s, `audio_processor.py:621`) **`self.all_tokens`(세션 전체 누적 토큰) 전체를 처음부터 재분할**해 **완전히 새 `PuncSegment` 객체**를 만든다(델타 아님, docstring도 명시: ":428 매 틱 새로 만드는 조립 계층 산출물"). `get_lines_diarization()`(:551-617)은 이 신규 세그먼트들에 `finalize_trigger`(:597)를 부여하고 `seg.finalized=True`(:607-608)를 찍어 반환한다.
+- Exp-176의 문법-조건부 침묵 게이트(`_apply_silence_grammar_gate`/`_gate_decide`, :368-492)는 **짧은 침묵 경계의 split/merge 판정을 이후 도착하는 B(다음 세그먼트) 맥락에 따라 뒤늦게 확정**하도록 설계돼 있다(`pending`→`merge`/`split` 지연 해소, `_apply_finalize_grace`:647-672도 유예). 즉 tick T에서 "finalized"로 찍힌 세그먼트가, tick T+1에서 더 많은 오디오가 들어오며 게이트가 그 경계를 "merge"로 재판정하면, **더 긴 `end` 타임스탬프를 가진 새 세그먼트로 다시 조립돼 다시 `finalized=True`로 반환**된다 — 이게 "growing-prefix 재확정"의 백엔드측 정체다.
+- **결정적 증폭 지점**: `whisperlivekit/web/live_transcription.js:373-378` — 프런트가 finalized 세그먼트를 누적하는 `finalizedHistory`(:30, `new Map()`, 세션 내내 유지·:557에서만 clear)의 **키가 `${ln.start}|${ln.end}|${ln.speaker}`**(:375)다. 위 메커니즘으로 같은 논리적 문장의 `end`가 커질 때마다 **키가 달라져 `Map.set()`이 새 엔트리로 추가**될 뿐 이전(더 짧은) 엔트리를 **덮어쓰지 못한다** — 오래된 절단판이 영구히 남고 매번 더 긴 판이 추가로 쌓인다. 렌더는 `[...finalizedHistory.values(), ...]`(:378)라 모든 버전이 화면(및 경로 C가 읽는 `#linesTranscript` DOM)에 그대로 누적 표시된다.
+- **Exp-179 가설(Exp-177 Bug1 계열) 기각**: Bug1은 `global_time_offset` 승계 버그(2026-07-03 Exp-151에서 이미 수정)로 타임스탬프 산술 문제였다. 이번에 규명한 메커니즘은 산술 버그가 아니라 **"finalized" 세그먼트의 경계(`end`)가 사후에 재조립되며 바뀔 수 있다는 설계상 계약 위반**(문법게이트의 지연 판정 자체는 Exp-176에서 의도된 기능)과 **프런트의 자연키 Map이 그 재조립을 "새 항목"으로 오인**하는 조합이다. 서로 다른 메커니즘.
+
+### 실측 재현 (Stage 0, N=1, `--trace-tokens`)
+
+`.omc/benchmarks/eval_20260717_1357_silencechurn_trace.json` (kor2 WER 95.1%·kor3 WER 57.0%, 화자F1 0.0%·문장F1 37.0%/70.6%, `vbcable=ok`). kor2 전사(`kor2_C_R1.txt`)에서 4개 growing-prefix 그룹 확인(예: "먼저 육군은...고려." → "...고려하여." / "GPGOP...창설." → "...창설하고...수." → "...수행이...발전시키며." → "...위협과...편성하겠습니다." 3단 성장). kor3(`kor3_C_R1.txt`)는 이번 회차엔 뚜렷한 성장형 중복이 관찰되지 않음(간헐적 현상 — 게이트가 매번 pending→merge로 재판정되는 건 아님을 시사).
+
+### 중요 함의 — WER 측정치 자체가 과대평가일 가능성
+
+경로 C의 `hyp_lines`/WER은 **이 프런트 DOM(`#linesTranscript`)에서 추출**된다(docs/TESTING.md). 즉 이번에 찾은 프런트 Map 키 충돌이 **실제 사용자 화면에도, 측정 WER에도 동일하게 영향**을 준다 — growing-prefix 중복이 WER 계산에서 대량 삽입(insertion) 오류로 잡혀 kor2 WER을 부풀렸을 가능성이 높다. 프런트 키를 고치면(예: `start`만으로 키를 잡고 `end`가 더 크면 in-place 교체) **kor2/kor3 실제 WER이 지금 측정치보다 크게 낮게 나올 가능성**이 있다 — 아직 검증 전.
+
+### 채택 조건 판정
+
+계측 전용(채택/기각 비대상, 코드 무변경).
+
+### 결론
+
+**원인 규명 완료**: kor2/kor3 growing-prefix 중복의 실체는 `live_transcription.js:373-378`의 `finalizedHistory` Map이 `start|end|speaker`로 키를 잡아, 문법게이트(Exp-176)가 사후에 세그먼트 경계를 늘리는 재조립을 매번 "새 줄"로 오인 누적하는 것. 백엔드 grammar-gate의 지연판정 자체는 의도된 설계(Exp-176)라 프런트 키를 안정 식별자(예: `start`, 또는 세그먼트 단조증가 id) 기준으로 바꿔 in-place 교체하는 쪽이 최소침습 후보 — 단 사용자 확인 후 착수(다음 가설 참조).
+
+### 다음 가설
+
+1. **프런트 `finalizedHistory` 키를 `start`(+`speaker`) 기준으로 변경**해 growing 세그먼트를 in-place 교체 — 최소침습, 백엔드 STT/게이트 로직 무변경. 이후 kor2/kor3 재측정으로 WER 실개선폭 확인(Exp-180 kor2 회귀분이 이 아티팩트에 기인했는지 검증).
+2. (대안, 더 침습적) 백엔드에서 "finalized" 세그먼트의 (start,end)를 진짜 불변으로 만들도록 grammar-gate 판정을 finalize 이전에 완전히 끝내는 재설계 — 위험도·범위 큼, 1번 결과 확인 후 필요시만 검토.
+3. sbs1 화자F1 worst-case 회귀(§Exp-180 미해결)는 이번 조사 범위 밖 — 별도.
+
+**JSON**: `.omc/benchmarks/eval_20260717_1357_silencechurn_trace.json` · **로그**: `server_kor2_C_R1_20260717_135804.log`·`server_kor3_C_R1_20260717_140125.log` · **전사**: `.omc/transcripts/kor2_C_R1.txt`·`.omc/transcripts/kor3_C_R1.txt`
