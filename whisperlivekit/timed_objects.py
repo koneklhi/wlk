@@ -206,6 +206,7 @@ class Segment(TimedText):
         _dict: Dict[str, Any] = {
             'speaker': int(self.speaker) if self.speaker != -1 else 1,
             'text': self.text,
+            'id': round(self.start, 3) if self.start is not None else None,  # 안정 세그먼트 식별자(세션상대 초). end가 자라거나 finalized→interim 재개방돼도 불변 — 클라이언트 dedup/React key용
             'start': start_str,
             'end': end_str,
             'finalized': self.finalized,

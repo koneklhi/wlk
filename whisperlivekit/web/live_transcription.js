@@ -24,7 +24,7 @@ let animationFrame = null;
 let waitingForStop = false;
 let lastReceivedData = null;
 let lastSignature = null;
-// 확정(finalized)된 줄 누적 기록. key=line.start(문자열), value=원본 line 객체.
+// 확정(finalized)된 줄 누적 기록. key=line.id(안정 세그먼트 식별자=세션상대 시작초, 문자열화), value=원본 line 객체.
 // 서버는 5분 슬라이딩 윈도우만 유지하므로, 확정된 줄은 서버가 다음 스냅샷에서
 // 빼버려도 화면에 계속 남아있도록 프론트에서 직접 누적한다.
 let finalizedHistory = new Map();
@@ -372,19 +372,19 @@ function renderLinesWithBuffer(
   // 서버의 5분 슬라이딩 윈도우로 확정 줄이 다음 스냅샷에서 빠져도 화면에서 사라지지 않게 함.
   for (const ln of (lines || [])) {
     if (ln.finalized && (ln.text || ln.speaker === -2)) {
-      // start만 키로 사용: 문법게이트 재조립 시 end는 늘어나도 문장 시작 시각은 불변이므로 growing-prefix가 같은 항목을 덮어쓴다.
-      finalizedHistory.set(`${ln.start}`, ln);
+      // id(안정 세그먼트 식별자=세션상대 시작초)만 키로 사용: 문법게이트 재조립 시 end는 늘어나도 첫 토큰 시작 시각은 불변이므로 growing-prefix가 같은 항목을 덮어쓴다. 1초 벽시계 문자열과 달리 같은-초 충돌 없음.
+      finalizedHistory.set(`${ln.id}`, ln);
     }
   }
-  // 미확정(진행중) 줄과 start가 같은 확정 이력 항목은 화면에서 가린다.
-  // 백엔드가 침묵으로 조기 확정한 세그먼트를, 이후 마침표 철회 등으로 같은 start에서
-  // 계속 이어 전사(재개방)하면 확정판(짧음)과 진행중판(성장)이 같은 start로 공존해
+  // 미확정(진행중) 줄과 id가 같은 확정 이력 항목은 화면에서 가린다.
+  // 백엔드가 침묵으로 조기 확정한 세그먼트를, 이후 마침표 철회 등으로 같은 id(첫 토큰 시작초)에서
+  // 계속 이어 전사(재개방)하면 확정판(짧음)과 진행중판(성장)이 같은 id로 공존해
   // 중복 표시된다. 진행중 줄이 그 세그먼트의 현재 진실이므로 stale 확정판을 가린다
-  // (진행중 줄이 다시 확정되면 같은 start 키로 덮어써져 자연 정리된다).
+  // (진행중 줄이 다시 확정되면 같은 id 키로 덮어써져 자연 정리된다).
   const interimLines = (lines || []).filter((l) => !l.finalized);
-  const interimStarts = new Set(interimLines.map((l) => `${l.start}`));
+  const interimIds = new Set(interimLines.map((l) => `${l.id}`));
   const mergedLines = [
-    ...[...finalizedHistory.values()].filter((l) => !interimStarts.has(`${l.start}`)),
+    ...[...finalizedHistory.values()].filter((l) => !interimIds.has(`${l.id}`)),
     ...interimLines,
   ];
   updateSaveButtonState();
