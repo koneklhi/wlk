@@ -66,6 +66,14 @@
 
 ### 3.2 `language_switch` — 한↔영 코드스위칭 경계
 
+> **언어 고정 세션에서는 이 트리거가 구조적으로 비활성이다(세션 언어 고정, 2026-07-17~).** 서버 전역 `--lan ko/en`
+> 또는 세션 쿼리 `?language=ko/en`으로 `cfg.language != "auto"`인 세션에서는 아래 "arm되는 유일한 게이트"를 무장하는
+> `_apply_detected_language` 호출 경로 5곳(①일반/게이트 감지·②주기 재감지·③짧은침묵 리셋·④화자전환 eager·⑤스크립트-앵커
+> 재감지)과 간접 재-arm 3종(long-silence·ForeignLang·ScriptMismatch)이 **전부 `cfg.language=="auto"` 게이트/가드로 차단**된다
+> (`backend.py` 각 경로의 `if self.model.cfg.language == "auto"` 가드 및 §3.5 짧은침묵 `end_silence` 분기 조건). 따라서 고정
+> 세션에서는 `LanguageSwitch` 마커가 방출되지 않고, 그에 딸린 retract(§3.2 하단)·트림도 발생하지 않는다 — `finalize_trigger`에
+> `language_switch`가 나타나지 않는다. auto 세션(생략 또는 `?language=auto`)에서만 아래 로직이 활성이다.
+
 - **신호 생성**: `state.pending_language_switch`가 arm돼 있고 이번 배치에 토큰이 있으면, 첫 토큰 앞에
   `LanguageSwitch` 마커 삽입 — `backend.py:573-595`. 이 마커는 `is_boundary()==True`, 텍스트 없음,
   FrontData로 직렬화 안 됨(분할 지점으로만 소비) — `timed_objects.py:124-139`.

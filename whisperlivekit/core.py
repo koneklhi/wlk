@@ -246,13 +246,22 @@ def online_factory(args, asr, language=None):
         language: Optional per-session language override (e.g. "en", "fr", "auto").
             If provided and the backend supports it, transcription will use
             this language instead of the server-wide default.
+
+    Note:
+        SimulStreaming/LocalAgreement(qwen3)만 세션 언어 오버라이드 실효.
+        qwen3-simul/voxtral/vllm 계열은 asr.cfg.language를 직접 읽어 오버라이드
+        무효(알려진 한계).
     """
-    # Wrap the shared ASR with a per-session language if requested
-    if language is not None:
+    backend = getattr(args, 'backend', None)
+    # SimulStreaming은 세션 cfg에서 언어를 직접 적용한다(SessionASRProxy는 transcribe()만
+    # 가로채는데 SimulStreaming은 infer()를 호출해 프록시가 무효). 그 외 백엔드는 프록시 사용.
+    _is_simulstreaming = args.backend_policy == "simulstreaming" and backend not in (
+        "vllm-realtime", "qwen3-simul-kv", "qwen3-mlx-simul", "qwen3-mlx",
+        "qwen3-simul", "voxtral-mlx", "voxtral", "qwen3",
+    )
+    if language is not None and not _is_simulstreaming:
         from whisperlivekit.session_asr_proxy import SessionASRProxy
         asr = SessionASRProxy(asr, language)
-
-    backend = getattr(args, 'backend', None)
     if backend == "vllm-realtime":
         from whisperlivekit.vllm_realtime import VLLMRealtimeOnlineProcessor
         return VLLMRealtimeOnlineProcessor(asr)
@@ -278,7 +287,7 @@ def online_factory(args, asr, language=None):
         return OnlineASRProcessor(asr)
     if args.backend_policy == "simulstreaming":
         from whisperlivekit.simul_whisper import SimulStreamingOnlineProcessor
-        return SimulStreamingOnlineProcessor(asr)
+        return SimulStreamingOnlineProcessor(asr, language=language)
     return OnlineASRProcessor(asr)
 
 

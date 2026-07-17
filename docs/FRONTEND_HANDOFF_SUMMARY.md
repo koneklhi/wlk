@@ -113,7 +113,16 @@ rows.map((line, i) => (
 - `GET /`는 내장 데모 UI를 서빙한다 — **React 배포 시엔 사용하지 않는다**, `/asr`만 쓰면 된다.
 - `GET /health`는 헬스체크용(§9.2) — React가 연결 전 서버 기동 확인에 활용 가능.
 - 쿼리 파라미터(선택):
-  - `?language=ko` — 세션별 소스 언어 강제. 생략 시 서버 `--lan` 기본값/auto.
+  - `?language=<code>` — **세션별 소스 언어 지정**. 허용값 `{auto, ko, en}`. **생략** = 서버 전역 `--lan`(기본 `auto`)을
+    따름(세션 오버라이드 없음), **`?language=auto`** = 그 세션만 강제 auto(코드스위칭), **`?language=ko`/`en`** = 그 언어로
+    고정. 허용 밖 값은 서버가 경고 로그 후 무시(서버 기본값 폴백).
+    > ⚠️ **정정(2026-07-17~ 실효)**: 이 파라미터는 과거 기본 백엔드(SimulStreaming)에서 **무효**였다(세션 언어 주입이
+    > `transcribe()`만 가로채는데 기본 백엔드는 `infer()`를 호출해 조용히 무시됨). 이제 실제로 동작한다 —
+    > 언어를 고정하면 그 세션의 한↔영 재감지·`language_switch` 경계 로직이 비활성화된다. 세션에 실제 적용된 언어는
+    > **연결 직후 `config` 메시지의 `language` 필드**로 확인할 수 있다(§4.1).
+    > 참고: 내장 테스트 UI(설정 패널)에 소스 언어 드롭다운(auto/ko/en)이 추가돼 있어 `ko`/`en` 선택 시 WS URL에
+    > `?language=`를 붙이고 auto면 생략한다(`buildWebSocketUrl()`). **배포 React의 언어 선택 UI는 프론트 담당 별도 소관** —
+    > 필요 시 이 방식(드롭다운→쿼리파라미터)을 참고만 하면 된다.
   - `?mode=diff` — 증분(diff) 프로토콜 옵트인(§9.3). 생략 시 `mode=full`(기본·권장).
 
 ### 3.2 시퀀스 (React 구현 순서)
@@ -128,9 +137,10 @@ rows.map((line, i) => (
 
 - **연결 직후 서버가 config 메시지를 1회 전송**:
   ```json
-  {"type": "config", "useAudioWorklet": true, "mode": "full"}
+  {"type": "config", "useAudioWorklet": true, "mode": "full", "language": "auto"}
   ```
-  클라이언트는 이 config를 받은 **뒤에** 녹음을 시작해야 한다(송신 방식이 여기서 정해짐).
+  클라이언트는 이 config를 받은 **뒤에** 녹음을 시작해야 한다(송신 방식이 여기서 정해짐). `language`는 그 세션에
+  실제 적용된 소스 언어(§4.1).
 - **종료**: 빈 프레임 `new ArrayBuffer(0)` 송신 → 서버가 잔여 오디오를 flush하고 처리 마무리.
 - **완료 신호**: 서버가 처리를 끝내면 `{"type":"ready_to_stop"}`을 보낸다. 받으면 마지막 상태
   렌더 후 `close()`.
@@ -152,9 +162,13 @@ React가 직접 구현**해야 한다(`onclose`/`onerror`에서 code 확인 후 
 ### 4.1 제어 메시지 (`type` 있음)
 | type | 시점 | 페이로드 | 의미 |
 |---|---|---|---|
-| `config` | 연결 직후 1회 | `{"type":"config","useAudioWorklet":bool,"mode":"full"\|"diff"}` | 오디오 송신 방식 결정 |
+| `config` | 연결 직후 1회 | `{"type":"config","useAudioWorklet":bool,"mode":"full"\|"diff","language":"auto"\|"ko"\|"en"}` | 오디오 송신 방식 + **세션 적용 언어** 통지 |
 | `ready_to_stop` | 처리 완료 | `{"type":"ready_to_stop"}` | 종료 신호 |
 | `snapshot`/`diff` | `?mode=diff`일 때만 | §9.3 | 증분 프로토콜(full 모드엔 안 옴) |
+
+> **`config.language`(2026-07-17 신설, additive·하위호환)**: 그 세션에 실제 적용된 소스 언어. `?language=`로 지정했으면
+> 그 값, 미지정이면 서버 전역 `--lan`(기본 `auto`). 세션 언어가 의도대로 걸렸는지 확인용(필드 없는 구버전 서버 대비
+> 방어적으로 읽을 것). 내장 UI는 이 값을 콘솔 로그로만 확인한다.
 
 ### 4.2 상태 스냅샷 메시지 (`type` 없음 — full 모드 기본)
 매 사이클(~50ms) 중 **직전과 다를 때만** 전송된다.

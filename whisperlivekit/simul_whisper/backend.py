@@ -1,3 +1,4 @@
+import dataclasses
 import gc
 import logging
 import platform
@@ -229,11 +230,12 @@ class SimulStreamingOnlineProcessor:
     _CHAR_RUN_THRESHOLD = 4
     _HALLUCINATION_RESET_THRESHOLD = 5
 
-    def __init__(self, asr, logfile=sys.stderr):
+    def __init__(self, asr, logfile=sys.stderr, language=None):
         self.asr = asr
         self.logfile = logfile
         self.end = 0.0
         self.buffer = []
+        self._session_cfg = self._resolve_session_cfg(language)
         self.model = self._create_alignatt()
         self._last_emitted_word: str = None
         self._last_emit_end: float = 0.0  # 마지막으로 토큰을 방출한 시점의 audio end (stall 복구 baseline)
@@ -258,13 +260,35 @@ class SimulStreamingOnlineProcessor:
             self.model.tokenizer = asr.tokenizer
             self.model.state.tokenizer = asr.tokenizer
 
+    def _resolve_session_cfg(self, language):
+        """세션 언어 오버라이드가 있으면 AlignAttConfig 얕은 사본을 반환한다.
+
+        language가 None(미지정)이면 전역 cfg를 그대로 반환 — auto 기본 동작이
+        객체 수준까지 변경 전과 동일하다. "auto" 문자열은 None으로 접지 않는다
+        (=세션 강제 auto, 서버 --lan이 무엇이든 auto로 덮음). 번역 태스크
+        (direct_english_translation)는 공유 asr.tokenizer가 전역 언어 기준으로
+        model.tokenizer를 덮어써(§__init__ 아래) 세션 오버라이드와 충돌하므로
+        무시하고 경고한다.
+        """
+        base_cfg = self.asr.cfg
+        if language is None:
+            return base_cfg
+        if getattr(self.asr, "direct_english_translation", False) and language != base_cfg.language:
+            logger.warning(
+                "[SessionLang] 번역 태스크에서는 세션 언어 오버라이드 미지원 — 무시 (session=%s, global=%s)",
+                language, base_cfg.language,
+            )
+            return base_cfg
+        return dataclasses.replace(base_cfg, language=language)
+
     def _create_alignatt(self):
         """Create the AlignAtt decoder instance based on ASR mode."""
+        cfg = self._session_cfg
         if self.asr.use_full_mlx and HAS_MLX_WHISPER:
-            return MLXAlignAtt(cfg=self.asr.cfg, mlx_model=self.asr.mlx_model)
+            return MLXAlignAtt(cfg=cfg, mlx_model=self.asr.mlx_model)
         else:
             return AlignAtt(
-                cfg=self.asr.cfg,
+                cfg=cfg,
                 loaded_model=self.asr.shared_model,
                 mlx_encoder=self.asr.mlx_encoder,
                 fw_encoder=self.asr.fw_encoder,
@@ -304,7 +328,10 @@ class SimulStreamingOnlineProcessor:
                 "[EndSilence] long-silence 리셋 직전(폐기 예정): det_lang=%s→None lang_before_reset=%s→None",
                 self.model.state.detected_language, self.model.state.lang_before_reset,
             )
-            self.model.state.detected_language = None   # 재감지 허용
+            # 언어 고정 세션: None 리셋 시 재감지 없어 고착 → 고정 언어 유지
+            self.model.state.detected_language = (
+                None if self.model.cfg.language == "auto" else self.model.cfg.language
+            )
             self.model.state.lang_before_reset = None   # 긴 침묵 = 문장 경계, 전환 판정 불필요
             self.model.state.pending_retract_from = None   # 긴 침묵 = 진짜 문장 경계, 철회 arm 무효화
             self.model.state.pending_prev_language = None
@@ -365,10 +392,16 @@ class SimulStreamingOnlineProcessor:
         # 1. refresh 전 버퍼로 새 화자 언어 즉시 감지 (경계 오디오가 아직 버퍼에 있음)
         # global_time_offset은 아직 change_speaker.start로 갱신되기 전(§2 아래)이므로
         # 현재 버퍼 시작의 절대 시각 그대로다 — 화자전환 절대시각과의 차이가 버퍼상대 오프셋.
+        lang_locked = self.model.cfg.language != "auto"
         boundary_offset = change_speaker.start - self.model.global_time_offset
-        eager = self.model.detect_current_language(
-            window_secs=1.5, min_prob=0.85, since_offset=boundary_offset,
-        )
+        if lang_locked:
+            # 언어 고정 세션: 화자전환 시 언어 재감지 안 함(인코더 forward 절약 +
+            # 오전환에 의한 세션 고정 파괴 방지). 경계 재디코딩 자체는 아래에서 유지.
+            eager = None
+        else:
+            eager = self.model.detect_current_language(
+                window_secs=1.5, min_prob=0.85, since_offset=boundary_offset,
+            )
         logger.info(
             "[NewSpeaker] spk=%s→%s det_before=%s eager=%s",
             self.model.state.speaker, change_speaker.speaker,
@@ -384,10 +417,13 @@ class SimulStreamingOnlineProcessor:
         keep_secs = max(keep_secs, _NEW_SPEAKER_KEEP_MARGIN)
         self.model.refresh_segment(complete=False, keep_secs=keep_secs)
         self.buffer = []
-        self.model.state.lang_before_reset = self.model.state.detected_language or self.model.state.lang_before_reset
-        self.model.state.detected_language = None
-        self.model.state.first_timestamp = None
-        self.model.state.eager_lang_detect = True
+        if not lang_locked:
+            # 고정 세션에선 detected_language를 None으로 리셋하면 재감지가 auto 전용이라
+            # 영구 None 고착 → 고정 언어를 그대로 유지한다.
+            self.model.state.lang_before_reset = self.model.state.detected_language or self.model.state.lang_before_reset
+            self.model.state.detected_language = None
+            self.model.state.first_timestamp = None
+            self.model.state.eager_lang_detect = True
         # 3. 감지 성공 시 토크나이저 즉시 교정 (refresh 후 적용)
         if eager:
             self.model._apply_detected_language(eager)
@@ -683,13 +719,16 @@ class SimulStreamingOnlineProcessor:
                     # ForeignLang은 방금 방출이 언어혼란(garbage)임을 뜻하므로, 재감지 후 언어가
                     # 달라지면 정당한 전환 → _apply_detected_language의 prev_lang 폴백이 경계
                     # 마커/트림을 발동해야 한다. 미승계 시 prev_lang이 stale해 전환이 누락된다.
-                    self.model.state.lang_before_reset = (
-                        self.model.state.detected_language or self.model.state.lang_before_reset
-                    )
-                    self.model.state.detected_language = None
-                    self.model.state.first_timestamp = None
-                    self.model.state.eager_lang_detect = True
-                    self.model.state.last_lang_switch_time = 0.0
+                    # 텍스트 드롭(garbage 제거)은 언어 무관 유지. 언어상태 리셋만 auto 가드
+                    # — 고정 세션에서 None 리셋하면 재감지가 auto 전용이라 고착된다.
+                    if self.model.cfg.language == "auto":
+                        self.model.state.lang_before_reset = (
+                            self.model.state.detected_language or self.model.state.lang_before_reset
+                        )
+                        self.model.state.detected_language = None
+                        self.model.state.first_timestamp = None
+                        self.model.state.eager_lang_detect = True
+                        self.model.state.last_lang_switch_time = 0.0
                     # 버려지는 세그먼트 텍스트를 로깅 (단계 C 계측: 정상 텍스트가 함께 유실되는지 감시).
                     dropped = [t for t in timestamped_words if _FOREIGN_LANG_PATTERN.search(t.text)]
                     if dropped:
@@ -709,13 +748,15 @@ class SimulStreamingOnlineProcessor:
                     # ForeignLang과 동일한 재감지 arm 매커니즘을 재사용한다(신규 발명 금지).
                     # refresh_segment는 호출하지 않는다 — Exp-163에서 refresh가 정렬을 교란해
                     # catastrophic 회귀를 일으킨 전례가 있다. 드롭만 하고 언어 재감지만 arm.
-                    self.model.state.lang_before_reset = (
-                        self.model.state.detected_language or self.model.state.lang_before_reset
-                    )
-                    self.model.state.detected_language = None
-                    self.model.state.first_timestamp = None
-                    self.model.state.eager_lang_detect = True
-                    self.model.state.last_lang_switch_time = 0.0
+                    # 드롭은 언어 무관 유지. 언어 재감지 arm만 auto 가드(고정 시 None 고착 방지).
+                    if self.model.cfg.language == "auto":
+                        self.model.state.lang_before_reset = (
+                            self.model.state.detected_language or self.model.state.lang_before_reset
+                        )
+                        self.model.state.detected_language = None
+                        self.model.state.first_timestamp = None
+                        self.model.state.eager_lang_detect = True
+                        self.model.state.last_lang_switch_time = 0.0
                     self._reset_script_anchor_streak()  # 언어 재감지 arm — 잠긴 언어 기준 streak 무효화
                     timestamped_words = []
 

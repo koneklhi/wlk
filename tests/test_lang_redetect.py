@@ -46,11 +46,27 @@ def test_min_duration_real_silence_constant():
 # ── long_silence 경로 ──────────────────────────────────────────────────────────
 
 def test_long_silence_resets_detected_language():
-    """(2) long_silence=True 시 end_silence() 후 state.detected_language is None."""
-    proc = _make_processor_for_silence()
+    """(2) auto 재감지 경로: language="auto" long_silence=True 시 end_silence() 후 detected_language is None.
+
+    세션 언어 고정 도입(편집 4)으로 long_silence 리셋은 cfg.language=="auto"일 때만 None으로
+    리셋된다(고정 언어면 그 언어를 유지). 이 Exp-093 테스트는 원래 auto 재감지(None 리셋)
+    경로를 검증하므로 명시적으로 language="auto"를 사용한다.
+    """
+    proc = _make_processor_for_silence(language="auto")
     silence_duration = MIN_DURATION_REAL_SILENCE  # 정확히 임계값 = long_silence 경계
     proc.end_silence(silence_duration=silence_duration, offset=0.0)
     assert proc.model.state.detected_language is None
+
+
+def test_long_silence_keeps_fixed_language():
+    """(2b) 고정 경로: 고정 세션(language="ko")은 긴침묵 리셋 시 재감지가 없어 고착 방지 위해 고정 언어 유지.
+
+    편집 5 검증 — long_silence 리셋에서 cfg.language != "auto"이면 detected_language를
+    None으로 리셋하지 않고 그 고정 언어를 유지한다(auto 전용 재감지가 없어 None이면 영구 고착).
+    """
+    proc = _make_processor_for_silence(language="ko")
+    proc.end_silence(silence_duration=MIN_DURATION_REAL_SILENCE, offset=0.0)
+    assert proc.model.state.detected_language == "ko"
 
 
 def test_long_silence_resets_first_timestamp():

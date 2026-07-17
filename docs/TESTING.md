@@ -37,6 +37,10 @@
 - 서버 기동: `whisperlivekit-server` (모든 인자가 parse_args.py 기본값 — `--lan auto` + simulstreaming. `--periodic-lang-check` 기본 None(비활성 — turbo 기질 Exp-160 채택, PLC=4.0이 ytn2에서 스퓨리어스 전환→환각 유발 확인); 탐색 시 다른 값 명시. 상세는 [OPEN_QUESTIONS.md](OPEN_QUESTIONS.md) 참조)
 - 목적: 실제 마이크 입력에 대한 정성적 평가 (경로 C 정량 평가와 병행)
 - 저장 버튼 클릭 시 내장 UI가 그 시점까지의 누적 전사를 `--transcript-save-dir`(기본값 `./transcripts`) 폴더에 `.txt`로 저장한다 (`POST /api/save-transcript`, 녹음 중에도 클릭 가능, 녹음 종료 시 자동 저장 아님).
+- **소스 언어 드롭다운 수동 검증(세션 언어 고정, 2026-07-17~)**: 우상단 설정(⚙) 패널의 "Source Language" 드롭다운(`auto`/`ko`/`en`)으로 그 세션의 소스 언어를 지정한다. 녹음 시작 **전에** 선택한다(녹음/처리 중엔 select 비활성 — 언어는 연결 시점에만 적용). 검증 포인트:
+  - `ko`/`en` 선택 시 브라우저 개발자도구 Network에서 WS `/asr` 요청 URL에 `?language=ko`(또는 `en`)가 붙는지, `auto` 선택 시 `language` 파라미터가 생략되는지 확인.
+  - 연결 직후 콘솔의 `Server applied source language: <값>` 로그(= `config` 메시지 `language` 필드)가 선택값과 일치하는지 확인.
+  - 언어 고정 시 한↔영 재감지·`language_switch` 경계가 비활성인지(예: 한국어 고정 세션에서 영어 발화가 억제/재감지 안 됨) 정성 확인. 선택값은 `localStorage`에 저장돼 새로고침 후에도 복원된다.
 
 ### 경로 C — 오디오 루프백 (1차 정량 성능 기준, Phase 2 도입)
 

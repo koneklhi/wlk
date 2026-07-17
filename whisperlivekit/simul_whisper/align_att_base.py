@@ -292,6 +292,8 @@ class AlignAttBase(ABC):
 
     def _maybe_periodic_lang_check(self, audio_end_secs: float) -> None:
         """주기적 언어 재감지 — diar-off에서 언어 고착 방지."""
+        if self.cfg.language != "auto":
+            return
         check_interval = self.cfg.periodic_lang_check_secs
         if check_interval is None:
             return
