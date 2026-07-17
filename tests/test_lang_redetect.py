@@ -58,6 +58,17 @@ def test_long_silence_resets_detected_language():
     assert proc.model.state.detected_language is None
 
 
+def test_long_silence_keeps_fixed_language():
+    """(2b) 고정 경로: 고정 세션(language="ko")은 긴침묵 리셋 시 재감지가 없어 고착 방지 위해 고정 언어 유지.
+
+    편집 5 검증 — long_silence 리셋에서 cfg.language != "auto"이면 detected_language를
+    None으로 리셋하지 않고 그 고정 언어를 유지한다(auto 전용 재감지가 없어 None이면 영구 고착).
+    """
+    proc = _make_processor_for_silence(language="ko")
+    proc.end_silence(silence_duration=MIN_DURATION_REAL_SILENCE, offset=0.0)
+    assert proc.model.state.detected_language == "ko"
+
+
 def test_long_silence_resets_first_timestamp():
     """(3) long_silence=True 시 end_silence() 후 state.first_timestamp is None."""
     proc = _make_processor_for_silence()

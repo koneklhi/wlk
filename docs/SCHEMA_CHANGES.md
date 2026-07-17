@@ -91,10 +91,14 @@ React는 `buffer_transcription`을 마지막 줄에 `"진행중"` 스타일로 �
 
 서버가 연결 직후 1회 전송:
 ```json
-{"type": "config", "useAudioWorklet": bool, "mode": "full"}
+{"type": "config", "useAudioWorklet": bool, "mode": "full", "language": "auto"}
 ```
 - `useAudioWorklet: true` → PCM s16le AudioWorklet으로 오디오 송신
 - `useAudioWorklet: false` → WebM MediaRecorder로 송신
+- `language`(str) — **신설(2026-07-17, 응답 config 메시지에 필드 추가. 요청 스키마가 아니라 서버→클라이언트
+  응답 필드. 하위호환 — 기존 필드 불변, 추가만)**: 그 세션에 실제 적용된 소스 언어(`auto`/`ko`/`en`). 세션이
+  `?language=` 쿼리파라미터로 언어를 지정했으면 그 값, 미지정이면 서버 전역 `--lan`(`config.lan`, 기본 `auto`).
+  React는 무시해도 되는 additive 필드지만, 세션 언어가 의도대로 걸렸는지 확인용으로 읽을 수 있다.
 - 서버 종료 신호: `{"type": "ready_to_stop"}`
 
 ---

@@ -22,7 +22,6 @@ from whisperlivekit.simul_whisper.config import AlignAttConfig
 from whisperlivekit.simul_whisper.simul_whisper import AlignAtt
 from whisperlivekit.timed_objects import ChangeSpeaker
 
-
 # ══════════════════════════════════════════════════════════════════════════════
 # A. _resolve_session_cfg — 모델 로드 불필요(순수 로직)
 # ══════════════════════════════════════════════════════════════════════════════
