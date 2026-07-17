@@ -3360,3 +3360,49 @@ Exp-180에서 확인한 kor2/kor3 WER 악화의 별개 원인("finalize_trigger=
 3. sbs1 화자F1 worst-case 회귀(§Exp-180 미해결)는 이번 조사 범위 밖 — 별도.
 
 **JSON**: `.omc/benchmarks/eval_20260717_1357_silencechurn_trace.json` · **로그**: `server_kor2_C_R1_20260717_135804.log`·`server_kor3_C_R1_20260717_140125.log` · **전사**: `.omc/transcripts/kor2_C_R1.txt`·`.omc/transcripts/kor3_C_R1.txt`
+
+---
+
+## Exp-182 — 프런트 실시간 전사 중복표시 2종 수정 (Exp-181 후속, 프런트 전용) [E5, master 머지 `36fdbaf`]
+
+**날짜**: 2026-07-17 · **Epoch**: E5(프런트 렌더 전용 — 백엔드 STT/디코더/게이트 무변경, epoch 미bump) · **브랜치**: `fix/frontend-finalized-history-key`(`b94ae45`+`06c36f1`), **master 머지 `36fdbaf`**
+
+### 가설
+
+Exp-181이 규명한 growing-prefix 중복은 백엔드 grammar-gate의 지연판정(Exp-176, 의도된 설계)이 "finalized 세그먼트의 `end`를 사후 확장"하는 것과, 프런트 `finalizedHistory` Map의 자연키(`start|end|speaker`)가 그 확장을 "새 줄"로 오인 누적하는 조합이다. **백엔드는 건드리지 않고 프런트 렌더만 고쳐** 중복을 제거한다(2종: ① 최종 화면 누적 중복, ② 실시간 진행중 화면 중복).
+
+### 변경 내용 (`whisperlivekit/web/live_transcription.js` `renderLinesWithBuffer()`, 프런트 전용)
+
+1. **`b94ae45`** — `finalizedHistory.set` 키를 `${ln.start}|${ln.end}|${ln.speaker}` → **`${ln.start}` 단독**으로. 문장이 자라며 `end`가 커져도 `start`는 불변이므로 같은 항목을 in-place 덮어써 **최종 화면의 growing-prefix 중복** 제거.
+2. **`06c36f1`** — 렌더 병합을 `[...finalizedHistory.values(), ...interim]` → **진행중(미확정) 줄과 `start`가 같은 확정 이력 항목을 억제**한 뒤 병합. 백엔드가 침묵으로 조기 확정한 세그먼트를 이후 마침표 철회 등으로 같은 `start`에서 이어 전사(재개방)할 때, 확정판(짧음)과 진행중판(성장)이 공존하는 **실시간 진행중 화면 중복**(사용자 화면 캡처로 확인된 증상) 제거. 진행중 줄이 그 세그먼트의 현재 진실이므로 stale 확정판을 가림(재확정되면 ①의 start-키로 자연 정리).
+
+### 정량 결과 (경로 C, 스크리닝 N=1 — 방향 신호)
+
+| 파일 | Exp-181 기준(수정 전) | b94ae45(①만) | 36fdbaf(①+②) |
+|---|---|---|---|
+| kor2 | 95.1% | **25.0%** | 20.8% |
+| kor3 | 57.0% | **30.5%** | 41.1%(실행편차 밴드 내) |
+
+pytest 411 passed·1 skipped(두 커밋 모두). ①만으로 kor2 95.1→25.0%(-70pt), kor3 57.0→30.5%(-26.5pt) — **growing-prefix 중복이 WER을 대량 삽입오류로 부풀렸던 것 실증**.
+
+### 분석 (정성)
+
+- ① 적용 후 kor3는 12개 확정 문장 전부 단일 발생(중복 완전 소거), kor2도 대부분 소거(잔존 1건은 `start`가 다른 별개 재전사 이벤트 — ②/이번 범위 밖).
+- ② 검증 한계: 이 수정은 **실시간 진행중(interim) 표시** 전용이라, 경로 C가 스크래핑하는 **최종 DOM**(모두 확정)에는 `interimStarts`가 비어 억제 분기가 발동 안 함 → 경로 C로는 실증 불가. 경로 C는 "JS 변경이 렌더/스크래핑을 깨뜨리지 않고 최종 WER 무회귀" 안전망만 통과. **실제 증상 제거는 라이브 뷰 육안 검증 필요**(사용자 확인 예정).
+- 기각된 가설: 별개로 백엔드 `audio_processor.py` 타임아웃 경로의 `buffer_transcription` 누출을 의심했으나, kor2 4회 계측에서 `buffer_text`가 확정 텍스트와 겹치는 사례 0건으로 **실측 기각**(코드 무변경 원복). 실시간 중복은 백엔드 leak이 아니라 위 프런트 렌더 조합이 원인임을 재확인.
+
+### ★ 중대한 함의 — 과거 kor1~3 WER 측정치 재해석 필요
+
+경로 C WER은 이 프런트 DOM에서 추출되므로, **Exp-178~181의 kor1/kor2/kor3 WER 수치(kor2 70~130% 등)는 이 렌더 아티팩트로 상당분 과대평가**됐던 것으로 확정된다. 특히 **Exp-180 약어 가드 채택 논의의 핵심 근거였던 "kor2 전체 WER 79→108% 악화"도 이 아티팩트가 낀 값**이다 — OFF/ON 양쪽에 동일하게 끼었으므로 상대 비교(오발동 0건 등 로그 기반 결론)는 유효하나, **절대 WER 게이트 판정은 재검토 대상**이다. Exp-180 kor2 회귀분의 상당 부분이 STT 품질이 아니라 이 UI 버그였을 가능성이 높다.
+
+### 채택 조건 판정 / 결론
+
+**채택 (master 머지 `36fdbaf`, 사용자 승인 — 2026-07-17)**. 프런트 렌더 전용·백엔드 STT 무변경·pytest 무회귀·경로 C 최종출력 무회귀. 표준 테스트셋(bong1/ytn2/sbs1)은 이 버그의 성장형 중복이 두드러지지 않아 영향 미미하나, kor 낭독체에서 측정 정확도를 크게 회복. **epoch 미bump**.
+
+### 다음 가설
+
+1. **라이브 뷰 육안 검증**(사용자) — ② 실시간 중복 제거 실효 확인.
+2. **Exp-180 재평가**: 이 수정 반영 후 약어가드 OFF/ON을 kor2 포함 재측정하면, 지난 "판단 유보"의 kor2 회귀분이 UI 아티팩트였는지 STT 실회귀였는지 분리 가능 — 재측정 여부는 사용자 판단.
+3. 백엔드 근본수정(선택): grammar-gate가 finalize 이전에 판정을 완전히 끝내 "finalized 세그먼트 (start,end) 불변" 계약을 지키게 하는 재설계 — 범위 크므로 프런트 수정으로 증상 해소된 현재는 후순위.
+
+**JSON**: `.omc/benchmarks/eval_20260717_1506_interim_dedup.json`(①+② kor2 20.8%/kor3 41.1%) · b94ae45 측정분(①만 kor2 25.0%/kor3 30.5%) · **커밋**: `b94ae45`·`06c36f1`·머지 `36fdbaf`
