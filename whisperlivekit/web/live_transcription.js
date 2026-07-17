@@ -50,6 +50,7 @@ const linesTranscriptDiv = document.getElementById("linesTranscript");
 const timerElement = document.querySelector(".timer");
 const themeRadios = document.querySelectorAll('input[name="theme"]');
 const microphoneSelect = document.getElementById("microphoneSelect");
+const languageSelect = document.getElementById("languageSelect");
 
 const settingsToggle = document.getElementById("settingsToggle");
 const settingsDiv = document.querySelector(".settings");
@@ -178,6 +179,28 @@ function handleMicrophoneChange() {
   }
 }
 
+// 소스 언어 선택 지속(localStorage). 마이크 select와 동일 패턴:
+// 페이지 로드 시 저장값 복원, change 시 저장.
+// 마이크와 달리 옵션이 HTML에 정적으로 있으므로 즉시 복원 가능(동적 populate 불필요).
+function restoreLanguageSelection() {
+  if (!languageSelect) return;
+  const savedLang = localStorage.getItem('selectedLanguage');
+  if (savedLang && [...languageSelect.options].some((o) => o.value === savedLang)) {
+    languageSelect.value = savedLang;
+  }
+}
+
+function handleLanguageChange() {
+  if (!languageSelect) return;
+  const value = languageSelect.value || "auto";
+  localStorage.setItem('selectedLanguage', value);
+
+  const labelMap = { auto: "자동 (Auto)", ko: "한국어 (Korean)", en: "English" };
+  console.log(`Selected source language: ${value}`);
+  // 언어는 다음 연결부터 적용된다(마이크처럼 즉시 재연결하지 않음 — 녹음 중엔 select가 비활성).
+  statusText.textContent = `Source language: ${labelMap[value] || value} (applies on next connection)`;
+}
+
 // Helpers
 function fmt1(x) {
   const n = Number(x);
@@ -231,10 +254,39 @@ function updateSaveButtonState() {
   saveTranscriptButton.disabled = buildTranscriptPayload().length === 0;
 }
 
+// 최종 WebSocket URL 조립: 언어 select 값을 쿼리파라미터로 병합한다.
+// - websocketUrl 전역(입력필드 표시값)은 오염시키지 않고 지역 최종 URL만 만든다.
+// - auto = language 파라미터 생략(delete), ko/en = language=<값> 설정(드롭다운이 이김).
+// - 사용자가 websocketInput으로 이미 쿼리스트링을 넣었을 수 있어 URL+URLSearchParams로 파싱·병합.
+function buildWebSocketUrl() {
+  const langValue = languageSelect ? (languageSelect.value || "auto") : "auto";
+  try {
+    // ws://·wss:// 는 브라우저 URL이 지원하는 special scheme이라 정상 파싱된다.
+    const url = new URL(websocketUrl);
+    if (langValue === "ko" || langValue === "en") {
+      url.searchParams.set("language", langValue);
+    } else {
+      // auto: 규약상 파라미터를 완전히 제거(빈 값이 아니라 delete).
+      url.searchParams.delete("language");
+    }
+    return url.toString();
+  } catch (e) {
+    // 비정상/상대 URL 대비 문자열 폴백(정상 ws://·wss:// 에선 도달하지 않음).
+    console.warn("WebSocket URL 파싱 실패, 문자열 폴백 사용:", e);
+    let base = websocketUrl;
+    if ((langValue === "ko" || langValue === "en") && !/[?&]language=/.test(base)) {
+      base += (base.includes("?") ? "&" : "?") + "language=" + langValue;
+    }
+    return base;
+  }
+}
+
 function setupWebSocket() {
   return new Promise((resolve, reject) => {
+    const finalWebSocketUrl = buildWebSocketUrl();
+    console.log("Connecting to WebSocket:", finalWebSocketUrl);
     try {
-      websocket = new WebSocket(websocketUrl);
+      websocket = new WebSocket(finalWebSocketUrl);
     } catch (error) {
       statusText.textContent = "Invalid WebSocket URL. Please check and try again.";
       reject(error);
@@ -288,6 +340,10 @@ function setupWebSocket() {
         statusText.textContent = serverUseAudioWorklet
           ? "Connected. Using AudioWorklet (PCM)."
           : "Connected. Using MediaRecorder (WebM).";
+        // 백엔드가 config에 language 필드를 실으면 실제 적용된 소스 언어를 로그로 확인(하위호환: 없으면 무시).
+        if (data.language !== undefined) {
+          console.log(`Server applied source language: ${data.language}`);
+        }
         if (configReadyResolve) configReadyResolve();
         return;
       }
@@ -800,6 +856,8 @@ async function toggleRecording() {
 function updateUI() {
   recordButton.classList.toggle("recording", isRecording);
   recordButton.disabled = waitingForStop;
+  // 언어는 연결 시점에만 적용되므로 녹음/처리 중에는 변경 잠금(중지 후 복원).
+  if (languageSelect) languageSelect.disabled = isRecording || waitingForStop;
 
   if (waitingForStop) {
     if (statusText.textContent !== "Recording stopped. Processing final audio...") {
@@ -824,6 +882,11 @@ recordButton.addEventListener("click", toggleRecording);
 
 if (microphoneSelect) {
   microphoneSelect.addEventListener("change", handleMicrophoneChange);
+}
+if (languageSelect) {
+  languageSelect.addEventListener("change", handleLanguageChange);
+  // 옵션이 정적이므로 즉시 복원 가능(스크립트는 body 끝에서 로드 → 요소 존재 보장).
+  restoreLanguageSelection();
 }
 document.addEventListener('DOMContentLoaded', async () => {
   try {

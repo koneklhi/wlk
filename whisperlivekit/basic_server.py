@@ -36,6 +36,9 @@ if config.trace_tokens:
     logger.info("[TraceTokens] DEBUG 레벨 로깅 활성화 (backend + align_att_base + tokens_alignment)")
 transcription_engine = None
 
+# 세션 언어 오버라이드 허용값(§3.2 한/영 두 언어 + auto). 그 외 값은 무시하고 서버 기본값 사용.
+_ALLOWED_SESSION_LANGUAGES = {"auto", "ko", "en"}
+
 
 class CorrectionUpdate(BaseModel):
     wrong_word: str
@@ -114,6 +117,16 @@ async def websocket_endpoint(websocket: WebSocket):
 
     # Read per-session options from query parameters
     session_language = websocket.query_params.get("language", None)
+    if session_language is not None:
+        normalized = session_language.strip().lower()
+        if normalized in _ALLOWED_SESSION_LANGUAGES:
+            session_language = normalized
+        else:
+            logger.warning(
+                "[SessionLang] 허용되지 않은 language=%r — 무시하고 서버 기본값 사용",
+                session_language,
+            )
+            session_language = None
     mode = websocket.query_params.get("mode", "full")
 
     audio_processor = AudioProcessor(
@@ -132,7 +145,12 @@ async def websocket_endpoint(websocket: WebSocket):
         logger.info("Client requested diff mode")
 
     try:
-        await websocket.send_json({"type": "config", "useAudioWorklet": bool(config.pcm_input), "mode": mode})
+        await websocket.send_json({
+            "type": "config",
+            "useAudioWorklet": bool(config.pcm_input),
+            "mode": mode,
+            "language": session_language if session_language is not None else getattr(config, "lan", "auto"),
+        })
     except Exception as e:
         logger.warning(f"Failed to send config to client: {e}")
 
