@@ -48,7 +48,7 @@ React가 반드시 새로 구현할 것: ① WS 연결·종료 시퀀스 ② con
 | 확정/미확정 표시 | 문장 단위 `status` 회색↔진하게 | 의미가 다름 → **§2.2 참조** | `lines[]`=진하게 / `buffer_*`=연하게 **2단계**. `finalized`는 색 아닌 리렌더 최적화(안정 key)용(§2.2) |
 | 번역 | 문장마다 **별도 `POST /api/translate` SSE**(토큰 스트리밍) | `lines[].translation` **인라인**(확정 후 통째로) + `buffer_translation`(진행중 번역) | `/api/translate` 호출·SSE 제거 → `lines[].translation` 읽기. **스트리밍 타이핑 UX는 사라짐.** `buffer_translation`도 동작(§7) |
 | 화자분할 | 없음 | `lines[].speaker`(int), `-2`=침묵/`0`=진행중 | **신규 UI**(배지·색 직접 구현, §5) |
-| 타임스탬프 | SSE에 없음(내부만 float 초) | `start`/`end` = 벽시계 `"HH:MM:SS"` 문자열 | 표시에 사용 가능. history 키는 `start\|end\|speaker` 복합키 |
+| 타임스탬프 | SSE에 없음(내부만 float 초) | `start`/`end` = 벽시계 `"HH:MM:SS"` 문자열(표시 전용) | 표시에만 사용. **누적/식별 키는 `id`**(안정 세그먼트 식별자) — `start\|end\|speaker` 복합키 금지(§4.4) |
 | 녹음 제어 | start/stop/status — **stop=캡처만 정지, WS 연결 유지(재개 가능)**, stop 시 화면도 클리어 | 연결=시작 / 빈 프레임=**종료(되돌릴 수 없음)**, status·재개 없음 | start=WS 열기+캡처 시작 / stop=빈 프레임+`close()`. **pause/resume 버튼이 있었다면 wlk는 resume 불가 → 제거·비활성**(재시작=`close()` 후 새 WS 연결=서버 세션 초기화). wl stop은 화면을 지웠으나 wlk는 프론트 누적분이 남음 |
 | 단어교정 | `/api/corrections`(GET/POST/DELETE) | **거의 동일** | 사전 관리 화면 **거의 1:1 재사용**(§9.1) |
 | glossary | `/api/prompts`(glossary/sentence 블록) | **구현됨**(GET 조회·POST add-item·POST delete-item) | 단어교정(§9.1)과 유사하게 연결 가능 — 상세는 §9.1 참조 |
@@ -187,9 +187,11 @@ React가 직접 구현**해야 한다(`onclose`/`onerror`에서 code 확인 후 
 > `lines[]`를 받은 그대로 전체교체 렌더만 해도 히스토리가 유지된다 — 별도 Map 누적은 더 이상 필수가
 > 아니다(단, 장시간 세션에서 리스트가 계속 길어지므로 렌더 성능이 걱정되면 선택적으로 가상 스크롤을
 > 고려할 수 있다).
-> ⚠️ `start`가 초 단위 벽시계 시각(`HH:MM:SS`)이라 같은 초에 여러 세그먼트가 시작될 수 있다
-> (빠른 화자전환·코드스위칭) — `start` 단독을 키로 쓰면 충돌로 항목이 덮어써진다. 반드시
-> `start`+`end`+`speaker` 복합키를 쓸 것.
+> ⚠️ **누적/식별 키가 필요하면 `id`(안정 세그먼트 식별자, number) 단독을 쓸 것.** `start`/`end`는 1초 해상도
+> 벽시계 문자열이라 같은 초에 여러 세그먼트가 시작될 수 있어(빠른 화자전환·코드스위칭) 키로 부적합하다.
+> **`start`+`end`+`speaker` 복합키는 금지** — 백엔드가 같은 문장의 `end`를 사후에 늘려 재전송(문법게이트 재조립)하므로
+> `end`가 낀 키는 매 성장마다 새 항목이 돼 같은 문장의 절단판이 누적된다(**growing-prefix 중복 표시**, 상세 §4.4).
+> 전체교체 렌더만 하면 이 문제 자체가 없다(누적 안 하니까). 누적할 때만 `id`로.
 > ⚠️ **status별 렌더**: `no_audio_detected`를 받으면 내장 UI는 **화면 자막만 가리고 누적 state는
 > 유지**한다(다음 `active_transcription`에서 복원). React가 이 status에서 자기 누적까지 비우면
 > 침묵 구간마다 자막이 영구 소실된다. `error` status엔 내장 UI가 별도 배너가 없으니 필요하면
@@ -200,7 +202,8 @@ React가 직접 구현**해야 한다(`onclose`/`onerror`에서 code 확인 후 
 |---|---|---|---|---|
 | `speaker` | int | O | `1`,`2`,… / `-2` | 화자 번호. **diar off면 항상 `1`**. **`-2`=침묵 세그먼트**. (§5) |
 | `text` | str·null | O | `"안녕하세요"` | 전사 텍스트(침묵이면 `null`/`""`) |
-| `start` | str | O | `"13:15:30"` | **PC 실제 벽시계 시각**(`HH:MM:SS`, 24시간제, 센티초 없음) — 녹음 시작 시점이 아니라 그 세그먼트가 실제로 발화된 시각 |
+| `id` | number | O | `12.34` | **안정 세그먼트 식별자**(세션상대 시작초). 누적/React key는 **반드시 이 값**(§4.2 경고·§4.4). `end`가 자라거나 재개방돼도 불변 |
+| `start` | str | O | `"13:15:30"` | **PC 실제 벽시계 시각**(`HH:MM:SS`, 24시간제, 센티초 없음) — 녹음 시작 시점이 아니라 그 세그먼트가 실제로 발화된 시각. **표시 전용, 식별 key로 쓰지 말 것** |
 | `end` | str | O | `"13:15:32"` | 동상 |
 | `finalized` | bool | O | `true`/`false` | 문장 확정 여부. **diar on/off 관계없이 정상 갱신됨** |
 | `completed` | bool | O | `finalized`와 동일 | React 호환 별칭 |
@@ -210,6 +213,20 @@ React가 직접 구현**해야 한다(`onclose`/`onerror`에서 code 확인 후 
 | `lang` | str | detected_language 있을 때만 | 동일 값 | React 호환 별칭 |
 
 > ⚠️ `text`가 없고 `speaker != -2`인 줄은 응답에서 아예 빠진다(침묵 세그먼트만 `text` 없이도 방출).
+
+### 4.4 중복 표시 방지 — 렌더 규칙 (⚠️ 미준수 시 같은 문장 중복)
+
+백엔드는 문장 확정을 뒤 맥락에 따라 사후 조정하므로, 같은 세그먼트가 ① `end`가 자란 채 다시 오거나 ②
+`finalized`가 `true`→`false`로 재개방될 수 있다(같은 `id` 유지).
+
+- **가장 단순·안전 = 전체교체 렌더** (§4.2): 매 스냅샷 `lines[]`를 통째로 다시 그리면 ①②가 자동 해소된다.
+- **누적한다면 키는 `id` 단독** (§4.2 경고): `start|end|speaker` 복합키는 `end` 성장분이 새 항목으로 쌓여 **growing-prefix 중복**을 만든다.
+  `id`로 upsert + 진행중(`finalized:false`) 줄을 같은 `id`의 확정판보다 우선 렌더.
+- **`buffer_*`는 마지막 진행중 줄에만** 이어붙인다 — 확정된 줄에 붙이면 진행중 텍스트가 확정 블록과 중복돼 보인다
+  (위 §2.2 코드의 `i === rows.length - 1`은 진행중 줄이 있을 때 그게 마지막이라는 전제; 진행중 줄이 없으면 buffer도 비어야 정상).
+
+> 정본 = [API_SPEC.md §2.4.4](API_SPEC.md), 참조 구현 = 내장 UI `live_transcription.js`. 이 규칙 미준수가 실측에서 kor
+> 낭독체 WER을 3배 부풀린 사례가 있었다(측정이 UI DOM 스크래핑 → 렌더 중복이 지표까지 오염).
 
 ---
 
