@@ -44,12 +44,37 @@ React UI 연결 시 이 문서를 기준으로 수정 범위를 결정한다.
 | `status: "process"/"complete"` | `finalized: bool` | `false`=비확정(진행중), `true`=확정 |
 | — | `completed` | `finalized` 와 동일 값 (React 호환 별칭) |
 | — | `speaker` | 화자 번호 (`int`). 화자분리 미사용 시 `1` |
+| — | `id` | **안정 세그먼트 식별자**(`number`, 세션상대 시작초). **세그먼트를 스냅샷 간 추적하는 유일한 안정 키** — `end`가 자라거나 `finalized`가 `true→false`로 재개방돼도 불변. **React는 라인 dedup·React key에 반드시 `id`를 쓸 것**(`start\|end\|speaker` 복합키 금지 — 아래 "라인 dedup·렌더 규칙" 참조). 신설(2026-07-17, master 머지 시). |
 | — | `finalize_trigger` | 문장이 **어떤 로직으로 확정·분리됐는지**(`string`\|`null`). 값: `silence`/`punctuation`/`language_switch`/`speaker_change`/`null`(미확정). React는 무시 가능한 **additive** 필드(배지 표시 등에 선택 활용). *Exp-170~: 값 집합 불변이나 `punctuation` 의미 확장 — 온점 형태소 종결이 독립적으로 문장을 분할하는 경우도 포함(기존 침묵/화자경계 세분 라벨 + 신규 독립 원인).* |
 | `start` (float, 초) | `start` (str, `"HH:MM:SS"`) | **타입 변경** — float에서 포맷 문자열로. **PC 실제 벽시계 시각**(예 `"13:15:30"`) — 녹음 시작 시점(0초) 기준 경과시간이 아니라 그 세그먼트가 실제로 발화된 현재 시각. 초 단위(센티초 없음), 24시간제 |
 | `end` (float, 초) | `end` (str, `"HH:MM:SS"`) | **타입 변경** — 위와 동일 |
 | — | `translation` | 번역 결과 (문자열). 번역 활성 + 확정된 세그먼트에만 존재 |
 
 > `start`/`end`는 `whisperlivekit/timed_objects.py`의 `Segment.to_dict(session_start=...)` → `format_walltime(session_start, offset)`으로 계산된다. `session_start`는 `whisperlivekit/audio_processor.py`의 `AudioProcessor.beg_loop`(첫 유효 오디오 청크 수신 시점의 `time.time()` epoch, 즉 세션/녹음 시작 시각)이며, `whisperlivekit/basic_server.py`의 `handle_websocket_results()`가 `audio_processor.beg_loop`를 읽어 매 응답마다 전달한다. `session_start`가 없으면(예: 업로드 파일 배치 처리 — `/v1/audio/transcriptions`, `/v1/listen`) 기존 경과시간 포맷(`format_time`, `"H:MM:SS.cc"`)으로 폴백한다 — 이 두 REST/WS 배치 엔드포인트는 여전히 파일 기준 경과시간을 쓰며 이번 변경의 영향을 받지 않는다.
+
+### 라인 dedup·렌더 규칙 (중요 — 미준수 시 중복 표시 버그)
+
+백엔드는 **문장 확정 판정을 뒤에 오는 발화 맥락에 따라 사후에 조정**한다(문법-조건부 침묵 게이트). 그 결과
+같은 세그먼트가 스냅샷마다 이렇게 변할 수 있다:
+
+1. **`end`가 자란다** — 같은 논리적 문장이 더 길어진 채 다시 전송된다(같은 `id`, 커진 `end`·`text`).
+2. **확정 세그먼트가 다시 미확정(진행중)으로 재개방된다** — `finalized`가 `true`→`false`로 돌아오고
+   같은 `id`로 계속 자란다(예: 스퓨리어스 온점으로 조기 확정 → 온점 철회 후 문장 계속).
+
+**권장 = 전체 교체 렌더**: `lines[]`는 세션 전체 히스토리를 무제한 유지·전량 재전송(§1 표·§6)하므로, 매 스냅샷
+`lines[]`를 통째로 다시 그리기만 하면 ①②가 자동으로 맞춰진다 — 확정 줄을 직접 누적할 필요가 없다.
+
+**클라이언트 누적을 굳이 한다면(선택) — 키는 반드시 `id`:**
+- ❌ **`start`+`end`+`speaker` 복합키 금지** — `end`가 자라면 매번 "새 항목"으로 취급돼 같은 문장의 절단판들이
+  화면에 누적(growing-prefix 중복 표시)된다. *(과거 이 문서·API_SPEC이 복합키를 권장했으나 이 버그의 직접 원인이라 폐기)*
+- ❌ **`start` 단독 키도 부적합** — `start`/`end`는 1초 해상도 벽시계 문자열이라 같은 초에 시작한 서로 다른
+  세그먼트(특히 다화자)가 충돌한다.
+- ✅ **`id` 단독 키** — `end`가 자라거나 재개방돼도 불변, float라 같은-초 충돌 없음. `id`로 upsert + **진행중 줄 우선**
+  (같은 `id`의 이전 확정판보다 `finalized:false` 줄을 우선 렌더 → 재개방 시 stale 확정판 가림).
+  `status:"no_audio_detected"`(빈 `lines[]`)에서 누적을 비우지 말 것.
+
+> 내장 테스트 UI(`whisperlivekit/web/live_transcription.js`)가 `id` 누적 방식의 참조 구현이다. 배포 React는 전체 교체
+> 렌더만 해도 충분하며, React key는 `id`를 쓰면 `end` 성장 시 불필요한 remount를 막는다.
 
 ### 비확정 텍스트 처리
 기존: 동일 세그먼트를 `status:"process"`로 반복 전송 → React가 갱신 판단

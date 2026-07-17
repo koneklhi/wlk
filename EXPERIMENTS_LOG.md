@@ -3406,3 +3406,45 @@ pytest 411 passed·1 skipped(두 커밋 모두). ①만으로 kor2 95.1→25.0%(
 3. 백엔드 근본수정(선택): grammar-gate가 finalize 이전에 판정을 완전히 끝내 "finalized 세그먼트 (start,end) 불변" 계약을 지키게 하는 재설계 — 범위 크므로 프런트 수정으로 증상 해소된 현재는 후순위.
 
 **JSON**: `.omc/benchmarks/eval_20260717_1506_interim_dedup.json`(①+② kor2 20.8%/kor3 41.1%) · b94ae45 측정분(①만 kor2 25.0%/kor3 30.5%) · **커밋**: `b94ae45`·`06c36f1`·머지 `36fdbaf`
+
+---
+
+## Exp-183 — Segment 안정 id 스키마 필드 추가: 배포 React 세그먼트 추적 계약 확립 (Exp-182 후속) [E5, master 머지]
+
+**날짜**: 2026-07-17 · **Epoch**: E5(스키마 additive 필드 + 프런트 키 전환 — 백엔드 STT/디코더/게이트 무변경, epoch 미bump) · **브랜치**: `feat/segment-stable-id@b974023`, **master 머지**
+
+### 가설
+
+Exp-182에서 프런트 렌더 중복을 `start` 단독 키로 해소했으나, 페이로드의 `start`/`end`가 1초 해상도 벽시계 문자열이라 **같은-초에 시작한 다른 세그먼트(특히 다화자 bong1) 충돌 위험**이 잠재했다. 또 배포 React가 참조하는 `docs/API_SPEC.md`가 **`start|end|speaker` 복합키를 명시 권장**해, 프런트 개발자가 그대로 따르면 growing-prefix 중복 버그를 처음부터 재현하게 되는 상태였다. 근본 해결로 **스키마에 안정 세그먼트 식별자 `id`를 추가**해 내장 UI·배포 React 공통의 견고한 dedup 키를 제공한다.
+
+### 변경 내용
+
+- `whisperlivekit/timed_objects.py` `Segment.to_dict()`: `id` 필드 추가 = `round(self.start, 3)`(세션상대 시작초 float). 근거: 세그먼트가 자라거나(end↑) finalized→interim 재개방돼도 **첫 토큰 시작초는 불변**이라 안정, 순차 비겹침 세그먼트는 서로 다른 float라 고유, 1초 벽시계와 달리 같은-초 충돌 없음. additive 필드(기존 필드·타입 무변경).
+- `whisperlivekit/web/live_transcription.js`: `finalizedHistory` 키 + interim 억제 키를 `${ln.start}`→`${ln.id}`로 전환(표시용 timeInfo `start`/`end`는 그대로).
+- **문서(정본 갱신)**: `docs/API_SPEC.md`(§2.4.3 `id` 필드 행 추가·§2.4.4 렌더 규칙 신설·§2.4.2/§5 복합키 지침 폐기), `docs/SCHEMA_CHANGES.md`(§2 필드표 `id` + "라인 dedup·렌더 규칙"), `docs/FRONTEND_HANDOFF_SUMMARY.md`(§4.2 경고·§4.3 필드표·§4.4 신설). 잘못됐던 "복합키 권장"을 "**전체교체 렌더 권장 + 누적 시 `id` 단독**"으로 정정. 부수 규명: `_DEFAULT_RETENTION_SECONDS=inf`(리텐션 실제 무제한 확인 → 전체교체 렌더가 정답).
+
+### 정량 결과 (경로 C, 스크리닝 N=1)
+
+| 파일 | WER | 화자F1 | 판독 |
+|---|---|---|---|
+| kor2 | 22.2% | — | Exp-182 밴드(20.8~25%) 유지 |
+| kor3 | 49.0% | — | ±변동 밴드 내 |
+| **bong1(다화자)** | **23.3%** | **58.5%** | 기준(WER~35%·F1~50-55%) 대비 **무회귀** — **같은-초 충돌 우려 실측 해소** |
+
+pytest 411 passed·1 skipped, ruff pass. id 방출 실증: `Segment.from_tokens([...start=12.34]).to_dict()['id']==12.34` 확인.
+
+### 분석 (정성)
+
+- **핵심 검증 = bong1 다화자 무회귀**: `start` 단독 키(Exp-182)의 잠재 리스크였던 "같은 초 다른 화자 세그먼트 충돌"이 id(float) 전환으로 제거됐고, bong1 화자F1 58.5%로 catastrophic 붕괴 없음 확인.
+- 이 변경의 진짜 산출물은 **문서 계약 정정**이다 — 배포 React가 `id`로 dedup(또는 전체교체 렌더)하면 Exp-181/182에서 규명한 중복을 처음부터 안 겪는다. 기존 API_SPEC의 복합키 권장이 버그 유발원이었음을 바로잡았다.
+
+### 채택 조건 판정 / 결론
+
+**채택 (master 머지)**. additive 스키마 필드 + 프런트 키 전환, 백엔드 STT 무변경, pytest·ruff 무회귀, bong1 다화자 무회귀. **epoch 미bump**. 병렬 세션(session-lang-lock)이 `live_transcription.js`를 자기 워크트리에서 편집 중이라 향후 머지 충돌 가능 — 인지함.
+
+### 다음 가설
+
+1. (선택) 백엔드 근본수정 — grammar-gate가 finalize 이전에 판정을 끝내 "finalized 세그먼트 불변" 계약을 지키게 하는 재설계. 프런트/스키마로 증상·계약 모두 해소된 현재는 후순위.
+2. Exp-180 약어가드 재평가 — 이제 kor WER 아티팩트가 제거됐으니, OFF/ON kor2 재측정으로 "판단 유보"를 깨끗한 숫자로 매듭(사용자 판단).
+
+**JSON**: `.omc/benchmarks/eval_20260717_1534_segid.json`(kor2 22.2%/kor3 49.0%/bong1 23.3%·화자F1 58.5%) · **커밋**: `b974023` + 머지
