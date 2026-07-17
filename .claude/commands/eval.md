@@ -3,7 +3,13 @@
 기능 수정 후 경로 C(VBCable 루프백)로 실제 오디오 파이프라인 전체를 통과한 성능을 측정한다.
 **WER(전사 정확도) + 화자분리 F1 + 문장분리 F1**를 출력한다. 개선·채택 우선순위 = **화자분리 F1 > WER > 문장분리 F1** (요구사항 정본 [docs/TRANSCRIPTION_REQUIREMENTS.md](../../docs/TRANSCRIPTION_REQUIREMENTS.md)). *2지표(화자분리/문장분리) 분리 구현 완료 — 신형식 정답(`<name>_speak,sentence_sperate.txt`) 존재 시 `seg_f1`=화자분리 F1, `sentence_f1`=문장분리 F1(모든 블록이 단일 문장이면 `None`)로 함께 산출된다. 아직 이 regime v2 기준 경로 C 베이스라인 실측 전이다.*
 서버 기동/종료와 VBCable 장치 설정/복원은 스크립트가 자동으로 처리한다.
-**테스트(채택/기각) 세트 = `bong1.wav` + `ytn2.mp3` + `sbs1.mp3`** (화자분할 ON; ytn2·bong1 공동 최우선). 측정은 **2계층**: ① 평소 스크리닝 = `--repeat 1`(방향 신호), ② master 채택 직전 확정 = `--repeat 3`(median+분산 판단). **held-out 정량 = `ytn1.mp3` + `eng1.mp3`** (채택 후보에 한해 **단회** diar-ON) + **held-out 정성 sanity = `kinno.mp3`**(2화자; 정답 텍스트 부정확 → **WER/F1 게이팅 제외**, 대규모 누락/환각·거친 화자/문장 분리만 정성 확인). `eval.py`의 기본 `--files`는 코드 상 여전히 sbs1/ytn1/eng1이므로 **루틴은 `--files` 명시 필수**.
+**세션 언어모드 매트릭스**(CLAUDE.md §3.2·§3.8 — `--lan`은 서버 기동당 전역 1값이라 언어모드가 다른 파일은 **run을 분리**):
+- **auto 테스트(채택/기각) = `bong1.wav` + `ytn2.mp3` + `sbs1.mp3`** (`--lan auto`; 화자분할 ON; ytn2·bong1 공동 최우선)
+- **ko 테스트(채택/기각) = `kor1.wav` + `kor2.wav` + `kor3.wav`** (`--lan ko`; 한국어 단독 낭독, Exp-178에서 auto 붕괴가 발견돼 편입)
+- **held-out 정량**: auto = `ytn1.mp3`(`--lan auto`), en = `eng1.mp3`(`--lan en`) — 채택 후보에 한해 **단회** diar-ON, 각각 별도 run
+- **held-out 정성 sanity = `kinno.mp3`**(`--lan auto`; 2화자; 정답 텍스트 부정확 → **WER/F1 게이팅 제외**, 대규모 누락/환각·거친 화자/문장 분리만 정성 확인)
+
+측정은 **2계층**: ① 평소 스크리닝 = `--repeat 1`(방향 신호), ② master 채택 직전 확정 = `--repeat 3`(median+분산 판단). `eval.py`의 기본 `--files`는 코드 상 여전히 sbs1/ytn1/eng1이므로 **루틴은 `--files`와 `--lan` 명시 필수**.
 
 **성능 판정 기준은 경로 C만** 사용한다. 경로 A(PCM 파일 주입)는 브라우저 오디오 파이프라인을 우회하므로 폐기.
 
@@ -17,31 +23,53 @@
 ## 기본 사용법
 
 ```powershell
-# ① 스크리닝(기본) — bong1 + ytn2 + sbs1, 화자분할 ON, 방향 탐색·catastrophic 회귀 감지용
+# ① 스크리닝(기본, auto 모드) — bong1 + ytn2 + sbs1, 화자분할 ON, 방향 탐색·catastrophic 회귀 감지용
 $env:PYTHONIOENCODING = "utf-8"
 $ts = Get-Date -Format "yyyyMMdd_HHmm"
 .venv\Scripts\python.exe scripts/eval.py `
   --model-dir whisperlivekit/model/whisper-large-v3-turbo `
   --files test_data/bong1.wav test_data/ytn2.mp3 test_data/sbs1.mp3 `
+  --lan auto `
   --diarization --sortformer-model whisperlivekit/model/sortformer-4spk-v2.nemo `
   --compression-ratio-threshold 3.0 `
   --output ".omc/benchmarks/eval_$ts.json"
 # ↑ --repeat 생략 = 기본값 1회. 수치는 '방향 신호'로만 해석한다.
 
-# ② 채택 확정용 (master 머지 직전에만 — N≥3회 반복, median+분산 판단)
+# ① 스크리닝(ko 모드) — kor1 + kor2 + kor3, 한국어 세션 개선 시 이 run으로 측정
+$ts = Get-Date -Format "yyyyMMdd_HHmm"
+.venv\Scripts\python.exe scripts/eval.py `
+  --model-dir whisperlivekit/model/whisper-large-v3-turbo `
+  --files test_data/kor1.wav test_data/kor2.wav test_data/kor3.wav `
+  --lan ko `
+  --diarization --sortformer-model whisperlivekit/model/sortformer-4spk-v2.nemo `
+  --compression-ratio-threshold 3.0 `
+  --output ".omc/benchmarks/eval_$ts.json"
+
+# ② 채택 확정용 (master 머지 직전에만 — N≥3회 반복, median+분산 판단). auto 테스트 예시, ko는 --lan ko + kor1~3로 동일하게 반복
 $ts = Get-Date -Format "yyyyMMdd_HHmm"
 .venv\Scripts\python.exe scripts/eval.py `
   --model-dir whisperlivekit/model/whisper-large-v3-turbo `
   --files test_data/bong1.wav test_data/ytn2.mp3 test_data/sbs1.mp3 `
+  --lan auto `
   --diarization --sortformer-model whisperlivekit/model/sortformer-4spk-v2.nemo `
   --compression-ratio-threshold 3.0 --repeat 3 `
   --output ".omc/benchmarks/eval_$ts.json"
 
-# held-out 일반화 검증 — 채택 후보에 한해 ytn1 + eng1 (단회, diar-ON)
+# held-out 일반화 검증 — 채택 후보에 한해 ytn1(auto) + eng1(en), 언어모드가 다르므로 run 분리(단회, diar-ON)
 $ts = Get-Date -Format "yyyyMMdd_HHmm"
 .venv\Scripts\python.exe scripts/eval.py `
   --model-dir whisperlivekit/model/whisper-large-v3-turbo `
-  --files test_data/ytn1.mp3 test_data/eng1.mp3 `
+  --files test_data/ytn1.mp3 `
+  --lan auto `
+  --diarization --sortformer-model whisperlivekit/model/sortformer-4spk-v2.nemo `
+  --compression-ratio-threshold 3.0 `
+  --output ".omc/benchmarks/eval_$ts.json"
+
+$ts = Get-Date -Format "yyyyMMdd_HHmm"
+.venv\Scripts\python.exe scripts/eval.py `
+  --model-dir whisperlivekit/model/whisper-large-v3-turbo `
+  --files test_data/eng1.mp3 `
+  --lan en `
   --diarization --sortformer-model whisperlivekit/model/sortformer-4spk-v2.nemo `
   --compression-ratio-threshold 3.0 `
   --output ".omc/benchmarks/eval_$ts.json"
@@ -50,6 +78,7 @@ $ts = Get-Date -Format "yyyyMMdd_HHmm"
 
 ## 실행 절차 (Claude가 따를 순서)
 
+0. **측정 대상 세션 언어모드를 먼저 확인**(auto/ko/en) — 개선 대상 파일군에 맞는 `--files`+`--lan` 조합을 위 명령 블록에서 선택한다. 모드가 섞인 파일을 한 run에 넣지 않는다.
 1. `$env:PYTHONIOENCODING = "utf-8"` 설정 후 eval.py 실행 (`--output`으로 JSON 자동 저장됨)
 2. VBCable 자동 설정 여부 로그 확인 (성공/실패/건너뜀)
 3. 저장된 JSON에서 파일별 `wer_median/min/max/stdev`, `seg_f1_median`, `avg_wer_c_median`/`avg_seg_f1_c_median` 추출.

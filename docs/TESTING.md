@@ -57,6 +57,10 @@ whisperlivekit-server
 인자 없이 기동해도 eval.py/closed_test.py 자동 기동 설정과 동일하다.
 단, eval/closed_test는 서버를 **8901**로 자동 기동한다(수동 서버 8900과 포트 충돌 없이 병행 가능).
 
+> **세션 언어모드(CLAUDE.md §3.2)**: `--lan auto`가 코드스위칭(auto) 세션의 기본값. 한국어/영어 단일 세션을
+> 측정하려면 `--lan ko` / `--lan en`으로 기동한다(eval.py 사용 시 `--lan` 인자로 전달 — 아래 파일 목록의
+> 언어모드 태그와 일치시킬 것). `--lan`은 서버 1회 기동당 전역 1값이므로 언어모드가 다른 파일은 별도 실행으로 측정한다.
+
 > ⚠️ **반복 측정 — 2계층**: 실시간 STT는 동일 조건에서도 매 실행마다 성능 편차가 발생한다.
 > **① 평소 스크리닝 = 1회** (`--repeat` 생략) — 방향 탐색·catastrophic 회귀 감지용. 1회 수치는 방향 신호로만 해석한다.
 > **② master 채택 확정(머지 직전)만 최소 3회** (`--repeat 3`) — median+분산(min/max/stdev)으로 판단. 상세 규칙은 CLAUDE.md §4.
@@ -72,19 +76,21 @@ whisperlivekit-server
   1. **`[spkN]` 헤더 전환 = 화자전환 경계** → **화자분리 F1**(1순위·필수). 화자가 바뀌면 새 `[spkN]` 헤더(사람 단위 — 같은 화자는 한·영 code-switch 가능, bong1=4화자 `spk1`~`spk4`).
   2. **화자 블록 내 줄바꿈 = 온점 문장 경계** → **문장분리 F1**(3순위·nice-to-have). WER 정답은 `[spkN]` 헤더 제거·라벨 미포함 텍스트.
   - **구형식 `<name>.txt`(라벨 없는 빈 줄)는 deprecated** — eval은 신형식(`<stem>_speak,sentence_sperate.txt`)을 우선 읽고, 없거나 `[spkN]` 헤더 파싱에 실패한 경우에만 `.with_suffix(".txt")`로 구 파일을 읽는다(신형식 파서 전환 구현 완료). 과도기 병존. 형식·측정 정본 = [TRANSCRIPTION_REQUIREMENTS.md](TRANSCRIPTION_REQUIREMENTS.md) §2·§3.
-- **파일 목록** (측정 기본 설정: 화자분할 ON — 이 옵션 전체가 이제 `parse_args.py` 기본값이라 추가 인자 없이 `whisperlivekit-server`만 기동해도 동일 설정임):
-  - `bong1.mp3` / `bong1.txt` — 봉준호 기생충 인터뷰. **영어 2명 + 한국어 2명**, 화자 교대·긴 발화 혼재. 다화자·온점분리 역량의 핵심 테스트 대상.
+- **파일 목록** (측정 기본 설정: 화자분할 ON — 이 옵션 전체가 이제 `parse_args.py` 기본값이라 추가 인자 없이 `whisperlivekit-server`만 기동해도 동일 설정임). **언어모드** 태그(CLAUDE.md §3.2)는 측정 시 넘길 `--lan` 값을 가리킨다:
+  - `bong1.mp3` / `bong1.txt` — 봉준호 기생충 인터뷰. **영어 2명 + 한국어 2명**, 화자 교대·긴 발화 혼재. 다화자·온점분리 역량의 핵심 테스트 대상. **언어모드: auto**.
     **테스트(채택/기각) + 개선 최우선 대상**(다화자·긴 발화). 채택 확정 시 `--repeat 3` 루틴.
-  - `ytn2.mp3` / `ytn2.txt` — SCM 회의 통역. 영어 발화자 발화 → 한국인 통역, **한 문장씩 화자 교대**(순차통역). EN↔KO 짧은 텀 교차.
+  - `ytn2.mp3` / `ytn2.txt` — SCM 회의 통역. 영어 발화자 발화 → 한국인 통역, **한 문장씩 화자 교대**(순차통역). EN↔KO 짧은 텀 교차. **언어모드: auto**.
     **테스트(채택/기각) + 개선 최우선 대상**(짧은 텀 코드스위칭). 채택 확정 시 `--repeat 3` 루틴.
-  - `sbs1.mp3` / `sbs1.txt` — 뉴스 리포트. **대부분 한국어 → 중간 영어 인용 → 다시 한국어 종료**(사실상 단일 앵커, 언어 전환 경계). **테스트(채택/기각)**.
-  - `ytn1.mp3` / `ytn1.txt` — SCM 회의 통역, ytn2 동일 이벤트 다른 구간. 영어 발화자+한국어 통역, 한 문장씩 화자 교대.
+  - `sbs1.mp3` / `sbs1.txt` — 뉴스 리포트. **대부분 한국어 → 중간 영어 인용 → 다시 한국어 종료**(사실상 단일 앵커, 언어 전환 경계). **언어모드: auto**(영어 인용 구간이 있어 ko 고정 시 오전사 위험 — auto 유지). **테스트(채택/기각)**.
+  - `ytn1.mp3` / `ytn1.txt` — SCM 회의 통역, ytn2 동일 이벤트 다른 구간. 영어 발화자+한국어 통역, 한 문장씩 화자 교대. **언어모드: auto**.
     **held-out 정량**(ytn2 동일 이벤트 쌍둥이 — ytn2 개선이 미학습 데이터에 일반화되는지 코드스위칭 검증용).
-  - `eng1.mp3` / `eng1.txt` — **단일 영어 발화자**만 말하는 상황. script-switch false split 감시용.
+  - `eng1.mp3` / `eng1.txt` — **단일 영어 발화자**만 말하는 상황. script-switch false split 감시용. **언어모드: en**(`--lan en`).
     **held-out 정량**(영어 전용 회귀 감시).
-  - `kinno.mp3` / `kinno_speak,sentence_sperate.txt` — ITS 2021 K-혁신기업 행사, **2화자 순차통역**(한국어 MC + 통역사), 한↔영 교차.
+  - `kor1.wav` / `kor2.wav` / `kor3.wav` — 한국어 단독 낭독체(Exp-178 발굴). auto 모드에서 서두 영어 환각 등으로 붕괴하는 실패모드가 발견되어 **정식 테스트셋(채택/기각)에 편입**됨. **언어모드: ko**(`--lan ko`).
+    **테스트(채택/기각)**. 채택 확정 시 `--repeat 3` 루틴.
+  - `kinno.mp3` / `kinno_speak,sentence_sperate.txt` — ITS 2021 K-혁신기업 행사, **2화자 순차통역**(한국어 MC + 통역사), 한↔영 교차. **언어모드: auto**.
     **held-out 정성 sanity** — 정답 텍스트의 단어·철자가 부정확할 수 있어 **WER/F1 채택 게이팅에서 제외**. 전반적 화자·문장 분리 + 대규모 누락/환각 유무만 정성 확인.
-- **정답 스크립트**: 위 모든 파일에 신형식 `<name>_speak,sentence_sperate.txt`가 존재(canonical). 구 `<name>.txt`는 bong1·ytn1·ytn2·sbs1·eng1에 병존(deprecated), kinno는 신형식만 존재.
+- **정답 스크립트**: 위 모든 파일에 신형식 `<name>_speak,sentence_sperate.txt`가 존재(canonical). 구 `<name>.txt`는 bong1·ytn1·ytn2·sbs1·eng1·kor1~3에 병존(deprecated), kinno는 신형식만 존재.
 - 용도: STT 전사 정확도(WER) + 화자분리 F1 + 문장분리 F1 정량 분석(우선순위 화자분리 F1 > WER > 문장분리 F1)
 
 ### STT 동작 확인용 UI 선택지
