@@ -101,6 +101,21 @@ React는 `buffer_transcription`을 마지막 줄에 `"진행중"` 스타일로 �
   React는 무시해도 되는 additive 필드지만, 세션 언어가 의도대로 걸렸는지 확인용으로 읽을 수 있다.
 - 서버 종료 신호: `{"type": "ready_to_stop"}`
 
+### 세션 언어모드 선택 (클라이언트 → 서버)
+
+배포 UI는 녹음 시작 전 사용자가 고른 **세션 언어모드**(한국어/영어/자동, CLAUDE.md §3.2)를 WebSocket 연결 시
+쿼리 파라미터로 전달한다:
+
+```
+ws://host:port/asr?language=<auto|ko|en>
+```
+
+- 값은 ISO 639-1 코드 `ko`/`en` 또는 `auto`(생략 시 서버 기본값 `--lan`을 따름).
+- 이 필드는 **입력(소스) 언어 지정**이며, §2의 `detected_language`/`lang`(세그먼트별 **감지된** 출력 언어)과는
+  방향이 반대인 별개 필드다 — 혼동 금지.
+- 세션 시작 후에는 값을 바꿀 수 없다(재연결 필요). 내장 테스트 UI(`live_transcription.html`)는 이 쿼리를
+  구성하는 언어 셀렉터의 참조 구현 위치가 된다(구현은 `feat/session-lang-lock` 브랜치 담당 — 이 문서는 계약만 기술).
+
 ---
 
 ## 4. REST API 변경 사항

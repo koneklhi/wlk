@@ -4,7 +4,7 @@ description: Phase 2 STT 성능 개선 반자율 루프 — 한 이터레이션�
 
 # Phase 2 STT 성능 개선 루프 — 1 이터레이션
 
-**목표 (우선순위 = 화자분리 F1 > WER > 문장분리 F1)**: 테스트 bong1·ytn2·sbs1에서 **① 화자전환 경계마다 줄분리 실현(화자분리 F1 — 목표치는 metric 구현 후 확정) → ② WER < 15% → ③ 문장분리 F1(nice-to-have, 게이트 아님)**. held-out 정량(ytn1·eng1) 회귀 없음 + 정성 sanity(kinno — 누락/환각·거친 화자/문장 분리만). **절대 금지 = Case B(한 단어/문장이 단어 중간에서 쪼개짐).** Case A(동일 화자 인접 문장 미분리)는 허용. 요구사항 정본 = [docs/TRANSCRIPTION_REQUIREMENTS.md](../../docs/TRANSCRIPTION_REQUIREMENTS.md).
+**목표 (우선순위 = 화자분리 F1 > WER > 문장분리 F1)**: auto 표준셋 bong1·ytn2·sbs1(또는 0단계에서 선언한 언어모드가 ko면 kor1·kor2·kor3)에서 **① 화자전환 경계마다 줄분리 실현(화자분리 F1 — 목표치는 metric 구현 후 확정) → ② WER < 15% → ③ 문장분리 F1(nice-to-have, 게이트 아님)**. held-out 정량(auto=ytn1·en=eng1) 회귀 없음 + 정성 sanity(kinno — 누락/환각·거친 화자/문장 분리만). **절대 금지 = Case B(한 단어/문장이 단어 중간에서 쪼개짐).** Case A(동일 화자 인접 문장 미분리)는 허용. 세션 언어모드 개념 정본 = CLAUDE.md §3.2, 요구사항 정본 = [docs/TRANSCRIPTION_REQUIREMENTS.md](../../docs/TRANSCRIPTION_REQUIREMENTS.md).
 (현재 2-F1 metric 미구현 — 신형식 파서 착지 전까지 단일 `seg_f1`을 화자분리 F1 근사로 해석; 착지 후 화자분리/문장분리 F1 분리 사용.)
 
 ---
@@ -13,6 +13,7 @@ description: Phase 2 STT 성능 개선 반자율 루프 — 한 이터레이션�
 
 다음 순서로 현황을 파악한다. **파악 없이 구현으로 건너뛰지 않는다.**
 
+0. **개선 대상 세션 언어모드를 먼저 선언한다**(auto/ko/en, CLAUDE.md §3.2). auto = bong1/ytn2/sbs1 표준셋 + ytn1 held-out, ko = kor1~3, en = eng1 held-out. 이후 단계의 `--files`/`--lan` 조합과 채택 판정 시 "다른 모드를 회귀시키지 않는지" 확인 대상이 이 선언에 따라 정해진다.
 1. `EXPERIMENTS.md`의 최신 Exp 항목을 읽어 현재 채택 베이스라인 수치(WER median/max, 화자분리/문장분리 F1 — regime v2; 미구현 시 단일 `seg_f1`을 화자분리 F1 근사로)와 "다음 가설" 항목을 추출한다.
 2. `.omc/benchmarks/` 디렉토리에서 가장 최근 JSON을 찾아 파일별 수치를 확인한다:
    ```powershell
@@ -118,12 +119,14 @@ Set-Location worktrees\[branch]
 .venv\Scripts\python.exe scripts/eval.py `
   --model-dir whisperlivekit/model/whisper-large-v3-turbo `
   --files test_data/bong1.wav test_data/ytn2.mp3 test_data/sbs1.mp3 `
+  --lan auto `
   --diarization --sortformer-model whisperlivekit/model/sortformer-4spk-v2.nemo `
   --compression-ratio-threshold 3.0 `
   --output ".omc/benchmarks/eval_exp_screen_$ts.json"
 Set-Location ..\..\  # main으로 복귀
 ```
 # ↑ --repeat 생략 = 1회. 수치는 '방향 신호'로만 해석, 미세 채택/기각 결론의 근거로 쓰지 않는다.
+# ↑ 0단계에서 ko 모드를 선언했다면 `--files test_data/kor1.wav test_data/kor2.wav test_data/kor3.wav --lan ko`로 교체(다른 언어모드 파일과 섞지 않는다).
 
 ### ② 채택 확정 측정 (master 머지 직전에만 — N≥3회 반복)
 
@@ -134,12 +137,14 @@ Set-Location worktrees\[branch]
 .venv\Scripts\python.exe scripts/eval.py `
   --model-dir whisperlivekit/model/whisper-large-v3-turbo `
   --files test_data/bong1.wav test_data/ytn2.mp3 test_data/sbs1.mp3 `
+  --lan auto `
   --diarization --sortformer-model whisperlivekit/model/sortformer-4spk-v2.nemo `
   --compression-ratio-threshold 3.0 `
   --repeat 3 `
   --output ".omc/benchmarks/eval_exp_candidate_$ts.json"
 Set-Location ..\..\  # main으로 복귀
 ```
+# ↑ ko 모드 실험은 동일하게 `--files test_data/kor1.wav test_data/kor2.wav test_data/kor3.wav --lan ko`로 교체.
 
 - **채택 확정 측정 도중 fail-fast 금지** — N=3회 전부 실행한다(② 단계 한정). 단 VBCable 무음 캡처(WER 100%)·포트 충돌 등 하니스 버그는 즉시 중단하고 수정 후 재시작.
 - VBCable 루프백 불안정 의심 시: `scripts/vbcable_test.py` 실행 후 이상 있으면 Audiosrv 재시작 / PC 재부팅.
@@ -195,11 +200,19 @@ $env:PYTHONIOENCODING = "utf-8"
 Set-Location worktrees\[branch]
 .venv\Scripts\python.exe scripts/eval.py `
   --model-dir whisperlivekit/model/whisper-large-v3-turbo `
-  --files test_data/ytn1.mp3 test_data/eng1.mp3 `
+  --files test_data/ytn1.mp3 `
+  --lan auto `
+  --diarization --sortformer-model whisperlivekit/model/sortformer-4spk-v2.nemo `
+  --compression-ratio-threshold 3.0
+.venv\Scripts\python.exe scripts/eval.py `
+  --model-dir whisperlivekit/model/whisper-large-v3-turbo `
+  --files test_data/eng1.mp3 `
+  --lan en `
   --diarization --sortformer-model whisperlivekit/model/sortformer-4spk-v2.nemo `
   --compression-ratio-threshold 3.0
 Set-Location ..\..\
 ```
+# ↑ ytn1(auto)·eng1(en)은 언어모드가 달라 `--lan`이 다른 별도 실행으로 분리. ko 모드 실험의 held-out은 auto(ytn1)만 회귀 감시하면 충분(en 세션과 직접 상호작용 없음) — 필요 시 en도 함께 확인.
 
 held-out에서 catastrophic 회귀 없으면 → 채택 후보 확정.
 
@@ -212,6 +225,7 @@ held-out에서 catastrophic 회귀 없으면 → 채택 후보 확정.
 ```
 ## Exp-[N] 결과 보고 (채택 후보 / 기각)
 
+**언어모드**: [auto/ko/en — 0단계 선언]
 **가설**: [한 줄]
 **변경 파일**: [경로:라인]
 

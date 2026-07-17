@@ -32,8 +32,12 @@
   (HF Hub auto-download, requests to github.com 등). 모델 경로는 로컬 파일/디렉터리를 명시적으로 받도록 설계한다.
 
 ### 3.2 언어 강제
-- **한국어 / 영어 두 언어만** 들어오는 환경. 두 언어 모두 인식률 극대화가 목표.
+- **한국어 / 영어 두 언어만** 들어오는 환경. 두 언어 모두 인식률 극대화가 목표. 이것은 **출력 언어 집합 제한**(일본어·중국어 등 환각 금지)이며, 아래 "세션 언어모드"(입력 소스 지정)와는 다른 개념이다 — 혼용 주의.
 - **Code-Switching**(한 발화 안에 한·영 혼용) 상황에서 단어 유실 / 환각 / 문장 조기 확정이 발생하지 않도록 설계한다. 특히 **전환 간격이 짧은 환경**(대표 데이터 = ytn2) 및 **다화자 장시간 발화 환경**(대표 데이터 = bong1 — 영어 2명+한국어 2명)에서도 인식률을 유지하는 것이 현재 최우선 과제다.
+- **세션 언어모드 (auto / ko / en)**: 배포 UI에서 사용자가 세션 시작 시 전사 언어를 **한국어 / 영어 / 자동** 중 선택한다(`--lan`/WebSocket `?language=` 값은 ISO 639-1 코드 `ko`/`en`/`auto` — "kor"/"eng" 3글자 코드는 코드베이스에 없음). 세션별 언어 고정 자체의 구현은 `feat/session-lang-lock` 브랜치/워크트리에서 진행 중(master 미머지)이며, 이 절은 그 기능이 확립하는 **운영 개념의 정본**이다.
+  - **auto**: 코드스위칭 세션. 언어 자동감지 + 화자전환/스크립트 재감지 + 언어전환 경계 처리(§3.3 confirmed 전환 로직)가 **모두 활성**.
+  - **ko / en**: 단일언어 세션. 세션 시작 시 언어를 고정하고, **코드스위칭 재감지 로직만 비활성**(자동감지·주기 재확인·화자전환 eager 재감지·긴 침묵 언어리셋 게이트가 전부 스킵). **나머지 전사 파이프라인(디코더 파라미터·VAD·필터·문장확정 로직)은 auto와 동일하게 유지** — ko/en 전용 하드코딩·별도 튜닝을 두지 않는다.
+  - **성능 개선 착수 규칙**: 새 실험을 시작하기 전 **개선 대상 세션 언어모드를 먼저 선언**한다(auto/ko/en 중 어느 것인가). 측정은 선언한 모드에 맞는 `--lan` 값으로 수행하고(§4), 한 모드용 변경이 **다른 모드를 회귀시키지 않는지** 함께 확인한다(§3.8 범용 개선 원칙의 언어모드 축 확장). 실험 기록에는 측정 언어모드를 명시한다(§4 실험 기록 규칙).
 
 ### 3.3 문장 단위 출력 — 백엔드 책임 범위
 - **백엔드(우리 작업)가 하는 일**: ① 한 문장이 끝났는지 판단(확정/비확정 상태 결정) ② 결과를 React UI에 메시지로 전달.
@@ -61,7 +65,12 @@
 ### 3.8 STT 개선 방향 제약 (Phase 4+)
 - **ytn2·bong1 공동 최우선**: 한↔영 전환 간격이 짧은 환경(ytn2) 및 다화자·긴 발화 환경(bong1 — 영어 2명+한국어 2명, 봉준호 기생충 인터뷰)이 현재 핵심 개선 대상. **음성 데이터 개선 1순위 = ytn2·bong1**. 목표는 각각 '짧은 텀 코드스위칭 역량'과 '다화자 화자전환 역량'의 **일반화 향상**이며, **데이터 특화 하드코딩(특정 단어·구절 암기) 금지** — 개선은 일반화돼야 한다.
 - **상용화 worst-case 우선**: 동일 음성·환경에도 실행마다 편차 큼 — 배포·상용화 관점에서 **worst 케이스 감소가 최우선**이다. 개선 방향 검토 시 median보다 **최악 케이스 축소를 먼저** 생각한다(채택 확정 단계 측정·채택 규칙은 §4).
-- **범용 개선만 + 테스트/held-out 분리**: 측정 **테스트 세트 = bong1 + ytn2 + sbs1**(채택/기각 판단; 채택 확정 시 `--repeat 3`, 스크리닝은 `--repeat 1` — §4), **held-out = 정량(ytn1 + eng1) + 정성 sanity(kinno)**(채택 후보에 한해 검증). ytn1은 ytn2 동일 이벤트 쌍둥이 → 미학습 코드스위칭 일반화 검증, eng1은 영어 회귀 감시. **kinno**(2화자 순차통역)는 정답 텍스트가 부정확할 수 있어 **WER/F1 채택 게이팅에서 제외** — 전반 화자·문장 분리 + 대규모 누락/환각 유무만 정성 확인. 새 실험 전 "이 변경이 bong1/ytn2/sbs1 특화인가?" 자문. 추후 테스트 데이터 추가 시 회귀 없어야 한다.
+- **범용 개선만 + 테스트/held-out 분리 (언어모드 매트릭스)**: 측정 세트는 세션 언어모드별로 나뉜다.
+  - **auto 테스트(채택/기각) = bong1 + ytn2 + sbs1** — 채택 확정 시 `--repeat 3`, 스크리닝은 `--repeat 1`(§4).
+  - **ko 테스트(채택/기각) = kor1 + kor2 + kor3**(한국어 단독 낭독, Exp-178 발굴 데이터 — auto 모드에서 서두 영어 환각 등으로 붕괴한 사례가 계기가 되어 정식 테스트셋에 편입됨). 측정은 `--lan ko`로 서버 기동.
+  - **held-out**: auto 정량 = ytn1(ytn2 동일 이벤트 쌍둥이 → 미학습 코드스위칭 일반화 검증), en 정량 = eng1(영어 회귀 감시, `--lan en`), 정성 sanity = kinno(2화자 순차통역, 정답 텍스트가 부정확할 수 있어 **WER/F1 채택 게이팅에서 제외** — 전반 화자·문장 분리 + 대규모 누락/환각 유무만 정성 확인).
+  - eval.py의 `--lan`은 실행 1회당 전역 1값이라 **언어모드가 다른 파일은 run을 분리**해 측정한다(모드별 `--lan` 매핑은 §4).
+  - 새 실험 전 "이 변경이 bong1/ytn2/sbs1(혹은 kor1~3) 특화인가?" 자문. 추후 테스트 데이터 추가 시 회귀 없어야 한다.
 - **하드코딩·백엔드 우선, 탈출구 허용**: 디코더 파라미터(beam_size, compression_ratio_threshold, no_speech_threshold 등)·오디오 전처리·VAD 등 backend 레벨 개선을 우선한다. **정 방법이 없는 경우 하드코딩·후처리 필터도 사용 가능**(남용 금지; 근거는 실험기록에 남긴다). 특정 언어·패턴 특화 하드코딩(한국어 N-gram 필터, N-word 배치 드롭 등)은 신규 추가보다 backend 대안을 먼저 탐색한다. 기존 베이스라인 필터(Exp-002/028/057)는 유지.
 
 ## 4. 코드 스타일 / 운영 규칙
@@ -83,6 +92,7 @@
   - **채택 우선순위(② 단계): 1순위 = 최악 케이스(max) 미회귀, 2순위 = median 개선.** 최악 케이스가 catastrophic하게 터지는 설정은 median이 좋아도 실사용에서 무너지므로 기각. 최악 케이스 발생 시 median 개선보다 원인 파악·해결을 먼저.
   - **지표 우선순위 — 화자분리 F1 > WER > 문장분리 F1**: **① 화자분리 F1**(정답 `[spk]` 화자전환 경계가 전사 줄분리로 실현되는지)이 **최우선** 개선·채택 지표, **② WER**(전사 정확도), **③ 문장분리 F1**(동일 화자 온점 문장 분리, nice-to-have). 채택 게이트 순서 = 화자분리 F1 worst-case 미회귀 → WER max 미회귀 → WER median 개선 → 문장분리 F1. **문장분리 F1 하락 단독은 기각 근거 아님**(Case A: 동일 화자 인접 문장이 붙여 전사돼도 허용). 단 **Case B(한 단어/문장이 단어 중간에서 쪼개짐, 예 "올렸"⏎"습니다")는 F1·WER 무관 hard-fail — flag·원인 수정**. 요구사항·측정·구현 정본 = [docs/TRANSCRIPTION_REQUIREMENTS.md](docs/TRANSCRIPTION_REQUIREMENTS.md). (신 regime v2 — 2지표 metric 코드 구현 완료.)
   - **측정 기본 설정 = 화자분할 ON**(Sortformer; `--diarization --sortformer-model whisperlivekit/model/sortformer-4spk-v2.nemo --compression-ratio-threshold 3.0`; 테스트·held-out 분리는 §3.8). **정답 = 신형식 `_speak,sentence_sperate.txt` canonical**(구 `<name>.txt` deprecated; 파서 전환 구현 완료). held-out 정량(ytn1+eng1)은 채택 후보에 한해 **단회** 검증, held-out 정성 sanity(kinno)는 **게이팅 제외**(누락/환각·거친 화자/문장 분리만).
+  - **언어모드별 측정(§3.2)**: 현재 서버 기본은 `--lan auto`(암묵). auto 테스트(bong1/ytn2/sbs1)·held-out(ytn1)은 `--lan auto`, ko 테스트(kor1~3)는 `--lan ko`, en held-out(eng1)은 `--lan en`으로 서버를 기동해 측정한다. `--lan`은 실행당 전역 1값이므로 모드가 섞인 파일 목록을 한 run에 넣지 않는다 — 언어모드별로 eval.py를 별도 실행. 실험 기록(`/log-experiment`)에 측정 언어모드를 명시한다. ko/en 세션의 완전한 거동(코드스위칭 재감지 비활성화 포함)은 `feat/session-lang-lock` 브랜치 머지 이후 확립됨 — 그 전까지는 전역 `--lan ko/en`이 초기 언어만 고정할 뿐 일부 재감지 경로가 남아있을 수 있다.
   - **안정화 단계 전환**: 테스트 3종 WER이 catastrophic worst-case 없이 일정 밴드로 수렴해 스크리닝 1회만으로 후보 우열을 가리기 어려워지면, **평소 측정 기본을 `--repeat 3`(상시 안정화 테스트)으로 되돌린다**. 이 전환은 **major 방향 전환**이므로 사용자에게 보고·확인 후 적용한다.
   - **정성 평가 통합**: eval.py 완료 후 `.omc/transcripts/` 전사 파일을 읽어 **목표 달성 여부·신규 이슈 발생 여부**를 정성 판정한다. 정량 수치만으로 채택/기각하지 않고 정성 분석을 반드시 함께 고려한다. WER이 악화돼도 목표 구간이 개선됐다면 자율 기각하지 않고 사용자 확인으로 에스컬레이션한다. **필수 확인**: ① 화자전환 경계마다 줄분리 실현(1순위), ② Case B(단어 중간 분절) 발생 시 hard-fail flag, ③ 대규모 누락/환각·한영 외 언어 환각. Case A(동일 화자 문장 미분리)는 허용. 판정 기준 상세는 `.claude/commands/eval.md §정성 평가 절차` 및 [docs/TRANSCRIPTION_REQUIREMENTS.md](docs/TRANSCRIPTION_REQUIREMENTS.md) §4 참조.
 
@@ -100,6 +110,7 @@
 | `pyproject.toml` extras 추가/제거 | `docs/DEPLOYMENT_OFFLINE.md` §2.1 기능별 extra 표 및 §2.2 export 명령 |
 | 번역 파이프라인 변경 (`translator.py`, config 번역 필드) | `docs/DEPLOYMENT_OFFLINE.md` §5, `docs/FRONTEND_HANDOFF_SUMMARY.md`, `docs/API_SPEC.md` |
 | `test_data/` 파일 추가 또는 정답 .txt 추가(구/신형식 `_speak,sentence_sperate.txt`) | `docs/TESTING.md` 파일 목록, `CLAUDE.md` §4 측정 기본 설정(테스트셋 변경 시), `docs/TRANSCRIPTION_REQUIREMENTS.md` §2(정답 형식) |
+| 세션 언어모드 정책 변경 또는 파일별 언어모드(auto/ko/en) 태그 변경 | `CLAUDE.md` §3.2·§3.8·§4, `docs/TESTING.md`, `docs/TRANSCRIPTION_REQUIREMENTS.md`, `EXPERIMENTS.md`, `.claude/commands/eval.md`·`log-experiment.md`·`phase2-improve.md`, `docs/SCHEMA_CHANGES.md` |
 | 측정 지표(WER·화자분리 F1·문장분리 F1) 정의·정답 파서·2지표 산출 (`scripts/eval.py`·`whisperlivekit/metrics.py`) | `docs/TRANSCRIPTION_REQUIREMENTS.md`(§2 형식·§3 측정·§4 분석·§5 구현), `.claude/commands/eval.md` 결과 해석 기준, `docs/TESTING.md` 경로 C |
 | 실패 모드를 바꾸는 **구조적** 코드 변경의 master 머지 (언어고정·비음성억제·디코더/VAD 파이프라인 등) | `EXPERIMENTS.md`(STATE) "코드 세대(Epoch)" 절 — epoch 마커 +1, 이전 세대 파라미터 결론에 `[E?·재검증]` 부여 |
 | 신규 실험(Exp-N) 기록 | `EXPERIMENTS_LOG.md`(전체 서술) + `EXPERIMENTS.md` 빠른참조 1행(Epoch 열) — `/log-experiment` |
