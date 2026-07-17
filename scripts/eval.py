@@ -258,6 +258,7 @@ def start_server(
     lan: str = "auto",
     diarization: bool = False,
     sortformer_model: str = "",
+    llm_translation: bool = False,
     extra_server_args: list = None,
     server_log_file: str = None,
 ) -> subprocess.Popen:
@@ -278,6 +279,10 @@ def start_server(
             cmd.extend(["--sortformer-model", sortformer_model])
     else:
         cmd.append("--no-diarization")
+    if llm_translation:
+        cmd.append("--llm-translation")
+    else:
+        cmd.append("--no-llm-translation")
     if extra_server_args:
         cmd.extend(extra_server_args)
     env = os.environ.copy()

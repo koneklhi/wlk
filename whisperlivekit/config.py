@@ -83,10 +83,11 @@ class WhisperLiveKitConfig:
     nllb_size: str = "600M"
 
     # LLM translation (parse_args --llm-translation 계열; config 누락으로 from_namespace에서 버려지던 버그 수정)
-    llm_translation: bool = False
-    translation_serve: str = "ollama"
-    translation_endpoint: str = "http://localhost:11434"
-    translation_model: str = "qwen2.5:7b"
+    # 기본값 = 배포 PC(llama.cpp, gpt-oss-20b) 대상. dev Ollama는 parse_args 플래그로 재정의.
+    llm_translation: bool = True
+    translation_serve: str = "llama"
+    translation_endpoint: str = "http://localhost:2010"
+    translation_model: str = "gpt-oss-20b"
 
     # vLLM Realtime backend
     vllm_url: str = "ws://localhost:8000/v1/realtime"

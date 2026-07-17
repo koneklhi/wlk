@@ -408,32 +408,33 @@ def create_parser():
     # LLM 번역 인자
     parser.add_argument(
         "--llm-translation",
-        action="store_true",
-        default=False,
+        action=BooleanOptionalAction,
+        default=True,
         dest="llm_translation",
-        help="LLM 기반 번역 활성화 (llama.cpp 또는 Ollama)",
+        help="LLM 기반 번역 활성화. 기본 ON(배포 PC llama.cpp). 끄려면 --no-llm-translation.",
     )
     parser.add_argument(
         "--translation-serve",
         type=str,
-        default="ollama",
+        default="llama",
         choices=["llama", "ollama"],
         dest="translation_serve",
-        help="번역 서버 종류: llama(llama.cpp/vLLM) 또는 ollama",
+        help="번역 서버 종류. 기본값 llama(배포 PC llama.cpp). dev Ollama로 바꾸려면 ollama 지정.",
     )
     parser.add_argument(
         "--translation-endpoint",
         type=str,
-        default="http://localhost:11434",
+        default="http://localhost:2010",
         dest="translation_endpoint",
-        help="번역 서버 엔드포인트 URL. 기본값: http://localhost:11434 (Ollama dev)",
+        help="번역 서버 엔드포인트 URL. 기본값: http://localhost:2010 (배포 PC llama.cpp)."
+        " dev Ollama는 http://localhost:11434 지정.",
     )
     parser.add_argument(
         "--translation-model",
         type=str,
-        default="qwen2.5:7b",
+        default="gpt-oss-20b",
         dest="translation_model",
-        help="번역 모델명. 기본값: qwen2.5:7b (dev). prod: gpt-oss-20b",
+        help="번역 모델명. 기본값: gpt-oss-20b (배포 PC). dev는 qwen2.5:7b 지정.",
     )
 
     return parser
