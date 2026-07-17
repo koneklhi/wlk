@@ -24,3 +24,6 @@
 | [FRONTEND_HANDOFF.md](FRONTEND_HANDOFF.md) | React 연동 상세본(코드 근거·이력) — 더 이상 갱신 안 함, 내용은 `docs/FRONTEND_HANDOFF_SUMMARY.md`로 대체됨 | `docs/` |
 | [explanation_phase3_biasing.md](explanation_phase3_biasing.md) | Phase 3 바이어싱 설명 자료 (COLLAB_GEMINI.md 회신파일 명명규칙 확립 이전 유물) | `docs/reviews/` |
 | [GOAL_SILENCE_GRAMMAR_GATE.md](GOAL_SILENCE_GRAMMAR_GATE.md) | 문법-조건부 침묵 경계 게이트 goal (Exp-176으로 완료, master `c1f5884` 머지) | `docs/` |
+| [GOAL_SCRIPTANCHOR_ACRONYM_GUARD.md](GOAL_SCRIPTANCHOR_ACRONYM_GUARD.md) | ScriptAnchorRedetect 철자낭독(약어) 오발동 가드 goal (Exp-180으로 완료, master `cfb0387` 머지) | `docs/` |
+| [GOAL_SCRIPTANCHOR_ACRONYM_GUARD_PAUSE_NOTE.md](GOAL_SCRIPTANCHOR_ACRONYM_GUARD_PAUSE_NOTE.md) | 위 goal 중단·재개 히스토리(공유 venv 파손 복구 포함) | `docs/` |
+| [GOAL_SCRIPTANCHOR_ACRONYM_GUARD_REPORT.md](GOAL_SCRIPTANCHOR_ACRONYM_GUARD_REPORT.md) | 위 goal 최종 결과보고 (판단 유보 → 사용자 승인 채택) | `docs/` |

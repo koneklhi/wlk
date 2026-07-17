@@ -3249,3 +3249,67 @@ Exp-178 trace 재측정으로 규명한 **세션 초입 언어감지 콜드스�
 **게이트 판정**: ① 화자분리 F1 — 발동 런(sbs1) 같은날 OFF와 동일(80), 미발동 런 인과 없음 → 통과. ② WER max — 발동 런 전부 게이트 이내(sbs1 15.5<16.1)·표적(kor1) max 대폭 개선; bong1 39.9는 미발동 런 변동(Exp-177 max 36.9와 3.0pp 차) → 통과(유보 각주). ③ 발동 전수 정당(확정 라운드 포함 ko×8·en×1, 오적용 0). ④ held-out 미회귀. → **채택 권고** (머지 = 사용자 승인).
 
 **JSON**: OFF `.omc/benchmarks/eval_20260715_0940_kor_trace_x2.json` · ON `worktrees/session-start-lang-probe/.omc/benchmarks/eval_20260715_0958_kor_probe_on_x2.json`·`eval_20260715_1031_regress_probe_on.json`·`eval_confirm_{test3_N3,kor_N3,kinno_N3,heldout}.json` · **로그**: 각 `.omc/server_logs/server_*_20260715_*.log`(trace ON) · **전사**: 각 `.omc/transcripts/`
+
+---
+
+## Exp-180 — ScriptAnchorRedetect 철자낭독(약어) 오발동 가드 (P1, Exp-179 후속)
+
+**날짜**: 2026-07-16(측정)~2026-07-17(채택) · **Epoch**: E5(구조 미변경 — epoch 미bump) · **브랜치**: `exp/scriptanchor-acronym-guard@747e47f`, **master 머지 `cfb0387`**
+
+### 가설
+
+Exp-179가 신규 규명한 kor2 폭주(70~109%) 원인 — 한국어 문장 내 영문 약어 철자낭독("GP·GOP")이 ScriptAnchorRedetect(Exp-175)의 Latin streak을 채워 ko→en 오전환을 유발하고, 전환 트림이 9.7~12s 오디오를 폐기해 중복 재확정 폭주로 이어진다 — 를 "약어 성격의 Latin 토큰을 streak 산입에서 중립 스킵"하는 가드로 막는다. 데이터 특화 하드코딩 금지(§3.8) 원칙에 따라 특정 단어가 아닌 타이포그래피 속성(길이·대소문자)만으로 판별한다.
+
+### 변경 내용
+
+- `whisperlivekit/simul_whisper/backend.py`: `_is_acronym_like_latin` 헬퍼 신설 + `_update_script_anchor_streak`에서 약어형 Latin 토큰을 중립 스킵(streak 가산도 리셋도 안 함). 규칙① 길이≤2(단일글자 철자낭독), 규칙② 전부대문자&&길이≤6(GOP/GPGOP/AI/NATO). 소문자 자연단어·타이틀케이스는 그대로 전환 증거로 인정(Exp-175 커버리지 보존). 롤백 플래그 `SCRIPT_ANCHOR_ACRONYM_GUARD_ENABLED=True`.
+- `tests/test_script_anchor_redetect.py`: 헬퍼·게이트 통합 테스트 30건으로 확장(신규 ~12건), `is`/`to`류 소문자 2자 자연단어가 규칙①에 걸려 스킵되는 기지 한계를 `test_acronym_helper_short_natural_word_known_limitation`로 명시.
+
+### 테스트 설정
+
+경로 C, diar-ON, CRT=3.0, 짝지음 A/B(OFF=master, ON=워크트리). 스크리닝(Stage1, `--repeat 1~2`) 후 채택 확정(Stage3, `--repeat 3`, fail-fast 금지). 테스트=bong1+ytn2+sbs1+kor1~3(사용자 지시로 편입), held-out=ytn1+eng1(N=1), kinno(N=3 누적, 정성·게이팅 제외).
+
+### 정량 결과 (Stage3 채택 확정, N=3)
+
+| 파일 | OFF med(max) | ON med(max) | Δmed | Δmax | 화자F1 worst(OFF→ON) |
+|---|---|---|---|---|---|
+| bong1 | 35.6%(47.4%) | 38.1%(48.6%) | +2.4pt | +1.2pt | 47.6→50.0(개선) |
+| ytn2 | 20.7%(21.2%) | 17.2%(20.7%) | -3.4pt | -0.5pt | 69.6→72.7(개선) |
+| sbs1 | 10.1%(22.0%) | 10.7%(25.0%) | +0.6pt | +3.0pt | **66.7→33.3(악화)** |
+| kor1 | 31.6%(50.9%) | 42.7%(46.2%) | +11.1pt | -4.7pt | 해당없음(단일화자) |
+| kor2(표적) | 79.2%(120.8%) | 108.3%(131.9%) | **+29.2pt** | **+11.1pt** | 해당없음 |
+| kor3 | 71.5%(86.1%) | 56.3%(62.3%) | -15.2pt | -23.8pt | 해당없음 |
+| ytn1(held-out,N=1) | WER 12.3%/F1 73.7% | WER 11.7%/F1 100.0% | — | — | 개선 |
+| eng1(held-out,N=1) | WER 2.9%/F1 100% | WER 4.8%/F1 0.0%(단일화자 채점) | — | — | N=1 저baseline 노이즈 가능성 |
+
+### 분석 (정성)
+
+- **kor2 로그 전수 감사**: ON 3라운드(R1~R3) 전부 ScriptAnchorRedetect 발동 5·5·4건이 **전부 acronym-skip**, 재감지 적용·LangSwitch 절단은 **3라운드 전부 0건** — 가드가 설계대로 정확히 동작해 표적 오발동 채널을 완전히 차단했다(로그 인과 확정). 동일코드 OFF는 오늘 재확인 로그에서 R3 2건 적용(ko→en "GP GOP" 6.25s 절단 포함)이 OFF 최악 라운드(120.8%)와 일치 — Exp-179 진단이 재실증됨.
+- **그런데도 kor2 WER은 악화** — ON hyp_lines 대조 결과 3라운드 전부에서 `finalize_trigger=silence`(language_switch 아님) growing-prefix 중복 확정이 여전히 존재하며, 이는 **OFF에도 동일하게 존재하는 별개 결함**(kor3에서도 동일 패턴). 동일 OFF 코드의 kor2 median WER 자체가 세션만 바뀌어도(Stage1 108.0%→Stage3 79.2%) 29pt 흔들린 전례가 있어, 이번 ON 회귀분(+29.2pt)이 이 자연 변동폭과 사실상 같은 크기다.
+- **sbs1 화자F1 worst-case 악화**: ON R1/R2 recall이 50%로 하락(참조 전환 ~2건 중 1건만 검출) — 참조 전환 개수가 적어 저표본 고변동 구조. 가드와의 인과 로그 대조는 시간관계상 미실시(후속 과제).
+- **kor3**: Stage1(N=2) 역전 신호(OFF 57.6%→ON 77.5%)가 Stage3(N=3)에서 뒤집혀 개선(71.5%→56.3%) — N=2 스크리닝 노이즈로 판단.
+- **ytn2 오스킵 감사(게이트 4-ⓒ)**: acronym-skip 6건 중 `is`(소문자 2자, 기지 한계) 1~2건 관찰. R3에서 `is` 스킵 직후 92줄 내 `there`+`more`로 정상 재감지·전환 발동 — 오스킵이 "카운트 지연"에 그쳤다는 설계 시 예상과 일치, 커버리지 손상 증거 없음.
+- **Case B(단어 중간 분절) 전수 감사**: OFF+ON 18개 파일-라운드 전수 대조, 진짜 Case B 0건.
+
+### 채택 조건 판정
+
+| # | 게이트 | 판정 |
+|---|---|---|
+| 1 | 화자분리 F1 worst-case 미회귀 | 부분 미충족 — sbs1 -33.4pt |
+| 2 | WER max 미회귀 | 부분 미충족 — kor2 +11.1pt |
+| 3 | Case B 0건 | 충족 |
+| 4 | 표적지표(ⓐ오발동0·ⓑWER개선·ⓒ오스킵무영향) | ⓐ충족·ⓑ미충족·ⓒ조건부충족 |
+| 5 | held-out 미회귀 | 참고용 충족(N=1) |
+| 6 | WER median 개선/중립 | 미충족(혼재) |
+
+### 결론
+
+**채택 (master 머지 `cfb0387`, 사용자 승인 — 2026-07-17)**. 정량 게이트는 문면상 충족되지 않으나(①②④⑥ 부분/미충족), 표적 메커니즘은 로그로 100% 검증됐고 Case B도 깨끗함. kor2 WER 악화·sbs1 F1 악화는 가드가 손대지 않는 별개 경로(silence-churn 재확정, 저표본 F1)의 세션 변동일 가능성이 높다는 정성 근거(동일 OFF 코드가 세션 간 29pt 흔든 전례)를 사용자가 받아들여 채택 — CLAUDE.md §4 "목표 필수 기능 채택은 사용자 질의" 절차(정량 게이트 미충족이어도 §3.2 한/영 코드스위칭 처리 기반 기능은 자율 기각하지 않고 사용자 확인)에 따라 자율 기각 대신 판단 유보로 보고, 사용자가 최종 채택을 결정했다. **epoch 미bump** — ScriptAnchorRedetect(Exp-175) 서브시스템 내 조건부 스킵 추가일 뿐, 디코더/VAD 파이프라인 자체는 무변경.
+
+### 다음 가설
+
+1. **kor2/kor3 silence-churn 결함**(finalize_trigger=silence growing-prefix 중복 재확정) — 이번 가드와 무관한 별도 결함으로 특정됨. 사용자 지시로 다음 조사 착수.
+2. sbs1 화자F1 worst-case 회귀 로그 인과 대조 (저표본 노이즈 여부 확인).
+3. held-out eng1·ytn1 N≥2 보강.
+
+**JSON**: `.omc/benchmarks/eval_20260716_stage3_OFF_adoptN3.json` · `eval_20260716_151459_stage3_ON_adoptN3.json` · `eval_20260716_180014_heldout_ON_R1.json` · `eval_20260716_180920_kinno_ON_R2R3.json` · **로그**: `server_kor2_C_R{1,2,3}_20260716_15{4703,4918,5134}.log`(ON)·`server_kor2_C_R{1,2,3}_20260716_10{1646,1904,2119}.log`(OFF)·`server_ytn2_C_R{1,2,3}_20260716_15{2534,2750,3006}.log` · **최종보고서**: [docs/archive/GOAL_SCRIPTANCHOR_ACRONYM_GUARD_REPORT.md](docs/archive/GOAL_SCRIPTANCHOR_ACRONYM_GUARD_REPORT.md)
