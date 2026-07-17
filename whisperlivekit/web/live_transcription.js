@@ -376,7 +376,17 @@ function renderLinesWithBuffer(
       finalizedHistory.set(`${ln.start}`, ln);
     }
   }
-  const mergedLines = [...finalizedHistory.values(), ...(lines || []).filter((l) => !l.finalized)];
+  // 미확정(진행중) 줄과 start가 같은 확정 이력 항목은 화면에서 가린다.
+  // 백엔드가 침묵으로 조기 확정한 세그먼트를, 이후 마침표 철회 등으로 같은 start에서
+  // 계속 이어 전사(재개방)하면 확정판(짧음)과 진행중판(성장)이 같은 start로 공존해
+  // 중복 표시된다. 진행중 줄이 그 세그먼트의 현재 진실이므로 stale 확정판을 가린다
+  // (진행중 줄이 다시 확정되면 같은 start 키로 덮어써져 자연 정리된다).
+  const interimLines = (lines || []).filter((l) => !l.finalized);
+  const interimStarts = new Set(interimLines.map((l) => `${l.start}`));
+  const mergedLines = [
+    ...[...finalizedHistory.values()].filter((l) => !interimStarts.has(`${l.start}`)),
+    ...interimLines,
+  ];
   updateSaveButtonState();
 
   const showLoading = !isFinalizing && (lines || []).some((it) => it.speaker == 0);
