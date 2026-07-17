@@ -199,7 +199,7 @@ Phase 4 사전 준비 — 번역 모델 테스트 환경 (2026-06-21 완료)
 → /api/save-transcript POST 연결 완료 (UI 저장 버튼 클릭 시 전사 .txt 저장, `--transcript-save-dir`)
 → /api/recordings, /api/prompts — React 소스 확보 후 4-7과 함께 처리 예정
  ✅ 4-3. 번역 모델(OSS 20B LLM) 로컬 경로 및 파일 존재 확인
-→ 배포: gpt-oss-20b @ llama.cpp:2010, 개발: qwen2.5:7b @ Ollama:11434 (docs/TRANSLATION_SETUP.md)
+→ 배포: gpt-oss-20b @ llama.cpp:2010(기본값), 개발: qwen2.5:7b @ Ollama:11434(재정의) (docs/DEPLOYMENT_OFFLINE.md §5)
  ✅ 4-4. 번역 파이프라인 이식 [이식]
 → whisperlivekit/llm_translation/translator.py (LlamaTranslator/OllamaTranslator, 정적 군사 프롬프트)
  ✅ 4-5. 번역 결과 전달 필드 구현

@@ -41,7 +41,7 @@
 
 | 항목                                  | 이번 범위                 | 비고                                                      |
 | ------------------------------------- | ------------------------- | --------------------------------------------------------- |
-| 번역 `lines[].translation`            | **표시함**                | 서버 `--llm-translation` **ON** 상태로 구동               |
+| 번역 `lines[].translation`            | **표시함**                | 서버 `--llm-translation` **기본 ON**(2026-07-16~)               |
 | 화자분할 `speaker`                    | **수신만, UI 표시 안 함** | 서버 diar ON(값은 옴). 화자 배지·색은 이번엔 미구현(§2.6) |
 | 전사 저장 `POST /api/save-transcript` | **범위 제외**             | 저장 버튼 미구현. §3.2는 참고용                           |
 | `finalize_trigger`                    | **UI에 표시(테스트용)**   | 성능 분석 목적. **최종 배포 시 UI에서 제거 예정**(§2.7)   |
@@ -395,9 +395,10 @@ Segment 예시:
 
 ## 4. 번역(translation) 동작
 
-- **활성화**: 서버 `--llm-translation` 플래그(기본 **OFF**). 꺼져 있으면 `lines[].translation`·
-  `buffer_translation` 모두 항상 비어 있다. (개발 기본 Ollama `qwen2.5:7b`, 배포 llama.cpp `gpt-oss-20b` —
-  서버 플래그만 다르고 프론트 계약은 동일.)
+- **활성화**: 서버 `--llm-translation` 플래그(**기본 ON**, 배포 PC llama.cpp `gpt-oss-20b` 대상 —
+  2026-07-16~; 끄려면 `--no-llm-translation`). 꺼져 있으면 `lines[].translation`·`buffer_translation`
+  모두 항상 비어 있다. (dev는 `--translation-serve ollama` 등으로 Ollama `qwen2.5:7b`를 가리키도록
+  재정의 — 서버 플래그만 다르고 프론트 계약은 동일. 상세: [DEPLOYMENT_OFFLINE.md §5](DEPLOYMENT_OFFLINE.md))
 - **확정 문장 번역** `lines[].translation`: 번역 활성 + 해당 세그먼트 `finalized=true`일 때 채워진다.
   캐시 미스면 비차단으로 요청 후 **다음 스냅샷부터** 채워진다(문장 통째로 등장, 토큰 스트리밍 아님).
 - **진행 중 번역** `buffer_translation`: 번역 활성 시 `lines[]`의 마지막 `finalized:false` 세그먼트를
@@ -432,7 +433,7 @@ Segment 예시:
 | 오디오 입력          | WebM(MediaRecorder) 고정    | `useAudioWorklet=false`                                                       |
 | WebM 청크 timeslice  | 100ms                       | `recorder.start(100)`                                                         |
 | 화자분할             | 기본 ON                     | 서버 `--diarization`(기본 True)                                               |
-| 번역                 | 기본 OFF (**현재 구동 ON**) | 서버 `--llm-translation`                                                      |
+| 번역                 | **기본 ON**(2026-07-16~) | 서버 `--llm-translation`(끄려면 `--no-llm-translation`)                       |
 | **전사 라인 리텐션** | **무제한**                  | `lines[]` 세션 전체 유지·재전송(과거 5분 슬라이딩 → 무제한, master `606ecac`) |
 | 전사 저장 디렉터리   | `./transcripts`             | 서버 `--transcript-save-dir`                                                  |
 

@@ -292,9 +292,10 @@ React가 직접 구현**해야 한다(`onclose`/`onerror`에서 code 확인 후 
 
 ## 7. 번역(translation) 표시
 
-- **활성화**: 서버 플래그 `--llm-translation`(기본 **OFF**). 켜지 않으면 `lines[].translation`·
-  `buffer_translation` 모두 항상 비어 있다. 개발 PC 기본값은 Ollama `qwen2.5:7b`, 배포 PC는
-  llama.cpp `gpt-oss-20b`로 서버 플래그만 바뀐다(프론트 변경 불필요).
+- **활성화**: 서버 플래그 `--llm-translation`(**기본 ON**, 2026-07-16~ — 배포 PC llama.cpp `gpt-oss-20b`
+  대상). 끄면(`--no-llm-translation`) `lines[].translation`·`buffer_translation` 모두 항상 비어 있다.
+  dev PC는 `--translation-serve ollama` 등으로 Ollama `qwen2.5:7b`를 가리키도록 재정의한다(서버 플래그만
+  바뀌고 프론트 변경 불필요, 상세: [DEPLOYMENT_OFFLINE.md §5](DEPLOYMENT_OFFLINE.md)).
 - **세그먼트별 확정 번역** `lines[].translation`(str): 번역 활성 + 해당 세그먼트
   `finalized=true`일 때 채워진다. 캐시 미스면 비차단으로 번역 요청 후 **다음 스냅샷부터**
   채워진다(확정 후 문장 통째로 등장 — wl처럼 토큰 단위로 흐르지 않음). **이 경로는 정상 동작한다.**
