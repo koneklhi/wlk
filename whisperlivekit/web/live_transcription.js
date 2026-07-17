@@ -372,7 +372,8 @@ function renderLinesWithBuffer(
   // 서버의 5분 슬라이딩 윈도우로 확정 줄이 다음 스냅샷에서 빠져도 화면에서 사라지지 않게 함.
   for (const ln of (lines || [])) {
     if (ln.finalized && (ln.text || ln.speaker === -2)) {
-      finalizedHistory.set(`${ln.start}|${ln.end}|${ln.speaker}`, ln);
+      // start만 키로 사용: 문법게이트 재조립 시 end는 늘어나도 문장 시작 시각은 불변이므로 growing-prefix가 같은 항목을 덮어쓴다.
+      finalizedHistory.set(`${ln.start}`, ln);
     }
   }
   const mergedLines = [...finalizedHistory.values(), ...(lines || []).filter((l) => !l.finalized)];
