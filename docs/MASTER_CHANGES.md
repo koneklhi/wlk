@@ -151,7 +151,8 @@ upstream의 **언어 TRIPLE-LOCK** 문제 해소:
 
 **Exp-093 — 침묵 기반 재감지** ([`backend.py:36,85-105`](../whisperlivekit/simul_whisper/backend.py)):
 - `MIN_DURATION_REAL_SILENCE = 2` (upstream 5→2)
-- 2초 이상 침묵(`long_silence`) 시 `detected_language = None`, `first_timestamp = None` 리셋 → 다음 청크에서 강제 재감지
+- 2초 이상 침묵(`long_silence`) 시 `first_timestamp = None` 리셋 → 다음 청크에서 재감지
+  - `detected_language`는 **auto 세션에서만** `None`으로 리셋한다(강제 재감지). **언어 고정 세션**(`--lan ko/en`·`?language=ko/en`, Exp-184)에서는 재감지가 auto 전용이라 None 고착을 막고자 **고정 언어를 그대로 유지**한다(`backend.py:331-334`).
 - 효과: ytn1 max WER **108.0% → 22.7%** (catastrophic 완전 제거)
 
 **Exp-101 — 짧은 pause 후 최근 창 재감지** ([`backend.py`](../whisperlivekit/simul_whisper/backend.py), [`align_att_base.py`](../whisperlivekit/simul_whisper/align_att_base.py)):

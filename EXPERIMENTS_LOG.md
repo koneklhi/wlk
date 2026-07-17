@@ -3448,3 +3448,62 @@ pytest 411 passed·1 skipped, ruff pass. id 방출 실증: `Segment.from_tokens(
 2. Exp-180 약어가드 재평가 — 이제 kor WER 아티팩트가 제거됐으니, OFF/ON kor2 재측정으로 "판단 유보"를 깨끗한 숫자로 매듭(사용자 판단).
 
 **JSON**: `.omc/benchmarks/eval_20260717_1534_segid.json`(kor2 22.2%/kor3 49.0%/bong1 23.3%·화자F1 58.5%) · **커밋**: `b974023` + 머지
+
+---
+
+## Exp-184 — 세션별 언어 고정(auto/ko/en): 코드스위칭 로직 게이트 + opt-in 단일언어 전사 [E5, master 머지 `ac17b00`]
+
+### 가설
+서버 `--lan auto`(코드스위칭 대응)로 **한국어 단일 음성**을 돌리면 성능이 나쁘다(Exp-178 kor 데이터 발굴 계기). 배포 현장엔 "이 세션은 ko만/en만"이라는 사전 정보가 있는 경우가 있어, 세션 단위로 언어를 고정하면 코드스위칭 재감지 오버헤드·오탐 없이 단일 언어에서 더 나은 전사가 가능할 것으로 예상. auto는 기본·무회귀(opt-in).
+
+### 규명 (설계 전제)
+`?language=` 세션 쿼리파라미터는 이미 존재했으나 **기본 백엔드(SimulStreaming)에서 무효**였다 — `SessionASRProxy`가 `transcribe()`만 가로채는데 SimulStreaming은 `infer()`를 호출하고 `original_language` 속성도 없어 조용히 무시됐다. 코드스위칭 게이트가 읽는 `AlignAttConfig.language`(`cfg.language`)와 프록시가 건드리는 `original_language`는 완전히 분리된 별개 값이었다.
+
+### 변경 내용
+- **세션 언어 전파**: `SimulStreamingOnlineProcessor.__init__(language=None)` + `_resolve_session_cfg`(`simul_whisper/backend.py:263-282`) — 세션 언어 지정 시 `dataclasses.replace(asr.cfg, language=...)`로 AlignAttConfig 얕은 사본을 만들어 `_create_alignatt`에 전달 → 기존 `cfg.language` 게이트 6곳이 코드 수정 없이 세션 언어를 따름. 미지정(None)이면 전역 cfg 그대로(auto 객체수준 무회귀). 번역 태스크(direct_english_translation)는 공유 tokenizer 충돌로 오버라이드 무시+경고.
+- **코드스위칭 로직 auto 가드 5곳**: new_speaker eager 재감지(`backend.py:395-426`, `lang_locked` 시 스킵), 긴침묵 언어리셋(`backend.py:331-334`, 고정 시 고정언어 유지), ForeignLang 언어리셋(`backend.py:724`, 드롭은 유지), ScriptMismatch 재감지 arm(`backend.py:752`, 드롭은 유지), periodic-lang-check(`align_att_base.py:295`). 전부 `cfg.language != "auto"`일 때만 스킵 — auto에선 한 줄도 안 달라짐.
+- **online_factory**(`core.py:255-291`): simulstreaming은 SessionASRProxy 미래핑 + language 직접 전달, 그 외 백엔드는 기존 프록시 유지.
+- **basic_server**: `?language=` 허용목록 `{auto,ko,en}` 검증 + config 메시지 `language` 필드(적용 언어).
+- **내장 UI**(`live_transcription.{html,js}`): 소스 언어 드롭다운(auto/ko/en) + `?language=` URL 조립(auto=생략).
+- 단위 테스트 +16(`test_session_language_lock.py` 신규 15 + `test_lang_redetect.py` 긴침묵 고정 1), 연동 문서 5종(API_SPEC·SCHEMA_CHANGES·FRONTEND_HANDOFF·SENTENCE_FINALIZATION·TESTING).
+
+### 테스트 설정
+경로 C(VBCable), 화자분할 ON(Sortformer, CRT=3.0), 스크리닝 `--repeat 1`. provenance `branch=feat/session-lang-lock@9c574b5 vbcable=ok`. 모델 가중치는 워크트리에 대용량 파일 부재로 메인 저장소 절대경로 참조(코드는 워크트리, `--expect-code-root` 통과).
+- ko 테스트: `--files kor1/kor2/kor3 --lan ko`
+- en held-out: `--files eng1 --lan en`
+- auto 베이스라인: `--files kor1/kor2/kor3+eng1 --lan auto`
+
+### 테스트 세트 결과 (스크리닝 1회 — 방향 신호)
+
+| 파일 | 모드 | 고정 WER | auto WER | ΔWER | 고정 문장F1 | auto 문장F1 |
+|------|------|---------|---------|------|-----------|-----------|
+| kor1 | ko | 20.5% | 18.7% | +1.8%p | 72.7% | 54.5% |
+| kor2 | ko | 18.8% | 18.8% | 0 | 50.0% | 40.0% |
+| kor3 | ko | 38.4% | 51.0% | **−12.6%p** | 71.0% | 71.0% |
+| eng1 | en | 8.6% | 1.9% | +6.7%p | 50.0% | 100.0% |
+
+한국어 3종 평균: **고정 25.9% vs auto 29.5%**(고정 3.6%p 유리, kor3 견인). 화자분리 F1은 단일화자 성격 + repeat=1이라 노이즈(kor2 100 vs 0, eng1 0 vs 100은 라인분할 타이밍 편차) — Sortformer는 `--lan` 무관이라 우열 판정 제외.
+
+### 분석 (전사 내용 정성 대조)
+
+**kor1/kor2** (ko 고정): 주요 실패 없음. 한국어 출력 정상, 한/영 외 언어 환각 0건. auto도 동일 언어 정상.
+
+**kor3** (ko 고정):
+- **단어 중간 분절(Case B)**: 고정 `추진하겠`⏎`으며`, `통합`⏎`하고`, `창설`⏎`하고` — 술어가 음절 경계에서 쪼개짐. **단 auto도 동일 발생**(`사령부를 창`⏎`설하고` — 더 심함, `창설하겠`⏎`으며`). → Case B는 **silence-churn 기존 아티팩트**(Exp-181 규명 계열)이며 **언어 고정과 무관**. kor1·kor2는 양쪽 모두 Case B 없음.
+
+**eng1** (en 고정):
+- **고유명사 오전사**: 고정 `Taoiseach`→`Fishek`/`Tisha`(아일랜드어), 영어 출력은 정상. auto는 1.9%로 이 구간을 더 잘 처리. → en 고정이 auto보다 나쁜 건 직관에 반하며, 영어는 auto도 첫 토큰에서 en으로 즉시 수렴해 고정과 거의 동일 경로를 타므로 **repeat=1 편차**로 해석(±30~120%p 변동 범위 내).
+
+**코드스위칭 로직 비활성**: 서버 로그상 [NewSpeaker] eager 재감지·[LangSwitch] 마커·언어감지 로그가 고정·auto 양쪽 모두 미포착 — 단일언어·거의 단일화자 데이터라 그 경로가 애초에 자극되지 않는다. 비활성은 코드 설계(auto 가드)상이며 이 데이터셋은 대비 실측을 못 시킨다(단위 테스트 16종으로 커버).
+
+**이번 변경 영향**: 한국어 단일언어에서 고정이 auto 대비 유망(kor3 −12.6%p), eng1 회귀는 스크리닝 편차 추정. Case B는 고정 무관 기존 이슈. auto 표준셋(bong1/ytn2/sbs1)은 게이트가 inert라 무영향(측정 생략, 구조적 무회귀 + pytest 425 pass로 갈음).
+
+### 채택 조건 판정 / 결론
+
+**채택 (master 머지, 사용자 승인 — opt-in)**. 정량 채택 게이트(`--repeat 3` worst-case)는 미실시이나, ① 기능 정상 작동(ko/en 고정 전사, 한/영 외 환각 0), ② auto 기본 **구조적 무회귀**(게이트 auto에서 inert·pytest 425 pass·ruff clean), ③ 한국어 단일언어 방향 유리, ④ §3.2 한/영 고정 환경 직결 **opt-in 기반기능**이라 CLAUDE.md §4 "목표 필수 기능 채택은 사용자 질의"에 따라 사용자 승인으로 채택. eng1 회귀·Case B는 별도 트랙(스크리닝 편차 / silence-churn). **epoch 미bump** — 게이트가 auto에서 완전 inert라 과거 auto 파라미터 결론 무효화 없음.
+
+### 다음 가설
+1. (선택) ko-모드 채택확정 `--repeat 3`(kor1/2/3, §3.8 신설 프로토콜) — median+분산으로 고정 우세 확정 + eng1 회귀가 편차인지 확인.
+2. Case B(silence-churn) 근본수정은 언어모드 무관 별도 트랙(Exp-181 계열).
+
+**JSON**: `.omc/eval_canary_kor1_ko.json`·`eval_kor23_ko.json`·`eval_eng1_en.json`·`eval_auto_baseline.json`(worktrees/session-lang-lock) · **커밋**: `4589cc7`+`b91ba55` → 머지 `ac17b00`
