@@ -1,0 +1,31 @@
+파일: test_data\kinno.mp3
+경로: C | 회차: R2 | 정답형식: 신형식
+WER: 30.5% | 화자분리F1: 69.0% | 문장분리F1: 37.5%
+
+[전사]
+제22회 중소기업기술혁신대전 K혁신기업과의 대회, 본 행사 진행을 맡은 저는 아나운서 손진희 저는 장택수 통역사입니다. 굿모닝 레이디즈 앤 젠트맨 웰컴 투 더 다일러그 웨트 케이 이노베이립 컴퍼니스 앱 ITS 2021 MC 손진희 아임 인터프리얼 장택수 네 저희는 원활한 행사의 진행을 위해서 마스크를 벗고 진행을 하도록 하겠습니다 오늘 진행은 저와 함께 옆에 계신 통역사분과 함께 영어와 한국어 순차 통역으로 진행될 예정입니다 오늘. In today's event, we'll be conducted in Korean and English. 그럼 이제 K혁신기업 기업과의 대화 본행사를 시작하도록 하겠습니다. 이제. So now let's begin today's event. So now let's begin,. today's event. 먼저 어제 26일이었던 이곳 특설무대 위에서 K혁신기업 11개의 기업이 쇼케이스를 진행했습니다. 혁신 기술을 기반으로 해서 다양한 신제품과 신기술을 소개해 주셨는데요. 어제. Yesterday afternoon at this special stage, 11K Innovative SMEs showcased their innovative products and technologies. 오늘은 어제 발표를 진행해 주셨던 11개의 K-혁신 기업을 전문가 심사위원과 국내외 미디어 관계자분들과 함께 이야기를 나누는 시간을 가져보도록 하겠습니다. Today we will have a special talk with 11K Innovative Companies and Judges and Media Professionals. Thank you. 오늘은 어제와 마찬가지로 코로나로 인해서 정부 안전 방역 지침을 따라하므로 여러분들 이곳에 모시지는 못했습니다. 다만 ITS 홈페이지를 통해서 온라인으로 시청을 할 수 있는데요. 또 다양한 행사도 있고 다시 보기도 계속 진행된다고 하니까요. 많은 관심과 성원 부탁드리겠습니다. Today's event is streamed through online and you can get access through ITS official website and also online streaming. 먼저 어제 멋진 발표를 해주셨고 또 11개의 핵심 기업이 오늘 발표자분들이 이곳에 자리해주셨습니다. 함께 만나볼까요. So today we have representatives from 11 innovative companies,
+
+[문장별 확정 트리거]
+1. 제22회 중소기업기술혁신대전 K혁신기업과의 대회, 본 행사 진행을 맡은 저는 아나운서 손진희 저는 장택수 통역사입니다.  ⟨punctuation⟩
+2. 굿모닝 레이디즈 앤 젠트맨 웰컴 투 더 다일러그 웨트 케이 이노베이립 컴퍼니스 앱 ITS 2021 MC 손진희 아임 인터프리얼 장택수 네 저희는 원활한 행사의 진행을 위해서 마스크를 벗고 진행을 하도록 하겠습니다 오늘 진행은 저와 함께 옆에 계신 통역사분과 함께 영어와 한국어 순차 통역으로 진행될 예정입니다 오늘.  ⟨language_switch⟩
+3. In today's event, we'll be conducted in Korean and English.  ⟨language_switch⟩
+4. 그럼 이제 K혁신기업 기업과의 대화 본행사를 시작하도록 하겠습니다.  ⟨speaker_change⟩
+5. 이제.  ⟨language_switch⟩
+6. So now let's begin today's event.  ⟨speaker_change⟩
+7. So now let's begin,.  ⟨silence⟩
+8. today's event.  ⟨language_switch⟩
+9. 먼저 어제 26일이었던 이곳 특설무대 위에서 K혁신기업 11개의 기업이 쇼케이스를 진행했습니다.  ⟨punctuation⟩
+10. 혁신 기술을 기반으로 해서 다양한 신제품과 신기술을 소개해 주셨는데요. 어제.  ⟨language_switch⟩
+11. Yesterday afternoon at this special stage, 11K Innovative SMEs showcased their innovative products and technologies.  ⟨language_switch⟩
+12. 오늘은 어제 발표를 진행해 주셨던 11개의 K-혁신 기업을 전문가 심사위원과 국내외 미디어 관계자분들과 함께 이야기를 나누는 시간을 가져보도록 하겠습니다.  ⟨language_switch⟩
+13. Today we will have a special talk with 11K Innovative Companies and Judges and Media Professionals.  ⟨speaker_change⟩
+14. Thank you.  ⟨language_switch⟩
+15. 오늘은 어제와 마찬가지로 코로나로 인해서 정부 안전 방역 지침을 따라하므로 여러분들 이곳에 모시지는 못했습니다.  ⟨punctuation⟩
+16. 다만 ITS 홈페이지를 통해서 온라인으로 시청을 할 수 있는데요. 또 다양한 행사도 있고 다시 보기도 계속 진행된다고 하니까요. 많은 관심과 성원 부탁드리겠습니다.  ⟨language_switch⟩
+17. Today's event is streamed through online and you can get access through ITS official website and also online streaming.  ⟨language_switch⟩
+18. 먼저 어제 멋진 발표를 해주셨고 또 11개의 핵심 기업이 오늘 발표자분들이 이곳에 자리해주셨습니다.  ⟨punctuation⟩
+19. 함께 만나볼까요.  ⟨language_switch⟩
+20. So today we have representatives from 11 innovative companies,  ⟨-⟩
+
+[정답]
+제 22회 중소기업기술혁신대전 K-혁신기업과의 대회 본 행사 진행을 맡은 저는 아나운서 손진희. 저는 장택수 통역사입니다. Good morning, ladies and gentlemen. Welcome to the Dialogue with K-Innovative Companies at ITS 2021. She is today's MC 손진희. I am interpreter 장택수. 저희는 원활한 행사의 진행을 위해서 마스크를 벗고 진행을 하도록 하겠습니다. 오늘 진행은 저와 함께 옆에 계신 통역사분과 함께 영어와 한국어 순차 통역으로 진행될 예정입니다. Today's event will be conducted in korean and english. 그럼 이제 K 혁신기업 기업과의 대화 본 행사를 시작하도록 하겠습니다. So now let's begin today's event 먼저 어제 26일이었던 이곳 특설무대위에서 K 혁신기업 11개의 기업이 쇼케이스를 진행했습니다. 혁신기술을 기반으로 해서 다양한 신제품과 신기술을 소개해 주셨는데요. Yesterday afternoon at this special stages, eleven k-innovated SMEs show case their innovated product at technologies. 오늘은 어제 발표를 진행해 주셨던 11개의 K-혁신 기업을 비롯해서 전문가 심사위원과 국내외 미디어 관계자분들과 함께 이야기를 나누는 시간을 가져보도록 하겠습니다. Today we'll have it special talk with eleven K-inonovated companies and judges and media professionals. 오늘은 어제와 마찬가지로 코로나로 인해서 정부 안전 방역 지침을 따라야 하므로 여러분을 이곳에 모시지는 못했습니다. 다만 ITS 홈페이지를 통해서 온라인으로 시청을 할 수 있는데요. 또 비롯해서 다양한 행사도 있고 또 다시 보기도 계속 진행된다고 하니까요. 많은 관심과 성원 부탁드리겠습니다. Under the quarantine measures, today's event is streamed through online and you can get access through ITS official website and also online streaming. 먼저 어제 멋진 발표를 해주셨고 또 11개 핵심 기업이 오늘 발표자분들이 이곳에 자리해 주셨습니다. 함께 만나볼까요? So today we have all presentative from eleven innovated companies.

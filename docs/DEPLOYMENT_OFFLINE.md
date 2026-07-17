@@ -565,10 +565,10 @@ C:\Python312\python.exe -m whisperlivekit.basic_server `
 | 한글이 깨져서 전송됨 | curl로 직접 호출 시 인코딩 문제 | httpx(wlk 내부)는 `ensure_ascii`로 정상 처리됨 — curl 자체 결함이니 wlk 실사용에는 무관 |
 
 **알려진 차이 — 기존 whisperlive 대비(버그 아님, 의도적 보류)**:
-- **Glossary/벡터 few-shot 미이식**: 기존 whisperlive는 Qdrant(bge-m3 임베딩) 벡터 검색으로 예시 문장을
-  프롬프트에 주입하고 동적 glossary(`admin_translation_glossary.json`/`user_translation_glossary.db`)를
-  참조한다. wlk 번역기는 **정적 군사 프롬프트만** 사용한다(§6.3 참조) — 동일 입력이라도 번역 품질/용어
-  일관성이 기존과 다를 수 있다.
+- **Qdrant 벡터 few-shot 미이식(Stage 2)**: 기존 whisperlive는 Qdrant(bge-m3 임베딩) 벡터 검색으로
+  입력과 유사한 예시 문장을 동적으로 골라 프롬프트에 주입한다. wlk는 이 벡터 검색 단계만 미이식이다 —
+  용어집(`glossary_block`) 동적 주입·고정 예시 문장(`sentence_block`) 주입은 이미 이식·연결 완료됐다
+  (Stage 1, §6.3 참조). 동일 입력이라도 예시 선택 방식 차이로 번역 품질/용어 일관성이 기존과 다를 수 있다.
 - **스트리밍 미사용**: 기존은 SSE 스트리밍(`_stream`), wlk는 단일 non-streaming POST(`stream:false`). 최종
   번역 결과는 동등하나, 화면에 토큰 단위로 흘러나오는 연출은 없다.
 
@@ -600,15 +600,31 @@ C:\Python312\python.exe -m whisperlivekit.basic_server `
 - `hallucination.json` 포맷: **문자열 배열** `["감사합니다", ...]`.
 - `user_replacement.db`: 기존 사용자 사전을 이어쓰려면 배포 DB 파일 복사, 새로 시작이면 불필요(매니저가 테이블 자동 생성).
 
-### 6.3 번역 Glossary — **미이식**(파일명 교체가 아니라 신규 이식)
-배포 원본은 `admin_translation_glossary.json` / `user_translation_glossary.db` + `TranslationPromptManager`를 쓰지만([whisperlive_code/filtering____init__.py:39-44](../whisperlive_code/filtering____init__.py), [whisperlive_code/prompt_manager.py](../whisperlive_code/prompt_manager.py)), **whisperlivekit엔 전혀 이식돼 있지 않다**(파일·클래스·팩토리 부재). 현재 번역기는 정적 군사 프롬프트만 쓴다.
+### 6.3 번역 Glossary — **Stage 1 이식 완료**(2026-07-16, master `534bad1`)
 
-> 사용자 결정(이번 범위: "현재 이식본 유지")에 따라 **glossary 동적주입은 이번 배포 범위 밖**이다.
-> 추후 glossary가 필요하면 4단 이식이 필요하다(아래). 이건 "파일명 교체"가 아니라 별도 과제다:
-> ① `prompt_manager.py` 이식(`whisperlivekit/llm_translation/prompt_manager.py`) — 원본에 `_load_default_glossary_from_file` 시그니처/`file_path` 버그가 있어 이식 시 수정 필요.
-> ② `get_prompt_manager()` 팩토리 추가(base=`admin_translation_glossary.json`, db=`user_translation_glossary.db`).
-> ③ `translator.py`에 glossary 주입 연결(원본 [translator.py:114-122](../whisperlive_code/translator.py) 패턴).
-> ④ (선택) `/api/prompts` REST 엔드포인트 추가(동적 추가/삭제용).
+> **[정정, 2026-07-17]** 이 절은 한동안 "미이식/배포 범위 밖"이라고 적혀 있었으나 이미 Stage 1(glossary_block +
+> sentence_block)이 이식·머지된 뒤 문서 갱신이 누락돼 있었다(CLAUDE.md "코드 변경 시 연동 갱신 문서" 표
+> 위반 사례). 아래가 현재 상태다.
+
+`whisperlivekit/llm_translation/`에 `TranslationPromptManager`(`prompt_manager.py`) + `get_prompt_manager()`
+싱글턴 팩토리 + `translator.py`의 `build_system_blocks()` 연결까지 완료돼 있다(`whisperlivekit/filtering/`과
+동일한 콜로케이션 패턴). `/api/prompts`(`GET` 조회, `POST /api/prompts/add-item` 추가, `POST
+/api/prompts/delete-item` 삭제)로 운용 중 동적 추가/삭제가 가능하고, 변경은 **다음 번역 요청부터 즉시
+반영**된다(API 계약 상세는 [API_SPEC.md §3.4](API_SPEC.md) 참조).
+
+| 파일 | dev 위치 | 배포 시 해야 할 일 |
+|---|---|---|
+| `admin_translation_glossary.json` | `whisperlivekit/llm_translation/` | 배포 원본의 실제 용어집으로 내용 교체. **포맷은 `{origin: translation}` dict** — 단어교정 `admin_replacement.json`의 리스트 포맷(§6.1)과 다르므로 혼동 금지 |
+| `user_translation_glossary.db` | `whisperlivekit/llm_translation/` | 기존 사용자 glossary를 이어쓰려면 배포 DB 파일 복사, 새로 시작이면 불필요(매니저가 테이블 자동 생성) |
+
+**미이식으로 남은 것은 Stage 2(Qdrant 벡터 유사 예시 검색)뿐**이다 — `sentence_block`(few-shot 예시 문장)
+자체는 이미 동작하며 항상 전체가 주입된다, "입력과 유사도가 가장 높은 예시만 동적으로 고른다"는 부분만
+아직 없다. 설계 상세: [docs/superpowers/specs/2026-07-16-translation-glossary-design.md](superpowers/specs/2026-07-16-translation-glossary-design.md) §8.
+
+> **⚠️ 배포 PC 반영 확인 필수**: `whisperlivekit/llm_translation/` 서브패키지 자체가 wheel에 새로 추가된
+> 변경이라, §8 트랩 "wheel 재설치 누락"·"wheel 버전 문자열 불변"을 빠뜨리면 구버전 wheel이 그대로 로드돼
+> 이 API 자체가 없는 것처럼(404) 보인다. 배포 후 `curl http://localhost:8900/api/prompts`로 반드시
+> 라이브 확인할 것(§7 점검 순서에 반영).
 
 ---
 
@@ -623,6 +639,7 @@ C:\Python312\python.exe -m whisperlivekit.basic_server `
 5. **번역**(§4.4 3단계 / §5): `start_oss.bat` 후 번역 + 화자분할 동시 ON 기동 → 한↔영 1문장 스모크(동시 사용 가능, §5.4).
 6. **경로 C 정량**(§4.1): `C:\Python312\python.exe scripts/closed_test.py test_data/sbs1.mp3` → WER/F1이 [EXPERIMENTS.md](../EXPERIMENTS.md) "현재 베이스라인"(turbo, diar-ON, Exp-161 기준: sbs1 ≈ WER 14.9%/F1 16.7% — F1은 diar-ON 문장경계 과분할로 낮게 나오는 게 정상, WER이 1차 지표) 근처인지. (playwright/VBCable 필요) — ⚠️ [MASTER_CHANGES §2](MASTER_CHANGES.md)의 수치(sbs1 19.6%/76.2%)는 Exp-105(2026-06-22, diar-OFF·base 기질) 기준으로 **stale** — 참조하지 말 것.
 7. **단어 교정**(§6.2): `admin_replacement.json`/`hallucination.json`을 배포본으로 채운 뒤 해당 단어가 교정되는지 확인.
+8. **번역 glossary**(§6.3): `curl http://localhost:8900/api/prompts`가 404가 아니라 200 JSON을 반환하는지, `/api/prompts/add-item`으로 추가한 용어가 다음 번역 요청부터 실제 반영되는지 확인.
 
 ---
 
