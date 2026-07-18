@@ -1,6 +1,8 @@
 """scripts/eval.py의 _build_result 신형식/구형식/무정답 3-way 분기 통합 테스트.
 
-tmp_path에 합성 정답 파일을 배치해 실제 서버·오디오 없이 분기 로직만 검증한다.
+정답 파일은 항상 `<stem>.txt` 하나이며, 내용에 `[spkN]` 헤더가 있으면 신형식,
+없으면 구형식(빈 줄 경계)으로 판별된다. tmp_path에 합성 정답 파일을 배치해
+실제 서버·오디오 없이 분기 로직만 검증한다.
 """
 
 import sys
@@ -29,10 +31,10 @@ it was warm
 
 
 def test_build_result_new_format_populates_speaker_and_sentence_fields(tmp_path):
-    """신형식 정답 파일이 있으면 그것을 우선 사용하고, seg_f1은 화자경계 F1을, sentence_f1은
-    블록 내부 문장경계 F1을 각각 나타내야 한다."""
+    """정답 파일(<stem>.txt)에 [spkN] 헤더가 있으면 신형식으로 파싱하고, seg_f1은 화자경계 F1을,
+    sentence_f1은 블록 내부 문장경계 F1을 각각 나타내야 한다."""
     audio_path = tmp_path / "foo.mp3"
-    (tmp_path / "foo_speak,sentence_sperate.txt").write_text(NEW_FORMAT_TEXT, encoding="utf-8")
+    (tmp_path / "foo.txt").write_text(NEW_FORMAT_TEXT, encoding="utf-8")
     hyp_sentences = ["the cat sat", "on the mat", "it was warm"]
 
     result = _build_result(audio_path, "the cat sat on the mat it was warm", hyp_sentences, "C")
@@ -50,7 +52,7 @@ def test_build_result_new_format_populates_speaker_and_sentence_fields(tmp_path)
 
 
 def test_build_result_old_format_fallback_when_no_new_format_file(tmp_path):
-    """신형식 파일이 없으면 구형식(.txt, 빈 줄 경계)으로 완전히 동일하게 폴백한다."""
+    """정답 파일(<stem>.txt)에 [spkN] 헤더가 없으면 구형식(빈 줄 경계)으로 완전히 동일하게 폴백한다."""
     audio_path = tmp_path / "bar.mp3"
     (tmp_path / "bar.txt").write_text(OLD_FORMAT_TEXT, encoding="utf-8")
     hyp_sentences = ["the cat sat", "on the mat", "it was warm"]
@@ -86,10 +88,9 @@ def test_build_result_no_reference_at_all(tmp_path):
 
 
 def test_build_result_unparseable_new_format_file_falls_back_to_old(tmp_path):
-    """신형식 파일명(_speak,sentence_sperate.txt)이 존재해도 [spkN] 헤더가 없어 파싱 실패하면
-    (parse_speaker_sentence_reference가 None을 반환하면) 구형식 파일로 폴백한다."""
+    """파일명이 신형식 규약대로 <stem>.txt여도 내용에 [spkN] 헤더가 없으면 파싱 실패하고
+    (parse_speaker_sentence_reference가 None을 반환하면) 같은 파일을 구형식으로 폴백한다."""
     audio_path = tmp_path / "qux.mp3"
-    (tmp_path / "qux_speak,sentence_sperate.txt").write_text(OLD_FORMAT_TEXT, encoding="utf-8")
     (tmp_path / "qux.txt").write_text(OLD_FORMAT_TEXT, encoding="utf-8")
     hyp_sentences = ["the cat sat", "on the mat", "it was warm"]
 

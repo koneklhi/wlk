@@ -3,9 +3,9 @@
 `scripts/`는 패키지가 아니므로 sys.path에 추가해 임포트한다
 (tests/test_analyze_case3_hallucination.py와 동일 방식).
 
-fixture는 실제 신형식 정답 파일(test_data/*_speak,sentence_sperate.txt)과
-구형식 정답 파일(test_data/*.txt)의 발췌를 사용해 실제 포맷 특이사항
-(줄 끝 공백, 말미 빈 줄 등)을 그대로 반영한다.
+fixture는 실제 정답 파일(test_data/*.txt — [spkN] 헤더가 있으면 신형식, 없으면
+구형식)의 발췌를 사용해 실제 포맷 특이사항(줄 끝 공백, 말미 빈 줄 등)을 그대로
+반영한다.
 """
 
 import sys
@@ -16,7 +16,7 @@ sys.path.insert(0, str(_SCRIPTS_DIR))
 
 from eval import parse_speaker_sentence_reference  # noqa: E402
 
-# test_data/ytn2_speak,sentence_sperate.txt 발췌 — 2화자, 화자당 문장 1개, spk1이 비인접 재등장.
+# test_data/ytn2.txt(신형식) 발췌 — 2화자, 화자당 문장 1개, spk1이 비인접 재등장.
 YTN2_EXCERPT = """[spk1]
 First among those were our efforts to maintain a robust, combined defense posture, and to strengthen coordination towards achieving the final, fully verified denuclearization of North Korea.
 
@@ -30,7 +30,7 @@ In support of these ends, we remain resolute in our enforcement of the United Na
 이런 목표들을 달성하기 위해서 우리는 UN안보리 결의를 집행하는 것과 관련해 저희 변함 없는 입장을 고수하고 있습니다.
 """
 
-# test_data/sbs1_speak,sentence_sperate.txt 발췌 — spk1 블록에 문장 6개(줄 끝 공백 포함, 실제 파일 그대로),
+# test_data/sbs1.txt(신형식) 발췌 — spk1 블록에 문장 6개(줄 끝 공백 포함, 실제 파일 그대로),
 # 뒤이어 spk2 블록에 문장 1개.
 SBS1_EXCERPT = """[spk1]
 현지 시간 5일 미국 육군 전쟁 대학 강연에 나선 제이비어 브런슨 주한미군 사령관.
@@ -49,7 +49,7 @@ SBS1_EXCERPT = """[spk1]
 From a satellite image, the Republic of Korea looks like an island, or like a fixed aircraft carrier floating in the water between Japan and mainland China.
 """
 
-# test_data/bong1_speak,sentence_sperate.txt 발췌 — 4화자 spk1~spk4, spk1/spk3/spk4가 비인접 재등장,
+# test_data/bong1.txt(신형식) 발췌 — 4화자 spk1~spk4, spk1/spk3/spk4가 비인접 재등장,
 # 단일/복수 문장 블록 혼재, 한/영 혼재.
 BONG1_EXCERPT = """[spk1]
 Song, when you read the screenplay for the first time, what did you think?
@@ -81,7 +81,8 @@ So, the rock what was the What's the metaphor?
 What's the significance of the rock that keeps popping up?
 """
 
-# test_data/ytn2.txt(구형식) 발췌 — [spkN] 헤더 없는 빈 줄 구분 텍스트.
+# 구형식(빈 줄 구분, [spkN] 헤더 없음) 예시 — 구형식 단독 파일은 더 이상 test_data/에 존재하지
+# 않으나(현재는 test_data/*.txt 하나로 통합), 폴백 분기 검증을 위해 합성한 발췌.
 OLD_FORMAT_EXCERPT = """First among those were our efforts to maintain a robust, combined defense posture, and to strengthen coordination towards achieving the final, fully verified denuclearization of North Korea.
 
 논의한 사안 중에서는 우선 왕성한 연합방위태세를 유지하기 위한 노력을 경주하자는 것과 북한의 최종적 그리고 완전히 검증된 비핵화를 달성하기 위해 협조를 강화하자는 취지의 논의를 했습니다.
