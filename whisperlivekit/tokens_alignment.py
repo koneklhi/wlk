@@ -492,6 +492,19 @@ class TokensAlignment:
                 prev_text.gate_pending = True
                 result.append(merged_silence)
             else:
+                # Exp-187: 이 분할이 (문법상 미종결이어도) 화자전환 때문에 강제된 것인지
+                # 표시한다 — _gate_decide의 speaker-mismatch 분기(split_grammar)와 동일 조건.
+                # TriggerAssign이 이 침묵을 무조건 silence/punctuation으로 라벨링하던 것을
+                # 정정해 speaker_change 우선순위(docs/SENTENCE_FINALIZATION_LOGIC.md §3.4)를
+                # 실제로 반영하기 위함.
+                if (
+                    self.diarization
+                    and next_seg is not None
+                    and getattr(next_seg, "speaker", -1) != -1
+                    and getattr(prev_text, "speaker", -1) != -1
+                    and next_seg.speaker != prev_text.speaker
+                ):
+                    merged_silence.speaker_boundary = True
                 result.append(merged_silence)
             i = span_end_idx + 1
         return result
@@ -609,6 +622,19 @@ class TokensAlignment:
                                     segment.is_silence(), getattr(closing, "gate_pending", False), closing.speaker,
                                 )
                                 pass  # 게이트 보류 — trigger 미설정(하류 확정 억제, §확정 유예 이원화)
+                            elif getattr(segment, "speaker_boundary", False):
+                                # Exp-187: 이 침묵 분할은 화자전환이 강제한 것(_gate_decide
+                                # split_grammar, speaker-mismatch)이다 — silence/punctuation으로
+                                # 흡수하지 않고 speaker_change 우선순위를 반영한다
+                                # (docs/SENTENCE_FINALIZATION_LOGIC.md §3.4: language_switch >
+                                # speaker_change > punctuation > silence).
+                                closing.finalize_trigger = "speaker_change"
+                                logger.debug(
+                                    "[TriggerAssign] branch=silence_speaker_boundary trigger=%s "
+                                    "speaker_boundary=%s closing_speaker=%s",
+                                    closing.finalize_trigger, getattr(segment, "speaker_boundary", False),
+                                    closing.speaker,
+                                )
                             else:
                                 closing.finalize_trigger = "punctuation" if closing.has_punctuation() else "silence"
                                 logger.debug(

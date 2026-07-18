@@ -3594,3 +3594,148 @@ pytest 411 passed·1 skipped, ruff pass. id 방출 실증: `Segment.from_tokens(
 3. auto 화자F1 worst-case의 정밀한 N=3 베이스라인(SHS=0.8) 대조 측정 — 이번엔 시간 관계상 N=1 베이스라인과만 비교.
 
 **JSON**: `worktrees/silence-hard-secs-sweep/.omc/benchmarks/eval_shs{0.8~2.0}_{auto,ko}.json`(스크리닝) · `eval_shs1.2_{auto,ko}_N3.json`(확정) · `eval_shs1.2_{ytn1,eng1}.json`(held-out) · **브랜치**: `exp/silence-hard-secs-sweep`(머지 대기)
+
+---
+
+## Exp-187 — 화자전환 finalize_trigger 라벨 손실 규명 + 분기우선순위 수정 [E5, `exp/speaker-change-trigger-loss`]
+
+### 배경 / 가설
+
+Exp-186(`feat/debug-diagnostics-logging`, 관찰용 로그만 추가, 규명 미완)이 bong1(정답 화자전환 14회, 4화자)에서
+diarizer `[NewSpeaker]` 로그는 회차당 26~27회 화자전환을 감지하는데 확정 트리거가 `speaker_change`로 배정된
+횟수는 회차당 1~4회뿐임을 관찰했다. §3.3 최우선 지표(화자분리 F1)와 직결되는 손실이라 이번 Stage에서
+`--trace-tokens`로 실측 규명한다. **최우선 가설**: `tokens_alignment.py:get_lines_diarization()`의 분기
+우선순위(`hard_boundary`→`is_silence()`→`speaker != closing.speaker`→`punct_boundary`) 자체가 구조적 원인 —
+`segment.is_silence()` 체크가 화자비교보다 먼저 걸려, 화자전환이 침묵을 사이에 두고 일어나면(자연 발화의 압도적
+다수 케이스) `speaker_change`가 `silence`/`punctuation`에 흡수된다는 가설. 부수 관찰(검증 대상): 마지막
+`else: closing.finalize_trigger = "speaker_change"` 폴백 분기가 De Morgan 전개상 도달 불가능해 보임(실제 0건인지
+로그로 확인).
+
+### 원인 규명 (재현 측정 + 코드 대조)
+
+`--trace-tokens --repeat 3`로 bong1 단독 재현(fix 전 코드, `67a58ad`)한 뒤 `[TriggerAssign]` 서버 로그를 직접 대조:
+
+1. **분기 우선순위가 실제 원인으로 확정**: `_apply_silence_grammar_gate()` → `_gate_decide()`(`tokens_alignment.py:412`)는
+   이미 `diar_mode and next_seg.speaker != closing.speaker`일 때 문법 판정(`should_split_after_silence`)을
+   건너뛰고 강제 분할(`split_grammar`)하고 있었다 — 즉 **화자전환이라는 사실 자체는 게이트 단계에서 이미 알고
+   있었다**. 그런데 이 판정 결과(`path`)가 반환값 그 이상으로 전달되지 않고 `_log_silence_gate` 디버그 로그에만
+   쓰이고 버려졌다. 그 결과 `get_lines_diarization()`의 TriggerAssign 블록(587~643행)이 `elif segment.is_silence():`
+   분기를 화자비교보다 먼저 타면서, 화자전환으로 인해 강제 분할된 침묵 경계까지 전부 `silence`/`punctuation`으로
+   라벨링했다. `tests/test_silence_grammar_gate.py::test_diar_speaker_change_blocks_merge`(기존 테스트, 침묵을
+   사이에 둔 화자전환 시나리오)가 "병합 안 됨"만 검증하고 `finalize_trigger`는 확인하지 않아 이 손실이 그동안
+   드러나지 않았다.
+2. **branch=else(fallback) 실측 0건 확정**: 부수 관찰대로 도달 불가능 — baseline(수정 전) bong1 R1/R2/R3 + 수정 후
+   bong1 R1/R2/R3 + ytn2 R1~R3 + sbs1 R1~R3 + ytn1 + kor2 + kor3, 총 **15개 서버 로그 전수에서 `branch=else` 0건**
+   (`grep -c "branch=else"` 전부 0). De Morgan 분석과 실측이 일치 — 코드는 그대로 두되(과잉 리팩터 지양) 사실로
+   기록만 남긴다.
+3. **diarizer 자체는 정상(귀속 오류 아님)**: `[NewSpeaker]` 원시 이벤트 자체는 회차당 46~68회(측정마다 상이,
+   §3.8 worst-case 변동성과 정합) 발생하고, 문제는 diar 신호 → `finalize_trigger` 변환 경로의 라벨링 로직에
+   있었다 — CLAUDE.md 지시서의 "diarizer 귀속 오류" 갈래는 **기각**.
+4. **ytn2/sbs1/ytn1 대조**: 2화자 순차통역(ytn2/ytn1)에서도 동일 패턴 확인 — 화자전환이 대부분 `language_switch`
+   (hard_boundary)로 흡수되거나(우선순위상 정상), 그 다음으로 침묵 경계에 흡수됐다. sbs1(사실상 단일 화자+영어
+   인용)은 diar가 인용부를 다른 화자로 오분류하는 지점에서만 `speaker_change`가 드물게 발생 — 파일 특성과 일관.
+
+### 수정 내용 (TDD)
+
+**Red**: `tests/test_finalize_trigger.py`에 diar 헬퍼(`feed_diar`/`diar_text_segs`, `test_silence_grammar_gate.py`
+패턴 재사용) + 2개 테스트 추가:
+- `test_diar_speaker_change_across_silence_gets_speaker_change_trigger` — `test_diar_speaker_change_blocks_merge`와
+  동일 입력(침묵 사이 화자전환)에서 `finalize_trigger == "speaker_change"` 기대. 수정 전 실행 → `AssertionError:
+  assert 'silence' == 'speaker_change'`로 **실패 확인**.
+- `test_diar_same_speaker_across_silence_still_gets_silence_trigger` — 같은 화자 침묵 경계는 그대로 `"silence"`
+  (회귀 방지 대조군). 수정 전에도 **통과**(기존 정상 경로 불변 확인).
+
+**Green (최소 수정, 2개 파일)**:
+- `whisperlivekit/timed_objects.py` — `PuncSegment`에 `speaker_boundary: bool = False` 필드 추가(`punct_boundary`/
+  `gate_pending`과 동일하게 내부 전용, `to_dict` 미방출).
+- `whisperlivekit/tokens_alignment.py` — ① `_apply_silence_grammar_gate()`: `decision == "split"`이고
+  `diar_mode and next_seg.speaker != prev_text.speaker`(양쪽 다 `-1` 아님)면 `merged_silence.speaker_boundary = True`
+  스탬프. ② `get_lines_diarization()`의 TriggerAssign 블록: `elif segment.is_silence():` 안에서 `gate_pending` 다음,
+  기존 `else`(silence/punctuation 라벨) 앞에 `elif getattr(segment, "speaker_boundary", False):
+  closing.finalize_trigger = "speaker_change"` 분기 신설 — `docs/SENTENCE_FINALIZATION_LOGIC.md` §3.4가 이미
+  명시했던 우선순위(`language_switch > speaker_change > punctuation > silence`)를 코드가 실제로 지키도록 정정.
+  진단 로그 `[TriggerAssign] branch=silence_speaker_boundary`도 함께 추가(`--trace-tokens`).
+- 두 파일 다 **판정 로직의 물리적 경계 생성(병합/분할)에는 손대지 않음** — `_gate_decide`의 `decision` 자체는
+  불변이라 세그먼트 개수·위치·WER·F1은 이론상 불변, `finalize_trigger` 라벨만 정정.
+
+**Red→Green 확인**: `test_diar_speaker_change_across_silence_gets_speaker_change_trigger` PASSED. 전체
+`pytest tests/ -q` → **427 passed, 1 skipped**(수정 전 425 passed 1 skipped + 신규 테스트 2개, 회귀 없음).
+`ruff check` clean.
+
+### 측정 (경로 C, diar-ON, CRT=3.0, PLC=None, beams=2, SHS=1.2, turbo, `--trace-tokens`)
+
+**bong1 단독 재현 — 수정 전(baseline, `67a58ad`) vs 수정 후, 둘 다 N=3**:
+
+| 회차 | WER(전) | 화자F1(전) | 문장F1(전) | trigger분포(전) | WER(후) | 화자F1(후) | 문장F1(후) | trigger분포(후) |
+|---|---|---|---|---|---|---|---|---|
+| R1 | 26.0% | 57.9% | 26.1% | lang8/punc8/sil8/**spk3** | 28.7% | 68.6% | 31.6% | lang6/punc8/sil4/**spk7** |
+| R2 | 29.6% | 68.4% | 28.6% | lang6/punc12/sil7/**spk3** | 29.6% | 71.8% | 20.0% | lang8/punc11/sil4/**spk5** |
+| R3 | 30.2% | 66.7% | 38.1% | lang7/punc12/sil7/**spk1** | 29.0% | 62.5% | 33.3% | lang6/punc6/sil5/**spk4** |
+| **median** | 29.6% | 66.7% | 28.6% | **합계 spk=7** | 29.0% | 68.6% | 31.6% | **합계 spk=16** |
+| avg(3회) | WER 28.6% / 화자F1 64.3% / 문장F1 30.9% | | | | WER 29.1% / 화자F1 67.6% / 문장F1 28.3% | | | |
+
+`[NewSpeaker]` 원시 이벤트(회차당): 전 50/46/68, 후 측정 안 함(동일 코드경로, 라벨링만 다르므로 재계측 불필요).
+**speaker_change 트리거 합계 7→16(2.3배)로 증가**, silence 22→13·punctuation 32→25로 상응 감소, language_switch
+21→20(거의 불변, hard_boundary 우선순위는 내 변경과 무관해 그대로) — 가설대로 실제 화자전환이 반영됐다.
+WER/화자F1/문장F1은 전/후 모두 노이즈 범위 내 동률(순수 라벨링 수정이라 이론과 일치, §4 경로 C 회차변동 ±30~120%p
+관측과 정합 — 차이는 코드 때문이 아니라 STT 확률적 변동).
+
+**ytn2+sbs1 채택확정(N=3, 수정 후 코드)**: ytn2 median WER **15.8%**(min14.8/max21.2, σ3.4)·화자F1 **80.0%**·문장F1
+N/A(단문 위주), sbs1 median WER **11.9%**(min7.1/max15.5, σ4.2)·화자F1 **100.0%**·문장F1 88.9%. Exp-185(SHS=1.2
+baseline) 대비 ytn2 17.2%(16.7–20.2)/화자F1 90.0%, sbs1 10.7%(8.9–11.9)/화자F1 100.0% — **전부 노이즈 범위 내,
+게이트(구 regime ytn2 max34.5%/sbs1 max16.1%) 대비 여유 있게 통과**. ytn2 speaker_change 트리거 R1~R3 합계
+7+3+3=13(수정 전 브랜치 관찰 없음이나 CLAUDE.md 지시서 표의 "ytn2 speaker_change=1(3회 합)"과 대비하면 대폭 증가).
+branch=else 전부 0건.
+
+**held-out ytn1(auto, 단회)**: WER **9.2%**·화자F1 **88.9%**·문장F1 66.7% — Exp-185 baseline(11.7%/84.2%/57.1%)
+대비 개선(노이즈 범위 내). speaker_change 트리거 4건(vs CLAUDE.md 지시서 표의 기존 1건) 발생, branch=else 0건.
+
+**ko kor2/kor3(`--lan ko`, 단회, 무회귀 확인 목적)**: kor2 WER 20.7%(Exp-185 baseline 19.4~21.5% 범위 내)·화자F1
+100.0%·문장F1 100.0%. kor3 WER 37.7%(Exp-185 baseline 36.4~45.7% 범위 내)·화자F1 100.0%·문장F1 100.0%. 둘 다
+**`silence` 트리거만 발생**(kor2 5건·kor3 6건, speaker_change/language_switch 0건) — 단독 낭독체(사실상 단일
+화자)라 화자전환 자체가 없으므로 이 기능과 정합. **참고(인과 무관, 별도 기록)**: kor2 화자F1이 Exp-185에서는
+N=3 전부 0.0%로 고착돼 있었는데(EXPERIMENTS.md "다음 가설 2") 이번 단회는 100.0% — 화자분리 F1은 `finalize_trigger`
+라벨과 무관하게 세그먼트 경계로만 산출되므로(§ 경로 C `scripts/eval.py:408` 확인, trigger는 `hyp_lines`용 additive
+필드일 뿐 F1/WER 계산에 미사용) **이번 수정과 인과관계 없음** — diar 화자 배정 자체의 회차간 변동으로 추정,
+kor1/kor2 F1 불안정은 Exp-185가 이미 남긴 후속 과제로 재확인만 하고 이번 Stage 범위 밖으로 둔다.
+
+**Case B(단어 중간 분절) 발생 건수**: bong1(전 3회+후 3회)·ytn2(3회)·sbs1(3회)·ytn1(1회)·kor2(1회)·kor3(1회) 전사
+전수 육안 확인 — **0건**(hard-fail 게이트 통과).
+
+### 채택 조건 판정
+
+① 화자분리 F1 worst-case 미회귀: **✓**(전 파일 노이즈 범위 내, 오히려 다수 개선). ② WER max 미회귀: **✓**
+(bong1 29.6%<게이트 이력, ytn2 21.2%<34.5%, sbs1 15.5%<16.1%). ③ WER median 개선: 중립(순수 라벨링 수정이라
+설계상 기대하지 않음 — 노이즈 수준 등락). ④ 문장분리 F1: 후순위, 특이사항 없음. ⑤ Case B 0건: **✓**. ⑥ pytest
+427 passed·1 skipped, ruff clean: **✓**. ⑦ held-out(ytn1)·ko(kor2/kor3) 무회귀: **✓**.
+
+**✅ 채택** — 화자전환 finalize_trigger 라벨 손실의 구조적 원인(분기 우선순위)을 규명하고 최소 수정으로 해결.
+`finalize_trigger`는 진단·평가(§3.3 화자분리 F1 정성 분석, `.claude/commands/eval.md` 정성 평가 절차의 "문장별
+확정 트리거" 판독)에 쓰이는 계측 필드이므로, 이 라벨이 실제 원인(화자전환)을 정확히 반영하게 된 것 자체가
+목표 달성이다(§3.3 "화자전환 경계 분리가 잘 됐는지" 정성 판정의 신뢰도 제고). 물리적 세그먼트 경계·WER·F1은
+설계상 불변이라 정량 게이트는 전부 노이즈 범위 내 무회귀로 통과. **epoch 미bump**(라벨링 전용 수정, 디코더/VAD
+파이프라인 무변경).
+
+### 다음 Stage에 참고할 사항
+
+1. **kor1/kor2 화자F1 불안정**(Exp-185 "다음가설 2"): 이번 조사에서 kor2가 1회 100.0%로 나와 Exp-185의 3회 연속
+   0.0%와 대비된다 — `finalize_trigger`와 무관함을 확인했으니, 다음 조사는 Sortformer가 단독 낭독체(무음구간 많고
+   화자전환 없는 긴 발화)에서 스퓨리어스 화자 분할을 내는지(과거 sbs1 diar-ON 과분할 사례, Exp-155)를 직접 봐야
+   한다.
+2. **kor1 Case B**(다음 Stage 예고 대상, 지시서 §7): 이번 조사 범위 밖 — kor2/kor3만 확인했고 Case B는 0건이었으나
+   kor1은 측정하지 않았다.
+3. `speaker_boundary` 플래그는 `_apply_silence_grammar_gate`(gate_enabled=True, 기본값) 경로에서만 채워진다 —
+   `--no-silence-grammar-gate` 롤백 시 이번 수정도 함께 비활성화된다(기존 우선순위 버그 재발). 별도 처리는
+   하지 않음(게이트 자체가 기본 ON이고, 롤백은 예외 경로).
+
+### 인프라 메모
+
+`test_data/bong1.wav`·`kor1~3.wav`·`whisperlivekit/model/sortformer-4spk-v2.nemo`·
+`whisperlivekit/model/whisper-large-v3-turbo/model.safetensors`가 신규 워크트리에 미존재(모두 `.gitignore` 대상
+바이너리) — 메인 저장소에서 하드링크로 해결(Exp-185와 동일 패턴, 반복 발생하는 워크트리 신설 시 정례 절차).
+VBCable·측정 하니스 자체는 문제 없었음(인프라 블로커 없음).
+
+**JSON**: `.omc/benchmarks/eval_20260718_1851_bong1_repro.json`(baseline N=3) ·
+`eval_20260718_1901_bong1_fixed.json`(수정후 N=3) · `eval_20260718_1950_ytn2_sbs1_fixed.json`(N=3) ·
+`eval_20260718_2006_ytn1_heldout.json` · `eval_20260718_2010_kor2_kor3_ko.json` ·
+**브랜치**: `exp/speaker-change-trigger-loss`(master 머지 대기 — 커밋만, 미머지·미푸시)

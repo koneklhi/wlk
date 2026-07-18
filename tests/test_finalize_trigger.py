@@ -13,13 +13,14 @@ from whisperlivekit.timed_objects import (
     LanguageSwitch,
     Segment,
     Silence,
+    SpeakerSegment,
     TimedText,
 )
 from whisperlivekit.tokens_alignment import FINALIZE_GRACE_SECS, SILENCE_HARD_SECS, TokensAlignment
 
 # ─── 헬퍼 ────────────────────────────────────────────────────────────────────
 
-def make_processor() -> TokensAlignment:
+def make_processor(diarization: bool = False) -> TokensAlignment:
     """최소 mock state/args로 TokensAlignment 인스턴스를 생성한다."""
     state = SimpleNamespace(
         new_tokens=[],
@@ -28,7 +29,7 @@ def make_processor() -> TokensAlignment:
         new_tokens_buffer=[],
         new_translation_buffer=TimedText(),
     )
-    args = SimpleNamespace(diarization=False)
+    args = SimpleNamespace(diarization=diarization)
     proc = TokensAlignment(state=state, args=args, sep=' ')
     proc.beg_loop = 0.0  # get_lines()에서 time() - beg_loop 사용하므로 초기화 필요
     return proc
@@ -44,6 +45,17 @@ def make_silence(start: float, end: float, has_ended: bool = True) -> Silence:
 
 def text_segments(proc: TokensAlignment) -> list:
     return [s for s in proc.validated_segments if not s.is_silence()]
+
+
+def feed_diar(proc: TokensAlignment, tokens, **kwargs):
+    """diar 경로: state.new_tokens에 넣고 update()로 all_tokens에 반영한 뒤 get_lines 호출."""
+    proc.state.new_tokens = list(tokens)
+    proc.update()
+    return proc.get_lines(**kwargs)
+
+
+def diar_text_segs(segments) -> list:
+    return [s for s in segments if s is not None and not s.is_silence()]
 
 
 # ─── 테스트 ──────────────────────────────────────────────────────────────────
@@ -151,3 +163,57 @@ def test_to_dict_always_contains_finalize_trigger_key():
     seg.finalize_trigger = "silence"
     d2 = seg.to_dict()
     assert d2['finalize_trigger'] == "silence"
+
+
+# ─── Exp-186/187 — diar 화자전환 경계가 침묵을 사이에 두고 발생하는 경우 ────────
+#
+# tests/test_silence_grammar_gate.py::test_diar_speaker_change_blocks_merge와 동일한
+# 입력(화자전환 사이에 짧은 침묵)을 재사용한다. 그 테스트는 "병합 안 됨(분할됨)"만
+# 검증하고 finalize_trigger 라벨은 확인하지 않는다 — 분할 자체는 _gate_decide()의
+# "diar_mode and next_seg.speaker != closing.speaker" 조건(split_grammar)이 이미
+# 강제하고 있으나(문법상 미종결이어도 화자가 다르면 무조건 분할), 그 판정 결과가
+# TriggerAssign 단계로 전달되지 않아 finalize_trigger는 "silence"로 잘못 붙는다
+# (get_lines_diarization의 `elif segment.is_silence():` 분기가 화자비교보다 먼저
+# 걸림 — Exp-186이 관찰한 "diar NewSpeaker 26~27회 vs speaker_change 트리거 1~4회"
+# 손실의 구조적 원인).
+
+def test_diar_speaker_change_across_silence_gets_speaker_change_trigger():
+    """화자전환이 침묵을 사이에 두고 일어나도 trigger는 'speaker_change'여야 한다."""
+    proc = make_processor(diarization=True)
+    proc.state.new_diarization = [
+        SpeakerSegment(start=0.0, end=1.2, speaker=0),
+        SpeakerSegment(start=1.2, end=2.0, speaker=1),
+    ]
+    segments, _, _ = feed_diar(
+        proc,
+        [make_token(0.0, 0.4, '중요한'), make_token(0.4, 0.8, '관련'),
+         make_silence(0.9, 1.2), make_token(1.3, 1.7, '다음')],
+        diarization=True, audio_time=1.7,
+    )
+    txts = diar_text_segs(segments)
+    assert len(txts) == 2, f"화자 전환인데 병합됨: {[s.text for s in txts]}"
+    closing = txts[0]
+    assert '관련' in closing.text
+    assert closing.finalize_trigger == "speaker_change", (
+        f"화자전환으로 강제분할된 세그먼트인데 trigger={closing.finalize_trigger!r} "
+        "(silence/punctuation으로 흡수됨 — 분기 우선순위 버그)"
+    )
+
+
+def test_diar_same_speaker_across_silence_still_gets_silence_trigger():
+    """화자가 같으면(진짜 침묵 경계) 기존대로 trigger='silence' — 회귀 방지."""
+    proc = make_processor(diarization=True)
+    proc.state.new_diarization = [
+        SpeakerSegment(start=0.0, end=2.0, speaker=0),
+    ]
+    segments, _, _ = feed_diar(
+        proc,
+        [make_token(0.0, 0.4, '안녕'), make_token(0.4, 0.8, '하세요'),
+         make_silence(0.9, 0.9 + SILENCE_HARD_SECS + 0.5), make_token(2.5, 2.9, '다음')],
+        diarization=True, audio_time=2.9,
+    )
+    txts = diar_text_segs(segments)
+    closing = next(s for s in txts if '하세요' in s.text)
+    assert closing.finalize_trigger == "silence", (
+        f"같은 화자 침묵 경계인데 trigger={closing.finalize_trigger!r}"
+    )

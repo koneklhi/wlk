@@ -126,6 +126,22 @@
   감지가 `_apply_detected_language`를 통해 추가로 `_trim_segments_to_recent`를 호출할 수 있어 그 *이후*에
   계산). 이 재계산이 `refresh_segment` 자체의 `cumulative_time_offset` 승계 메커니즘을 우회하므로, 이중
   가산을 막기 위해 재계산 직후 `cumulative_time_offset`을 명시적으로 0.0 리셋한다.
+- **침묵을 사이에 둔 화자전환의 라벨 손실 수정(Exp-187)**: 화자전환이 **침묵 없이 인접**한 경우만
+  `tokens_alignment.py`의 `elif segment.speaker != closing.speaker:` 분기(병합 루프 §2)가 잡아
+  `speaker_change`를 붙였다. 그러나 실제 화자전환은 대부분 짧은 침묵을 사이에 두고 일어나는데, 이
+  경우 병합 루프가 먼저 도달하는 `elif segment.is_silence():` 분기가 화자 비교 없이 무조건
+  `silence`/`punctuation`으로 라벨링해 화자전환 정보가 소실됐다(Exp-186이 관찰한 "diar `[NewSpeaker]`
+  회차당 수십 건 vs `speaker_change` 트리거 1~4건"의 구조적 원인). 한편 `_apply_silence_grammar_gate`
+  → `_gate_decide`는 **이미** `diar_mode and next_seg.speaker != closing.speaker`일 때 문법 판정을
+  건너뛰고 강제 분할(`split_grammar`)하고 있었으나, 그 판정 결과가 TriggerAssign 단계로 전달되지
+  않았다. 수정: `_apply_silence_grammar_gate`가 분할 결정 시 화자 불일치 여부를 `PuncSegment.
+  speaker_boundary`(신규 필드, 내부 전용)에 스탬프하고, TriggerAssign의 `elif segment.is_silence():`
+  분기가 `gate_pending` 다음으로 이 플래그를 확인해 `speaker_change`를 우선 배정한다(§3.4 우선순위
+  language_switch > speaker_change > punctuation > silence를 코드가 실제로 반영하도록 정정). 순수
+  라벨링 수정이라 **세그먼트 병합/분할 자체(경계 개수·위치)·WER·F1은 불변** — `finalize_trigger` 값과
+  진단 로그(`branch=silence_speaker_boundary`)만 바뀐다. 테스트: `tests/test_finalize_trigger.py`
+  `test_diar_speaker_change_across_silence_gets_speaker_change_trigger`(회귀 방지용
+  `test_diar_same_speaker_across_silence_still_gets_silence_trigger`도 추가).
 
 ### 3.4 `punctuation` — 라벨 의미 (두 경로)
 
@@ -137,6 +153,9 @@
   (`timed_objects.py:4,28-30`).
 - **우선순위**(동시 발생 시): `language_switch` > `speaker_change` > `punctuation`(온점 형태소) > `silence`
   — diar 라벨 분기 `tokens_alignment.py:320-328`. 화자가 동시에 바뀌면 `speaker_change`가 온점보다 우선.
+  **(Exp-187 이전엔 화자전환이 침묵을 사이에 두고 일어나면 이 우선순위가 지켜지지 않고 `silence`/
+  `punctuation`으로 라벨이 밀렸다 — §3.3 "침묵을 사이에 둔 화자전환의 라벨 손실 수정" 참조. 현재는
+  `speaker_boundary` 플래그로 정정돼 문서상 우선순위와 코드가 일치한다.)**
 
 ### 3.5 `punctuation`(온점 형태소 종결) — 독립 문장 경계 (Exp-170~)
 
