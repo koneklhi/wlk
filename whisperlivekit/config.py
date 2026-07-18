@@ -70,6 +70,7 @@ class WhisperLiveKitConfig:
     periodic_lang_check_secs: Optional[float] = None
     lang_restrict_koen: bool = True
     silence_grammar_gate: bool = True
+    silence_hard_secs: Optional[float] = None
 
     # Diarization — Sortformer
     sortformer_model: str = "nvidia/diar_streaming_sortformer_4spk-v2"

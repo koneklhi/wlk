@@ -62,7 +62,7 @@ _LATIN_PATTERN = re.compile(r'[A-Za-z]')
 # SILENCE_HARD_SECS: 이 이상 침묵이면 문법 판정 없이 항상 분할(안전망).
 # 불변식: <= 2.0 — 이를 넘기면 backend.py 쪽 long-silence 하드리셋 구간과 겹쳐 디코더 문맥
 # 연속성이 끊기므로, 병합으로 이어붙인 텍스트의 자연스러움을 더는 보증할 수 없다.
-SILENCE_HARD_SECS: float = 0.8
+SILENCE_HARD_SECS: float = 1.2
 assert SILENCE_HARD_SECS <= 2.0, "SILENCE_HARD_SECS는 backend.py long-silence 하드리셋 상한(2.0s)을 넘을 수 없다"
 
 # PENDING_RESOLVE_CAP: 게이트가 다음 발화(B) 도착을 기다리는 최대 시간(초, silence.end 기준).
@@ -92,6 +92,11 @@ class TokensAlignment:
         self.diarization = args.diarization
         # 문법-조건부 침묵 경계 게이트. 기본 ON — --no-silence-grammar-gate(parse_args.py)로 롤백.
         self.gate_enabled: bool = bool(getattr(args, "silence_grammar_gate", True))
+        # 침묵 안전망 문턱(초) — CLI --silence-hard-secs 오버라이드, 미지정 시 모듈 기본값 사용.
+        self.silence_hard_secs: float = float(getattr(args, "silence_hard_secs", None) or SILENCE_HARD_SECS)
+        assert self.silence_hard_secs <= 2.0, (
+            "silence_hard_secs는 backend.py long-silence 하드리셋 상한(2.0s)을 넘을 수 없다"
+        )
         # diar 경로(무상태 재계산) 플래핑 방지 메모 — 한 번 캡 만료로 분할 확정된 침묵은
         # 이후 재계산에서도 병합으로 되돌리지 않는다. 키 = round(silence.start, 2).
         self.resolved_split_silences: set = set()
@@ -383,7 +388,7 @@ class TokensAlignment:
         if silence_seg.start is not None and silence_seg.end is not None:
             d_eff = silence_seg.end - silence_seg.start
 
-        if d_eff is not None and d_eff >= SILENCE_HARD_SECS:
+        if d_eff is not None and d_eff >= self.silence_hard_secs:
             return "split", "split_hard"
 
         key = self._pending_key(silence_seg)
@@ -704,7 +709,7 @@ class TokensAlignment:
         end = token.end
         d_eff = (end - start) if (start is not None and end is not None) else None
         closing_text = self._current_line_text()
-        if d_eff is not None and d_eff >= SILENCE_HARD_SECS:
+        if d_eff is not None and d_eff >= self.silence_hard_secs:
             self._log_silence_gate(start, end, d_eff, last_word(closing_text), None,
                                     None, None, "split", "split_hard")
             self._close_current_line("silence")
