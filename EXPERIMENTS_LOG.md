@@ -3507,3 +3507,90 @@ pytest 411 passed·1 skipped, ruff pass. id 방출 실증: `Segment.from_tokens(
 2. Case B(silence-churn) 근본수정은 언어모드 무관 별도 트랙(Exp-181 계열).
 
 **JSON**: `.omc/eval_canary_kor1_ko.json`·`eval_kor23_ko.json`·`eval_eng1_en.json`·`eval_auto_baseline.json`(worktrees/session-lang-lock) · **커밋**: `4589cc7`+`b91ba55` → 머지 `ac17b00`
+
+---
+
+## Exp-185 — SILENCE_HARD_SECS 0.8→1.2 스윕: 낭독체 호흡 pause Case B 안전망 우회 해소 [E5, `exp/silence-hard-secs-sweep`]
+
+### 가설
+
+사용자 관찰(한 화자가 발화 중 잠깐 침묵할 때 침묵 로직이 문장을 과도하게 분리) + Exp-178/179의 기존 규명(`SILENCE_HARD_SECS=0.8`초 안전망이 낭독체 호흡 pause에서 문법 게이트를 우회해 kor3에 단어 중간 분절 Case B 3건을 냄, "다음 가설" 항목으로 이미 등록됨) → `SILENCE_HARD_SECS`를 상향하면 문법 게이트(`should_split_after_silence`)가 짧은 호흡 pause를 판정할 여유가 늘어 과분할이 줄고 Case B가 해소될 것으로 예측. 상한은 `backend.py` long-silence 하드리셋(2.0s)과 겹치지 않아야 하므로 기존 assert(`<=2.0`)를 그대로 유지.
+
+### 변경 내용
+
+`SILENCE_HARD_SECS`(기존 `tokens_alignment.py` 모듈 상수, 0.8 하드코딩)를 CLI로 오버라이드 가능하게 전환 — 값 자체를 바꾼 게 아니라 **스윕 인프라**를 추가:
+- [tokens_alignment.py:95-98](whisperlivekit/tokens_alignment.py#L95-L98) `TokensAlignment.__init__`에 `self.silence_hard_secs = float(getattr(args, "silence_hard_secs", None) or SILENCE_HARD_SECS)` + `assert <= 2.0` 추가.
+- [tokens_alignment.py:391](whisperlivekit/tokens_alignment.py#L391)(`_gate_decide`, diar 경로), [tokens_alignment.py:712](whisperlivekit/tokens_alignment.py#L712)(`_gate_intake_nondiar_silence`, 비-diar 경로) — 모듈 상수 참조를 `self.silence_hard_secs`로 교체.
+- [config.py:73](whisperlivekit/config.py#L73) `silence_hard_secs: Optional[float] = None` 필드 추가.
+- [parse_args.py:408-416](whisperlivekit/parse_args.py#L408-L416) `--silence-hard-secs` CLI 플래그(simulstreaming_group) 추가.
+- [scripts/eval.py:582-589,665-666](scripts/eval.py#L582) `--silence-hard-secs` 인자 + `extra_server_args` 전달 추가.
+- 미지정 시 기존 0.8 그대로 폴백 — **채택 확정 커밋에서 실제 값을 1.2로 변경**(아래 결론 참조).
+- pytest 425 passed·1 skipped(무변경).
+
+### 테스트 설정
+
+경로 C, diar-ON(Sortformer, CRT=3.0), beams=2, PLC=None, turbo. cwd=워크트리(`worktrees/silence-hard-secs-sweep`, provenance로 매 회 확인). 언어모드 auto(`--lan auto`, bong1/ytn2/sbs1 + held-out ytn1)와 ko(`--lan ko`, kor1/kor2/kor3) 양쪽 측정, en held-out(eng1, `--lan en`) 단회. 워크트리 신설 시 test_data 일부(`bong1.wav`/`kor1~3.wav`)와 모델 파일(`model.safetensors`/`sortformer-4spk-v2.nemo`)이 git 비추적이라 부재했음 — 다른 워크트리에서 복사(테스트 wav)·하드링크(모델, 용량 절약)로 해결 겸 메인 저장소도 함께 복원(우발적 소실 발견, 원인 미상 — 별도 조사 불필요, 데이터 자체 소실 아님을 확인).
+
+### 테스트 세트 결과
+
+**① 스크리닝(N=1, 0.8→2.0 스윕)** — WER% / 화자F1%:
+
+| SHS | bong1 | ytn2 | sbs1 | auto avg WER/화자F1 | kor1 | kor2 | kor3 | ko avg WER/화자F1 |
+|---|---|---|---|---|---|---|---|---|
+| 0.8(기존) | 36.9/57.9 | 15.8/76.2 | 8.9/80.0 | 20.5%/71.4% | 17.0/0.0 | 18.1/100.0 | 37.1/0.0 | 24.1%/33.3% |
+| 1.0 | 29.0/75.7 | 18.7/72.7 | 10.1/66.7 | 19.3%/71.7% | 18.1/0.0 | 19.4/100.0 | 36.4/0.0 | 24.7%/33.3% |
+| **1.2** | 33.8/68.6 | 14.8/90.0 | 9.5/80.0 | 19.4%/79.5% | 23.4/0.0 | 16.0/100.0 | 29.1/100.0 | 22.8%/66.7% |
+| 1.5 | 29.0/68.4 | 18.7/76.2 | 7.7/100.0 | 18.5%/81.5% | 19.9/100.0 | 27.1/100.0 | 36.4/0.0 | 27.8%/66.7% |
+| 1.8 | 27.5/77.8 | 16.3/81.8 | 7.7/80.0 | 17.2%/79.9% | 17.5/100.0 | 22.2/100.0 | 43.0/0.0 | 27.6%/66.7% |
+| 2.0 | 29.3/57.1 | 10.3/94.7 | 14.9/80.0 | 18.2%/77.3% | 13.5/100.0 | 25.0/0.0 | 41.1/100.0 | 26.5%/66.7% |
+
+전 구간에서 auto가 일관 개선. ko는 값마다 요동 — **1.2가 auto·ko 양쪽에서 동시에 개선되는 유일한 지점**으로 보여 확정 후보 선정.
+
+**② 채택 확정(N=3, SHS=1.2)** — median(min–max, stdev):
+
+| 파일 | WER | 화자F1 | 문장F1 |
+|---|---|---|---|
+| bong1 | 31.4%(29.3–34.4, σ2.6) | 64.9%(61.5–68.8) | 25.0% |
+| ytn2 | 17.2%(16.7–20.2, σ1.9) | 90.0%(80.0–90.0) | N/A |
+| sbs1 | 10.7%(8.9–11.9, σ1.5) | 100.0%(80.0–100.0) | 88.9% |
+| **auto avg** | **19.8%** | **85.0%** | — |
+| kor1 | 17.0%(17.0–22.2, σ3.0) | 0.0%(0.0–0.0) | 70.0% |
+| kor2 | 19.4%(19.4–21.5, σ1.2) | 0.0%(0.0–0.0) | 40.0% |
+| kor3 | 37.1%(36.4–45.7, σ5.2) | 100.0%(0.0–100.0, σ0.58) | 48.0% |
+| **ko avg** | **24.5%** | **33.3%** | — |
+
+**N=1 스크리닝과 달리 N=3에서 ko 화자F1 "개선"은 재현 안 됨**(kor1·kor2가 3회 전부 0.0%로 고착, N=1의 kor2=100%는 노이즈였음) — ko는 WER·F1 모두 베이스라인(0.8, N=1)과 사실상 동률(중립). auto는 N=3에서도 화자F1·WER 개선 유지, 단 **bong1 max 34.4%가 기존 확정 게이트(30.5%, Exp-161 N=3 베이스라인) 초과**.
+
+**held-out(단회)**: ytn1(auto) WER 11.7%·화자F1 84.2%·문장F1 57.1%(베이스라인 21.5%/38.1% 대비 개선). eng1(en) WER 3.8%·화자F1 0.0%·문장F1 66.7%(베이스라인 4.8%/0.0% 대비 개선/동일) — 양쪽 무회귀.
+
+### 분석 (전사 내용 정성 대조)
+
+**kor3** (SHS=1.2, N=3 R1/R2/R3 전 회차):
+- **Case B 완전 해소, 재발 0/3**: 기존 0.8에서 `"통합."`⏎`"하고 방공간제전대…"`(정답 `"통합하고"`)로 쪼개지던 지점이, 1.2에서는 R1/R2/R3 전부 `"통합하고 방공관제전대 통합 및…"` 한 줄로 유지됨. `"전투비행대대를 개편하고 장기체공저피탐…"`도 3회 전부 안 끊김(기존엔 `"…비행대대 창."`으로 단어 중간 잘림).
+- **잔존 이슈**: kor3 WER 자체는 여전히 높음(median 37.1%) — 이는 Exp-178에서 별도 규명한 stall recovery 연쇄 웨지·QG streak refresh 서두 폐기 등 **다른 원인**(이번 변경 범위 밖)이 지배적.
+
+**bong1** (SHS=1.2, N=3 중 max 회차 R2, WER 34.4%):
+- **비언어 토큰·환각 폭주**: "Thank you"×4, "하하"×10 — bong1의 기존 웃음/필러 환각 실패모드(Exp-159/163/171/174/176에서 반복 확인)와 정성적으로 일치. 이번 변경(침묵 안전망 문턱)이 웃음 구간 환각을 유발할 메커니즘적 근거가 없어 **무관한 회차 변동**으로 판단.
+
+**ytn2/sbs1** (SHS=1.2): 주요 실패 없음, N=3 전 회차 게이트(34.5%/16.1%) 이내.
+
+**이번 변경 영향**: 목표(kor3 Case B)는 완전 해소. auto(co-first priority) WER·화자F1 순개선. ko 전체 WER·F1은 중립(회귀 아님). bong1 max 게이트 초과는 기존 웃음/필러 실패모드로 귀속, 이번 메커니즘과 무관.
+
+### 채택 조건 판정 / 결론
+
+① 화자분리 F1 worst-case 미회귀: auto **개선**(N=3 baseline 부재로 N=1 베이스라인 대비 비교, 정밀 worst-case 대조는 후속 과제) / ko **중립**(회귀 아님).
+② WER max 미회귀: ytn2·sbs1 **✓** / bong1 **✗**(34.4%>30.5%, 정성 귀속=기존 웃음/필러 패턴 무관).
+③ Case B 신규 발생 없음(hard floor): **✓** — 오히려 기존 Case B 해소.
+④ pytest 전부 통과: **✓** 425 passed·1 skipped.
+⑤ 아티팩트 악화 없음: **✓** 신규 실패 패턴 없음.
+⑥ held-out 무회귀: **✓** ytn1·eng1 둘 다 개선.
+
+**채택 (사용자 승인, master 머지 예정)**. bong1 max 게이트 초과에도 불구, CLAUDE.md §3.3 "Case B는 수치 무관 hard-fail — 원인 수정 대상"에 해당하는 목표를 정확히 해소했고 ko는 회귀 없이 중립·auto는 순개선이므로 사용자가 채택 승인. **epoch 미bump**(Exp-176 문법-조건부 침묵 게이트의 파라미터 값 조정 — 같은 세대 내 실험).
+
+### 다음 가설
+
+1. bong1의 웃음/필러 환각(Layer 3b)은 여전히 미해결 — no_speech/VAC 경로는 Exp-163~165에서 이미 폐기 확정됨. 별도 비-ASR 웃음 분류기 설계가 필요(범위 밖, 별도 세션).
+2. ko kor1/kor2 화자F1이 SHS 값과 무관하게 3회 전부 0%로 고착 — Sortformer 화자분할과 침묵게이트 상호작용 또는 kor1/kor2 정답 자체의 화자전환 유무(단독 낭독이라 전환이 거의 없을 가능성) 확인 필요.
+3. auto 화자F1 worst-case의 정밀한 N=3 베이스라인(SHS=0.8) 대조 측정 — 이번엔 시간 관계상 N=1 베이스라인과만 비교.
+
+**JSON**: `worktrees/silence-hard-secs-sweep/.omc/benchmarks/eval_shs{0.8~2.0}_{auto,ko}.json`(스크리닝) · `eval_shs1.2_{auto,ko}_N3.json`(확정) · `eval_shs1.2_{ytn1,eng1}.json`(held-out) · **브랜치**: `exp/silence-hard-secs-sweep`(머지 대기)
