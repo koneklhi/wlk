@@ -25,8 +25,8 @@ let waitingForStop = false;
 let lastReceivedData = null;
 let lastSignature = null;
 // 확정(finalized)된 줄 누적 기록. key=line.id(안정 세그먼트 식별자=세션상대 시작초, 문자열화), value=원본 line 객체.
-// 서버는 5분 슬라이딩 윈도우만 유지하므로, 확정된 줄은 서버가 다음 스냅샷에서
-// 빼버려도 화면에 계속 남아있도록 프론트에서 직접 누적한다.
+// 서버는 lines[]를 세션 전체 무제한 유지·재전송하므로(과거 5분 슬라이딩 윈도우 → 무제한, master 606ecac),
+// 이 누적은 이제 필수가 아니라 중복 안전장치다(전체 교체 렌더만으로도 화면 유지됨).
 let finalizedHistory = new Map();
 let isPaused = false;          // teardown 됐지만 기록 유지, "시작"으로 재개 대기 중
 let committedLines = [];       // 이전 pause 사이클들의 확정 줄을 순서대로 "얼린" append-only 배열. id 충돌에서 격리하는 핵심 장치.
@@ -448,7 +448,7 @@ function renderLinesWithBuffer(
   }
 
   // 확정된 줄은 history에 누적하고, 화면엔 history + 아직 미확정인 최신 줄만 합쳐서 그린다.
-  // 서버의 5분 슬라이딩 윈도우로 확정 줄이 다음 스냅샷에서 빠져도 화면에서 사라지지 않게 함.
+  // (서버는 lines[]를 무제한 유지·재전송하므로 이 누적은 중복 안전장치 — 전체 교체 렌더만으로도 유지됨.)
   for (const ln of (lines || [])) {
     if (ln.finalized && (ln.text || ln.speaker === -2)) {
       // id(안정 세그먼트 식별자=세션상대 시작초)만 키로 사용: 문법게이트 재조립 시 end는 늘어나도 첫 토큰 시작 시각은 불변이므로 growing-prefix가 같은 항목을 덮어쓴다. 1초 벽시계 문자열과 달리 같은-초 충돌 없음.
@@ -475,7 +475,7 @@ function renderLinesWithBuffer(
   const showTransLag = !isFinalizing && remaining_time_transcription > 0;
   const showDiaLag = !isFinalizing && !!buffer_diarization && remaining_time_diarization > 0;
   const signature = JSON.stringify({
-    lines: mergedLines.map((it) => ({ speaker: it.speaker, text: it.text, start: it.start, end: it.end, detected_language: it.detected_language, finalize_trigger: it.finalize_trigger })),
+    lines: mergedLines.map((it) => ({ speaker: it.speaker, text: it.text, translation: it.translation, start: it.start, end: it.end, detected_language: it.detected_language, finalize_trigger: it.finalize_trigger, finalized: it.finalized })),
     buffer_transcription: buffer_transcription || "",
     buffer_diarization: buffer_diarization || "",
     buffer_translation: buffer_translation,
