@@ -419,8 +419,8 @@ WS `/asr`와 별개로, 사용자가 UI의 **저장 버튼을 눌렀을 때**만
 - [ ] 오디오 캡처 구현: **WebM(MediaRecorder) 기본**, 또는 PCM(AudioWorklet+Worker, 서버
       `--pcm-input` 시). 재사용 가능한 내장 코드는 §6.4 참고.
 - [ ] 필드 타입 변경: `start`/`end`는 `"HH:MM:SS"` 문자열(PC 실제 벽시계 시각, 센티초 없음),
-      `finalized`(=completed) bool, 언어는 `detected_language`(=lang). history Map 키는
-      `start` 단독이 아니라 `start`+`end`+`speaker` 복합키(같은 초 충돌 방지).
+      `finalized`(=completed) bool, 언어는 `detected_language`(=lang). **history Map 키(누적 시)는
+      `id` 단독**(§4.2·§4.4) — `start` 단독·`start`+`end`+`speaker` 복합키 **금지**(growing-prefix 중복).
 - [ ] 확정/미확정 스타일(2단계): `lines[]` 텍스트는 전부 진하게, `buffer_*`만 연하게.
       `finalized`는 색이 아니라 **히스토리 누적에만** 사용(§2.2 참조).
 - [ ] 화자 UI: `speaker` 배지/색 직접 구현, `-2`=침묵, `0`=diar 진행중, `buffer_diarization` 표시.

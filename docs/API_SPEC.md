@@ -237,9 +237,23 @@ Segment 예시:
 **`buffer_transcription` 표시:** 마지막 **진행중(`finalized:false`) 줄** 꼬리에만 이어붙인다. **확정된 줄에는 붙이지 말 것** —
 확정 줄에 붙이면 진행중 텍스트가 확정 블록과 중복돼 보인다.
 
+**`lines[]`가 비고 `buffer_*`만 있을 때(세션 초기):** 확정 줄이 아직 하나도 없는데 `buffer_transcription`/`buffer_diarization`만
+채워진 스냅샷에서는, 버퍼를 독립된 진행중 줄로 보이게 하기 위해 **임시 줄(예 `{speaker:1, text:""}`)을 하나 만들어 그 꼬리에
+버퍼를 붙인다**. 이 케이스를 처리하지 않으면 첫 발화가 확정되기 전까지 화면이 빈 채로 남는다. 참조 = `live_transcription.js:475-477`.
+
+**⚠️ 세션 종료 시 `buffer_*` 정착(fold-in) — 누락 시 마지막 발화 증발:** `ready_to_stop` 수신 후의 **마지막 렌더**에서는
+남은 `buffer_diarization`·`buffer_transcription`(및 `buffer_translation`)을 **연한 진행중 span으로 남기지 말고 마지막 줄 본문에
+일반 텍스트로 접합**한다(각 조각을 `trim`하고, 앞줄 본문과 버퍼가 모두 비어있지 않을 때만 단일 공백으로 join). 이 처리를 빼면
+**종료 순간 마지막 미확정 발화가 화면에서 그대로 사라진다** — 버퍼는 별도 줄이 아니라 확정 줄에 못 실린 진행중 꼬리이기 때문.
+참조 = `live_transcription.js:521-537`·`:539-547`(`isFinalizing` 분기).
+
 > 참조 구현 = 내장 테스트 UI `whisperlivekit/web/live_transcription.js`(누적 Map을 `id`로 키잉 + 진행중 줄과 같은 `id`
 > 확정판 억제). 배경: 이 규칙 미준수(`start|end|speaker` 누적)가 실측에서 kor 낭독체 WER을 3배 이상 부풀린 사례가 있었다
 > (성능 측정이 UI DOM을 스크래핑하므로 렌더 중복이 지표까지 오염 — 프론트 버그가 백엔드 지표로 오인됨).
+> **단, 내장 UI가 `finalizedHistory` Map으로 확정 줄을 누적하는 것은 과거 서버가 확정 줄을 5분 슬라이딩 윈도우로
+> 잘라내던 시절의 레거시다.** 현재 서버는 `lines[]`를 세션 전체 **무제한 유지·재전송**하므로(§2.4.2·§6), React는 그 Map
+> 누적/stale 억제 로직을 그대로 옮길 필요가 없다 — **전체 교체 렌더가 더 단순·안전**하고 위 ①②(`end` 성장·재개방)도
+> 자동 해소된다. 누적은 렌더 최적화(안정 key)가 필요할 때만, 그때도 키는 `id` 단독.
 
 ### 2.5 `status` 값
 
@@ -347,6 +361,10 @@ Segment 예시:
 - 파일 형식: `[화자 N] 텍스트`, 번역이 있으면 다음 줄에 `    ↳ 번역`(타임스탬프 없음).
 - 저장 버튼은 녹음 중에도 클릭 가능하며, 매 클릭마다 클릭 시점까지의 **전체 누적**을 새 타임스탬프 파일로 저장(증분 아님).
 - 권장 흐름: `finalized` 줄 전체 + 마지막 미확정 줄을 합쳐 `lines`로 구성해 호출.
+- **payload 구성 시 클라이언트 전처리(권장)**: 화면 표시와 별개로, 저장 payload는 클라이언트가 다듬어 보내는 것이 좋다 —
+  ① **침묵 세그먼트(`speaker === -2`)와 `text`·`translation`이 모두 빈 줄은 제외**, ② `text`/`translation`은 `trim`,
+  ③ 값 없는 `translation`은 필드 자체를 생략. 이 전처리를 하지 않아도 서버가 빈 줄은 파일에서 스킵하지만, `line_count`
+  왜곡과 침묵 줄 저장을 피하려면 클라이언트에서 걸러 보낸다. 참조 = 내장 UI `buildTranscriptPayload()` `live_transcription.js:247-251`.
 
 ### 3.3 단어교정 사전 — `/api/corrections`
 
