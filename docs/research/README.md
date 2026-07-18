@@ -13,3 +13,4 @@ SENTENCE_FINALIZATION_LOGIC.md 등). 여기 문서는 특정 시점의 조사 �
 | [CODESWITCH_REALTIME_DESIGN.md](CODESWITCH_REALTIME_DESIGN.md) | 코드스위칭 실시간 전사 파이프라인 코드레벨 설계 정리 | 코드 실측 기반 설계 보고서 |
 | [PHASE3_TRANSLATION_RESEARCH.md](PHASE3_TRANSLATION_RESEARCH.md) | 번역 파이프라인 개선 + 로컬 모델 대안 deep-research (2026-07-06) | deep-research |
 | [PHASE3_WORD_REPLACEMENT_RESEARCH.md](PHASE3_WORD_REPLACEMENT_RESEARCH.md) | 단어 대치(용어 인식) 개선 3계층 바이어싱 deep-research (2026-06-23) | deep-research |
+| [AUTO_MODE_KOREAN_PERF_ANALYSIS_20260718.md](AUTO_MODE_KOREAN_PERF_ANALYSIS_20260718.md) | auto 모드 한국어 전사 성능 경로 C 측정(8파일×3회) + 정성 분석 — speaker_change 트리거 저빈도·kor1 Case B/언어오검출 버그·단일화자 F1 메트릭 아티팩트 (2026-07-18) | 측정+정성 분석 |

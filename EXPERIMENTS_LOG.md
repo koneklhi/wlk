@@ -3594,3 +3594,151 @@ pytest 411 passed·1 skipped, ruff pass. id 방출 실증: `Segment.from_tokens(
 3. auto 화자F1 worst-case의 정밀한 N=3 베이스라인(SHS=0.8) 대조 측정 — 이번엔 시간 관계상 N=1 베이스라인과만 비교.
 
 **JSON**: `worktrees/silence-hard-secs-sweep/.omc/benchmarks/eval_shs{0.8~2.0}_{auto,ko}.json`(스크리닝) · `eval_shs1.2_{auto,ko}_N3.json`(확정) · `eval_shs1.2_{ytn1,eng1}.json`(held-out) · **브랜치**: `exp/silence-hard-secs-sweep`(머지 대기)
+
+---
+
+## Exp-186
+
+**날짜**: 2026-07-18 | **Epoch**: E5(미bump — 진단 측정, 코드 변경 없음) | **측정 언어모드**: **auto**
+(`--lan auto` — kor1~3도 이례적으로 auto로 측정, §가설 참조)
+
+### 배경/가설
+
+사용자가 `--lan auto` 세션에서도 한국어만 계속 들어오는 상황(단일언어 세션)이 실제로 발생할 수
+있다고 보고, 이 상황에서의 한국어 전사 성능을 개선하기 전에 먼저 **eng1을 제외한 전체 테스트
+데이터를 auto 모드로 3회씩 측정하고 전사 결과를 정성 분석**해 개선 표적을 좁히는 것이 목적이었다.
+kor1/kor2/kor3(평소 "ko 테스트"로 `--lan ko` 고정 측정하는 파일)를 이번엔 의도적으로 `--lan auto`로
+측정해 "auto의 상시 언어 재감지 로직이 단일언어(한국어) 세션에 부작용을 일으키는가"를 직접
+검증했다. 코드 변경 가설이 아니라 **진단 전용**(채택/기각 비대상) 실험이다. 부수적으로, 발견된
+원인을 다음 라운드에 정밀 추적할 수 있도록 관찰용 디버그 로그(§변경 내용)를 보강했다.
+
+### 변경 내용
+
+**코드 변경 없음**(master 기준 순수 측정+분석). 단 별도 브랜치에 **관찰용 로그**를 추가·커밋(판정
+로직·분기 조건·반환값은 전혀 변경하지 않음, `feat/debug-diagnostics-logging`, 커밋 `67a58ad`,
+master 미머지):
+- [tokens_alignment.py](whisperlivekit/tokens_alignment.py) finalize_trigger 배정 5개 분기 전부에
+  `[TriggerAssign]`, grace 유예 판정에 `[FinalizeGrace]`, 비-diar 커밋에 `[CloseLine]`.
+- [sentence_boundary.py](whisperlivekit/sentence_boundary.py) 순수 함수 전 반환지점에
+  `[SentenceBoundary]`(어떤 규칙 — 숫자가드/KO_FINAL_SUFFIXES/EN_ABBREV 등 — 이 판정을 결정했는지).
+- [filtering/__init__.py](whisperlivekit/filtering/__init__.py) 환각 제거·단어교정이 실제로 텍스트를
+  바꿨을 때만 `[HallucinationDrop]`/`[WordCorrection]`(원문→치환문).
+- [basic_server.py](whisperlivekit/basic_server.py) 위 신규 로거 2개를 기존 `--trace-tokens` DEBUG
+  승격 목록에 추가(신규 CLI 플래그 없음).
+- ruff clean(기존 이슈 1건은 무관), pytest 425 passed·1 skipped(회귀 없음).
+
+### 테스트 설정
+
+경로 C, `--lan auto`, diar-ON(Sortformer, CRT=3.0), `--trace-tokens`(backend/align_att_base/
+tokens_alignment DEBUG — 이번 측정 로그엔 아직 위 신규 태그 미포함, 측정을 master@`ec4684e`로
+먼저 수행하고 로그 보강은 별도 브랜치에 사후 추가했기 때문), `--repeat 3`. cwd=메인 저장소(master).
+파일: bong1.wav, ytn2.mp3, sbs1.mp3, kor1.wav, kor2.wav, kor3.wav, ytn1.mp3, kinno.mp3(eng1 제외).
+
+### 테스트 세트 결과
+
+경로 C, N=3, median[min–max]:
+
+| 파일 | 화자구조 | WER | 화자F1 | 문장F1 |
+|---|---|---|---|---|
+| bong1 | 4화자 | 29.3%[27.8–32.6] | 63.2%[57.9–78.8] | 14.3%[9.5–19.0] |
+| ytn2 | 2화자 | 15.8%[11.8–18.7] | 90.0%[80.0–90.0] | N/A |
+| sbs1 | 2화자 | 10.7%[10.1–11.9] | 100.0%[66.7–100.0] | 88.9%[85.7–94.7] |
+| kor1 | 단일화자 | 43.9%[22.2–48.0] | 0.0%(3회 전부) | 42.9%[40.0–75.0] |
+| kor2 | 단일화자 | 19.3%[10.3–21.4] | 100/0/100%(진동) | 100/80/100%(진동) |
+| kor3 | 단일화자 | 33.8%[29.8–35.8] | 100/0/100%(진동) | 100/83.3/100%(진동) |
+| ytn1(held-out) | 2화자 | 12.9%[9.8–21.5] | 84.2%(3회 동일) | 57.1%(3회 동일) |
+| kinno(정성 sanity) | 2화자 | 32.1%[27.6–33.7] | 77.4%[56.2–84.6] | 47.1%[30.0–61.5] |
+| **경로 C 평균** | | **23.8%** | **66.6%** | **64.0%** |
+
+**Exp-185(`--lan ko`, 동일 코드 SHS=1.2, N=3) 대비 auto 교차비교** — `--lan` 값만 다르고 나머지
+설정 동일:
+
+| 파일 | ko(Exp-185) WER med[min–max] | auto(이번) WER med[min–max] | ko 화자F1 | auto 화자F1 | auto만의 Case B |
+|---|---|---|---|---|---|
+| kor1 | 17.0%[17.0–22.2] | 43.9%[22.2–48.0] | 0.0%(3회) | 0.0%(3회) | **3건** |
+| kor2 | 19.4%[19.4–21.5] | 19.3%[10.3–21.4] | 0.0%(3회) | 100/0/100%(진동) | 0건 |
+| kor3 | 37.1%[36.4–45.7] | 33.8%[29.8–35.8] | 100/0/100%(진동) | 100/0/100%(진동) | 0건(오탐 배제) |
+
+### 분석 (전사 내용 정성 대조)
+
+**bong1**(R1, median WER 29.3%):
+- **화자 혼동·경계 오류**: 정답 화자전환 14회 대비 `speaker_change` 확정 트리거는 R1=1·R2=4·R3=3회뿐.
+  서버 로그 diarizer 원시신호(`[NewSpeaker]`)는 회차당 26~27회로 diarizer 자체는 화자전환을 감지하나
+  그 신호가 문장 확정으로 이어지는 비율이 매우 낮음(§3.1). eager_applied 비율·RetractScan
+  removed 합계 어느 것도 F1 편차(57.9~78.8%)와 단조 상관 없음 — 단일 원인이 아닌 구조적 손실.
+
+**ytn2**(R1, median WER 15.8%): **필러 환각**: 전사 "Uhhuh." — 정답에 없음. 코드스위칭 자체는
+정상(화자F1 90%).
+
+**sbs1**(R2, median WER 10.7%): **필러 환각**: "사태라." "You." — 정답에 없는 짧은 삽입. 주요
+실패는 없음(화자F1 100%, 문장F1 88.9%).
+
+**kor1**(R2, median WER 43.9%):
+- **단어 유실·잘림(Case B, hard-fail)**: 전사 `"국방환.⟨silence⟩" / "경을 고려...⟨silence⟩"` —
+  정답 "국방 환경을 고려한"의 "환경"이 음절 중간에서 잘림. R1에서도 같은 위치가 `"국방환경.
+  ⟨silence⟩" / "을 고려한...⟨silence⟩"`로 절단(덜 심함) — 두 회차 재현. "소모 강요"→"강.⟨silence⟩"/
+  "요 등,...⟨silence⟩"도 동일 유형. 트리거 원인 전부 `silence`.
+- **코드스위칭(언어) 실패**: `[ShortSilenceLangCheck] 최근 1.5s → en (p=0.99)` — 순수 한국어
+  구간을 영어로 고신뢰도 오검출. "Thank you very much."(2회) 환각 삽입까지 유발.
+- **단어 유실**: "순서는 보시는 바와 같습니다." 통째 누락.
+
+**kor2**(R3, median WER 19.3%): **단어 유실**: "동원사단은" 누락. **화자 경계**(§3.4): 화자F1이
+100→0→100%로 진동하나 실제 화자오분류가 아니라 참조가 단일화자([spk1] 하나, 화자경계 0개)라
+`compute_speaker_sentence_segmentation`(metrics.py)이 all-or-nothing 구조가 되기 때문(문장분리
+F1이 100% 미만인 회차와 정확히 일치) — Sortformer·게이트 문제 아님.
+
+**kor3**(R3, median WER 33.8%): **숫자·군사용어 동음이의**: "작전 3위"(정답 "작전사 및"), "준사군"
+(정답 "준 4군") 반복. 화자F1 진동은 kor2와 동일 메커니즘(메트릭 아티팩트). Case B 의심 사례("준.")는
+정답 자체가 "준 4군"(공백 포함)이라 오탐으로 배제.
+
+**ytn1**(R3, held-out, median WER 12.9%): **필러 환각**: "Yeah." "Yeah, I." — 정답에 없음. **단어
+유실**: "한반도뿐만" 누락. F1이 3회 모두 84.2%로 동일해 안정적으로 보이나, `speaker_change`
+트리거는 거의 발동 안 함(1/0/0회)이고 대신 `language_switch`가 19회 안팎으로 안정 발동해 대리
+역할 — 원어민↔통역 구조상 언어전환=화자전환이 거의 일치하는 우연.
+
+**kinno**(R2, 정성 sanity, WER/F1 게이팅 제외): 대규모 누락·환각·비한영 혼입 없음. 한↔영 순차통역
+alternation 구조를 화자·문장 분리가 대체로 잘 따라감. 사소한 누락("따라야 하므로" 등)만 확인.
+
+**이번 실험의 영향(진단 전용)**: 코드 변경 없음 — 위 실패모드를 발견·원인 후보를 좁히는 것이
+목적이었고 실제 개선은 다음 라운드 과제(§다음 가설).
+
+### 채택 조건 판정 / 결론
+
+📋 **계측완료 (채택/기각 비대상 — 코드 변경 없는 진단 측정)**.
+
+핵심 발견 우선순위(화자분리 F1 > WER > 문장분리 F1 순):
+1. **[최우선] `speaker_change` 확정 트리거가 구조적으로 거의 발동하지 않음** — bong1(다화자)조차
+   회차당 1~4회뿐, diarizer는 26~27회 감지. 화자분리 F1이 1순위 지표인 이 프로젝트에서 가장
+   우선순위 높은 개선 표적.
+2. **[hard-fail] kor1 Case B 3건 확인** — `SILENCE_HARD_SECS=1.2`(Exp-185 채택 후)에도 불구하고
+   auto 모드에서 잔존. kor3의 Case B는 Exp-185로 해소된 채 유지(오탐 배제로 확인), **kor1은
+   Exp-185 범위 밖의 별개 사례**.
+3. **kor1 순수 한국어 구간 언어오검출(ko→en) 버그** — 오검출 횟수와 WER이 상관.
+4. **kor2/kor3 화자F1 0%↔100% 진동은 실제 버그가 아니라 메트릭 아티팩트** — Exp-185 "다음 가설 2"
+   (SHS 무관 0% 고착 원인)에 대한 답: 단일화자 참조(화자경계 0개)의 all-or-nothing F1 구조 때문,
+   Sortformer·게이트 상호작용 아님.
+5. **auto vs ko 교차비교 결과 auto의 취약점은 kor1에 국한** — kor2/kor3는 auto가 오히려 동등하거나
+   나음(§테스트 세트 결과 교차비교 표). "auto가 한국어 세션 전반을 악화시킨다"는 과장이며, 정확히는
+   kor1 특유의 국소적 취약점.
+6. 비한영 언어 혼입 0건(§3.2 준수). 필러 환각·숫자/군사용어 동음이의 다수 관찰(개선 우선순위는
+   상대적으로 낮음).
+
+상세 리포트: [docs/research/AUTO_MODE_KOREAN_PERF_ANALYSIS_20260718.md](docs/research/AUTO_MODE_KOREAN_PERF_ANALYSIS_20260718.md).
+
+### 다음 가설
+
+1. **[1순위]** §발견1 diarizer 신호 → `speaker_change` 확정 손실 원인 규명 — `[TriggerAssign]`/
+   `[FinalizeGrace]` 로그(이번에 추가) 활성화 재측정으로 diarizer 감지 시점에 실제 어느 분기를
+   타는지(게이트 보류/침묵 미도래/화자 귀속 오류) 추적.
+2. §발견2 kor1 Case B — 무음 기반 조기 확정이 단어 중간에서 발생하는 정확한 경로 특정.
+   `[SentenceBoundary]`/`[CloseLine]` 로그로 해당 오디오 구간(국방환경을/소모강요 부근) 재현·추적.
+3. §발견3/5 "왜 kor1만" 언어오검출(ko→en)에 취약한지(발화 특성? 특정 구간 acoustic 특이점?) 원인
+   조사.
+4. (경험적, 코드 변경 아님) 단일화자 테스트 파일의 "화자분리 F1" 지표 적용 방식 재검토 필요성을
+   사용자에게 제안 — 화자경계 0개 파일은 화자F1 대신 문장F1만 채택 게이팅에 반영하는 대안 등.
+
+**JSON**: `.omc/benchmarks/eval_auto_kordebug_20260718_1216.json` · 시각화:
+`.omc/transcripts/eval_report_auto_kordebug.html` · 전사: `.omc/transcripts/{stem}_C_R{1,2,3}.txt` ·
+서버로그: `.omc/server_logs/server_{stem}_C_R{n}_20260718_*.log` · **디버그 로깅 브랜치**:
+`feat/debug-diagnostics-logging`(커밋 `67a58ad`, 머지 대기) · **후속 goal prompt**:
+`docs/goal_prompt/GOAL_AUTO_KOREAN_FOLLOWUP.md`
