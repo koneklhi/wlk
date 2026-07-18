@@ -110,7 +110,7 @@ class FileResult:
     sentence_f1: Optional[float] = None
     sentence_precision: Optional[float] = None
     sentence_recall: Optional[float] = None
-    ref_format: Optional[str] = None   # "new"(신형식 _speak,sentence_sperate.txt) | "old"(구형식 .txt) | None(정답 없음)
+    ref_format: Optional[str] = None   # "new"([spkN] 헤더 신형식) | "old"(빈 줄 경계 구형식) | None(정답 없음) — 파일은 항상 <stem>.txt
 
 
 @dataclass
@@ -323,11 +323,11 @@ def stop_server(proc: subprocess.Popen) -> None:
 def _build_result(audio_path: Path, transcription: str, hyp_sentences: list, path: str, hyp_lines: Optional[list] = None) -> FileResult:
     """전사 결과로부터 WER + 화자분리 F1 + 문장분리 F1을 산출해 FileResult를 만든다.
 
-    정답은 신형식(`<stem>_speak,sentence_sperate.txt`)을 우선 사용한다 — 존재하고
-    `[spkN]` 헤더로 정상 파싱되면(parse_speaker_sentence_reference가 non-None을 반환하면)
-    화자분리 F1(seg_f1)·문장분리 F1(sentence_f1)을 함께 산출한다. 신형식 파일이 없거나,
-    있어도 헤더가 없어 파싱에 실패하면 구형식(`<stem>.txt`, 빈 줄=경계)으로 완전히 동일하게
-    폴백한다 — 이 경우 문장분리 F1은 산출 불가(None)이며 seg_f1은 구 정의(빈 줄 경계) 그대로다.
+    정답 파일은 `<stem>.txt` 하나뿐이다. 먼저 `[spkN]` 헤더 신형식으로 파싱을 시도하고
+    (parse_speaker_sentence_reference가 non-None을 반환하면) 화자분리 F1(seg_f1)·
+    문장분리 F1(sentence_f1)을 함께 산출한다. 헤더가 없어 파싱에 실패하면 같은 파일을
+    구형식(빈 줄=경계)으로 폴백한다 — 이 경우 문장분리 F1은 산출 불가(None)이며
+    seg_f1은 구 정의(빈 줄 경계) 그대로다.
     """
     from whisperlivekit.metrics import (
         compute_segmentation,
@@ -343,10 +343,10 @@ def _build_result(audio_path: Path, transcription: str, hyp_sentences: list, pat
     sentence_f1 = sentence_precision = sentence_recall = None
     ref_format = None
 
-    new_ref_path = audio_path.with_name(audio_path.stem + "_speak,sentence_sperate.txt")
+    ref_path = audio_path.with_suffix(".txt")
     parsed = None
-    if new_ref_path.exists():
-        parsed = parse_speaker_sentence_reference(new_ref_path.read_text(encoding="utf-8"))
+    if ref_path.exists():
+        parsed = parse_speaker_sentence_reference(ref_path.read_text(encoding="utf-8"))
 
     if parsed is not None:
         reference = parsed["plain_text"]
@@ -362,7 +362,6 @@ def _build_result(audio_path: Path, transcription: str, hyp_sentences: list, pat
             sentence_recall = sentence["recall"]
         ref_format = "new"
     else:
-        ref_path = audio_path.with_suffix(".txt")
         if ref_path.exists():
             reference = ref_path.read_text(encoding="utf-8").strip()
             wer = compute_wer(reference, transcription.strip())["wer"]
