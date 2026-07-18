@@ -405,6 +405,15 @@ def create_parser():
         "롤백/A-B 비교용으로 끄려면 --no-silence-grammar-gate.",
     )
 
+    simulstreaming_group.add_argument(
+        "--silence-hard-secs",
+        type=float,
+        default=None,
+        dest="silence_hard_secs",
+        help="문법-조건부 침묵 게이트의 안전망 문턱(초) — 이 이상 침묵이면 문법 판정 없이 항상 분할. "
+        "기본값(None)은 tokens_alignment.SILENCE_HARD_SECS(현재 0.8s)를 사용. 실험용 스윕 오버라이드, 2.0s 초과 불가.",
+    )
+
     # LLM 번역 인자
     parser.add_argument(
         "--llm-translation",

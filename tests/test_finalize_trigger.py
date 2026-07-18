@@ -15,7 +15,7 @@ from whisperlivekit.timed_objects import (
     Silence,
     TimedText,
 )
-from whisperlivekit.tokens_alignment import FINALIZE_GRACE_SECS, TokensAlignment
+from whisperlivekit.tokens_alignment import FINALIZE_GRACE_SECS, SILENCE_HARD_SECS, TokensAlignment
 
 # ─── 헬퍼 ────────────────────────────────────────────────────────────────────
 
@@ -54,7 +54,9 @@ def test_silence_commit_trigger_is_silence():
     proc.new_tokens = [
         make_token(0.0, 0.5, '안녕'),
         make_token(0.5, 1.0, '하세요'),
-        make_silence(1.0, 2.0),
+        # 뒤에 이어지는 토큰이 없어 안전망(SILENCE_HARD_SECS)으로만 분할되므로,
+        # 문턱을 확실히 넘도록 margin 0.5s를 둔다.
+        make_silence(1.0, 1.0 + SILENCE_HARD_SECS + 0.5),
     ]
 
     proc.get_lines(diarization=False, current_silence=None, translation=False)
@@ -112,7 +114,9 @@ def test_grace_window_suspends_trigger_then_restores():
     proc.new_tokens = [
         make_token(0.0, 0.5, '안녕'),
         make_token(0.5, 1.0, '하세요'),
-        make_silence(1.0, 2.0),
+        # 뒤에 이어지는 토큰이 없어 안전망(SILENCE_HARD_SECS)으로만 분할되므로,
+        # 문턱을 확실히 넘도록 margin 0.5s를 둔다.
+        make_silence(1.0, 1.0 + SILENCE_HARD_SECS + 0.5),
     ]
 
     # 유예 창 안(1.5 - 1.0 = 0.5 < FINALIZE_GRACE_SECS) → 확정 보류

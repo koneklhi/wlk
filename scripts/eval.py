@@ -580,6 +580,14 @@ def main() -> None:
         "A/B 비교용: --no-silence-grammar-gate로 롤백, --silence-grammar-gate로 명시 ON.",
     )
     parser.add_argument(
+        "--silence-hard-secs",
+        type=float,
+        default=None,
+        dest="silence_hard_secs",
+        help="문법-조건부 침묵 게이트 안전망 문턱(초, 서버 기본 0.8). 미지정 시 서버 기본값 사용(전달 안 함). "
+        "실험용 스윕 오버라이드 — 서버 측 상한 2.0s 초과 불가(서버가 assert로 거부).",
+    )
+    parser.add_argument(
         "--expect-code-root",
         type=Path,
         default=None,
@@ -654,6 +662,8 @@ def main() -> None:
         extra_server_args.append(
             "--silence-grammar-gate" if args.silence_grammar_gate else "--no-silence-grammar-gate"
         )
+    if args.silence_hard_secs is not None:
+        extra_server_args.extend(["--silence-hard-secs", str(args.silence_hard_secs)])
 
     for f in args.files:
         if not f.exists():

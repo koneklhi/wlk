@@ -9,7 +9,7 @@ to_dict()['finalized'] 값도 검증한다.
 from types import SimpleNamespace
 
 from whisperlivekit.timed_objects import ASRToken, Segment, Silence, TimedText
-from whisperlivekit.tokens_alignment import TokensAlignment
+from whisperlivekit.tokens_alignment import SILENCE_HARD_SECS, TokensAlignment
 
 
 # ─── 헬퍼 ────────────────────────────────────────────────────────────────────
@@ -84,7 +84,9 @@ def test_to_dict_finalized_true():
     proc.new_tokens = [
         make_token(0.0, 0.5, 'Hello'),
         make_token(0.5, 1.0, ' world'),
-        make_silence(1.0, 2.0),
+        # 뒤에 이어지는 토큰이 없어 안전망(SILENCE_HARD_SECS)으로만 분할되므로,
+        # 문턱을 확실히 넘도록 margin 0.5s를 둔다.
+        make_silence(1.0, 1.0 + SILENCE_HARD_SECS + 0.5),
     ]
 
     proc.get_lines(diarization=False, current_silence=None, translation=False)
@@ -110,13 +112,21 @@ def test_to_dict_finalized_false_for_trailing():
 def test_multiple_sentences_all_finalized():
     """무음이 여러 번 오면 각 validated 세그먼트가 모두 finalized=True여야 한다."""
     proc = make_processor()
+    # 두 침묵 모두 뒤에 새 문장이 이어지지만, 안전망(SILENCE_HARD_SECS)이 실제로
+    # 분할을 트리거해야 하는 의도이므로 각 침묵 길이를 문턱 + margin 0.5s로 둔다.
+    # 토큰 시각은 이전 구간이 끝난 직후부터 이어지도록 순차 배치한다.
+    silence1_end = 1.0 + SILENCE_HARD_SECS + 0.5
+    token3_start = silence1_end
+    token4_start = token3_start + 0.5
+    silence2_start = token4_start + 0.5
+    silence2_end = silence2_start + SILENCE_HARD_SECS + 0.5
     proc.new_tokens = [
         make_token(0.0, 0.5, '첫'),
         make_token(0.5, 1.0, '문장'),
-        make_silence(1.0, 2.0),
-        make_token(2.0, 2.5, '두번째'),
-        make_token(2.5, 3.0, '문장'),
-        make_silence(3.0, 4.0),
+        make_silence(1.0, silence1_end),
+        make_token(token3_start, token4_start, '두번째'),
+        make_token(token4_start, silence2_start, '문장'),
+        make_silence(silence2_start, silence2_end),
     ]
 
     proc.get_lines(diarization=False, current_silence=None, translation=False)
