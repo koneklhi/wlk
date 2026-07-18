@@ -3739,3 +3739,138 @@ VBCable·측정 하니스 자체는 문제 없었음(인프라 블로커 없음)
 `eval_20260718_1901_bong1_fixed.json`(수정후 N=3) · `eval_20260718_1950_ytn2_sbs1_fixed.json`(N=3) ·
 `eval_20260718_2006_ytn1_heldout.json` · `eval_20260718_2010_kor2_kor3_ko.json` ·
 **브랜치**: `exp/speaker-change-trigger-loss@aec666e`(master 머지 대기 — 커밋만, 미머지·미푸시)
+
+---
+
+## Exp-188 — kor1 Case B(단어중간분절) 근본원인 규명 + 짧은 diar 세그먼트 화자귀속 노이즈 방지 [E5, `exp/kor1-caseb-fix`]
+
+### 배경 / 가설
+
+Exp-186(측정 세션, 문서 미커밋)이 kor1(단일화자 낭독, 121초, `--lan ko`)에서 Case B(단어 중간 분절, CLAUDE.md §3.3
+hard-fail) 3건을 실측 확인 — "2040년 국방 환경을 고려한..."이 "국방환경."⏎"을 고려한..."으로, "소모 강요"가
+"강."⏎"요 등..."으로 절단(그 자리에 없던 마침표까지 삽입). `SILENCE_HARD_SECS` 0.8→1.2(Exp-185)로 kor3의 Case B는
+해소됐으나 kor1은 미해소로 남아 다음 Stage(Exp-188)로 이관됨. 가설: kor1이 순수 낭독체 단일화자임에도 Sortformer
+diarization이 순간적으로 다른 화자를 오귀속하는 노이즈가 있고, `_gate_decide`의 화자불일치 분기(`diar_mode and
+next_seg.speaker != closing.speaker`)가 문법 판정(`should_split_after_silence`)보다 **우선** 무조건 분할을
+강제해 이 노이즈를 그대로 Case B로 증폭시킨다는 것.
+
+### 재현 + 근본원인 규명
+
+kor1 단독 `--lan ko --diarization --sortformer-model ... --repeat 3 --trace-tokens`로 재현 측정(수정 전 코드,
+Exp-187 Stage 1 반영 상태). R1·R2는 재현 안 됨(회차 변동 — 동일 오디오도 매 실행마다 편차 큼), **R3에서 정확히
+동일 패턴 재현**: "소모 강요"가 "적가의 무인전투체계를 활용한 고가의 첨단 무기체계 소모 강."(8번줄, `⟨speaker_change⟩`)
+/ "요 등 저비 고효율 효과중..."(9번줄, `⟨speaker_change⟩`)로 절단. Exp-187 반영 덕에 트리거가 `silence`가 아니라
+정확히 `speaker_change`로 라벨링되어(Exp-186 시절엔 이 라벨 손실 버그 때문에 `silence`로 오분류됐었음 — 근본원인이
+같은 메커니즘임을 뒷받침) 화자불일치 강제분할 경로임이 즉시 드러남.
+
+`--trace-tokens` 로그(`[SilenceGate]`)로 정확한 인과를 확정: 같은 침묵 위치(`start=57.41 end=57.89 d_eff=0.48`,
+문법상 명백히 미종결 — SILENCE_HARD_SECS 1.2s 미만이라 안전망도 미작동)에서 diar 무상태 재계산 tick마다 화자값이
+바뀌었다 — 초기 tick `speakers=(1, 1) decision=merge`(정상) → 이후 tick(diarization 데이터가 더 들어온 뒤)
+`speakers=(1, 2) decision=split path=split_grammar`(오분류). **"강"이라는 극히 짧은 텍스트 세그먼트 하나에만
+diarization이 순간적으로 다른 화자(2)를 귀속**했고, `_gate_decide`가 이 값을 무조건 신뢰해 문법 판정을 건너뛰고
+강제 분할한 것 — 실제 화자는 앞뒤 모두 동일(1)이었다(kor1은 애초에 단일화자 파일). 이는 diarization 임베딩이
+아주 짧은 세그먼트에서 불안정한 일반적 한계(특정 언어·데이터 무관)이며, `_gate_decide`가 화자불일치를
+grammar보다 우선하는 **의도된 설계**(진짜 화자전환 보호용, `test_diar_speaker_change_blocks_merge`로 테스트됨)와
+충돌해 Case B를 만든다.
+
+### 변경 내용
+
+[whisperlivekit/tokens_alignment.py](../whisperlivekit/tokens_alignment.py):
+- `MIN_SPEAKER_ATTRIBUTION_SECS = 0.5`s 신규 상수(:73-80) — 화자 귀속을 신뢰하는 최소 **diar 세그먼트**(ASR
+  텍스트 세그먼트 아님) 길이.
+- `get_lines_diarization()`의 화자 배정 루프(:583-620)가 `prev_resolved_speaker`를 추적하고, max-overlap
+  승자 **diar 세그먼트 자체의 길이**가 이 문턱보다 짧고 직전 확정 화자와 다르면 그 귀속을 신뢰하지 않고 직전
+  화자를 승계한다. **ASR 텍스트 길이가 아니라 diar 세그먼트 길이**를 기준으로 삼은 이유: 정상적인 실제 화자전환
+  발화(ytn2 "한 문장씩 화자 교대")도 짧을 수 있어 텍스트 길이만으로는 노이즈와 구분 불가 — `concatenate_diar_segments()`가
+  동일화자 연속 조각만 병합하므로, 진짜 화자전환은 보통 여러 조각에 걸쳐 이 문턱보다 길게 남는 반면 순간적
+  오분류(blip)는 앞뒤 동일화자 조각 사이에 낀 짧은 조각 하나로 고립된다는 성질을 이용.
+- `docs/SENTENCE_FINALIZATION_LOGIC.md` §3.3·§5 갱신(연동 문서 규약).
+- TDD: `tests/test_silence_grammar_gate.py::test_diar_short_segment_speaker_flip_does_not_force_case_b_split`
+  신규 — kor1 실측 패턴을 diar 세그먼트 구성으로 그대로 재현(짧은 세그먼트만 다른 화자로 귀속, 앞뒤는 동일화자).
+  수정 전 RED 확인(`['능력과', '강', '요']` 3분할) → 수정 후 GREEN. 기존 `test_diar_speaker_change_blocks_merge`(진짜
+  화자전환은 텍스트가 짧아도(0.4s) 여전히 강제분할돼야 함 — diar 세그먼트가 0.8s로 충분히 길어 문턱 이상이라
+  무회귀) 포함 27개 게이트 테스트 전부 통과. 전체 pytest 428 passed·1 skipped, ruff clean.
+
+### 테스트 설정
+
+경로 C(VBCable), diar-ON(Sortformer, CRT=3.0), turbo, cwd=워크트리(`worktrees/kor1-caseb-fix`, provenance 확인).
+- kor1(`--lan ko`): 재현 N=3(수정 전) + 확정 N=3 + 추가 N=5(총 N=8, 수정 후), `--trace-tokens`로 `[SpeakerAttribution]`
+  발동 여부 계측.
+- auto 표준세트(bong1/ytn2/sbs1, `--lan auto`): 스크리닝 N=1(`--trace-tokens`) → 확정 N=3(무회귀 확인).
+- ko 무회귀(kor2/kor3, `--lan ko`): 스크리닝 N=1(`--trace-tokens`).
+
+### 정량 결과
+
+**kor1(target, 수정 후 N=8 = N3+N5)**: WER `[15.8, 14.0, 18.7, 19.9, 18.1, 17.5, 21.6, 20.5]` — median **18.4%**
+(min 14.0/max 21.6, stdev 2.5). Exp-185 베이스라인(SHS=1.2, N=3): median 17.0%(17.0-22.2) — 동일 범위(중립,
+회귀 아님). **Case B 발생 0/8**(수정 전 재현 3회 중 1회 발생과 대비). `[SpeakerAttribution]` 오버라이드 발동 **0/8회**
+— 즉 이 N=8 확정측정에서는 새 분기가 아예 발동하지 않았다(diar 재분절 타이밍이 매 실행마다 달라 발동이 희소함,
+"짝지음 A/B 0-firing 노이즈 대조" 사례). 발동이 0회라는 것 자체가 이 8회 결과를 내 변경 탓으로도 덕으로도 돌릴 수
+없다는 뜻이나, **수정 전 재현 R3의 정확한 로그**(같은 침묵에서 `speakers=(1,1)/merge` → `speakers=(1,2)/split_grammar`
+플립)로 메커니즘 자체는 확정적으로 규명했고, 유닛 테스트로 그 메커니즘이 고쳐졌음을 결정적으로 검증했다.
+
+**auto 표준세트(확정 N=3)**:
+
+| 파일 | WER (R1,R2,R3) | median | max | F1 (R1,R2,R3) | F1 median | 베이스라인(Exp-185 N=3) | SpeakerAttribution 발동 |
+|---|---|---|---|---|---|---|---|
+| bong1 | 44.4/31.7/27.2 | 31.7% | 44.4%❌ | 47.1/54.1/68.4 | 54.1%↓ | WER 31.4%(29.3-34.4)/F1 64.9%(61.5-68.8) | 0/3 |
+| ytn2 | 18.7/15.8/15.3 | **15.8%**↑ | 18.7% | 76.2/76.2/90.0 | 76.2%↓ | WER 17.2%(16.7-20.2)/F1 90.0%(80.0-90.0) | 0/3 |
+| sbs1 | 10.7/9.5/11.9 | 10.7%= | 11.9%= | 80.0/80.0/100.0 | 80.0%= | WER 10.7%(8.9-11.9)/F1 100.0%(80.0-100.0) | 0/3 |
+
+**ko 무회귀(스크리닝 N=1)**: kor2 WER 17.2%(F1 100.0%, 베이스라인 19.4%/0.0% — 개선, F1 0%↔100%는 단일화자
+무전환 파일의 F1 산식 경계값 아티팩트로 추정) · kor3 WER 29.8%(F1 100.0%, 베이스라인 37.1%/100.0% — 개선).
+둘 다 Case B 재발 없음(kor3는 Exp-185로 이미 해소된 상태 유지 확인). 둘 다 0회 발동.
+
+### 분석 (전사 내용 정성 대조)
+
+**kor1** (수정 후 N=8 전 회차): "국방환경을"/"소모 강요" 등 Case B 대상 위치 전 회차 정상 결합 확인. 대신 일부
+회차에 "박진."(정답에 없는 삽입, R3) 같은 소규모 환각이 산발 — Case B와 무관한 별개 이슈(다음 Stage 조사 대상인
+언어오검출과 관련 가능성, 이번 Stage 범위 밖).
+
+**bong1** (R1, max 회차): "Thank you very much", "I know. know. I know.", "Yeah. Yeah. Yeah, That's right." —
+bong1의 기존 웃음/필러 환각 실패모드(Exp-159/163/171/174/176/185에서 반복 확인)와 정성적으로 완전히 일치.
+`[SpeakerAttribution]` 0회 발동으로 이번 변경과 인과관계 없음이 로그로 확정됨 — R2/R3는 median 부근(27.2~31.7%)으로
+정상 범위.
+
+**ytn2**: 주요 실패 없음(WER 개선). F1 median 76.2%가 베이스라인 하한(80%) 바로 아래이나 0회 발동이라 이번
+변경과 무관(diar 자체 회차 변동으로 추정, 스크리닝에서는 오히려 784회 발동하며 F1 84.2%로 베이스라인 범위
+안이었음 — 발동량 자체가 회차마다 크게 요동).
+
+**sbs1**: 주요 실패 없음, 베이스라인과 거의 정확히 일치.
+
+**이번 변경 영향**: kor1 목표(Case B) 해소 확정(메커니즘 규명 + 유닛테스트 결정적 검증 + 8회 측정 재발 0건).
+auto 표준세트·ko 세트 전부 무회귀(bong1 max/F1 저하는 0-firing으로 이번 변경과 무관 확정, 기존 웃음/필러
+패턴으로 귀속).
+
+### 채택 조건 판정 / 결론
+
+① Case B 신규 발생 없음(hard floor): **✓** — kor1 8/8, kor2·kor3·ytn2·sbs1·bong1 전사 전수 확인 결과 0건.
+② 화자분리 F1 worst-case: bong1 min 47.1%가 베이스라인 61.5% 아래로 **수치상 하회**하나, `[SpeakerAttribution]`
+0회 발동으로 **이번 변경과 인과관계 없음이 로그로 확정**(기존 웃음/필러 패턴, Exp-171/174/176/185와 동일 귀속).
+③ WER max: ytn2·sbs1 미회귀, bong1만 초과하나 ②와 동일 사유로 무관.
+④ WER median: ytn2 개선, sbs1 동률, bong1 동률(31.7% vs 31.4%), ko셋 둘 다 개선.
+⑤ pytest 428 passed·1 skipped, ruff clean.
+
+**✅ 채택 (이 브랜치 `exp/kor1-caseb-fix`에 커밋 — master 미머지, Stage 종료 후 통합 단계에서 처리 예정)**.
+목표(kor1 Case B) 완전 해소를 메커니즘 규명(정확한 로그 인과관계)·TDD(결정적 재현+검증)·8회 반복측정(재발 0건)
+3중으로 확인했고, 표준 테스트셋 전체에서 이번 변경으로 귀속 가능한 회귀가 없다(bong1 이상치는 0-firing으로
+무관 확정). **epoch 미bump**(화자귀속 신뢰도 게이팅 — 같은 세대 내 세부 수정, 실패모드 자체를 바꾸는 구조 변경
+아님).
+
+### 다음 가설 / 미해결
+
+1. **kor1 언어오검출**(다음 Stage 예고 대상) — auto 모드에서 `ShortSilenceLangCheck`이 순수 한국어 중간에 영어를
+   오검출(p=0.99)하는 별개 버그가 Exp-186에서 관찰됨. 이번 Stage 범위 밖(`--lan ko` 고정 세션에서는 코드스위칭
+   재감지 게이트가 비활성이라 이 경로 자체가 발동하지 않음 — CLAUDE.md §3.2). kor1 R3에서 관찰된 "박진." 삽입도
+   이 계열 조사에서 함께 볼 가치 있음.
+2. **`[SpeakerAttribution]` 발동률 자체의 회차간 변동폭**(ytn2 스크리닝 784회 vs 확정 N=3 0회)이 시사하는 것 —
+   diar 재분절 타이밍이 실시간 처리 지연·GPU 경합 등에 민감하게 반응하는 것으로 추정되나 확증 안 됨. 향후
+   diar 안정성 개선 트랙에서 재조사 여지.
+3. `MIN_SPEAKER_ATTRIBUTION_SECS=0.5s`는 **잠정값** — kor1 실측(diar 세그먼트 ~0.4s 추정) 기반 최소 방어선.
+   추가 스윕(0.3/0.7/1.0 등)으로 정밀화 여지 있으나 이번 측정에서 무회귀 확인된 값 그대로 채택.
+
+**JSON**: `.omc/benchmarks/eval_20260718_2035_kor1_repro.json`(수정전 재현 N=3, R3에서 Case B 확인) ·
+`eval_20260718_2100_kor1_fix_N3.json`·`eval_20260718_2200_kor1_fix_N5.json`(수정후 N=8) ·
+`eval_20260718_2215_auto_screening.json`(N=1) · `eval_20260718_2225_auto_confirm_N3.json`(N=3) ·
+`eval_20260718_2245_ko23_screening.json`(N=1) ·
+**브랜치**: `exp/kor1-caseb-fix`(`exp/speaker-change-trigger-loss@0df3188`에서 분기, 커밋 예정 — master 미머지·미푸시)

@@ -142,6 +142,22 @@
   진단 로그(`branch=silence_speaker_boundary`)만 바뀐다. 테스트: `tests/test_finalize_trigger.py`
   `test_diar_speaker_change_across_silence_gets_speaker_change_trigger`(회귀 방지용
   `test_diar_same_speaker_across_silence_still_gets_silence_trigger`도 추가).
+- **짧은 세그먼트 화자 오귀속(노이즈) 방지 — Case B 수정(Exp-188)**: kor1(단일화자 낭독) 실측에서
+  Sortformer가 아주 짧은 텍스트 세그먼트(예 "강" — "소모 강요"의 "강요"가 잘린 자리)에만 순간적으로
+  다른 화자를 귀속하는 것을 확인했다(`[SilenceGate]` 로그가 같은 침묵 위치에서 재계산 tick마다
+  `speakers=(1,1)`→`(1,2)`로 플립 — diar 무상태 재계산 특성상 diarization 데이터가 더 들어올수록
+  달라짐). `_gate_decide`의 화자불일치 분기(`diar_mode and next_seg.speaker != closing.speaker`)는
+  이 노이즈를 진짜 화자전환과 구분하지 못해 문법상 미종결 단어("강")를 무조건 분할해 Case B를
+  만들었다(§3.5 hard-fail). 수정: `get_lines_diarization()`의 화자 귀속 루프가 max-overlap **승자
+  diar 세그먼트 자체의 길이**(`MIN_SPEAKER_ATTRIBUTION_SECS = 0.5s`, `tokens_alignment.py`)를 함께
+  본다 — `concatenate_diar_segments()`가 동일화자 연속 조각만 병합하므로, 진짜 화자전환은 보통 여러
+  조각에 걸쳐 이 문턱보다 길게 남는 반면 순간적 오분류(blip)는 앞뒤 동일화자 조각 사이에 낀 짧은
+  조각 하나로 고립된다. 승자 diar 세그먼트가 이 문턱보다 짧고 직전 확정 화자와 다르면, 그 귀속을
+  신뢰하지 않고 **직전 확정 화자를 승계**한다(ASR 텍스트 세그먼트 자체의 길이가 아니라 diar
+  세그먼트 길이를 기준으로 삼은 이유: 정상적인 짧은 발화/단어는 흔해 텍스트 길이만으로는 노이즈와
+  구분 불가 — 회귀 테스트 `test_diar_speaker_change_blocks_merge`가 이 구분을 검증). 순수 화자
+  귀속 신뢰도 게이팅이라 정상적인(충분히 긴) 화자전환 로직·우선순위(§3.4)는 불변. 테스트:
+  `tests/test_silence_grammar_gate.py::test_diar_short_segment_speaker_flip_does_not_force_case_b_split`.
 
 ### 3.4 `punctuation` — 라벨 의미 (두 경로)
 
@@ -239,6 +255,7 @@ Whisper가 찍는 마침표(`.`/`。`)를 문장 분할 신호로 쓰되, **진�
 | 스크립트-앵커 재감지 창(Exp-175~, **잠정**) | `2.0`s·p≥`0.90` | `backend.py:187-188` | 트리거 시 `detect_current_language` 창·확신 문턱 |
 | `_NEW_SPEAKER_KEEP_MARGIN`(Exp-171~) | `0.3`s | `backend.py:48` | 화자전환 경계-앵커 유지 여유(damage B 수정) |
 | `_NEW_SPEAKER_MAX_KEEP`(Exp-171~) | `5.0`s | `backend.py:49` | 화자전환 유지 오디오 상한(과거 keep=4.5 환각 전례 반영) |
+| `MIN_SPEAKER_ATTRIBUTION_SECS`(Exp-188) | `0.5`s | `tokens_alignment.py` | 승자 diar 세그먼트가 이보다 짧고 직전 화자와 다르면 귀속 불신 → 직전 화자 승계(짧은 세그먼트 화자오귀속 노이즈 방지, §3.3) |
 
 디코더 파라미터(간접 영향: 어떤 텍스트가 나오는지에 영향, 경계는 §3의 3신호가 전담) —
 `frame_threshold`, `beams`, `logprob_threshold`, `compression_ratio_threshold` 등은
