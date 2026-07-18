@@ -3738,4 +3738,4 @@ VBCable·측정 하니스 자체는 문제 없었음(인프라 블로커 없음)
 **JSON**: `.omc/benchmarks/eval_20260718_1851_bong1_repro.json`(baseline N=3) ·
 `eval_20260718_1901_bong1_fixed.json`(수정후 N=3) · `eval_20260718_1950_ytn2_sbs1_fixed.json`(N=3) ·
 `eval_20260718_2006_ytn1_heldout.json` · `eval_20260718_2010_kor2_kor3_ko.json` ·
-**브랜치**: `exp/speaker-change-trigger-loss`(master 머지 대기 — 커밋만, 미머지·미푸시)
+**브랜치**: `exp/speaker-change-trigger-loss@aec666e`(master 머지 대기 — 커밋만, 미머지·미푸시)
