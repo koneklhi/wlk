@@ -89,69 +89,73 @@ body {
   flex-direction: column;
 }
 
-/* Record button */
-#recordButton {
-  width: 50px;
-  height: 50px;
-  border: none;
-  border-radius: 50%;
+/* 녹음 제어 3버튼(시작/일시중단/완전중단) */
+.record-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 40px;
+  padding: 0 16px;
+  border-radius: 999px;
   background-color: var(--button-bg);
-  cursor: pointer;
-  transition: all 0.3s ease;
   border: 1px solid var(--button-border);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  position: relative;
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  white-space: nowrap;
 }
 
-#recordButton.recording {
-  width: 180px;
-  border-radius: 40px;
-  justify-content: flex-start;
-  padding-left: 20px;
+.record-control:active:not(:disabled) {
+  transform: scale(0.96);
 }
 
-#recordButton:active {
-  transform: scale(0.95);
+.record-control:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }
 
-.shape-container {
-  width: 25px;
-  height: 25px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
+.record-control-icon {
+  font-size: 12px;
+  line-height: 1;
 }
 
-.shape {
-  width: 25px;
-  height: 25px;
-  background-color: rgb(209, 61, 53);
-  border-radius: 50%;
-  transition: all 0.3s ease;
+.record-control--start {
+  color: #2e7d32;
+  border-color: rgba(46, 125, 50, 0.35);
 }
 
-#recordButton:disabled .shape {
-  background-color: #6e6d6d;
+.record-control--start:hover:not(:disabled) {
+  background-color: rgba(46, 125, 50, 0.08);
 }
 
-#recordButton.recording .shape {
-  border-radius: 5px;
-  width: 25px;
-  height: 25px;
+.record-control--pause {
+  color: #b06d00;
+  border-color: rgba(176, 109, 0, 0.35);
 }
 
-/* Recording elements */
+.record-control--pause:hover:not(:disabled) {
+  background-color: rgba(176, 109, 0, 0.08);
+}
+
+.record-control--stop {
+  color: rgb(209, 61, 53);
+  border-color: rgba(209, 61, 53, 0.35);
+}
+
+.record-control--stop:hover:not(:disabled) {
+  background-color: rgba(209, 61, 53, 0.08);
+}
+
+/* Recording elements — 녹음 중일 때만 파형+타이머 노출 */
 .recording-info {
   display: none;
   align-items: center;
-  margin-left: 15px;
-  flex-grow: 1;
+  margin-left: 6px;
 }
 
-#recordButton.recording .recording-info {
+#recordingInfo.active {
   display: flex;
 }
 

@@ -134,10 +134,10 @@ async def run_browser_test(
 
             print("[vbcable_test] 페이지 로드 중...")
             await page.goto(f"{url}/")
-            await page.wait_for_selector("#recordButton")
+            await page.wait_for_selector("#startButton")
 
             print("[vbcable_test] 녹음 시작...")
-            await page.click("#recordButton")
+            await page.click("#startButton")
             # WebSocket이 OPEN 될 때까지 대기 — 캡처 준비 전 재생 시작(레이스)으로 앞부분 유실 방지
             for _ in range(50):  # 최대 ~5초
                 try:
@@ -186,13 +186,20 @@ async def run_browser_test(
 
             # 재생 완료 직후 바로 녹음 중지 — buffer_transcription 대기 제거
             # (문장 확정 로직 없으면 buffer가 영원히 안 비워짐)
-            print("[vbcable_test] 녹음 중지...")
-            await page.click("#recordButton")
+            # 3버튼(시작/일시중단/완전중단) UI에서는 "완전중단"이 화면 전사 기록을 즉시 비우므로
+            # 스크래핑 직전에 누르면 안 된다 — 서버 flush를 기다리며 기록을 화면에 유지하는
+            # "일시중단"이 예전 단일 토글의 "정지" 동작과 의미상 대응된다.
+            print("[vbcable_test] 녹음 중지(일시중단)...")
+            await page.click("#pauseButton")
 
             print("[vbcable_test] 서버 처리 완료 대기 중...")
             for _ in range(int(processing_timeout_sec / poll_interval)):
                 status = await page.text_content("#status") or ""
-                if "Finished processing" in status or "Processing finalized" in status:
+                if (
+                    "일시 중단됨" in status
+                    or "Finished processing" in status
+                    or "Processing finalized" in status
+                ):
                     break
                 await asyncio.sleep(poll_interval)
             else:
