@@ -161,9 +161,10 @@ eval.py 완료 후 `.omc/transcripts/`에 저장된 `{파일명}_{경로}_R{회�
 | 낮음(Recall↓) | 동일 화자 문장 미분리 — **허용**(Case A, 감점 아님) |
 | 낮음(Precision↓) | 과분할 — **Case B(단어중간)면 hard-fail**, 아니면 후순위 |
 
-> 구현 현황: 2지표 분리 metric **구현 완료**. `scripts/eval.py`가 신형식 정답(`<name>_speak,sentence_sperate.txt`)을
-> 우선 읽어 `seg_f1`=화자분리 F1·`sentence_f1`=문장분리 F1을 각각 산출한다(신형식 파일이 없거나 `[spkN]` 헤더
-> 파싱에 실패하면 구 `<name>.txt`·빈 줄 경계=구 regime으로 폴백 — 이 경우 `sentence_f1`은 `None`).
+> 구현 현황: 2지표 분리 metric **구현 완료**. `scripts/eval.py`가 정답 `<name>.txt`(2026-07-18부로 단일
+> 규약 — 과거 `_speak,sentence_sperate.txt` 접미사 파일명은 폐지·통합됨)에 대해 신형식(`[spkN]` 헤더) 파싱을
+> 우선 시도해 `seg_f1`=화자분리 F1·`sentence_f1`=문장분리 F1을 각각 산출한다(헤더 파싱에 실패하면 같은
+> 파일을 빈 줄 경계=구 regime으로 폴백 — 이 경우 `sentence_f1`은 `None`).
 > 상세는 [docs/TRANSCRIPTION_REQUIREMENTS.md](../../docs/TRANSCRIPTION_REQUIREMENTS.md) §5 참조. 경로 C 화자 id
 > 배선(§5 step 4, 귀속 정확도)은 아직 미구현이며, regime v2 기준 신 베이스라인 실측도 다음 세션 과제다.
 

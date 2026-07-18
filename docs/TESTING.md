@@ -76,10 +76,10 @@ whisperlivekit-server
 - `test_data/` 디렉토리: 음성 파일(mp3/wav) + 선택적 정답 스크립트(txt)
 - 파일명 규칙: 음성파일과 정답 스크립트 파일명 동일, 확장자만 다름 (예: `sbs1.mp3` ↔ `sbs1.txt`)
 - 정답 스크립트가 없는 음성파일도 존재 가능
-- **정답 스크립트 형식 (신형식 canonical)**: 성능 개선 정답 = `<name>_speak,sentence_sperate.txt`. 두 경계를 라벨링한다:
+- **정답 스크립트 형식 (canonical, 2026-07-18부로 `<name>.txt` 단일 규약)**: 성능 개선 정답 = `<name>.txt`. 두 경계를 라벨링한다:
   1. **`[spkN]` 헤더 전환 = 화자전환 경계** → **화자분리 F1**(1순위·필수). 화자가 바뀌면 새 `[spkN]` 헤더(사람 단위 — 같은 화자는 한·영 code-switch 가능, bong1=4화자 `spk1`~`spk4`).
   2. **화자 블록 내 줄바꿈 = 온점 문장 경계** → **문장분리 F1**(3순위·nice-to-have). WER 정답은 `[spkN]` 헤더 제거·라벨 미포함 텍스트.
-  - **구형식 `<name>.txt`(라벨 없는 빈 줄)는 deprecated** — eval은 신형식(`<stem>_speak,sentence_sperate.txt`)을 우선 읽고, 없거나 `[spkN]` 헤더 파싱에 실패한 경우에만 `.with_suffix(".txt")`로 구 파일을 읽는다(신형식 파서 전환 구현 완료). 과도기 병존. 형식·측정 정본 = [TRANSCRIPTION_REQUIREMENTS.md](TRANSCRIPTION_REQUIREMENTS.md) §2·§3.
+  - `[spkN]` 헤더가 없는 `<name>.txt`(라벨 없는 빈 줄 경계만)는 구형식으로 폴백 파싱된다(문장분리 F1 미산출) — `eval.py`가 같은 `<name>.txt`에 대해 신형식 파싱을 우선 시도하고 실패 시에만 폴백. 과거엔 `_speak,sentence_sperate.txt`라는 별도 접미사 파일명으로 신/구형식을 구분했으나 **폐지되고 `<name>.txt`로 통합**됐다(전 파일 `[spkN]` 헤더 포함 상태). 형식·측정 정본 = [TRANSCRIPTION_REQUIREMENTS.md](TRANSCRIPTION_REQUIREMENTS.md) §2·§3.
 - **파일 목록** (측정 기본 설정: 화자분할 ON — 이 옵션 전체가 이제 `parse_args.py` 기본값이라 추가 인자 없이 `whisperlivekit-server`만 기동해도 동일 설정임). **언어모드** 태그(CLAUDE.md §3.2)는 측정 시 넘길 `--lan` 값을 가리킨다:
   - `bong1.mp3` / `bong1.txt` — 봉준호 기생충 인터뷰. **영어 2명 + 한국어 2명**, 화자 교대·긴 발화 혼재. 다화자·온점분리 역량의 핵심 테스트 대상. **언어모드: auto**.
     **테스트(채택/기각) + 개선 최우선 대상**(다화자·긴 발화). 채택 확정 시 `--repeat 3` 루틴.
@@ -92,9 +92,9 @@ whisperlivekit-server
     **held-out 정량**(영어 전용 회귀 감시).
   - `kor1.wav` / `kor2.wav` / `kor3.wav` — 한국어 단독 낭독체(Exp-178 발굴). auto 모드에서 서두 영어 환각 등으로 붕괴하는 실패모드가 발견되어 **정식 테스트셋(채택/기각)에 편입**됨. **언어모드: ko**(`--lan ko`).
     **테스트(채택/기각)**. 채택 확정 시 `--repeat 3` 루틴.
-  - `kinno.mp3` / `kinno_speak,sentence_sperate.txt` — ITS 2021 K-혁신기업 행사, **2화자 순차통역**(한국어 MC + 통역사), 한↔영 교차. **언어모드: auto**.
+  - `kinno.mp3` / `kinno.txt` — ITS 2021 K-혁신기업 행사, **2화자 순차통역**(한국어 MC + 통역사), 한↔영 교차. **언어모드: auto**.
     **held-out 정성 sanity** — 정답 텍스트의 단어·철자가 부정확할 수 있어 **WER/F1 채택 게이팅에서 제외**. 전반적 화자·문장 분리 + 대규모 누락/환각 유무만 정성 확인.
-- **정답 스크립트**: 위 모든 파일에 신형식 `<name>_speak,sentence_sperate.txt`가 존재(canonical). 구 `<name>.txt`는 bong1·ytn1·ytn2·sbs1·eng1·kor1~3에 병존(deprecated), kinno는 신형식만 존재.
+- **정답 스크립트**: 위 모든 파일에 `<name>.txt`가 존재(canonical, `[spkN]` 헤더+화자·문장 전처리 완료). 2026-07-18 이전엔 `_speak,sentence_sperate.txt` 접미사 파일로 별도 관리됐으나 폐지·통합됨.
 - 용도: STT 전사 정확도(WER) + 화자분리 F1 + 문장분리 F1 정량 분석(우선순위 화자분리 F1 > WER > 문장분리 F1)
 
 ### STT 동작 확인용 UI 선택지

@@ -56,13 +56,14 @@
 
 ---
 
-## 2. 정답 스크립트 형식 (신형식 canonical)
+## 2. 정답 스크립트 형식 (canonical)
 
-성능 개선의 정답 스크립트는 **`test_data/<name>_speak,sentence_sperate.txt`** (신형식)을 canonical로 쓴다.
-구 `test_data/<name>.txt`(라벨 없는 빈 줄 형식)는 **deprecated** — metric 코드가 신형식 파서로 전환되면 정답
-용도 폐기(그 전까지 과도기 병존).
+성능 개선의 정답 스크립트는 **`test_data/<name>.txt`**를 canonical로 쓴다(2026-07-18부로 단일 규약 —
+과거 `_speak,sentence_sperate.txt` 접미사로 별도 관리되던 신형식 파일을 `<name>.txt`로 이전·통합했다).
+`[spkN]` 헤더가 있으면 아래 신형식으로 파싱해 화자분리 F1+문장분리 F1을 산출하고, 헤더가 없으면(라벨
+없는 빈 줄 형식) 구형식으로 폴백 파싱한다(문장분리 F1 미산출).
 
-신형식 구조(예 `sbs1_speak,sentence_sperate.txt`):
+신형식 구조(예 `sbs1.txt`):
 
 ```
 [spk1]
@@ -138,10 +139,11 @@ Part 1~3(파서·2지표 산출·집계/출력)은 **구현 완료**되었다(`f
 Part 4(경로 C 화자 id 배선)는 **선택 확장으로 아직 미구현**이다.
 
 1. **[완료] 신형식 canonical 파서**: `scripts/eval.py`의 `parse_speaker_sentence_reference()`가
-   `<name>_speak,sentence_sperate.txt`를 읽어 `[spkN]` 헤더를 해석하고 **(a) 화자경계 집합** +
+   `<name>.txt`를 읽어 `[spkN]` 헤더를 해석하고 **(a) 화자경계 집합** +
    **(b) 문장 경계 집합** + **(c) 라벨 제거 WER 텍스트**(`plain_text`)를 산출한다(`[spkN]` 헤더가 없으면
-   `None`을 반환). `_build_result()`가 신형식 파일을 우선 시도하고, 없거나 파싱 실패 시(`None`) 구
-   `parse_reference_sentences()`로 폴백한다(과도기 병존 유지).
+   `None`을 반환). `_build_result()`가 동일한 `<name>.txt`에 대해 신형식 파싱을 우선 시도하고, 파싱
+   실패 시(`None`) 같은 파일을 구 `parse_reference_sentences()`로 폴백한다(2026-07-18부로 별도
+   `_speak,sentence_sperate.txt` 접미사 파일명 규약은 폐지·`<name>.txt`로 통합).
 2. **[완료] 2지표 산출**: `whisperlivekit/metrics.py`의 `compute_speaker_sentence_segmentation()`이
    `compute_segmentation()`과 동일한 Levenshtein 정렬·경계 매칭 로직(내부 공용 헬퍼로 추출:
    `_flatten_sentences`/`_flatten_blocks`/`_match_boundaries`/`_boundary_prf`)을 화자경계·문장경계 두

@@ -160,7 +160,7 @@ Whisper가 찍는 마침표(`.`/`。`)를 문장 분할 신호로 쓰되, **진�
 - **파라미터**: §5 `KO_FINAL_SUFFIXES`/`KO_EXCLUDE_SUFFIXES`/`EN_ABBREV`(SoT=`sentence_boundary.py`).
 - **측정(Exp-170)**: 출력 계층 전용이라 **WER 중립**(단어 시퀀스 불변). **구 regime**에서는 정답이 화자전환(문단)
   경계 기준이라 문장 분할을 credit 못 했으나(당시 채택 근거 = 목표·정성·WER 중립), **신 regime v2**는 신형식
-  정답(`test_data/<name>_speak,sentence_sperate.txt`)의 화자 블록 내 줄바꿈으로 **문장분리 F1**을 별도 산출한다
+  정답(`test_data/<name>.txt`, `[spkN]` 헤더 포함 canonical)의 화자 블록 내 줄바꿈으로 **문장분리 F1**을 별도 산출한다
   (측정·구현 계획 = [TRANSCRIPTION_REQUIREMENTS.md](TRANSCRIPTION_REQUIREMENTS.md); 우선순위 화자분리 F1 > WER > 문장분리 F1).
 - **[금지] Case B — 단어 중간 over-split**: 온점 형태소 분할이든 침묵(§3.1)·화자경계(§3.3) 과분할이든, 한
   단어/문장이 **단어 중간에서 쪼개져** 확정되면(예 "…지도를 올렸"⏎"습니다") **critical 실패**다(Exp-173 "단어 내부
