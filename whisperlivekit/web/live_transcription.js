@@ -28,6 +28,9 @@ let lastSignature = null;
 // 서버는 5분 슬라이딩 윈도우만 유지하므로, 확정된 줄은 서버가 다음 스냅샷에서
 // 빼버려도 화면에 계속 남아있도록 프론트에서 직접 누적한다.
 let finalizedHistory = new Map();
+let isPaused = false;          // teardown 됐지만 기록 유지, "시작"으로 재개 대기 중
+let committedLines = [];       // 이전 pause 사이클들의 확정 줄을 순서대로 "얼린" append-only 배열. id 충돌에서 격리하는 핵심 장치.
+let stopIntent = null;         // 'pause' | 'fullstop' | null — 현재 진행 중인 teardown/EOS가 끝나면 무엇을 할지
 let availableMicrophones = [];
 let selectedMicrophoneId = null;
 let serverUseAudioWorklet = null;
@@ -41,7 +44,10 @@ waveCanvas.height = 30 * (window.devicePixelRatio || 1);
 waveCtx.scale(window.devicePixelRatio || 1, window.devicePixelRatio || 1);
 
 const statusText = document.getElementById("status");
-const recordButton = document.getElementById("recordButton");
+const startButton = document.getElementById("startButton");
+const pauseButton = document.getElementById("pauseButton");
+const stopButton = document.getElementById("stopButton");
+const recordingInfo = document.getElementById("recordingInfo");
 const saveTranscriptButton = document.getElementById("saveTranscriptButton");
 const chunkSelector = document.getElementById("chunkSelector");
 const websocketInput = document.getElementById("websocketInput");
@@ -171,9 +177,10 @@ function handleMicrophoneChange() {
 
   if (isRecording) {
     statusText.textContent = "Switching microphone... Please wait.";
-    stopRecording().then(() => {
+    // 마이크 교체는 완전중단이 아니라 일시중단→재개로 처리해 화면 기록을 유지한다.
+    pauseRecording().then(() => {
       setTimeout(() => {
-        toggleRecording();
+        startOrResume();
       }, 1000);
     });
   }
@@ -245,7 +252,7 @@ websocketInput.addEventListener("change", () => {
 // 클릭 시점까지 확정된 누적 전사 + 최신 미확정 줄을 저장 payload로 변환.
 // 저장 버튼 클릭 핸들러와 활성/비활성 상태 판정(updateSaveButtonState) 양쪽에서 재사용한다.
 function buildTranscriptPayload() {
-  return [...finalizedHistory.values(), ...((lastReceivedData && lastReceivedData.lines) || []).filter((l) => !l.finalized)]
+  return [...committedLines, ...finalizedHistory.values(), ...((lastReceivedData && lastReceivedData.lines) || []).filter((l) => !l.finalized)]
     .filter((l) => l.speaker !== -2 && (l.text || l.translation))
     .map((l) => ({ speaker: l.speaker, text: (l.text || "").trim(), translation: (l.translation || "").trim() || undefined }));
 }
@@ -298,7 +305,7 @@ function setupWebSocket() {
       resolve();
     };
 
-    websocket.onclose = () => {
+    websocket.onclose = async () => {
       if (userClosing) {
         if (waitingForStop) {
           statusText.textContent = "Processing finalized or connection closed.";
@@ -317,7 +324,8 @@ function setupWebSocket() {
       } else {
         statusText.textContent = "Disconnected from the WebSocket server. (Check logs if model is loading.)";
         if (isRecording) {
-          stopRecording();
+          await teardownCapture();
+          isPaused = true; // 기록은 유지한 채 일시중단 상태로 전환 — "시작"으로 이어서 재개 가능
         }
       }
       isRecording = false;
@@ -357,6 +365,14 @@ function setupWebSocket() {
 
       if (data.type === "ready_to_stop") {
         console.log("Ready to stop received, finalizing display and closing WebSocket.");
+
+        // 완전중단은 fullStop()이 이미 즉시 자체적으로 초기화+소켓 종료를 마쳤으므로,
+        // 뒤늦게 도착한 ready_to_stop은 아무 상태도 건드리지 않고 조용히 무시한다.
+        if (stopIntent === "fullstop") {
+          stopIntent = null;
+          return;
+        }
+
         waitingForStop = false;
 
         if (lastReceivedData) {
@@ -370,15 +386,22 @@ function setupWebSocket() {
             true
           );
         }
-        statusText.textContent = "Finished processing audio! Ready to record again.";
-        recordButton.disabled = false;
+
+        if (stopIntent === "pause") {
+          isPaused = true;
+          statusText.textContent = "일시 중단됨. 시작을 누르면 이어서 녹음합니다.";
+        } else {
+          statusText.textContent = "Finished processing audio! Ready to record again.";
+        }
 
         // 자동 저장은 하지 않는다 — 저장은 사용자가 저장 버튼을 눌렀을 때만 수행한다(buildTranscriptPayload 참조).
         updateSaveButtonState();
+        updateUI();
 
         if (websocket) {
           websocket.close();
         }
+        stopIntent = null;
         return;
       }
 
@@ -440,6 +463,9 @@ function renderLinesWithBuffer(
   const interimLines = (lines || []).filter((l) => !l.finalized);
   const interimIds = new Set(interimLines.map((l) => `${l.id}`));
   const mergedLines = [
+    // 이전 pause 사이클에서 "얼린" 확정 줄. 새 세션의 id(세션상대 시작초, 0부터 재시작)와
+    // 우연히 같아도 숨기면 안 되므로 interimIds 필터를 적용하지 않는다.
+    ...committedLines,
     ...[...finalizedHistory.values()].filter((l) => !interimIds.has(`${l.id}`)),
     ...interimLines,
   ];
@@ -620,7 +646,19 @@ function drawWaveform() {
   animationFrame = requestAnimationFrame(drawWaveform);
 }
 
-async function startRecording() {
+async function startRecording(resume = false) {
+  if (resume) {
+    // 직전 세션의 확정 줄을 committedLines에 "얼려서" 옮긴다 — 새 세션의 finalizedHistory는 항상 빈 상태로
+    // 시작하므로, 새 세션이 매기는 line.id(0부터 재시작)가 committedLines와 절대 같은 Map에서 충돌하지 않는다.
+    for (const ln of finalizedHistory.values()) {
+      committedLines.push(ln);
+    }
+  } else {
+    // fresh 시작: 완전 초기화
+    committedLines = [];
+    linesTranscriptDiv.innerHTML = "";
+    lastReceivedData = null;
+  }
   finalizedHistory.clear();
   lastSignature = "";
   updateSaveButtonState();
@@ -730,6 +768,7 @@ async function startRecording() {
     drawWaveform();
 
     isRecording = true;
+    isPaused = false;
     updateUI();
   } catch (err) {
     if (window.location.hostname === "0.0.0.0") {
@@ -742,7 +781,9 @@ async function startRecording() {
   }
 }
 
-async function stopRecording() {
+// 로컬 오디오/미디어 리소스 정리만 담당(순수 teardown). websocket EOS 전송·userClosing/waitingForStop
+// 설정·finalizedHistory 처리는 호출자(pauseRecording/fullStop/onclose)가 각자 책임진다.
+async function teardownCapture() {
   if (wakeLock) {
     try {
       await wakeLock.release();
@@ -750,14 +791,6 @@ async function stopRecording() {
       // ignore
     }
     wakeLock = null;
-  }
-
-  userClosing = true;
-  waitingForStop = true;
-
-  if (websocket && websocket.readyState === WebSocket.OPEN) {
-    websocket.send(new ArrayBuffer(0));
-    statusText.textContent = "Recording stopped. Processing final audio...";
   }
 
   if (recorder) {
@@ -772,7 +805,7 @@ async function stopRecording() {
     recorderWorker.terminate();
     recorderWorker = null;
   }
-  
+
   if (workletNode) {
     try {
       workletNode.port.onmessage = null;
@@ -822,63 +855,130 @@ async function stopRecording() {
   }
   timerElement.textContent = "00:00";
   startTime = null;
+}
+
+// 일시중단: teardown하되 화면의 전사 기록(finalizedHistory)은 그대로 유지한다.
+// 서버측 EOS 응답(ready_to_stop)이 도착하면 isPaused=true로 전환되고, 이후 "시작"을
+// 누르면 startRecording(resume=true)이 finalizedHistory를 committedLines로 얼려 이어붙인다.
+async function pauseRecording() {
+  stopIntent = "pause";
+  userClosing = true;
+  waitingForStop = true;
+
+  if (websocket && websocket.readyState === WebSocket.OPEN) {
+    websocket.send(new ArrayBuffer(0));
+    statusText.textContent = "일시 중단 처리 중...";
+  }
+
+  await teardownCapture();
 
   isRecording = false;
   updateUI();
 }
 
-async function toggleRecording() {
-  if (!isRecording) {
-    if (waitingForStop) {
-      console.log("Waiting for stop, early return");
-      return;
+// 완전중단: teardown하고 화면의 전사 기록을 완전히 비운다. 기록을 버리므로 서버의
+// ready_to_stop 응답을 기다리지 않고 즉시 초기화 후 소켓도 닫는다.
+async function fullStop() {
+  stopIntent = "fullstop";
+  const wasRecording = isRecording;
+
+  if (wasRecording) {
+    userClosing = true;
+    if (websocket && websocket.readyState === WebSocket.OPEN) {
+      websocket.send(new ArrayBuffer(0));
     }
-    console.log("Connecting to WebSocket");
-    try {
-      if (websocket && websocket.readyState === WebSocket.OPEN) {
-        await configReady;
-        await startRecording();
-      } else {
-        await setupWebSocket();
-        await configReady;
-        await startRecording();
-      }
-    } catch (err) {
-      statusText.textContent = "Could not connect to WebSocket or access mic. Aborted.";
-      console.error(err);
+    await teardownCapture();
+  }
+
+  finalizedHistory.clear();
+  committedLines = [];
+  linesTranscriptDiv.innerHTML = "";
+  lastReceivedData = null;
+  lastSignature = "";
+  isPaused = false;
+  isRecording = false;
+  waitingForStop = false;
+
+  if (websocket) {
+    try { websocket.close(); } catch (e) {}
+    websocket = null;
+  }
+
+  updateSaveButtonState();
+  updateUI();
+  statusText.textContent = "전사 기록이 초기화되었습니다.";
+}
+
+// "시작" 버튼 핸들러: isPaused 상태였다면 이어서 재개(resume), 아니면 새로 시작한다.
+async function startOrResume() {
+  if (waitingForStop) {
+    console.log("Waiting for stop, early return");
+    return;
+  }
+  const resume = isPaused;
+  console.log(resume ? "Resuming after pause" : "Connecting to WebSocket");
+  try {
+    if (websocket && websocket.readyState === WebSocket.OPEN) {
+      await configReady;
+      await startRecording(resume);
+    } else {
+      await setupWebSocket();
+      await configReady;
+      await startRecording(resume);
     }
-  } else {
-    console.log("Stopping recording");
-    stopRecording();
+  } catch (err) {
+    statusText.textContent = "Could not connect to WebSocket or access mic. Aborted.";
+    console.error(err);
   }
 }
 
 function updateUI() {
-  recordButton.classList.toggle("recording", isRecording);
-  recordButton.disabled = waitingForStop;
-  // 언어는 연결 시점에만 적용되므로 녹음/처리 중에는 변경 잠금(중지 후 복원).
-  if (languageSelect) languageSelect.disabled = isRecording || waitingForStop;
+  // 3버튼(시작/일시중단/완전중단) 활성 상태 + 상태 문구를 현재 상태(PROCESSING/RECORDING/PAUSED/IDLE)에 맞게 갱신한다.
+  if (recordingInfo) recordingInfo.classList.toggle("active", isRecording);
+  // 언어는 연결 시점에만 적용되므로 녹음/처리/일시중단 중에는 변경 잠금(완전중단 후 복원).
+  if (languageSelect) languageSelect.disabled = isRecording || waitingForStop || isPaused;
 
   if (waitingForStop) {
-    if (statusText.textContent !== "Recording stopped. Processing final audio...") {
+    // PROCESSING: 3버튼 모두 비활성.
+    startButton.disabled = true;
+    pauseButton.disabled = true;
+    stopButton.disabled = true;
+    if (
+      statusText.textContent !== "Recording stopped. Processing final audio..." &&
+      statusText.textContent !== "일시 중단 처리 중..."
+    ) {
       statusText.textContent = "Please wait for processing to complete...";
     }
   } else if (isRecording) {
+    // RECORDING: 시작 비활성, 일시중단/완전중단 활성.
+    startButton.disabled = true;
+    pauseButton.disabled = false;
+    stopButton.disabled = false;
     statusText.textContent = "";
+  } else if (isPaused) {
+    // PAUSED: 시작(이어서)·완전중단 활성, 일시중단 비활성.
+    startButton.disabled = false;
+    pauseButton.disabled = true;
+    stopButton.disabled = false;
+    statusText.textContent = "일시 중단됨 — 시작을 누르면 이어서 녹음합니다.";
   } else {
+    // IDLE: 시작만 활성.
+    startButton.disabled = false;
+    pauseButton.disabled = true;
+    stopButton.disabled = true;
     if (
       statusText.textContent !== "Finished processing audio! Ready to record again." &&
-      statusText.textContent !== "Processing finalized or connection closed."
+      statusText.textContent !== "Processing finalized or connection closed." &&
+      statusText.textContent !== "전사 기록이 초기화되었습니다."
     ) {
       statusText.textContent = "Click to start transcription";
     }
   }
-  if (!waitingForStop) {
-    recordButton.disabled = false;
-  }
 }
 
-recordButton.addEventListener("click", toggleRecording);
+startButton.addEventListener("click", startOrResume);
+pauseButton.addEventListener("click", pauseRecording);
+stopButton.addEventListener("click", fullStop);
 
 if (microphoneSelect) {
   microphoneSelect.addEventListener("change", handleMicrophoneChange);

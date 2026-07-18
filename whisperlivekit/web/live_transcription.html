@@ -12,17 +12,24 @@
     <div class="header-container">
         <div class="settings-container">
             <div class="buttons-container">
-                <button id="recordButton">
-                    <div class="shape-container">
-                        <div class="shape"></div>
-                    </div>
-                    <div class="recording-info">
-                        <div class="wave-container">
-                            <canvas id="waveCanvas"></canvas>
-                        </div>
-                        <div class="timer">00:00</div>
-                    </div>
+                <button id="startButton" class="record-control record-control--start" title="녹음 시작">
+                    <span class="record-control-icon">▶</span>
+                    <span class="record-control-label">시작</span>
                 </button>
+                <button id="pauseButton" class="record-control record-control--pause" title="일시 중단" disabled>
+                    <span class="record-control-icon">⏸</span>
+                    <span class="record-control-label">일시중단</span>
+                </button>
+                <button id="stopButton" class="record-control record-control--stop" title="완전 중단" disabled>
+                    <span class="record-control-icon">⏹</span>
+                    <span class="record-control-label">완전중단</span>
+                </button>
+                <div class="recording-info" id="recordingInfo">
+                    <div class="wave-container">
+                        <canvas id="waveCanvas"></canvas>
+                    </div>
+                    <div class="timer">00:00</div>
+                </div>
 
                 <button id="saveTranscriptButton" class="settings-toggle" title="전사 저장" disabled>
                     <img src="web/src/save.svg" alt="Save" />
