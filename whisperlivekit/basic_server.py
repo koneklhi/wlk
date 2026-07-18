@@ -33,7 +33,14 @@ if config.trace_tokens:
     # 이 목록에 없으면 root(WARNING) 레벨에 막혀 logger.info가 조용히 사라진다 — 실측 중
     # 발견(Exp-171 스크리닝, [RetractScan] 0건으로 오인될 뻔함).
     logging.getLogger("whisperlivekit.tokens_alignment").setLevel(logging.DEBUG)
-    logger.info("[TraceTokens] DEBUG 레벨 로깅 활성화 (backend + align_att_base + tokens_alignment)")
+    # sentence_boundary([SentenceBoundary])·filtering([HallucinationDrop]/[WordCorrection])도
+    # 동일 사유로 이 목록에 포함해야 logger.debug가 root(WARNING)에 막히지 않는다.
+    logging.getLogger("whisperlivekit.sentence_boundary").setLevel(logging.DEBUG)
+    logging.getLogger("whisperlivekit.filtering").setLevel(logging.DEBUG)
+    logger.info(
+        "[TraceTokens] DEBUG 레벨 로깅 활성화 "
+        "(backend + align_att_base + tokens_alignment + sentence_boundary + filtering)"
+    )
 transcription_engine = None
 
 # 세션 언어 오버라이드 허용값(§3.2 한/영 두 언어 + auto). 그 외 값은 무시하고 서버 기본값 사용.

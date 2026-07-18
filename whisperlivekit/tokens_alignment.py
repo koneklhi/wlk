@@ -595,17 +595,52 @@ class TokensAlignment:
                     if not closing.is_silence():
                         if getattr(closing, "hard_boundary", False):
                             closing.finalize_trigger = "language_switch"
+                            logger.debug(
+                                "[TriggerAssign] branch=hard_boundary trigger=%s hard_boundary=%s "
+                                "closing_speaker=%s segment_speaker=%s",
+                                closing.finalize_trigger, getattr(closing, "hard_boundary", False),
+                                closing.speaker, segment.speaker,
+                            )
                         elif segment.is_silence():
                             if getattr(closing, "gate_pending", False):
+                                logger.debug(
+                                    "[TriggerAssign] branch=gate_pending trigger=None(보류) is_silence=%s "
+                                    "gate_pending=%s closing_speaker=%s",
+                                    segment.is_silence(), getattr(closing, "gate_pending", False), closing.speaker,
+                                )
                                 pass  # 게이트 보류 — trigger 미설정(하류 확정 억제, §확정 유예 이원화)
                             else:
                                 closing.finalize_trigger = "punctuation" if closing.has_punctuation() else "silence"
+                                logger.debug(
+                                    "[TriggerAssign] branch=silence trigger=%s is_silence=%s "
+                                    "has_punctuation=%s closing_speaker=%s",
+                                    closing.finalize_trigger, segment.is_silence(),
+                                    closing.has_punctuation(), closing.speaker,
+                                )
                         elif segment.speaker != closing.speaker:
                             closing.finalize_trigger = "speaker_change"
+                            logger.debug(
+                                "[TriggerAssign] branch=speaker_change trigger=%s closing_speaker=%s "
+                                "segment_speaker=%s punct_boundary=%s",
+                                closing.finalize_trigger, closing.speaker, segment.speaker,
+                                getattr(closing, "punct_boundary", False),
+                            )
                         elif getattr(closing, "punct_boundary", False):
                             closing.finalize_trigger = "punctuation"
+                            logger.debug(
+                                "[TriggerAssign] branch=punct_boundary trigger=%s punct_boundary=%s "
+                                "closing_speaker=%s segment_speaker=%s",
+                                closing.finalize_trigger, getattr(closing, "punct_boundary", False),
+                                closing.speaker, segment.speaker,
+                            )
                         else:
                             closing.finalize_trigger = "speaker_change"
+                            logger.debug(
+                                "[TriggerAssign] branch=else(fallback) trigger=%s closing_speaker=%s "
+                                "segment_speaker=%s punct_boundary=%s",
+                                closing.finalize_trigger, closing.speaker, segment.speaker,
+                                getattr(closing, "punct_boundary", False),
+                            )
                     segments.append(segment)
 
         # 화자 전환이 발생한 세그먼트는 확정 완료 — 마지막 세그먼트(현재 발화 중)는 제외
@@ -670,10 +705,15 @@ class TokensAlignment:
             # 이원화가 깨진다(B 디코드 지연 중 조기 finalized=True → 번역 오발사).
             return
         if last.is_silence() and not prev.is_silence() and prev.text:
-            prev.finalized = flush or (audio_time - last.start) >= FINALIZE_GRACE_SECS
+            elapsed = audio_time - last.start
+            prev.finalized = flush or elapsed >= FINALIZE_GRACE_SECS
             prev.finalize_trigger = (
                 ("punctuation" if prev.has_punctuation() else "silence")
                 if prev.finalized else None
+            )
+            logger.debug(
+                "[FinalizeGrace] finalized=%s flush=%s elapsed=%.3f grace_secs=%.3f trigger=%s",
+                prev.finalized, flush, elapsed, FINALIZE_GRACE_SECS, prev.finalize_trigger,
             )
 
     # ─── 비-diar 경로 헬퍼(게이트 decide-late 지원) ──────────────────────────
@@ -685,6 +725,10 @@ class TokensAlignment:
             if seg is not None:
                 seg.finalized = True
                 seg.finalize_trigger = trigger
+                logger.debug(
+                    "[CloseLine] trigger=%s text_preview=%r",
+                    trigger, (seg.text or "")[:40],
+                )
                 self.validated_segments.append(seg)
             self.current_line_tokens = []
 
