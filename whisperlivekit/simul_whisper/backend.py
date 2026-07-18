@@ -50,6 +50,23 @@ STALL_RECOVER_SEC = 10.0
 _NEW_SPEAKER_KEEP_MARGIN = 0.3
 _NEW_SPEAKER_MAX_KEEP = 5.0
 
+# Exp-189: new_speaker() eager 언어감지 버스트(diar flip-flop) 쿨다운.
+# 배경: Sortformer가 단일화자 파일(kor1)에서도 순간적으로 speaker 0↔1을 반복
+# 오귀속하는 노이즈가 있음(Exp-188과 동일 근원 — "diarization 임베딩이 아주 짧은
+# 세그먼트에서 불안정한 일반적 한계"). 매 flip마다 new_speaker()가 다시 호출되고
+# eager 언어감지(detect_current_language, since_offset로 창을 좁힘)도 매번 재실행된다.
+# 버스트(짧은 시간 내 연쇄 flip) 중에는 새 화자 오디오가 거의 안 쌓인 채(연쇄
+# flip일수록 창이 더 좁아짐) 반복 재시도되고, 우연히 고신뢰 오탐(예: en, p=0.95→
+# 1.00→0.99 연속)이 나오면 그 상태가 버스트 내내 유지·재확인되며 실제 언어
+# 환각으로 이어질 수 있다(kor1 실측: R2, WER 20.5%→47.4%, "We have a lot of
+# work..." 영어 환각 삽입). 직전 eager 체크로부터 이 시간 이내에 또 화자전환
+# 이벤트가 오면 eager 재감지 자체를 건너뛴다(encoder forward도 생략) —
+# detected_language는 그대로 None으로 리셋되므로 infer()의 표준 eager_lang_detect
+# 폴백(1.5~2.0s 더 많은 표본 확보 후 판정하는 기존 안전 경로)이 대신 처리한다.
+# genuine 단일 화자전환(ytn2 CASE2 등)은 쿨다운 창 안에서 재호출되지 않으므로
+# 영향받지 않는다.
+_EAGER_LANG_COOLDOWN_SECS = 1.5
+
 _FOREIGN_LANG_PATTERN = re.compile(r'\(speaking in foreign language', re.IGNORECASE)
 
 # P2: 언어-출력 스크립트 불일치 억제 게이트.
@@ -241,6 +258,7 @@ class SimulStreamingOnlineProcessor:
         self._last_emit_end: float = 0.0  # 마지막으로 토큰을 방출한 시점의 audio end (stall 복구 baseline)
         self._consecutive_char_repeat: int = 0
         self._short_silence_check_at: float = 0.0
+        self._last_eager_lang_check_end: Optional[float] = None  # Exp-189 버스트 쿨다운
         self._recent_emitted_words: List[str] = []  # 중복 방출 계측용 최근 방출 단어(정규화) tail
         # P2 스크립트 불일치 게이트: 실측(TokenTrace)상 배치가 보통 1~3 토큰 단위라
         # 한 배치만으로는 TTR 판정 표본이 부족하다 — detected_language와 반대
@@ -399,9 +417,20 @@ class SimulStreamingOnlineProcessor:
             # 오전환에 의한 세션 고정 파괴 방지). 경계 재디코딩 자체는 아래에서 유지.
             eager = None
         else:
-            eager = self.model.detect_current_language(
-                window_secs=1.5, min_prob=0.85, since_offset=boundary_offset,
-            )
+            last_check_end = getattr(self, "_last_eager_lang_check_end", None)
+            if last_check_end is not None and self.end - last_check_end < _EAGER_LANG_COOLDOWN_SECS:
+                # Exp-189: diar flip-flop 버스트 억제 — 직전 eager 체크로부터 얼마
+                # 안 지나 또 화자전환 이벤트가 오면 재감지를 건너뛴다(상단 상수 주석 참조).
+                logger.info(
+                    "[NewSpeaker] eager 언어체크 쿨다운 스킵 (마지막 체크 %.2fs 전, 문턱 %.2fs)",
+                    self.end - last_check_end, _EAGER_LANG_COOLDOWN_SECS,
+                )
+                eager = None
+            else:
+                eager = self.model.detect_current_language(
+                    window_secs=1.5, min_prob=0.85, since_offset=boundary_offset,
+                )
+                self._last_eager_lang_check_end = self.end
         logger.info(
             "[NewSpeaker] spk=%s→%s det_before=%s eager=%s",
             self.model.state.speaker, change_speaker.speaker,
