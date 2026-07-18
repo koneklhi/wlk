@@ -32,6 +32,7 @@ class WhisperLiveKitConfig:
     disable_punctuation_split: bool = False
     transcript_save_dir: str = "transcripts"
     frontend_dir: str = "frontend/static"
+    frontend_base: str = "auto"
     diarization_backend: str = "sortformer"
     backend_policy: str = "simulstreaming"
     backend: str = "auto"

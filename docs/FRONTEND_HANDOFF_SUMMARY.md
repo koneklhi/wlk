@@ -112,7 +112,9 @@ rows.map((line, i) => (
 - WebSocket: `ws://<host>:<port>/asr` (기본 `ws://localhost:8900/asr`), TLS면 `wss://`.
 - `GET /`는 기본적으로 내장 데모 UI를 서빙하지만, **`frontend/static/`에 React 빌드 산출물(dist)을 배치하면
   (`index.html` 존재 기준) 자동으로 그 dist를 대신 서빙한다** — 배포 방법 A([API_SPEC.md §1.1](API_SPEC.md)) 구현 완료.
-  서빙 루트는 `--frontend-dir`(기본값 `frontend/static`)로 지정한다. `/asr`는 두 경우 모두 동일하게 쓰면 된다.
+  서빙 루트는 `--frontend-dir`(기본값 `frontend/static`)로 지정한다. **dist가 Vite `base`(예 `/wlkies`)로 빌드됐으면**
+  백엔드가 `index.html`에서 base를 자동 추출해 그 하위(`/wlkies/assets`, `/wlkies/{spa}`)로 서빙하고 `GET /`는 base로
+  리다이렉트한다(`--frontend-base`, 기본값 `auto`; 루트 빌드도 하위호환). `/asr`는 어느 경우든 동일하게 쓰면 된다.
 - `GET /health`는 헬스체크용(§9.2) — React가 연결 전 서버 기동 확인에 활용 가능.
 - 쿼리 파라미터(선택):
   - `?language=<code>` — **세션별 소스 언어 지정**. 허용값 `{auto, ko, en}`. **생략** = 서버 전역 `--lan`(기본 `auto`)을
