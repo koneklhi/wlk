@@ -22,6 +22,15 @@ def create_parser():
         "--port", type=int, default=8900, help="The port number to bind the server to. (기본값 8900: master 배포 설정)"
     )
     parser.add_argument(
+        "--frontend-dir",
+        type=str,
+        default="frontend/static",
+        dest="frontend_dir",
+        help="React 프론트엔드 dist 서빙 루트 디렉터리 (기본값: frontend/static, 저장소 루트 기준 상대경로."
+        " 절대경로로 오버라이드 가능). 이 디렉터리에 index.html이 있으면 GET /에서 React dist를 서빙하고"
+        " /assets를 마운트한다. 없으면(개발 환경 등) 기존 내장 데모 UI로 폴백한다.",
+    )
+    parser.add_argument(
         "--warmup-file",
         type=str,
         default="test_data/sbs1_10s.mp3",

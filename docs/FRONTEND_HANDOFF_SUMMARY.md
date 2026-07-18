@@ -110,7 +110,9 @@ rows.map((line, i) => (
 
 ### 3.1 엔드포인트
 - WebSocket: `ws://<host>:<port>/asr` (기본 `ws://localhost:8900/asr`), TLS면 `wss://`.
-- `GET /`는 내장 데모 UI를 서빙한다 — **React 배포 시엔 사용하지 않는다**, `/asr`만 쓰면 된다.
+- `GET /`는 기본적으로 내장 데모 UI를 서빙하지만, **`frontend/static/`에 React 빌드 산출물(dist)을 배치하면
+  (`index.html` 존재 기준) 자동으로 그 dist를 대신 서빙한다** — 배포 방법 A([API_SPEC.md §1.1](API_SPEC.md)) 구현 완료.
+  서빙 루트는 `--frontend-dir`(기본값 `frontend/static`)로 지정한다. `/asr`는 두 경우 모두 동일하게 쓰면 된다.
 - `GET /health`는 헬스체크용(§9.2) — React가 연결 전 서버 기동 확인에 활용 가능.
 - 쿼리 파라미터(선택):
   - `?language=<code>` — **세션별 소스 언어 지정**. 허용값 `{auto, ko, en}`. **생략** = 서버 전역 `--lan`(기본 `auto`)을

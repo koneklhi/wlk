@@ -207,7 +207,10 @@ Phase 4 사전 준비 — 번역 모델 테스트 환경 (2026-06-21 완료)
  ✅ 4-6. 문장 확정 시점 → 번역 수행 → UI 출력 흐름 연결
 → TranslationManager: finalized 세그먼트 확정 후 비차단 async 번역 캐시 (filter_segments 직후 훅)
  ⏳ 4-7. 기존 React UI에서 전사·번역 결과 최종 확인
-→ React 소스 확보 후 진행
+→ 백엔드 정적 서빙 배선(React dist를 `frontend/static/`에서 `/`로 서빙, `--frontend-dir` 플래그, SPA
+  fallback 포함) 구현 완료(feat/frontend-static-serving) — dist가 있으면 자동 서빙, 없으면 내장 UI 폴백.
+  단 **배포 PC에 실제 React dist를 배치해 최종 연결 검증**하는 것은 아직 미완료 — 사용자가 배포 PC에서 수행할
+  잔여 작업.
 
 완료 기준
 
