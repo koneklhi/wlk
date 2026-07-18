@@ -423,8 +423,10 @@ C:\Python312\python.exe -m whisperlivekit.basic_server --no-llm-translation
 
 > **정적 서빙 배선 구현 완료**: React 빌드 산출물(dist)을 배포 PC의 `frontend/static/`(즉 `frontend/static/index.html` +
 > `frontend/static/assets/...`)에 배치하고 서버를 재기동하면, `GET /`가 내장 데모 UI 대신 그 dist를 자동 서빙한다
-> (서빙 루트는 `--frontend-dir`로 변경 가능, 기본값 `frontend/static`). dist가 아직 없으면 지금처럼 내장 데모 UI로
-> 폴백하므로 이 단계를 건너뛰어도 안전하다. dist를 언제·어떻게 배포 PC로 옮기는지는 별도 반입 절차 소관.
+> (서빙 루트는 `--frontend-dir`로 변경 가능, 기본값 `frontend/static`). **dist가 Vite `base`(예 `/wlkies`)로 빌드된
+> 경우**도 그대로 배치하면 되며, 백엔드가 `index.html`에서 base를 자동 추출해 그 하위(`/wlkies/assets`, `/wlkies/{spa}`)로
+> 서빙하고 `GET /`는 base로 리다이렉트한다(`--frontend-base`, 기본값 `auto`; 루트 빌드도 하위호환). dist가 아직 없으면
+> 지금처럼 내장 데모 UI로 폴백하므로 이 단계를 건너뛰어도 안전하다. dist를 언제·어떻게 배포 PC로 옮기는지는 별도 반입 절차 소관.
 
 | 맞출 항목 | 신규 whisperlivekit |
 |---|---|

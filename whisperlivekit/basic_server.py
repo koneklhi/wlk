@@ -5,6 +5,7 @@ os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
 
 import asyncio
 import logging
+import re
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
@@ -12,7 +13,7 @@ from typing import List, Optional
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse
 from pydantic import BaseModel
 from starlette.staticfiles import StaticFiles
 
@@ -41,6 +42,28 @@ transcription_engine = None
 # 없으면(개발 환경 등) 기존 내장 데모 UI로 폴백한다.
 _frontend_dir = Path(config.frontend_dir).resolve() if getattr(config, "frontend_dir", None) else None
 _frontend_enabled = bool(_frontend_dir and (_frontend_dir / "index.html").is_file())
+
+
+def _detect_frontend_base(index_html: Path) -> str:
+    """index.html의 절대경로 자산 참조에서 빌드 base 경로를 추출한다.
+    예: <script src="/wlkies/assets/index-XXXX.js"> -> "/wlkies". 루트(base '/') 빌드면 ""."""
+    try:
+        text = index_html.read_text(encoding="utf-8")
+    except OSError:
+        return ""
+    m = re.search(r"""(?:src|href)\s*=\s*["'](/[^"']*?)/assets/""", text)
+    return m.group(1).rstrip("/") if m else ""
+
+
+# dist가 base 경로(예: /wlkies)로 빌드됐으면 그 하위에서 서빙해야 자산 절대경로 URL이 맞는다.
+# base는 index.html에서 자동 추출(config.frontend_base='auto'); 명시 오버라이드도 허용.
+_frontend_base = ""
+if _frontend_enabled:
+    _cfg_base = getattr(config, "frontend_base", "auto")
+    if _cfg_base == "auto":
+        _frontend_base = _detect_frontend_base(_frontend_dir / "index.html")
+    else:
+        _frontend_base = _cfg_base.rstrip("/")
 
 # 세션 언어 오버라이드 허용값(§3.2 한/영 두 언어 + auto). 그 외 값은 무시하고 서버 기본값 사용.
 _ALLOWED_SESSION_LANGUAGES = {"auto", "ko", "en"}
@@ -82,14 +105,17 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# React dist의 /assets을 마운트 (assets 디렉토리가 실제로 없으면 건너뛰어 기동 실패 방지).
+# React dist의 assets을 base 경로 하위에 마운트 (assets 디렉토리가 실제로 없으면 건너뛰어 기동 실패 방지).
 if _frontend_enabled:
     _frontend_assets_dir = _frontend_dir / "assets"
     if _frontend_assets_dir.is_dir():
-        app.mount("/assets", StaticFiles(directory=str(_frontend_assets_dir)), name="frontend_assets")
+        app.mount(f"{_frontend_base}/assets", StaticFiles(directory=str(_frontend_assets_dir)), name="frontend_assets")
 
 @app.get("/")
 async def get():
+    # dist가 base 경로로 빌드된 경우 그 base로 리다이렉트해 router basepath와 URL을 일치시킨다.
+    if _frontend_enabled and _frontend_base:
+        return RedirectResponse(f"{_frontend_base}/")
     if _frontend_enabled:
         return FileResponse(_frontend_dir / "index.html")
     return HTMLResponse(get_inline_ui_html())
@@ -493,9 +519,26 @@ async def save_transcript(req: SaveTranscriptRequest):
 # ---------------------------------------------------------------------------
 
 if _frontend_enabled:
-    @app.get("/{full_path:path}")
-    async def spa_fallback(full_path: str):
+    def _serve_frontend(full_path: str):
+        # base 하위의 실제 파일(logo 등 public)이면 그 파일을, 아니면 SPA 진입점 index.html을 반환.
+        if full_path:
+            try:
+                candidate = (_frontend_dir / full_path).resolve()
+                candidate.relative_to(_frontend_dir)  # 디렉토리 이탈(path traversal) 방지
+                if candidate.is_file():
+                    return FileResponse(candidate)
+            except (ValueError, OSError):
+                pass
         return FileResponse(_frontend_dir / "index.html")
+
+    if _frontend_base:
+        @app.get(_frontend_base)
+        async def spa_base_root():
+            return _serve_frontend("")
+
+    @app.get(f"{_frontend_base}/{{full_path:path}}")
+    async def spa_fallback(full_path: str):
+        return _serve_frontend(full_path)
 
 
 def main():
