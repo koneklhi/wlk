@@ -38,8 +38,9 @@ C:\Python312\python.exe -m whisperlivekit.basic_server
 >
 > **venv가 없다** — DLP 회피를 위해 `C:\Python312`에 직접 설치했으므로 활성화 단계 자체가 없다(§3.0).
 > 대신 **인터프리터를 항상 `C:\Python312\python.exe`로 명시**한다. `python`(PATH의 다른 Python)으로 실행하면
-> `numpy`/`torch` 등을 못 찾는 에러가 난다(§8 트랩 참조). `C:\Python312\Scripts`를 PATH에 등록했다면
-> `whisperlivekit-server` 콘솔 스크립트로도 켤 수 있다(§4 참조).
+> `numpy`/`torch` 등을 못 찾는 에러가 난다(§8 트랩 참조). **whisperlivekit 프로젝트 자체는 wheel로 설치하지
+> 않으므로 `whisperlivekit-server` 콘솔 스크립트는 존재하지 않는다** — 항상 `python -m
+> whisperlivekit.basic_server`를 쓴다(§4 참조).
 
 환경 준비가 안 됐다면 아래 §1~§4를 순서대로 따른다. **처음 반입한다면 §1.1(통째 복사 함정)을 먼저 읽고, 검증은 §4.4의 3단계(전사 → React 프론트 → 번역) 순서를 권장한다.**
 
@@ -53,7 +54,7 @@ C:\Python312\python.exe -m whisperlivekit.basic_server
 | 2 | **STT 모델** | `whisperlivekit/model/whisper-large-v3-turbo/` (≈1.6GB, `model.safetensors`+토크나이저) | 이미 저장소에 동봉됨 → 코드와 함께 이동 |
 | 3 | **화자분할 모델** | `whisperlivekit/model/sortformer-4spk-v2.nemo` | 이미 저장소에 동봉됨 |
 | 4 | **번역 LLM** | `gpt-oss-20b-F16.gguf` (≈40GB) + `start_oss.bat` | **배포 PC에 기설치** — 별도 반입 불필요 |
-| 5 | **의존성 + 설치도구** | `deploy/` 전체 — `wheelhouse/`(패키지), `*.whl`(프로젝트), `uv-installer/`(uv, 선택 — plain pip 설치엔 불필요), `python-installer/`(Python 3.12), `deploy_source.zip`, `requirements-deploy.txt` (§2에서 생성) | 오프라인 pip 설치용. **배포 PC Python은 반드시 3.12** — wheelhouse가 dev(3.12) 태그로 고정됨(§2.2·§3.0) |
+| 5 | **의존성 + 설치도구** | `deploy/` 전체 — `wheelhouse/`(서드파티 의존성 패키지), `uv-installer/`(uv, 선택 — plain pip 설치엔 불필요), `python-installer/`(Python 3.12), `deploy_source.zip`, `requirements-deploy.txt` (§2에서 생성) | 오프라인 pip 설치용. **배포 PC Python은 반드시 3.12** — wheelhouse가 dev(3.12) 태그로 고정됨(§2.2·§3.0). whisperlivekit 프로젝트 자체는 wheel로 만들지 않는다 — raw 소스(①)만으로 실행 |
 | 6 | **playwright 브라우저** | `%USERPROFILE%\AppData\Local\ms-playwright\` (chromium) | 경로 C 자동화에 필요 |
 | 7 | **시스템 바이너리** | `ffmpeg.exe`(PATH 등록), VBCable 드라이버 설치본 | ffmpeg=WebM/mp3 디코딩, VBCable=경로 C 루프백 |
 
@@ -82,10 +83,13 @@ git archive master --output=deploy_source.zip
 
 `git archive`는 **추적 파일만** zip으로 묶는다 — `.git/`(git 이력 전체)·`worktrees/`·`.venv/`·gitignore된 파일이 **자동 제외**된다. 결과물은 **git 기록·worktree가 없는 깨끗한 단일 폴더** — IDE에서 열면 버전 관리 없는 일반 프로젝트로 보인다. 절대경로 함정 없이 가장 깔끔한 방식이다.
 
-**⚠️ raw 소스 복사만으로 끝내지 말 것**: `whisperlivekit-server`(공식 권장 기동법, §0·§4.2·§4.4)는
-cwd와 무관하게 site-packages에 설치된 wheel을 우선 로드한다 — `whisperlivekit/**`가 바뀌면 raw 사본
-복사와 별개로 **wheel도 `--force-reinstall`로 재설치**해야 실제 반영된다(§8 트랩 "wheel 재설치 누락"
-참조).
+**✅ raw 소스 복사만으로 충분하다**: 서버는 항상 `python -m whisperlivekit.basic_server`(모듈 실행)로
+켜고, 이 방식은 cwd(저장소 루트)를 sys.path 최우선에 둔다 — `whisperlivekit/` raw 소스 폴더가 있으면
+그게 항상 로드된다. whisperlivekit 프로젝트 자체는 더 이상 wheel로 빌드·설치하지 않으므로 별도 재설치
+단계가 없다. **단, 그만큼 파일 복사 누락에 대한 안전장치도 없어졌다** — `whisperlivekit/**` 변경분이
+일부라도 복사에서 빠지면 예전처럼 wheel이 백스톱 역할을 해주지 못하고 그대로 stale 코드가 조용히
+실행된다. 매 반입 시 `deploy-sync` 6단계의 `diff -q` 검증을 반드시 거친다(§8 트랩 "raw 소스 파일
+복사 누락" 참조).
 
 USB에 담을 3가지:
 
@@ -93,7 +97,7 @@ USB에 담을 3가지:
 |---|---|---|
 | ① `deploy/deploy_source.zip` | master 소스 코드 | `git archive master --output=deploy\deploy_source.zip` |
 | ② `whisperlivekit/model/` 디렉터리(≈20GB + ≈1.5GB) | STT·화자분할 모델 | `.gitignore` 비추적이라 아카이브에 안 들어옴 → **폴더 수동 복사** |
-| ③ `deploy/` 전체 | 패키지+uv 설치도구 | §2에서 생성 (`wheelhouse/`·`*.whl`·`uv-installer/` 포함) |
+| ③ `deploy/` 전체 | 서드파티 의존성 패키지+uv 설치도구 | §2에서 생성 (`wheelhouse/`·`uv-installer/` 포함) |
 
 배포 PC에서 unzip 후 §3대로 `C:\Python312`에 오프라인 설치하면 Python 경로가 폐쇄망 기준으로 새로 잡혀 정상 동작한다.
 
@@ -103,8 +107,8 @@ USB에 담을 3가지:
 `wlk_in\SYNC_STATE.txt`가 마지막으로 동기화된 master 커밋·시각·범위를 기록하는 1차 소스다 — 다음
 반입 때 이 파일을 기준으로 "무엇이 바뀌었는지"만 diff해 해당 파일만 옮기면 된다. 단, `wlk_in`이
 최신이라는 것과 배포 PC가 실제로 그 내용을 반영했다는 것은 별개다(폐쇄망이라 여기서 검증 불가) —
-USB 반입·적용 여부는 매번 별도로 확인해야 한다. **`whisperlivekit/**` 변경분은 raw 소스 사본
-복사만으론 부족할 수 있다** — 위 경고 및 §8 트랩 "wheel 재설치 누락" 참조. 상세 절차는
+USB 반입·적용 여부는 매번 별도로 확인해야 한다. **`whisperlivekit/**` 변경분은 raw 소스 사본 복사만으로
+충분하다** — 위 설명 및 §8 트랩 "raw 소스 파일 복사 누락" 참조. 상세 절차는
 `.claude/commands/deploy-sync.md` 참조.
 
 ---
@@ -172,17 +176,15 @@ Invoke-WebRequest -Uri "https://github.com/astral-sh/uv/releases/download/$uvVer
 #    4b) uv wheel — pip 경유 설치용 (wheelhouse에 포함)
 .venv\Scripts\python.exe -m pip download uv -d deploy\wheelhouse
 
-# 5) 프로젝트 자체도 wheel로 빌드 → deploy/에 복사
-uv build --wheel        # → dist/whisperlivekit-0.2.20-*.whl
-Copy-Item (Get-ChildItem dist -Filter "*.whl" | Sort-Object LastWriteTime -Descending | Select-Object -First 1 -ExpandProperty FullName) deploy\
-
-# 6) 소스 아카이브 — HEAD가 아닌 master 명시 (feature 브랜치 체크아웃 중이어도 master 기준으로 묶임)
+# 5) 소스 아카이브 — HEAD가 아닌 master 명시 (feature 브랜치 체크아웃 중이어도 master 기준으로 묶임)
+#    whisperlivekit 프로젝트 자체는 wheel로 빌드하지 않는다 — 이 아카이브(raw 소스)가 배포 PC에서
+#    `python -m whisperlivekit.basic_server`로 cwd 우선 로드되는 그대로 실행 대상이다.
 git archive master --output=deploy\deploy_source.zip
 
-# 7) 경로 C 자동화용 브라우저
+# 6) 경로 C 자동화용 브라우저
 python -m playwright install chromium    # → %USERPROFILE%\AppData\Local\ms-playwright\
 
-# 8) 배포 PC용 Python 설치파일 확보 (배포 PC엔 wheelhouse와 같은 마이너 버전 Python이 없을 수 있음)
+# 7) 배포 PC용 Python 설치파일 확보 (배포 PC엔 wheelhouse와 같은 마이너 버전 Python이 없을 수 있음)
 New-Item -ItemType Directory -Force deploy\python-installer | Out-Null
 Invoke-WebRequest -Uri "https://www.python.org/ftp/python/3.12.10/python-3.12.10-amd64.exe" `
   -OutFile "deploy\python-installer\python-3.12.10-amd64.exe" -UseBasicParsing
@@ -284,20 +286,14 @@ C:\Python312\python.exe -m pip install --no-index --find-links C:\whist\wlk\depl
 C:\Python312\python.exe -m pip install --no-index --find-links C:\whist\wlk\deploy\wheelhouse `
   -r C:\whist\wlk\deploy\requirements-deploy.txt
 
-# 3) 프로젝트 whl 설치
-#    whl 파일명의 버전이 다르면 Get-ChildItem C:\whist\wlk\deploy -Filter "*.whl"로 확인 후 맞춰 쓸 것
-#    ⚠️ 이후 master 갱신마다 이 wheel을 다시 설치할 때는 --force-reinstall 필수(§8 트랩 "wheel
-#    버전 문자열 불변" 참조) — 버전이 항상 0.2.20 그대로라 없으면 "already satisfied"로 스킵된다
-C:\Python312\python.exe -m pip install --no-index --force-reinstall --no-deps `
-  C:\whist\wlk\deploy\whisperlivekit-0.2.20-py3-none-any.whl
-
-# 4) playwright 브라우저 배치: USB의 ms-playwright 폴더를
+# 3) playwright 브라우저 배치: USB의 ms-playwright 폴더를
 #    %USERPROFILE%\AppData\Local\ms-playwright\ 로 복사
 #    (또는) $env:PLAYWRIGHT_BROWSERS_PATH = "C:\whist\wlk\ms-playwright"
 
-# 5) ffmpeg.exe 를 PATH에 등록, VBCable 드라이버 설치(경로 C용)
+# 4) ffmpeg.exe 를 PATH에 등록, VBCable 드라이버 설치(경로 C용)
 
-# 6) 설치 확인 — venv 활성화 단계가 없으므로 바로 실행
+# 5) 설치 확인 — venv 활성화 단계가 없으므로 바로 실행. whisperlivekit는 wheel로 설치되지
+#    않았으므로 저장소 루트(C:\whist\wlk)에서 실행해야 raw 소스가 cwd 우선으로 로드된다.
 C:\Python312\python.exe -c "import whisperlivekit, torch; print('torch', torch.__version__, 'cuda', torch.cuda.is_available())"
 # → 예: torch 2.x+cu128 cuda True  ← cuda True 나오면 성공
 ```
@@ -310,12 +306,13 @@ C:\Python312\python.exe -c "import whisperlivekit, torch; print('torch', torch._
 > ```
 > 코드 수정이 즉시 반영되는 editable가 필요하면 경로 대신 `-e C:\whist\wlk`를 쓴다 — 단 editable는
 > `site-packages`에 `.txt`/finder 파일을 남기므로, 그 위치(`C:\Python312`)가 위 DLP 프로브를 통과했는지
-> 확인한다.
+> 확인한다. 이 경로를 타더라도 `python -m whisperlivekit.basic_server`로 실행하는 한 cwd의 raw 소스가
+> 여전히 우선 로드되므로, whisperlivekit 자체를 이렇게 설치하는 건 필수가 아니라 선택 사항이다.
 
 ### 3.2 런타임 자동 다운로드 차단 — 이제 기본값이 로컬 경로
 
 > **변경됨**: 과거엔 아래 3개를 매번 CLI로 오버라이드해야 했으나, 이제 `parse_args.py` **기본값이 로컬 경로**라
-> `whisperlivekit-server`만 쳐도 다운로드 시도 없이 켜진다(요청 3). 아래는 그 기본값과 근거 — **추가 조치 불필요**.
+> `python -m whisperlivekit.basic_server`만 쳐도 다운로드 시도 없이 켜진다(요청 3). 아래는 그 기본값과 근거 — **추가 조치 불필요**.
 
 | 위험 지점 | 과거 기본값(다운로드 시도) | 현재 기본값(로컬, 자동) | 근거 |
 |---|---|---|---|
@@ -340,9 +337,8 @@ C:\Python312\python.exe -c "import whisperlivekit, torch; print('torch', torch._
 > 기본 포트는 **8900**(과거 8000), 자동측정(`eval.py`/`closed_test.py`)은 **8901**(과거 8001) — 배포 PC의 기존 8000/8001 점유와 충돌 회피(요청 2).
 > 향후 설정 변경은 **CLI를 늘리지 말고 `parse_args.py` 기본값을 고친다**(closed_test도 그 값을 자동 동기화 — 요청 5).
 > **저장소 루트에서 실행.** venv가 없으므로(§3) **인터프리터를 직접 지정**해 실행한다:
-> `C:\Python312\python.exe -m whisperlivekit.basic_server`. 콘솔 스크립트 `whisperlivekit-server.exe`는
-> `C:\Python312\Scripts\`에 생성되므로, 그 폴더를 PATH에 등록했다면 `whisperlivekit-server`로도 동일하게
-> 실행 가능하다(등록 안 했다면 풀 경로 `C:\Python312\Scripts\whisperlivekit-server.exe`로 호출).
+> `C:\Python312\python.exe -m whisperlivekit.basic_server`. **whisperlivekit 프로젝트는 wheel로 설치되지
+> 않으므로 `whisperlivekit-server` 콘솔 스크립트 자체가 존재하지 않는다** — 항상 위 `-m` 형태로 실행한다.
 >
 > ⚠️ **가상환경 활성화 단계가 없다** — `python`(시스템/PATH의 다른 Python)으로 실행하지 말고 항상
 > `C:\Python312\python.exe`를 명시한다(§8 트랩 참조).
@@ -621,10 +617,9 @@ C:\Python312\python.exe -m whisperlivekit.basic_server `
 자체는 이미 동작하며 항상 전체가 주입된다, "입력과 유사도가 가장 높은 예시만 동적으로 고른다"는 부분만
 아직 없다. 설계 상세: [docs/superpowers/specs/2026-07-16-translation-glossary-design.md](superpowers/specs/2026-07-16-translation-glossary-design.md) §8.
 
-> **⚠️ 배포 PC 반영 확인 필수**: `whisperlivekit/llm_translation/` 서브패키지 자체가 wheel에 새로 추가된
-> 변경이라, §8 트랩 "wheel 재설치 누락"·"wheel 버전 문자열 불변"을 빠뜨리면 구버전 wheel이 그대로 로드돼
-> 이 API 자체가 없는 것처럼(404) 보인다. 배포 후 `curl http://localhost:8900/api/prompts`로 반드시
-> 라이브 확인할 것(§7 점검 순서에 반영).
+> **⚠️ 배포 PC 반영 확인 필수**: `whisperlivekit/llm_translation/` 서브패키지 raw 소스 파일 복사가
+> 누락되면(§8 트랩 "raw 소스 파일 복사 누락") 이 API 자체가 없는 것처럼(404) 보인다. 배포 후
+> `curl http://localhost:8900/api/prompts`로 반드시 라이브 확인할 것(§7 점검 순서에 반영).
 
 ---
 
@@ -651,7 +646,7 @@ C:\Python312\python.exe -m whisperlivekit.basic_server `
 | uv 미설치 (dev PC 전용) | `uv: command not found` | 배포/협업 PC는 uv가 불필요(§3 — plain pip). **dev PC의 wheelhouse 빌드(§2.2)**에서만 필요 — 로컬 uv 설치 또는 `deploy\uv-installer\uv-*.zip` 압축 해제 후 PATH 등록 |
 | HF repo ID 기본값 | (과거) 기동 시 네트워크 시도/실패 | **해결됨** — 기본값이 로컬 경로(§3.2). 안전상 `HF_HUB_OFFLINE=1` 권장 |
 | `--warmup-file` 미지정 | (과거) github `jfk.wav` 다운로드 | **해결됨** — 기본값 `test_data/sbs1_10s.mp3`(§3.1) |
-| 루트 밖에서 실행 | 모델·warmup 상대경로 못 찾음 | **저장소 루트에서** `whisperlivekit-server` 실행(요청 1) |
+| 루트 밖에서 실행 | 모델·warmup 상대경로 못 찾음 | **저장소 루트에서** `python -m whisperlivekit.basic_server` 실행(요청 1) |
 | 번역 미동작(과거) | `--llm-translation` 줘도 번역 안 붙음 | **해결됨** — config.py 4필드 master 머지(§5.2) |
 | diar + 번역(과거) | 화자분할 ON이면 번역 공백 | **해결됨** — `get_lines_diarization` finalized 마킹 master 머지(§5.4). 동시 사용 가능 |
 | **번역이 의도치 않게 켜짐/시도됨(2026-07-16~)** | 전사만 보려 했는데 llama.cpp 연결 시도 로그가 남거나, dev PC에서 없는 서버(`localhost:2010`)로 연결 실패 경고가 뜸 | `--llm-translation`이 **기본 ON**으로 바뀜(과거엔 기본 OFF). 전사만 보려면 `--no-llm-translation`, dev Ollama로 쓰려면 §5.6 재정의 플래그 필요(§5.3·§5.7) |
@@ -661,11 +656,8 @@ C:\Python312\python.exe -m whisperlivekit.basic_server `
 | 포트 충돌 | 수동 서버=8900, eval/closed_test=8901(기본). 배포 PC 기존 점유와 충돌하면 | `--port`로 변경, 또는 `parse_args.py`/`eval.py SERVER_PORT` 기본값 수정. 동시 기동 시 GPU 2배 점유 주의 |
 | 문서 플래그 오타 | `--avg-logprob-threshold`는 없음 | 실제 플래그는 `--logprob-threshold`([parse_args.py:321](../whisperlivekit/parse_args.py#L321)) |
 | **Python 버전 불일치** | `pip install -r requirements-deploy.txt` 중 `aiohttp`(또는 soxr·multiprocess 등)가 "Python 버전이 안 맞는다"고 실패 | wheelhouse가 **dev(3.12) 태그로 고정**됨(§2.2). 대상 PC에 `python-installer\python-3.12.10-amd64.exe`를 `C:\Python312`(PATH 미등록)로 설치(§3.0) 후 `C:\Python312\python.exe -m pip install ...`로 그 인터프리터에 직접 설치(§3.1). 기존 3.11 프로그램은 PATH를 건드리지 않으므로 영향 없음 |
-| **잘못된 Python 호출** | 설치 로그엔 `numpy`·`torch` 등이 분명히 설치됐는데, `python -c "import ..."`나 `whisperlivekit-server` 실행 시 `ModuleNotFoundError: No module named 'numpy'` 등 발생 | venv가 없으므로 **활성화 단계 자체가 없다** — 대신 PATH의 다른 Python(시스템 3.11 등)이 실행돼 벌어지는 증상이다. 항상 **`C:\Python312\python.exe`를 직접 지정**해서 실행한다(§3.1·§4). `C:\Python312\Scripts`를 PATH에 등록했다면 `whisperlivekit-server` 콘솔 스크립트도 동일하게 동작한다 |
+| **잘못된 Python 호출** | 설치 로그엔 `numpy`·`torch` 등이 분명히 설치됐는데, `python -c "import ..."`나 `python -m whisperlivekit.basic_server` 실행 시 `ModuleNotFoundError: No module named 'numpy'` 등 발생 | venv가 없으므로 **활성화 단계 자체가 없다** — 대신 PATH의 다른 Python(시스템 3.11 등)이 실행돼 벌어지는 증상이다. 항상 **`C:\Python312\python.exe`를 직접 지정**해서 실행한다(§3.1·§4) |
 | **sounddevice 누락** | `C:\Python312\python.exe scripts/closed_test.py ...`(경로 C) 실행 시 `ModuleNotFoundError: No module named 'sounddevice'` | `scripts/vbcable_test.py`가 `sd.play()`로 VBCable에 오디오를 재생하는 하드 의존성인데 과거 `vbcable` extra(playwright+comtypes만)에 빠져 있었음 — master에서 수정 완료(pyproject.toml `vbcable` extra에 `sounddevice` 추가, requirements-deploy.txt·wheelhouse 갱신). 이미 설치된 PC는 `C:\Python312\python.exe -m pip install --no-index --find-links C:\whist\wlk\deploy\wheelhouse sounddevice==0.5.5`로 단건 추가하면 된다(전체 재설치 불필요) |
-| **filtering/llm_translation 누락** | `whisperlivekit-server` 또는 `closed_test.py` 실행 시 `ModuleNotFoundError: No module named 'whisperlivekit.filtering'`(또는 `.llm_translation`) | `pyproject.toml`의 `[tool.setuptools] packages` 목록에 두 서브패키지가 빠져 빌드된 wheel에서 통째로 누락됨(dev는 editable 설치라 미표면화). master에서 수정 완료(packages 목록 추가 + `filtering`의 `*.json` package-data). 새로 빌드된 `whisperlivekit-0.2.20-py3-none-any.whl`로 `C:\Python312\python.exe -m pip install --no-index --force-reinstall --no-deps ...` 재설치하면 해결 |
 | **공유 `.venv` 반쪽 손상** (dev PC §2.2 패키징 전용 — 배포/협업 PC는 venv가 없어 해당 없음) | dev PC에서 `.venv\Scripts\python.exe`가 `No pyvenv.cfg file`(exit 106)로 기동 불가 → 측정·pytest 전면 차단. `.venv` 최상위에 `Lib`/`pyvenv.cfg` 없이 `Scripts`/`share`만 잔존 | **원인**: 배포/wheelhouse 작업(§2.2)의 `uv venv`/`uv pip`/`uv sync`를 **공유(Junction) `.venv`에 실행**했고, 그 순간 IDE Jedi 언어서버가 python.exe를 잠가 Scripts 제거가 실패한 반쪽 손상. **예방**: §2.2 경고대로 wheelhouse 빌드는 독립 `.venv`에서 + IDE 인터프리터 분리. **복구(무중단)**: `uv venv` 출력의 base python(`Using CPython … at <경로>`)으로 임시 probe venv 생성 → 그 `pyvenv.cfg`를 손상된 `.venv\`에 복사 → python 기동 회복 → `uv sync --extra diarization-sortformer --extra vbcable --extra cu128`로 Lib 재설치(Scripts 제거를 안 하므로 IDE 잠금과 무관). 진행 중 uv 경합이 있으면 먼저 멈춘 뒤 복구 |
 | **`wlk_in` 최신화 ≠ 배포 PC 반영** | dev PC의 `wlk_in`은 최신 master 기준으로 갱신됐는데, 배포 PC(`C:\whist\wlk`)는 여전히 구버전 코드로 동작(예: `model_dir` 미전파로 인터넷 다운로드 시도 → `getaddrinfo failed`) | `wlk_in`을 갱신하는 것과 그걸 USB로 옮겨 배포 PC에 실제로 덮어쓰는 것은 별개 단계다. `wlk_in\SYNC_STATE.txt`의 `deploy_pc_confirmed_applied`가 `unknown`이면 아직 배포 PC 반영이 확인되지 않은 것 — 매번 USB 반입·적용 여부를 사용자에게 확인한다 |
-| **cwd가 wheel을 가림** | 배포 PC에서 `whisperlivekit` wheel을 재설치해도 버그가 그대로 재현됨(코드가 안 바뀐 것처럼 보임) | `C:\Python312\python.exe -m whisperlivekit.basic_server`는 cwd(`C:\whist\wlk`)를 sys.path 최우선에 둔다 — cwd에 `whisperlivekit\` raw 소스 폴더가 있으면 **wheel 설치 여부와 무관하게 그 raw 폴더가 항상 먼저 로드**된다. `C:\Python312\python.exe -c "import whisperlivekit; print(whisperlivekit.__file__)"`로 실제 로드 경로를 확인하고, raw 폴더 쪽을 갱신해야 한다(wheel만 갱신해선 소용없음) |
-| **wheel 재설치 누락(콘솔 스크립트 기동 시)** | `whisperlivekit-server`(§0·§4.2·§4.4의 공식 권장 기동법)로 켠 PC에서 새 코드가 전혀 반영 안 됨 — raw `whisperlivekit\` 폴더는 최신으로 갱신했는데도 버그 재현 | 위 항목과 정반대 상황: `whisperlivekit-server`는 콘솔 스크립트라 cwd를 sys.path에 얹지 않고 **site-packages(설치된 wheel)를 항상 우선 로드**하며 cwd의 raw 폴더는 무시한다. `whisperlivekit/**` 변경분을 반영하려면 raw 사본 복사와 별개로 `C:\Python312\python.exe -m pip install --no-index --force-reinstall --no-deps C:\whist\wlk\deploy\whisperlivekit-*.whl`로 wheel도 반드시 재설치해야 한다. 실사고: Exp-167~175 여러 회차의 반입 안내가 raw 사본 복사만 지시하고 wheel 재설치를 빠뜨렸다 — 그 기간 배포 PC가 `whisperlivekit-server`로 기동됐다면 CASE1/CASE2/CASE3/경계철회 등 해당 수정들이 전혀 반영되지 않았을 수 있다 |
-| **wheel 버전 문자열 불변 → 재설치 스킵** | `C:\Python312\python.exe -m pip install ...whisperlivekit-0.2.20-....whl`을 다시 돌려도 "Requirement already satisfied"만 뜨고 실제로는 아무것도 안 바뀜 | 프로젝트 wheel은 코드가 바뀌어도 `pyproject.toml`의 버전을 올리지 않는 한 파일명이 항상 `whisperlivekit-0.2.20-py3-none-any.whl`로 동일하다 — pip는 버전 문자열만 보고 "이미 만족됨"으로 건너뛴다. 내용이 바뀐 wheel을 실제로 덮어쓰려면 **`--force-reinstall`을 항상 붙인다** |
+| **raw 소스 파일 복사 누락** | 일부 `whisperlivekit/**` 변경이 반영 안 된 듯 보이는데 재설치할 wheel이 없음(예: 특정 버그 수정이 재현되거나, 신규 서브패키지의 API가 404) | whisperlivekit 프로젝트는 wheel로 설치하지 않으므로 유일한 반영 경로는 raw 소스 파일 복사뿐이다 — `C:\Python312\python.exe -c "import whisperlivekit; print(whisperlivekit.__file__)"`로 실제 로드 경로(`C:\whist\wlk\whisperlivekit\...`)를 확인하고, `deploy-sync` 절차의 `git diff --name-status` 목록과 `wlk_in`/배포 PC의 실제 파일을 `diff -q`로 대조해 빠짐없이 복사됐는지 확인한다 — wheel이라는 안전장치가 사라졌으므로 이 확인이 유일한 검증 수단이다 |

@@ -23,47 +23,51 @@ description: master 변경사항을 배포 반입 산출물(deploy/, wlk_in/)에
 
 3. **변경 범위별 대응 결정 — 2축으로 분리해서 판단한다**
 
-   "휠/wheelhouse를 재빌드해야 하는가"와 "`wlk_in`의 raw 소스 사본을 갱신해야 하는가"는 다른 질문이지만,
-   `whisperlivekit/**`가 바뀌면 **둘 다 항상** 실행 대상이다. 배포 PC가 서버를 켜는 방식은 두 가지다:
-   `whisperlivekit-server`(콘솔 스크립트, `docs/DEPLOYMENT_OFFLINE.md` §0·§4.2·§4.4가 **실제로 권장하는
-   기동법**)는 cwd와 무관하게 site-packages(wheel)를 우선 로드하고, `python -m
-   whisperlivekit.basic_server`는 반대로 cwd(raw 사본)를 우선 로드한다. 즉 raw 사본만 갱신하고 wheel을
-   재설치하지 않으면 공식 권장 기동법으로 켠 배포 PC에는 반영되지 않는다(실사고: Exp-167~175 여러 회차의
-   반입 안내가 raw 사본 복사만 지시하고 wheel 재설치를 빠뜨렸다 — `docs/DEPLOYMENT_OFFLINE.md` §8 트랩
-   "wheel 재설치 누락" 참조). 어느 실행법을 쓰든 안전하도록 raw 사본과 wheel을 **항상 함께** 최신화한다.
+   "의존성 wheelhouse를 재빌드해야 하는가"와 "`wlk_in`의 raw 소스 사본을 갱신해야 하는가"는 서로 다른
+   축이다. **whisperlivekit 프로젝트 자체는 wheel로 빌드·설치하지 않는다** — 배포 PC는 항상 `python -m
+   whisperlivekit.basic_server`(모듈 실행, `docs/DEPLOYMENT_OFFLINE.md` §0·§4가 권장하는 유일한 기동법)로
+   켜고, 이 방식은 cwd(raw 사본)를 sys.path 최우선에 둔다. 즉 `whisperlivekit/**` 변경은 **raw 사본
+   갱신만으로 충분**하며 재설치할 프로젝트 wheel 자체가 없다. wheelhouse 재빌드가 필요한 건 **서드파티
+   의존성**(`pyproject.toml`/`uv.lock`)이 바뀔 때뿐이다.
 
-   | 바뀐 것 | 휠/wheelhouse 조치 | `wlk_in` 원본 미러 조치 |
+   | 바뀐 것 | 의존성 wheelhouse 조치 | `wlk_in` 원본 미러 조치 |
    |---|---|---|
    | `pyproject.toml` / `uv.lock` | wheelhouse 전체 재구성 필요(`docs/DEPLOYMENT_OFFLINE.md` §2.2) — 무거운 작업이니 진행 전 사용자 확인 | 파일 자체도 복사(배포 PC 참고용) |
-   | `whisperlivekit/**` (패키지 코드) | **프로젝트 wheel 재빌드 필수**(§2.2 step 5) + 내용 검증. 배포 PC 적용 시 `--force-reinstall` 필수(버전 문자열이 안 바뀌어 생략하면 "already satisfied"로 스킵됨) | **변경 파일 복사 필수** — `python -m` 실행 시 이 사본이 우선 로드된다 |
+   | `whisperlivekit/**` (패키지 코드) | **불필요** — 프로젝트는 wheel로 설치하지 않는다 | **변경 파일 복사 필수 — 이게 whisperlivekit 코드 반영의 유일한 경로다.** `python -m` 실행 시 이 사본이 그대로 우선 로드된다 |
    | `scripts/**` | 불필요 — wheel엔 안 들어감 | 변경 파일 복사(배포 PC에서 소스 그대로 직접 실행) |
    | `docs/**` | 불필요 | 변경 파일 복사(배포 PC 운영자 참고용 — "배포 산출물 없음"과 "wlk_in 사본 갱신 불필요"는 다른 얘기다) |
    | `test_data/**`, `tests/**`, 루트 메타파일(`README.md`·`EXPERIMENTS*.md` 등) | 불필요 | 변경 파일 복사 |
    | `whisperlivekit/model/**` | 해당 없음 | `.gitignore` 비추적이라 git diff로 안 잡힘 — 새 모델 파일 추가 여부를 사용자에게 별도 확인 |
    | `.claude/`, `.memorize/`, `.omc/` | 불필요 | **범위 밖** — 배포 PC는 Claude Code를 쓰지 않는다. `wlk_in`에 이미 있는 구버전은 방치해도 무방(정리 불필요) |
 
-4. **wheel 재빌드가 필요한 경우 — 공유 `.venv` 절대 접촉 금지**
-   - `uv build` / `uv sync` / `uv venv` / `uv run`을 공유(Junction) `.venv`에 실행하지 않는다(CLAUDE.md uv
+4. **서드파티 의존성 wheelhouse 재빌드가 필요한 경우(`pyproject.toml`/`uv.lock` 변경 시) — 공유 `.venv` 절대 접촉 금지**
+   - `uv export` / `uv sync` / `uv venv` / `uv run`을 공유(Junction) `.venv`에 실행하지 않는다(CLAUDE.md uv
      가드레일 — 위반 시 IDE 언어서버 잠금과 겹쳐 `.venv`가 반쪽 손상되는 실사고가 있었다, §8 트랩 표 참조).
-   - 방법: (a) 전용 워크트리 + 독립 `.venv`(§2.2 공식 레시피 — 의존성 자체가 바뀌었을 때) 또는
-     (b) 별도 시스템 Python으로 `python -m build --wheel`(의존성 변경 없이 패키지 코드만 바뀌었을 때, 더 가볍다).
+   - 전용 워크트리 + 독립 `.venv`(`docs/DEPLOYMENT_OFFLINE.md` §2.2 공식 레시피)에서 `uv export` →
+     `pip download`로 wheelhouse를 재구성한다. whisperlivekit 프로젝트 자체는 wheel로 빌드하지 않으므로
+     `uv build --wheel`/`python -m build --wheel` 단계는 필요 없다.
    - 무거운 작업(전체 wheelhouse 재구성 등)이면 서브에이전트에 위임해 메인 세션 컨텍스트를 아낀다 —
      워크트리 절대경로를 프롬프트에 명시(CLAUDE.md 워크트리 규약).
    - 패키징 버그 등 **코드 자체를 고쳐야 하는 문제가 발견되면 여기서 직접 고치지 않는다** — 별도
      브랜치+워크트리로 분리하고, 병합은 사용자 승인 후 진행한다(main 브랜치 편집 규약).
 
-5. **빌드 산출물 검증**
-   - `zipfile`로 wheel 내부에 예상 서브패키지(`whisperlivekit.filtering` · `whisperlivekit.llm_translation` 등)가
-     빠짐없이 포함됐는지 확인한다 — 과거 `pyproject.toml` packages 목록 누락으로 이 문제가 실제 발생한 적 있다(§8 트랩).
-   - 이번에 바뀐 설정값(`parse_args.py` 기본값 등)이 wheel 안 소스에 실제로 반영됐는지 확인한다.
+5. **반영 산출물 검증**
+   - `whisperlivekit/**`가 바뀌었으면: 이번에 바뀐 설정값(`parse_args.py` 기본값 등)과 신규/변경
+     서브패키지(예: `whisperlivekit.filtering`·`whisperlivekit.llm_translation`)가 `wlk_in\whisperlivekit\`에
+     실제로 반영됐는지 `diff -q`로 확인한다 — 프로젝트가 wheel로 설치되지 않으므로 이 raw 사본 확인이
+     유일한 검증 수단이다(`docs/DEPLOYMENT_OFFLINE.md` §8 "raw 소스 파일 복사 누락" 참조).
+   - 의존성 wheelhouse를 재구성했으면: `deploy\wheelhouse\`에 신규/변경 의존성이 빠짐없이 받아졌는지
+     `pip download` 로그의 `Successfully downloaded` 목록으로 확인한다(`docs/DEPLOYMENT_OFFLINE.md` §2.2).
 
 6. **동기화 반영**
-   - 휠이 바뀌었으면 새 wheel을 `deploy/` · `wlk_in/deploy/`에 복사하고, `git archive
-     master --output=deploy\deploy_source.zip`을 재생성해 `wlk_in`에도 동일 반영한다.
+   - `git archive master --output=deploy\deploy_source.zip`을 재생성해 `wlk_in`에도 동일 반영한다.
+     의존성 wheelhouse를 재구성했으면 `deploy\wheelhouse\`(신규/갱신분)도 `wlk_in\deploy\wheelhouse\`에
+     복사한다 — whisperlivekit 프로젝트는 wheel로 빌드하지 않으므로 복사할 project wheel은 없다.
    - **`wlk_in` 원본 미러는 파일 단위로 갱신한다** — 전체 트리 재추출(`git archive` 통짜 압축 해제)이나
      `robocopy /MIR`는 쓰지 않는다. 두 방식 모두 "git 추적 파일 전체"를 기준으로 움직이는데, gitignore된
      모델 가중치(`model.safetensors`, `.nemo`, silero onnx/jit 등)가 그 기준에 없어 실수로 지워질 위험이
-     있다. 대신:
+     있다. **whisperlivekit 코드 변경 반영은 이 파일 단위 갱신이 유일한 경로다** — wheel이라는 백스톱이
+     없으므로 아래 단계를 빠짐없이 수행한다:
      1. 2단계에서 이미 구한 `git diff <직전 커밋>..master --name-status`(대상 경로: `whisperlivekit`,
         `scripts`, `docs`, `test_data`, 루트 메타파일, `pyproject.toml`, `uv.lock` — `.claude`/`.memorize`/
         `.omc`는 제외)를 그대로 파일 목록으로 쓴다.
@@ -92,14 +96,14 @@ description: master 변경사항을 배포 반입 산출물(deploy/, wlk_in/)에
      last_synced_commit: <커밋 7자리>
      last_synced_at: <ISO 8601>
      last_scope: full|incremental
-     wheel_version: <바뀌었으면 새 버전, 아니면 이전 값 유지>
+     deps_wheelhouse_version: <서드파티 의존성 wheelhouse를 재빌드했으면 새 시각/버전, 아니면 이전 값 유지 — whisperlivekit 프로젝트 자체는 wheel로 배포하지 않으므로 이 필드는 wheelhouse에만 해당>
      deploy_pc_confirmed_applied: unknown
 
      === HISTORY (append newest at bottom) ===
      --- <ISO 8601> ---
      commit: <커밋 7자리>
      scope: full|incremental
-     wheel_rebuilt: yes|no
+     deps_wheelhouse_rebuilt: yes|no
      files:
        <path> (A|M|D)
        ...
@@ -119,32 +123,32 @@ description: master 변경사항을 배포 반입 산출물(deploy/, wlk_in/)에
      **바뀐 파일**
      - <path> — <이유> [wlk_in 반영 완료]
      ...
-     **wheel/wheelhouse**: 재빌드 불필요 / 재빌드함(사유: ...)
+     **의존성 wheelhouse**: 재빌드 불필요 / 재빌드함(사유: ...) — whisperlivekit 프로젝트 자체는 wheel로
+     빌드하지 않으므로 이 항목은 서드파티 의존성(`pyproject.toml`/`uv.lock`)이 바뀐 경우에만 해당
      **배포 PC(C:\whist\wlk)에서 적용할 명령**
        copy <path> C:\whist\wlk\<path>
        ...
-       (wheel을 재빌드했다면 반드시 포함 — 버전 문자열이 안 바뀌므로 --force-reinstall 없으면 스킵됨)
-       C:\Python312\python.exe -m pip install --no-index --force-reinstall --no-deps C:\whist\wlk\deploy\<wheel 파일명>
+       (의존성 wheelhouse를 재빌드했을 때만 추가)
+       C:\Python312\python.exe -m pip install --no-index --find-links C:\whist\wlk\deploy\wheelhouse -r C:\whist\wlk\deploy\requirements-deploy.txt
      **검증(권장)**: 배포 PC에서 `C:\Python312\python.exe -c "import whisperlivekit; print(whisperlivekit.__file__)"`로
-     실제 로드 경로를 확인 — `whisperlivekit-server`(공식 기동법)는 site-packages를 우선 로드하므로
-     wheel 재설치가 반영됐는지 이 경로로 재확인한다.
+     실제 로드 경로가 `C:\whist\wlk\whisperlivekit\...`인지 확인한다 — `python -m whisperlivekit.basic_server`는
+     항상 저장소 루트(cwd)를 우선 로드하므로, 이 경로가 아니라면 저장소 루트 밖에서 실행했는지 의심한다.
      **주의**: 여기까지는 dev PC `wlk_in` 스테이징 갱신입니다. 배포 PC는 폐쇄망이라 자동 반영이
-     안 됩니다 — 위 파일을 USB로 옮기고 배포 PC에서 직접 덮어써야 실제 적용됩니다. **raw 파일 복사만으론
-     부족할 수 있습니다** — `whisperlivekit-server`는 cwd가 아니라 site-packages를 우선 로드하므로
-     wheel 재설치를 빠뜨리면 반영되지 않습니다. 적용을 확인해주시면 SYNC_STATE.txt의
+     안 됩니다 — 위 파일을 USB로 옮기고 배포 PC에서 직접 덮어써야 실제 적용됩니다. whisperlivekit 코드
+     변경은 **raw 파일 복사만으로 충분**합니다(더 이상 wheel 재설치 단계가 없습니다) — 단, 파일 복사
+     자체가 빠짐없이 됐는지는 여전히 확인이 필요합니다(`diff -q`). 적용을 확인해주시면 SYNC_STATE.txt의
      deploy_pc_confirmed_applied를 갱신하겠습니다.
      ```
 
 **주의**:
-- 배포 PC 파일 vs site-packages(wheel) 구분을 항상 먼저 확인한다 — `scripts/`는 소스트리 실행이라
-  파일 자체 복사가 필요하다. `whisperlivekit/`는 실행법에 따라 로드 경로가 달라진다: `C:\Python312\python.exe -m
-  whisperlivekit.basic_server`는 cwd(raw 사본)를 우선 로드하지만, **공식 권장 기동법인
-  `whisperlivekit-server`(콘솔 스크립트)는 cwd와 무관하게 site-packages(wheel)를 우선 로드한다.**
-  raw 사본만 갱신하고 wheel을 재설치하지 않으면 `whisperlivekit-server`로 켠 배포 PC에는 반영되지
-  않는다 — `whisperlivekit/**`가 바뀌면 raw 사본 복사와 wheel `--force-reinstall` 재설치를 **항상
-  함께** 안내한다(어느 실행법을 쓰든 안전하도록). 배포 PC는 venv가 없으므로(`docs/DEPLOYMENT_OFFLINE.md`
-  §3) `C:\Python312\python.exe -c "import whisperlivekit; print(whisperlivekit.__file__)"`로 실제 로드
-  경로를 확인하는 게 가장 확실하다(같은 문서 §8 트랩 참조).
+- `whisperlivekit`는 wheel로 설치하지 않는다 — 배포 PC는 항상 `C:\Python312\python.exe -m
+  whisperlivekit.basic_server`(모듈 실행)로 켜고, 이 방식은 cwd(저장소 루트의 raw 사본)를 sys.path
+  최우선에 둔다. `scripts/`도 마찬가지로 소스트리 그대로 직접 실행되므로, **두 경로 모두 파일 단위
+  복사만 정확하면 반영은 보장된다** — wheel 재설치 같은 별도 단계는 없다. 배포 PC는 venv가 없으므로
+  (`docs/DEPLOYMENT_OFFLINE.md` §3) `C:\Python312\python.exe -c "import whisperlivekit;
+  print(whisperlivekit.__file__)"`로 실제 로드 경로가 `C:\whist\wlk\whisperlivekit\...`인지 확인하면
+  가장 확실하다(같은 문서 §8 트랩 "raw 소스 파일 복사 누락" 참조) — wheel 백스톱이 없으므로 파일
+  복사 누락 자체를 잡아낼 유일한 수단은 이 확인과 `diff -q`뿐이다.
 - **"`wlk_in`이 최신"과 "배포 PC가 실제로 반영했음"은 다른 사실이다.** 이 스킬은 dev PC 스테이징
   (`wlk_in`)까지만 책임진다 — 폐쇄망이라 배포 PC 상태를 여기서 검증할 수 없다. 매 동기화 후
   `SYNC_STATE.txt`의 `deploy_pc_confirmed_applied`가 `unknown`이면 사용자에게 USB 반입·적용 여부를
