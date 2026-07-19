@@ -132,3 +132,58 @@ def test_new_speaker_passes_buffer_relative_since_offset():
     proc.model.detect_current_language.assert_called_once_with(
         window_secs=1.5, min_prob=0.85, since_offset=pytest.approx(1.2),
     )
+
+
+# ── Exp-189: eager 언어체크 버스트(diar flip-flop) 쿨다운 ─────────────────────
+
+def test_new_speaker_skips_eager_when_within_cooldown_of_last_check():
+    """(6) kor1 실측(Exp-189) 규명: Sortformer가 단일화자 파일에서도 순간적으로
+    speaker 0↔1을 반복 오귀속하는 노이즈(Exp-188과 동일 근원)가 있고, 매 flip마다
+    new_speaker()의 eager 언어감지가 다시 실행된다. 버스트 중 새 화자 오디오가
+    거의 안 쌓인 채(연쇄 flip일수록 창이 더 좁아짐) 반복 재시도되면서 우연히 고신뢰
+    오탐(en, p=0.95→1.00→0.99 연속)이 나오면 그 상태가 버스트 내내 유지돼 실제
+    영어 환각("We have a lot of work...")까지 이어졌다(R2, WER 20.5%→47.4%).
+
+    직전 eager 체크로부터 EAGER_LANG_COOLDOWN_SECS 이내에 또 화자전환 이벤트가 오면
+    eager 재감지 자체를 건너뛴다(encoder forward 생략) — detected_language는 여전히
+    None으로 리셋되므로, infer()의 표준 eager_lang_detect 폴백(더 많은 표본 확보 후
+    판정하는 기존 안전 경로)이 대신 처리한다.
+    """
+    proc = _make_processor(detected_language="ko", lang_before_reset=None)
+    proc.model.global_time_offset = 8.0
+    proc.model.detect_current_language = MagicMock(return_value="en")
+
+    proc.end = 9.5
+    cs1 = ChangeSpeaker(start=9.4, speaker=1)
+    proc.new_speaker(cs1)
+    assert proc.model.detect_current_language.call_count == 1
+
+    # 0.4s 뒤 재전환(버스트) — 쿨다운(기본 1.5s) 이내이므로 eager 재감지를 건너뛰어야 한다.
+    proc.end = 9.9
+    cs2 = ChangeSpeaker(start=9.8, speaker=0)
+    proc.new_speaker(cs2)
+    assert proc.model.detect_current_language.call_count == 1, (
+        "쿨다운 이내 재호출은 eager 재감지를 건너뛰어야 한다"
+    )
+
+
+def test_new_speaker_runs_eager_again_after_cooldown_elapses():
+    """(7) 쿨다운 경과 후에는 정상적으로 eager 재감지를 수행한다(회귀 방지 대조군).
+
+    ytn2 CASE2(genuine 화자전환)처럼 다음 화자전환이 쿨다운 창 밖에서 일어나는
+    정상 케이스는 이번 변경으로 영향받지 않아야 한다.
+    """
+    proc = _make_processor(detected_language="ko", lang_before_reset=None)
+    proc.model.global_time_offset = 8.0
+    proc.model.detect_current_language = MagicMock(return_value="en")
+
+    proc.end = 9.5
+    cs1 = ChangeSpeaker(start=9.4, speaker=1)
+    proc.new_speaker(cs1)
+    assert proc.model.detect_current_language.call_count == 1
+
+    # 쿨다운(1.5s) 밖 — 정상적으로 다시 실행돼야 한다.
+    proc.end = 11.2
+    cs2 = ChangeSpeaker(start=11.1, speaker=0)
+    proc.new_speaker(cs2)
+    assert proc.model.detect_current_language.call_count == 2

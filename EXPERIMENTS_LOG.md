@@ -4022,3 +4022,250 @@ auto 표준세트·ko 세트 전부 무회귀(bong1 max/F1 저하는 0-firing으
 `eval_20260718_2215_auto_screening.json`(N=1) · `eval_20260718_2225_auto_confirm_N3.json`(N=3) ·
 `eval_20260718_2245_ko23_screening.json`(N=1) ·
 **브랜치**: `exp/kor1-caseb-fix`(`exp/speaker-change-trigger-loss@0df3188`에서 분기, 커밋 예정 — master 미머지·미푸시)
+
+---
+
+## Exp-189 — kor1 auto모드 언어오검출 근본원인 규명 + new_speaker eager 버스트 쿨다운 [E5, `exp/kor1-lang-misdetect`, Stage 3(최종)]
+
+### 배경 / 가설
+
+Exp-186이 kor1(121초 단일화자 낭독, `--lan auto`)에서 `detect_current_language` 공용 로그
+태그 `[ShortSilenceLangCheck]`가 고신뢰도로 영어를 오검출(p=0.99 등)하는 사례를 관찰했다 — 실제
+`en↔ko` 전환(`[LangSwitch] switch=True`) 횟수가 회차별로 R1=0/R2=7/R3=14로 요동했고 이 횟수와
+WER(22.2%/43.9%/48.0%)이 뚜렷이 상관했다. 이번 Stage(3, 최종)는 CLAUDE.md 지시서가 제시한 3가설
+(ⓐ kor1 고유 acoustic 특이점 / ⓑ 재확인 임계값·표본크기 문제 / ⓒ kor1만 재확인 트리거 빈도가 다름)
+중 무엇이 원인인지 로그 근거로 좁혀 규명하고, ⓑ로 특정되면 파라미터 조정 → TDD → 짝지음 A/B →
+채택확정까지 진행하는 것이 목표다.
+
+### 재현 측정
+
+`kor1 --lan auto --repeat 5 --trace-tokens`(diar-ON, CRT=3.0, 이 Stage만 예외적으로 N=5 — 오검출
+발생 회차를 더 확보하기 위함). Provenance 확인(`code=kor1-lang-misdetect branch=exp/kor1-lang-misdetect@8ea32ef
+vbcable=ok`).
+
+**수정 전(baseline) 결과**: WER [R1 20.5%, R2 47.4%, R3 35.1%, R4 18.7%, R5 17.0%] — median 20.5%,
+max 47.4%. R2에 실제 영어 환각 확정("We have a lot of work to do with the work to do with a lot
+work.", "This is the.") — `language_switch` 트리거 3회. R3는 `language_switch` 1회(환각 없이 자기
+교정). R1/R4/R5는 `language_switch` 0회.
+
+### 원인 규명 (로그 대조로 가설 좁히기)
+
+**1단계 — 오검출이 실제로 어느 함수에서 나오는지 특정**: `detect_current_language()`의 로그 라인
+(`[ShortSilenceLangCheck] 최근 %.1fs → %s (p=%.2f)`)은 이 함수를 호출하는 **3곳 모두가 공유**하는
+태그였다(`_check_short_silence_language`·`new_speaker()`의 eager 감지·`_maybe_periodic_lang_check`).
+CLAUDE.md 지시서가 지목한 `_check_short_silence_language`(min_prob=0.90)만 의심하면 안 되고, 실제
+호출자를 인접 로그(`[NewSpeaker]`)로 대조해야 했다. R2 로그를 줄 단위로 대조한 결과, **고신뢰
+오탐(en, p=0.95→1.00→0.99 3연속)이 정확히 `new_speaker()`의 eager 감지(min_prob=0.85)에서 나왔다**
+— 매 오탐 직전/직후에 `[NewSpeaker] spk=X→Y det_before=... eager=en` / `det_after=en
+(eager_applied=True)` 로그가 붙어 있었다. `_check_short_silence_language` 자체는 R2에서 정확히
+1회만 개입했고 그마저도 `en → ko`로 **올바르게 자기교정**한 것이었다(`[ShortSilenceLangCheck] 언어
+전환 감지: en → ko`). R3의 유일한 en 오탐(p=0.96)도 동일하게 `new_speaker()` eager 경로였다.
+
+**2단계 — new_speaker가 왜 이렇게 자주 불렸는지**: `[NewSpeaker] spk=.*det_before` 호출 횟수를
+세보니 R1=0·R2=**52**·R3=**16**·R4=0·R5=0 — **kor1은 단일화자 파일인데도** Sortformer가 순간적으로
+speaker 0↔1을 반복 오귀속하는 노이즈(Exp-188이 이미 규명한 것과 **동일 근원** — "diarization
+임베딩이 아주 짧은 세그먼트에서 불안정한 일반적 한계, 특정 언어·데이터 무관")가 있고, 매 flip마다
+`new_speaker()`가 재호출돼 그 안의 eager 언어감지도 재실행됐다. R2 로그에서 `global_time_offset`이
+34.04→34.52→34.52→34.52로 3연속 거의 그대로인 것으로 보아, 이 오탐 트리오는 **버스트(0.5~1초
+이내 연쇄 flip)** 중 새 화자 오디오가 거의 안 쌓인 채(`kept_segments_len` 0.53~1.20s) 반복
+재시도된 결과였다.
+
+**3단계 — kor2/kor3 대조**: 동일 `--lan auto` 조건으로 kor2·kor3를 단회 측정한 결과 **NewSpeaker
+호출 0회**(둘 다) — 즉 정상 조건에서는 diar flip-flop 자체가 거의 안 일어난다. kor1의 "정상"
+회차(R1/R4/R5, 12~13회 언어체크)도 kor2(13회)·kor3(18회)와 같은 범위였다 — **kor1이 평소에
+유별나게 다른 파일이 아니라, R2/R3에서만 우연히 diar 노이즈 버스트가 발생**한 것이었다.
+
+**결론(가설 판정)**: ⓐ(kor1 고유 acoustic 특이점)는 **기각** — kor1의 "정상" 회차는 kor2/kor3와
+구분 안 되고, 문제는 diar flip-flop **버스트가 실제로 발생한 회차에만** 국한된다. ⓒ(재확인 트리거
+빈도 차이)는 **부분적으로 맞지만 원인이 아니라 결과**다 — 빈도 차이 자체가 real-time 처리
+중 diar 노이즈 버스트 발생 여부(runtime jitter, 회차마다 편차)에 좌우되는 것이지 kor1 파일
+고유 속성이 아니다. 근본 메커니즘은 ⓑ의 변형: `_check_short_silence_language`의 min_prob=0.90은
+**무관**(정상 작동 확인)했고, 실제 취약점은 **`new_speaker()`의 eager 언어감지(min_prob=0.85)가
+diar flip-flop 버스트 중 아무 쿨다운 없이 매번 재실행**되며 점점 좁아지는 잡음투성이 창에서
+반복적으로 그릇된 고신뢰 언어를 재확인/고착시키는 구조였다. Exp-188과 **동일한 diar 노이즈가
+근원**이나, 이번엔 Case B(단어분절)가 아니라 **언어오검출**이라는 별개 다운스트림 경로로
+나타났다 — Exp-188의 `MIN_SPEAKER_ATTRIBUTION_SECS`(tokens_alignment.py, 텍스트 정렬 단계)는
+이 경로(backend.py `new_speaker()` eager 언어감지)를 커버하지 않는다.
+
+### 수정 내용 (TDD)
+
+**Red**: `tests/test_eager_lang_since_offset.py`에 2개 테스트 추가.
+- `test_new_speaker_skips_eager_when_within_cooldown_of_last_check` — 쿨다운(1.5s) 이내 재호출은
+  eager 재감지를 건너뛰어야 함. 수정 전 실행 → `assert 2 == 1` **실패 확인**(매번 재호출되던 기존
+  동작).
+- `test_new_speaker_runs_eager_again_after_cooldown_elapses` — 쿨다운 경과 후에는 정상 재실행(회귀
+  방지 대조군, ytn2 CASE2 같은 genuine 단일 전환 시나리오 보호). 수정 전에도 **통과**.
+
+**Green (최소 수정, 1개 파일)**: [whisperlivekit/simul_whisper/backend.py](../whisperlivekit/simul_whisper/backend.py)
+- `_EAGER_LANG_COOLDOWN_SECS = 1.5` 신규 상수(§근본원인 규명 주석 포함).
+- `__init__`에 `self._last_eager_lang_check_end: Optional[float] = None` 추가.
+- `new_speaker()`: eager 감지 직전, `self.end - self._last_eager_lang_check_end < _EAGER_LANG_COOLDOWN_SECS`이면
+  `detect_current_language()` 호출 자체를 건너뛰고 `eager = None`(로그 `[NewSpeaker] eager 언어체크
+  쿨다운 스킵`). `eager=None`이어도 `detected_language`는 여전히 None으로 리셋되므로(기존 로직
+  불변), infer()의 표준 eager_lang_detect 폴백(1.5~2.0s 더 많은 표본 확보 후 판정하는 기존 안전
+  경로)이 대신 처리한다 — genuine 단일 전환(예: ytn2 CASE2)은 쿨다운 창 안에서 재호출되지 않으므로
+  영향받지 않는다. `_check_short_silence_language`·`_maybe_periodic_lang_check`·diar 텍스트정렬
+  (`tokens_alignment.py`, `MIN_SPEAKER_ATTRIBUTION_SECS`)은 **전혀 손대지 않음**(이번 Stage
+  범위 엄수).
+
+**Red→Green 확인**: 두 신규 테스트 PASS. 전체 `pytest tests/ -q` → **430 passed, 1 skipped**(Exp-188
+기준 428 passed + 신규 2개, 회귀 없음). `ruff check` clean.
+
+### 측정 (경로 C, diar-ON, CRT=3.0, PLC=None, beams=2, turbo, `--trace-tokens`)
+
+**kor1(target) 수정 후 N=5, `--lan auto`**: WER [R1 24.0%, R2 22.2%, R3 22.2%, R4 22.2%, R5 45.0%] —
+median **22.2%**(수정전 20.5%, 노이즈 범위 — CLAUDE.md §4 회차변동 통상범위 이내), max 45.0%(수정전
+47.4%, 거의 동률). **en 고신뢰 오탐 0/5회**(전 회차 en 검출은 전부 sub-threshold: R5 최대 p=0.69,
+0.85 문턱 미달로 정상 기각) — `language_switch` 트리거로 이어진 en 오검출 완전 소멸. R5(58회
+NewSpeaker, 수정전 R2의 52회와 동급 버스트 규모)에서도 eager_applied=True 11건 **전부 "ko"**(오검출
+0건) — 같은 규모의 diar 노이즈 버스트를 재현했음에도 언어오검출은 재발하지 않음(쿨다운
+스킵 37/58회 확인).
+
+**R5 잔존 고WER(45.0%)의 원인 — 별개 이슈**: R5 전사를 확인하니 언어오검출이 아니라 **재디코딩
+중복 삽입**("국방환경을 고려 국방환경을 고려한", "기습공격 기습공격" 등, diar 강제분할 경계마다
+`refresh_segment(complete=False)`가 겹치는 오디오를 재디코딩하며 생기는 아티팩트)이 원인이었다.
+**이 패턴은 수정 전 R2/R3 전사에도 이미 존재**했다("국방환경을 고려 국방환경을 고려한 군구조 개
+금구조 개편", "기습공격 기습공격" 등 — 수정 전 R2에 언어환각과 **동시에** 나타남) — 즉 이번
+수정과 무관한 **선재(pre-existing) 이슈**이며, Exp-188이 규명한 diar 노이즈의 또 다른 다운스트림
+증상(Case B·언어오검출과 별개 채널)이다. 이번 Stage 범위 밖(diar 세그먼트 신뢰도 전반 재설계
+필요) — 수정하지 않음.
+
+**auto 표준세트 스크리닝(N=1, 무회귀 확인)**: bong1 WER 31.4%(화자F1 66.7%) / ytn2 WER 12.8%(화자F1
+94.7%) / sbs1 WER 12.5%(화자F1 100.0%) — 전부 기존 베이스라인 범위 이내(Exp-187/188 기준 bong1
+29~31%대, ytn2 15.8%대, sbs1 10.7~11.9%대와 노이즈 범위에서 일치, ytn2·sbs1은 오히려 개선). bong1
+서버로그 대조: NewSpeaker 26회 중 쿨다운 스킵 9회·**정상 eager_applied=True 13회(ko/en 교차,
+다화자 정상 감지 유지 확인)** — genuine 다화자 빠른 전환(§3.8 bong1 핵심 시나리오)이 쿨다운으로
+억제되지 않고 계속 정상 작동함을 실측 확인.
+
+**ko 무회귀(kor2/kor3, `--lan auto`, N=1)**: kor2 WER 17.9%(화자F1 100%) / kor3 WER 43.1%(화자F1
+100%) — 둘 다 NewSpeaker 호출 0회로 이번 변경 코드가 아예 실행되지 않음(완전 무관 확정). kor3의
+높은 WER은 Exp-185가 이미 규명한 별개 원인(stall recovery 연쇄 웨지)으로 귀속, 무회귀.
+
+### 채택 확정 측정 (N=3, master 최신본 머지 후 — CLAUDE.md §4)
+
+**병합 사실**: 커밋 `2090592`로 master 최신본(frontend 정적서빙 + `live_transcription.js` 재렌더
+signature 수정 — WS 파이프라인·경로 C 채택 판정과 무관, translation·finalized 필드 추가)을 이
+브랜치에 병합한 뒤 재검증했다. 공유 `.venv`가 중간에 다른 세션에 의해 비워졌다 복구된 사건이
+있었으나(코디네이터 확인·복구, `uv sync --extra diarization-sortformer --extra vbcable --extra
+cu128`) 이번 측정 전 `import whisperlivekit` 경로가 이 워크트리를 가리킴을 재확인, `pytest` 437
+passed·1 skipped(병합으로 늘어난 기존 테스트 포함, 회귀 없음)을 먼저 확인 후 측정을 진행했다.
+
+**kor1(target) 확정 N=3, `--lan auto --trace-tokens`**: WER `[22.8%, 23.4%, 18.1%]` — **median
+22.8%, min 18.1%, max 23.4%, stdev 2.9%**(스크리닝 N=5 대비 분산 대폭 축소 — stdev 13.1%p(수정전)
+→ 2.9%p). **`language_switch` 트리거 0/3, en 고신뢰 오탐 0/3**(NewSpeaker 호출 자체가 0/3회 —
+이번 확정측정 3회는 diar 버스트가 발생하지 않은 회차였음). 화자분리 F1은 0.0%(단일화자 무전환
+파일의 F1 산식 경계값 아티팩트 — Exp-185/187/188에서 반복 확인된 동일 현상, 회귀 아님). worst-case
+(max 23.4%)가 수정 전 baseline(이 세션 N=5 측정 max 47.4%, Exp-188 N=8 측정 max 21.6%)과 비교해
+**영어환각발 catastrophic 케이스가 완전히 사라졌음**을 확정측정에서도 재확인.
+
+**auto 표준세트 확정 N=3**: bong1 median 23.0%(min 19.9/max **35.0%**, 화자F1 63.2%[53.7–70.6]) /
+ytn2 median 18.2%(min 17.2/max 23.6%, 화자F1 75.0%[70.0–76.2]) / sbs1 median 12.5%(min 10.7/max
+14.9%, 화자F1 80.0%[80.0–100.0]). bong1 max(35.0%, R2)를 로그·전사 대조: NewSpeaker 20~25회 중
+쿨다운 스킵 4~10회·**genuine eager_applied=True 11~12회(ko/en 정상 교차, 억제 없음)** 확인, R2
+전사는 "so he's been going around. Saying that he's the main character main protagonist" /
+"they understand everyone here they're going to be like what's the they're going to be like
+what's the meaning" 등 **기존에 반복 확인된 bong1 웃음/필러 재디코딩 반복 패턴**(Exp-159/163/171/
+174/176/185/187/188)과 정성적으로 일치 — 이번 수정과 무관 확정(0-firing 대조가 아니라 정상
+발동 대조: 발동은 정상이었고 결과도 정상(en/ko 올바로 교차)이었으므로 causal하게 배제됨).
+
+**ko 테스트셋 확정 N=3, `--lan ko`**: kor2 median 22.1%(min 21.4/max 24.1%, 화자F1 0.0%[0.0–100.0]
+—단일화자 F1 아티팩트) / kor3 median 41.1%(min 33.8/max **47.7%**). 둘 다 **NewSpeaker 호출
+0/3회**로 이번 변경 코드경로가 전혀 실행되지 않음(완전 무관 확정). kor3 수치는 Exp-185 스크리닝
+범위(29.1~45.7%)·이 세션 N=1 결과(43.1%)와 일관 — 이미 알려진 stall recovery 별개 원인.
+
+**held-out(단회)**: ytn1(auto) WER 20.3%·화자F1 84.2%·문장F1 57.1%(화자F1은 Exp-185/187 베이스라인
+84.2~88.9%와 정확히 일치 — 1순위 지표 무회귀) / eng1(en) WER 3.8%(화자F1 0.0%는 단일화자 아티팩트,
+베이스라인 4.8%/3.8%와 일관 — 개선/동일).
+
+**Case B 재확인 — 신규 발견(별개 원인, 이번 Stage 범위 밖)**: kor1 확정 N=3의 R1에서 "2040년
+국방환경."⏎"을 고려한 군구조…" 분절 관찰. 서버로그 대조 결과 `[SilenceGate] start=12.09
+end=15.68 d_eff=3.59 last_word='국방환경' next_word='을' ... decision=split path=split_hard` —
+**`SILENCE_HARD_SECS`(Exp-185) 안전망이 실제 3.59초 침묵(발화자의 진짜 호흡 pause)에 반응해 강제
+분할한 것**이며, `_check_short_silence_language`나 이번 Stage의 `new_speaker()` 쿨다운과는
+**무관**(diar/언어감지 어느 쪽도 개입 안 함, 순수 `tokens_alignment.py` `_gate_decide` 침묵-길이
+경로). **이 세션의 병합 전 N=5 측정(수정 전·후 공통)에서도 동일 지점("국방환경을")에서 "국방환."/
+"국방환경." 형태로 반복 관찰**됐음을 재확인 — 즉 이번 확정측정이나 master 병합이 만든 신규
+현상이 아니라 **kor1 특정 발화 지점의 진짜로 긴 낭독 pause + `SILENCE_HARD_SECS` 안전망의 상호작용
+으로 재현되는 pre-existing 현상**(발생 여부는 회차별 real-time 타이밍에 따라 확률적 — kor1 3회 중
+R1만 발생, R2·R3는 "2040년. 국방환경을 고려한…" 완전 결합). Exp-188이 고친 diar-flip 유발 Case B
+와는 **다른 근본원인**(diar 노이즈가 아니라 순수 침묵-길이 안전망)이므로 이번 Stage(언어오검출)의
+직접 수정 대상이 아니다 — 최종 통합 보고서·후속 세션에 "SILENCE_HARD_SECS 유발 Case B(kor1
+'국방환경을' 지점)" 항목으로 인계.
+
+### "박진." 환각과의 연관성
+
+Stage 2(Exp-188)가 kor1 `--lan ko` 모드 측정(R3)에서 관찰한 "박진."(정답에 없는 삽입)은 **이번
+Stage가 고친 경로와는 직접 연결될 수 없다** — `--lan ko`는 `lang_locked=True`라 `new_speaker()`의
+eager 언어감지 자체가 호출되지 않고(§3.2, 코드스위칭 재감지 전부 스킵), `_check_short_silence_language`도
+`cfg.language == "auto"` 가드로 애초에 armed되지 않는다. 다만 이번 Stage에서 새로 확인한 **재디코딩
+중복삽입**(위 R5 분석) 채널은 diar flip-flop이 유발하는 `refresh_segment(complete=False)` 재디코딩
+자체에서 나오며, 이 재디코딩 로직은 언어모드와 무관하게(`lang_locked` 여부와 상관없이) 항상
+실행된다 — 따라서 "박진."도 언어오검출이 아니라 **같은 diar 노이즈가 만드는 재디코딩
+중복/삽입 아티팩트 계열일 개연성이 높다**(정성적 추론 — 원본 로그·전사가 보존돼 있지 않아
+정확한 위치 대조는 불가, git 이력에도 미커밋 상태였음을 확인). 확정하려면 `--lan ko`로 kor1을
+`--trace-tokens` 재측정해 diar NewSpeaker 버스트 시점과 삽입 위치를 직접 대조해야 하며, 이는
+diar 세그먼트 신뢰도 전반(Exp-188 후속) 트랙의 범위다.
+
+### 채택 조건 판정 / 결론 (확정, N=3 기준)
+
+① 화자분리 F1 worst-case 미회귀: **✓** — kor1(단일화자 F1 아티팩트, 회귀 아님) / bong1 min
+53.7%·ytn2 min 70.0%·sbs1 min 80.0%(전부 최근 베이스라인 범위 내, 하락 관측분은 0-firing 아닌
+정상발동 대조로 이번 변경과 무관 확정) / ytn1(held-out) 84.2%(베이스라인과 정확 일치).
+② WER max 미회귀: **✓(목표 파일 kor1 대폭 개선, 나머지 무관 변동)** — kor1 max 23.4%(수정전
+47.4%에서 **catastrophic 케이스 소멸**) / bong1 max 35.0%(기존 웃음·필러 패턴 귀속, 정상발동 로그로
+인과관계 배제) / ytn2·sbs1·kor2·kor3 전부 최근 스크리닝 범위 내(NewSpeaker 0회로 이번 변경과
+무관 확정된 kor2/kor3 포함).
+③ WER median: kor1 22.8%(수정전 이 세션 N=5 median 20.5%, 노이즈 범위 — 목표는 median이 아니라
+worst-case 소멸이었으므로 §4 "목표 필수 기능" 취지에 부합).
+④ 문장분리 F1: kor1 75~80%, 표준세트도 정상 범위 — 회귀 없음.
+⑤ Case B: 3/3 kor1 확정측정 중 1건(R1) 관찰됐으나 **원인 규명 결과 `SILENCE_HARD_SECS`(Exp-185)
+안전망이 진짜 3.59초 침묵에 반응한 것으로 확정** — 이번 Stage의 수정(`new_speaker()` eager
+쿨다운)이나 diar 노이즈와 무관, 병합 전 N=5 측정에도 동일 지점에서 이미 재현되던 pre-existing
+현상(§위 상세). Exp-188이 고친 diar-flip 유발 Case B와는 별개 원인 — 최종 보고서에 인계.
+⑥ §3.2 직결: en 고신뢰 오탐 완전 소멸(0/3, 확정측정도 스크리닝 N=5와 일관), auto 세션 순수
+한국어 낭독 중 영어 삽입 방지라는 §3.2 목표에 직결.
+⑦ pytest 437 passed·1 skipped(master 병합으로 늘어난 기존 테스트 포함, 회귀 없음), ruff clean.
+
+**✅ 채택 확정 (CLAUDE.md §4 `--repeat 3` 완료)**. Case B/diar 텍스트정렬 로직은 손대지 않은 최소
+범위 수정. epoch 미bump(파라미터/타이밍 조정 — 같은 세대 내 실험, 실패모드를 바꾸는 구조 변경
+아님).
+
+### 다음 가설 / 미해결 (최종 통합 보고서 인계용)
+
+1. **`SILENCE_HARD_SECS` 유발 Case B(kor1 "국방환경을" 지점)** — 이번 확정측정에서 재확인(R1).
+   Exp-188의 diar-flip 유발 Case B와는 다른 원인(순수 침묵-길이 안전망이 진짜 긴 낭독 pause에
+   반응)으로, 이번 Stage 범위 밖. Exp-185가 "kor1 미해소로 남음"이라 flag했던 잔존 리스크와 동일
+   계열 — 후속 세션에서 SILENCE_HARD_SECS 값 재검토 또는 grammar-conditional 판정 강화 필요.
+2. **재디코딩 중복삽입 아티팩트**(R5 분석에서 재확인) — Exp-188 diar 노이즈의 또 다른 다운스트림
+   증상으로, 이번 Stage 범위 밖. `new_speaker()`의 `refresh_segment(complete=False, keep_secs=...)`가
+   diar flip-flop 버스트 중 겹치는 오디오를 반복 재디코딩하며 발생 — "박진." 환각과 같은 계열일
+   개연성(§위 분석). 후속 세션에서 diar 세그먼트 신뢰도 전반 재설계 시 함께 다룰 것을 권고.
+3. **`_EAGER_LANG_COOLDOWN_SECS=1.5`는 잠정값** — kor1 실측(diar flip-flop 간격 0.5~1s대) 기반
+   최소 방어선. 추가 스윕(1.0/2.0 등)으로 정밀화 여지 있으나 이번 측정에서 무회귀 확인된 값
+   그대로 채택.
+4. **diar flip-flop 버스트의 근본 억제**(`new_speaker()` 호출 자체를 줄이는 것)는 이번 Stage
+   범위 밖으로 남겨둠 — Exp-188의 `MIN_SPEAKER_ATTRIBUTION_SECS`가 텍스트 정렬 단계에서, 이번
+   Exp-189의 쿨다운이 언어감지 단계에서 각각 증상을 완화했으나, backend.py `new_speaker()`
+   호출 자체(diar 이벤트 수신 즉시 실행)의 상위 게이팅은 미해결.
+5. **확정측정 3회 모두 diar 버스트(NewSpeaker>0) 미재현** — kor1 target 확정측정에서는 우연히
+   diar 노이즈 버스트가 발생하지 않아(R1-R3 전부 NewSpeaker=0), 쿨다운이 실제로 개입한 사례는
+   이 세션의 별도 스크리닝(N=5 사전측정, R5 58회 NewSpeaker·쿨다운 스킵 37회·en오탐 0건)에서만
+   확인됐다. "짝지음 A/B 0-firing 노이즈 대조" 원칙상 확정측정 자체의 0-firing은 이번 수정의
+   무해성(무회귀)을 뒷받침하는 근거이며, 효과 입증은 스크리닝 단계의 버스트 재현 결과로 이미
+   확보돼 있다.
+
+**이것으로 3-Stage 순차개선 루프(Stage 1 화자전환 트리거 손실 → Stage 2 kor1 Case B → Stage 3
+언어오검출)가 종료됨.** 최종 통합 보고서는 3개 브랜치(`exp/speaker-change-trigger-loss`,
+`exp/kor1-caseb-fix`, `exp/kor1-lang-misdetect`)의 결과를 종합해야 한다.
+
+**JSON**: `.omc/benchmarks/eval_20260718_2201_kor1_langmisdetect.json`(수정전 N=5, 병합 전) ·
+`eval_20260718_2233_kor1_postfix.json`(수정후 N=5, 병합 전) ·
+`eval_20260718_2248_auto_screening_postfix.json`(auto 표준세트 N=1, 병합 전) ·
+`eval_20260718_2257_kor23_postfix_check.json`(kor2/kor3 N=1, 병합 전) ·
+`eval_20260719_1218_kor1_confirm_N3.json`(kor1 확정 N=3, **병합 후**) ·
+`eval_20260719_1228_auto_confirm_N3_postmerge.json`(auto 표준세트 확정 N=3, 병합 후) ·
+`eval_20260719_1253_ko23_confirm_N3_postmerge.json`(ko 세트 확정 N=3, 병합 후) ·
+`eval_20260719_1311_ytn1_heldout_postmerge.json`·`eval_20260719_1314_eng1_heldout_postmerge.json`
+(held-out 단회, 병합 후) ·
+**브랜치**: `exp/kor1-lang-misdetect`(`exp/kor1-caseb-fix@8ea32ef`에서 분기, master 병합 `2090592` 반영,
+커밋 완료 — master 미머지·미푸시)
