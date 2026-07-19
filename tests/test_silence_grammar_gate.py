@@ -465,3 +465,46 @@ def test_gate_reuses_is_sentence_final_ko_not_a_new_dictionary():
     assert is_sentence_final_ko('올렸') is False
     assert should_split_after_silence('드렸습니다', None) == is_sentence_final_ko('드렸습니다')
     assert should_split_after_silence('올렸', '습니다') == is_sentence_final_ko('올렸')
+
+
+# ─── 15. Case B(Exp-188) — 짧은 세그먼트 화자 오귀속(diarization 노이즈)이
+#          문법-미종결 단어를 화자불일치로 강제분할하지 않아야 한다 ───────────
+#
+# kor1(단일화자 낭독) 실측(Exp-186/188, --trace-tokens N=3 R3)에서 Sortformer가
+# "강"(← "소모 강요"의 "강요"가 쪼개진 자리) 같은 아주 짧은 텍스트 세그먼트에만
+# 순간적으로 다른 화자를 귀속하는 노이즈를 관찰했다 — 서버 로그:
+#   [SilenceGate] start=57.41 end=57.89 d_eff=0.48 last_word='강' next_word='요'
+#     speakers=(1, 1) ... decision=merge path=merge   (초기 tick, 정상)
+#   [SilenceGate] start=57.41 end=57.89 d_eff=0.48 last_word='강' next_word='고'
+#     speakers=(1, 2) ... decision=split path=split_grammar   (이후 tick, 오귀속)
+# 같은 침묵 위치에서 diarization 재계산(무상태)만으로 화자값이 (1,1)→(1,2)로
+# 플립되고, `_gate_decide`의 화자불일치 분기가 문법 판정보다 우선해 무조건
+# 분할시켜 "강"이 "요"와 분리 확정된다(정답 "강요"가 "강."⏎"요 등..."로 절단).
+# 이 테스트는 그 정확한 메커니즘을 TokensAlignment 단위에서 재현한다.
+
+def test_diar_short_segment_speaker_flip_does_not_force_case_b_split():
+    """아주 짧은 텍스트 세그먼트('강')만 순간적으로 다른 화자로 오귀속돼도
+    문법상 미종결 단어 분리(Case B)를 강제하면 안 된다 — 직전 확정 화자를 승계."""
+    proc = make_processor(diarization=True)
+    # '강'(0.8~1.1, 길이 0.3s)만 감싸는 diar 세그먼트가 순간적으로 다른 화자(1)로
+    # 잘못 귀속됨 — 앞뒤 '능력과'/'요'는 모두 화자 0으로 정상 귀속.
+    proc.state.new_diarization = [
+        SpeakerSegment(start=0.0, end=0.7, speaker=0),
+        SpeakerSegment(start=0.7, end=1.1, speaker=1),   # 노이즈: '강' 구간만 다른 화자
+        SpeakerSegment(start=1.1, end=3.0, speaker=0),
+    ]
+    segments, _, _ = feed(
+        proc,
+        [tok(0.0, 0.4, '능력과'), sil(0.4, 0.7),
+         tok(0.8, 1.1, '강'), sil(1.1, 1.4),
+         tok(1.5, 1.9, '요')],
+        diarization=True, audio_time=1.9,
+    )
+    txts = text_segs(segments)
+    joined = joined_text(segments)
+    assert '강요' in joined.replace(' ', ''), (
+        f"Case B 재현 — 짧은 세그먼트 화자오귀속으로 '강'/'요'가 분리됨: {[s.text for s in txts]}"
+    )
+    assert not any(s.text.strip() == '강' for s in txts), (
+        f"'강'이 단독으로 확정됨(단어 중간 분절): {[s.text for s in txts]}"
+    )

@@ -126,6 +126,38 @@
   감지가 `_apply_detected_language`를 통해 추가로 `_trim_segments_to_recent`를 호출할 수 있어 그 *이후*에
   계산). 이 재계산이 `refresh_segment` 자체의 `cumulative_time_offset` 승계 메커니즘을 우회하므로, 이중
   가산을 막기 위해 재계산 직후 `cumulative_time_offset`을 명시적으로 0.0 리셋한다.
+- **침묵을 사이에 둔 화자전환의 라벨 손실 수정(Exp-187)**: 화자전환이 **침묵 없이 인접**한 경우만
+  `tokens_alignment.py`의 `elif segment.speaker != closing.speaker:` 분기(병합 루프 §2)가 잡아
+  `speaker_change`를 붙였다. 그러나 실제 화자전환은 대부분 짧은 침묵을 사이에 두고 일어나는데, 이
+  경우 병합 루프가 먼저 도달하는 `elif segment.is_silence():` 분기가 화자 비교 없이 무조건
+  `silence`/`punctuation`으로 라벨링해 화자전환 정보가 소실됐다(Exp-186이 관찰한 "diar `[NewSpeaker]`
+  회차당 수십 건 vs `speaker_change` 트리거 1~4건"의 구조적 원인). 한편 `_apply_silence_grammar_gate`
+  → `_gate_decide`는 **이미** `diar_mode and next_seg.speaker != closing.speaker`일 때 문법 판정을
+  건너뛰고 강제 분할(`split_grammar`)하고 있었으나, 그 판정 결과가 TriggerAssign 단계로 전달되지
+  않았다. 수정: `_apply_silence_grammar_gate`가 분할 결정 시 화자 불일치 여부를 `PuncSegment.
+  speaker_boundary`(신규 필드, 내부 전용)에 스탬프하고, TriggerAssign의 `elif segment.is_silence():`
+  분기가 `gate_pending` 다음으로 이 플래그를 확인해 `speaker_change`를 우선 배정한다(§3.4 우선순위
+  language_switch > speaker_change > punctuation > silence를 코드가 실제로 반영하도록 정정). 순수
+  라벨링 수정이라 **세그먼트 병합/분할 자체(경계 개수·위치)·WER·F1은 불변** — `finalize_trigger` 값과
+  진단 로그(`branch=silence_speaker_boundary`)만 바뀐다. 테스트: `tests/test_finalize_trigger.py`
+  `test_diar_speaker_change_across_silence_gets_speaker_change_trigger`(회귀 방지용
+  `test_diar_same_speaker_across_silence_still_gets_silence_trigger`도 추가).
+- **짧은 세그먼트 화자 오귀속(노이즈) 방지 — Case B 수정(Exp-188)**: kor1(단일화자 낭독) 실측에서
+  Sortformer가 아주 짧은 텍스트 세그먼트(예 "강" — "소모 강요"의 "강요"가 잘린 자리)에만 순간적으로
+  다른 화자를 귀속하는 것을 확인했다(`[SilenceGate]` 로그가 같은 침묵 위치에서 재계산 tick마다
+  `speakers=(1,1)`→`(1,2)`로 플립 — diar 무상태 재계산 특성상 diarization 데이터가 더 들어올수록
+  달라짐). `_gate_decide`의 화자불일치 분기(`diar_mode and next_seg.speaker != closing.speaker`)는
+  이 노이즈를 진짜 화자전환과 구분하지 못해 문법상 미종결 단어("강")를 무조건 분할해 Case B를
+  만들었다(§3.5 hard-fail). 수정: `get_lines_diarization()`의 화자 귀속 루프가 max-overlap **승자
+  diar 세그먼트 자체의 길이**(`MIN_SPEAKER_ATTRIBUTION_SECS = 0.5s`, `tokens_alignment.py`)를 함께
+  본다 — `concatenate_diar_segments()`가 동일화자 연속 조각만 병합하므로, 진짜 화자전환은 보통 여러
+  조각에 걸쳐 이 문턱보다 길게 남는 반면 순간적 오분류(blip)는 앞뒤 동일화자 조각 사이에 낀 짧은
+  조각 하나로 고립된다. 승자 diar 세그먼트가 이 문턱보다 짧고 직전 확정 화자와 다르면, 그 귀속을
+  신뢰하지 않고 **직전 확정 화자를 승계**한다(ASR 텍스트 세그먼트 자체의 길이가 아니라 diar
+  세그먼트 길이를 기준으로 삼은 이유: 정상적인 짧은 발화/단어는 흔해 텍스트 길이만으로는 노이즈와
+  구분 불가 — 회귀 테스트 `test_diar_speaker_change_blocks_merge`가 이 구분을 검증). 순수 화자
+  귀속 신뢰도 게이팅이라 정상적인(충분히 긴) 화자전환 로직·우선순위(§3.4)는 불변. 테스트:
+  `tests/test_silence_grammar_gate.py::test_diar_short_segment_speaker_flip_does_not_force_case_b_split`.
 
 ### 3.4 `punctuation` — 라벨 의미 (두 경로)
 
@@ -137,6 +169,9 @@
   (`timed_objects.py:4,28-30`).
 - **우선순위**(동시 발생 시): `language_switch` > `speaker_change` > `punctuation`(온점 형태소) > `silence`
   — diar 라벨 분기 `tokens_alignment.py:320-328`. 화자가 동시에 바뀌면 `speaker_change`가 온점보다 우선.
+  **(Exp-187 이전엔 화자전환이 침묵을 사이에 두고 일어나면 이 우선순위가 지켜지지 않고 `silence`/
+  `punctuation`으로 라벨이 밀렸다 — §3.3 "침묵을 사이에 둔 화자전환의 라벨 손실 수정" 참조. 현재는
+  `speaker_boundary` 플래그로 정정돼 문서상 우선순위와 코드가 일치한다.)**
 
 ### 3.5 `punctuation`(온점 형태소 종결) — 독립 문장 경계 (Exp-170~)
 
@@ -220,6 +255,7 @@ Whisper가 찍는 마침표(`.`/`。`)를 문장 분할 신호로 쓰되, **진�
 | 스크립트-앵커 재감지 창(Exp-175~, **잠정**) | `2.0`s·p≥`0.90` | `backend.py:187-188` | 트리거 시 `detect_current_language` 창·확신 문턱 |
 | `_NEW_SPEAKER_KEEP_MARGIN`(Exp-171~) | `0.3`s | `backend.py:48` | 화자전환 경계-앵커 유지 여유(damage B 수정) |
 | `_NEW_SPEAKER_MAX_KEEP`(Exp-171~) | `5.0`s | `backend.py:49` | 화자전환 유지 오디오 상한(과거 keep=4.5 환각 전례 반영) |
+| `MIN_SPEAKER_ATTRIBUTION_SECS`(Exp-188) | `0.5`s | `tokens_alignment.py` | 승자 diar 세그먼트가 이보다 짧고 직전 화자와 다르면 귀속 불신 → 직전 화자 승계(짧은 세그먼트 화자오귀속 노이즈 방지, §3.3) |
 
 디코더 파라미터(간접 영향: 어떤 텍스트가 나오는지에 영향, 경계는 §3의 3신호가 전담) —
 `frame_threshold`, `beams`, `logprob_threshold`, `compression_ratio_threshold` 등은

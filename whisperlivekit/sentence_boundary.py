@@ -5,7 +5,11 @@ Whisper가 찍는 마침표를 문장 분할 신호로 쓰되, '진짜 종결'�
 순수 함수 — 모델·상태 무의존. 로직/목록 변경 시
 docs/SENTENCE_FINALIZATION_LOGIC.md §3·§5를 함께 갱신한다(§7 규약).
 """
+import logging
+
 from whisperlivekit.timed_objects import PUNCTUATION_MARKS
+
+logger = logging.getLogger(__name__)
 
 # 한국어 종결어미(고정밀 Tier 1). bare 단음절(군/네/다/까)은 명사·조사 충돌로 제외한다.
 KO_FINAL_SUFFIXES = (
@@ -85,15 +89,40 @@ def should_split_after_silence(closing_text: str, next_text=None):
     """
     word = _last_word(closing_text)
     if not word:
+        logger.debug(
+            "[SentenceBoundary] func=should_split_after_silence rule=empty_word verdict=True "
+            "closing_tail=%r next_text=%r",
+            closing_text[-40:], next_text,
+        )
         return True  # 판정 근거 없음 — 기존(무조건 분할) 동작을 안전하게 보존
     if _has_hangul(word):
-        return is_sentence_final_ko(word)
+        verdict = is_sentence_final_ko(word)
+        logger.debug(
+            "[SentenceBoundary] func=should_split_after_silence rule=ko_final_suffix verdict=%s word=%r",
+            verdict, word,
+        )
+        return verdict
     if next_text is None:
+        logger.debug(
+            "[SentenceBoundary] func=should_split_after_silence rule=en_next_text_none verdict=None word=%r",
+            word,
+        )
         return None
     nxt = next_text.strip()
     if not nxt:
+        logger.debug(
+            "[SentenceBoundary] func=should_split_after_silence rule=en_next_text_blank verdict=None "
+            "word=%r next_text=%r",
+            word, next_text,
+        )
         return None
-    return nxt[0].isupper()
+    verdict = nxt[0].isupper()
+    logger.debug(
+        "[SentenceBoundary] func=should_split_after_silence rule=en_next_capitalized verdict=%s "
+        "word=%r next_text=%r",
+        verdict, word, next_text,
+    )
+    return verdict
 
 
 def is_genuine_sentence_end(closing_text: str, next_text=None) -> bool:
@@ -108,16 +137,42 @@ def is_genuine_sentence_end(closing_text: str, next_text=None) -> bool:
     while j > 0 and s[j - 1] in PUNCTUATION_MARKS:
         j -= 1
     if j > 0 and s[j - 1].isdigit():
+        logger.debug(
+            "[SentenceBoundary] func=is_genuine_sentence_end rule=digit_guard verdict=False closing_tail=%r",
+            s[-40:],
+        )
         return False
     word = _last_word(closing_text)
     if not word:
+        logger.debug(
+            "[SentenceBoundary] func=is_genuine_sentence_end rule=empty_word verdict=False closing_tail=%r",
+            s[-40:],
+        )
         return False
     if _has_hangul(word):
-        return is_sentence_final_ko(word)
+        verdict = is_sentence_final_ko(word)
+        logger.debug(
+            "[SentenceBoundary] func=is_genuine_sentence_end rule=ko_final_suffix verdict=%s word=%r",
+            verdict, word,
+        )
+        return verdict
     # 영어: 약어 아니고, 다음 어절이 대문자로 시작할 때만(발화끝/침묵은 호출부 (a)/(b)가 처리).
     if is_abbreviation_en(word):
+        logger.debug(
+            "[SentenceBoundary] func=is_genuine_sentence_end rule=en_abbreviation verdict=False word=%r",
+            word,
+        )
         return False
     if next_text is None:
+        logger.debug(
+            "[SentenceBoundary] func=is_genuine_sentence_end rule=en_next_text_none verdict=False word=%r",
+            word,
+        )
         return False
     nxt = next_text.strip()
-    return bool(nxt) and nxt[0].isupper()
+    verdict = bool(nxt) and nxt[0].isupper()
+    logger.debug(
+        "[SentenceBoundary] func=is_genuine_sentence_end rule=en_next_capitalized verdict=%s word=%r next_text=%r",
+        verdict, word, next_text,
+    )
+    return verdict

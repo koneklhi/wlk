@@ -132,10 +132,16 @@ def filter_segments(segments: list) -> list:
             logger.warning("[CJKDrop] CJK/kana 포함 세그먼트 드롭: %.200s", text)
             continue
 
+        pre_hallucination_text = text
         for bad in _HALLUCINATIONS:
             if bad in text:
                 text = text.replace(bad, "")
         text = re.sub(r"\s+", " ", text).strip()
+        if text != pre_hallucination_text:
+            logger.debug(
+                "[HallucinationDrop] 원문=%.200s 치환문=%.200s",
+                pre_hallucination_text, text,
+            )
 
         # 유령/중복 온점 collapse: QG 억제→재디코딩이 재귀속 자리에 만든 중복 "."을 정리한다.
         # ". ." ".." → ".", 선두 단독 온점 스트립(". 자신의" → "자신의"). 문장 끝 정상 온점
@@ -149,7 +155,13 @@ def filter_segments(segments: list) -> list:
             continue
 
         if pattern:
-            text = pattern.sub(lambda m: replacements[m.group(0)], text)
+            corrected = pattern.sub(lambda m: replacements[m.group(0)], text)
+            if corrected != text:
+                logger.debug(
+                    "[WordCorrection] 원문=%.200s 치환문=%.200s",
+                    text, corrected,
+                )
+            text = corrected
 
         seg.text = text
         result.append(seg)

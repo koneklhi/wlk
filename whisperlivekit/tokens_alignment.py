@@ -70,6 +70,16 @@ assert SILENCE_HARD_SECS <= 2.0, "SILENCE_HARD_SECS는 backend.py long-silence �
 # 앵커·용도가 달라 별도 상수로 둔다(§확정 유예 이원화, 게이트 대상 침묵은 이 캡만 적용받는다).
 PENDING_RESOLVE_CAP: float = 2.0
 
+# MIN_SPEAKER_ATTRIBUTION_SECS(Exp-188): 화자 귀속을 신뢰하는 최소 텍스트 세그먼트 길이(초).
+# diarization 백엔드(Sortformer 등)는 아주 짧은 세그먼트(한 음절/한 단어)에서 화자 임베딩이
+# 불안정해 순간적으로 오귀속하는 일반적 한계가 있다(diarization 문헌 공통 현상 — 특정
+# 언어·데이터 특화 아님). 이 문턱보다 짧은 세그먼트가 직전 확정 화자와 다른 화자로
+# max-overlap 판정되면, 그 판정을 신뢰하지 않고 직전 화자를 승계한다 — 노이즈성 화자
+# 플립이 문법-조건부 게이트(_gate_decide)의 화자불일치 강제분할(Case B)을 유발하는 것을
+# 방지한다(kor1 실측 "강"⏎"요" 절단, Exp-186/188 규명). 정상적인 화자전환(다화자 파일의
+# 실제 화자교대)은 대개 이 문턱보다 긴 발화이므로 영향받지 않는다.
+MIN_SPEAKER_ATTRIBUTION_SECS: float = 0.5
+
 
 def _is_opposite_script(text: str, prev_lang: Optional[str]) -> bool:
     """prev_lang의 정상 스크립트와 반대 스크립트로만 구성된 텍스트인지 판정.
@@ -492,6 +502,19 @@ class TokensAlignment:
                 prev_text.gate_pending = True
                 result.append(merged_silence)
             else:
+                # Exp-187: 이 분할이 (문법상 미종결이어도) 화자전환 때문에 강제된 것인지
+                # 표시한다 — _gate_decide의 speaker-mismatch 분기(split_grammar)와 동일 조건.
+                # TriggerAssign이 이 침묵을 무조건 silence/punctuation으로 라벨링하던 것을
+                # 정정해 speaker_change 우선순위(docs/SENTENCE_FINALIZATION_LOGIC.md §3.4)를
+                # 실제로 반영하기 위함.
+                if (
+                    self.diarization
+                    and next_seg is not None
+                    and getattr(next_seg, "speaker", -1) != -1
+                    and getattr(prev_text, "speaker", -1) != -1
+                    and next_seg.speaker != prev_text.speaker
+                ):
+                    merged_silence.speaker_boundary = True
                 result.append(merged_silence)
             i = span_end_idx + 1
         return result
@@ -560,6 +583,7 @@ class TokensAlignment:
         diarization_buffer = ''
         punctuation_segments = self.compute_punctuations_segments()
         diarization_segments = self.concatenate_diar_segments()
+        prev_resolved_speaker: Optional[int] = None
         for punctuation_segment in punctuation_segments:
             if not punctuation_segment.is_silence():
                 if diarization_segments and punctuation_segment.start >= diarization_segments[-1].end:
@@ -567,12 +591,41 @@ class TokensAlignment:
                 else:
                     max_overlap = 0.0
                     max_overlap_speaker = 1
+                    max_overlap_segment = None
                     for diarization_segment in diarization_segments:
                         intersec = self.intersection_duration(punctuation_segment, diarization_segment)
                         if intersec > max_overlap:
                             max_overlap = intersec
                             max_overlap_speaker = diarization_segment.speaker + 1
-                    punctuation_segment.speaker = max_overlap_speaker
+                            max_overlap_segment = diarization_segment
+                    # Exp-188: 승자 diar 세그먼트 자체의 길이로 귀속 신뢰도를 판단한다(ASR
+                    # 텍스트 세그먼트 길이가 아님 — 정상적인 짧은 발화/단어도 흔해 그 길이로는
+                    # 노이즈와 구분 불가). concatenate_diar_segments()가 동일화자 연속 조각만
+                    # 병합하므로, 진짜 화자전환은 보통 여러 조각에 걸쳐 이 문턱보다 길게
+                    # 남는 반면, Sortformer의 순간적 오분류(blip)는 앞뒤 동일화자 조각 사이에
+                    # 낀 짧은 조각 하나로 고립된다(kor1 실측 "강"⏎"요" 절단, Exp-186/188).
+                    diar_seg_dur = (
+                        max_overlap_segment.end - max_overlap_segment.start
+                        if max_overlap_segment is not None
+                        and max_overlap_segment.start is not None and max_overlap_segment.end is not None
+                        else None
+                    )
+                    if (
+                        prev_resolved_speaker is not None
+                        and max_overlap_speaker != prev_resolved_speaker
+                        and diar_seg_dur is not None
+                        and diar_seg_dur < MIN_SPEAKER_ATTRIBUTION_SECS
+                    ):
+                        # 짧게 고립된 diar 세그먼트의 화자 귀속 노이즈 — 직전 확정 화자 승계.
+                        logger.debug(
+                            "[SpeakerAttribution] branch=short_segment_override diar_seg_dur=%.2f "
+                            "raw_speaker=%s prev_speaker=%s text=%r",
+                            diar_seg_dur, max_overlap_speaker, prev_resolved_speaker, punctuation_segment.text,
+                        )
+                        punctuation_segment.speaker = prev_resolved_speaker
+                    else:
+                        punctuation_segment.speaker = max_overlap_speaker
+                    prev_resolved_speaker = punctuation_segment.speaker
 
         if self.gate_enabled:
             # 화자 배정이 끝난 뒤에 게이트를 적용 — (a)같은 화자 조건 판정에 실제 화자값이 필요.
@@ -595,17 +648,65 @@ class TokensAlignment:
                     if not closing.is_silence():
                         if getattr(closing, "hard_boundary", False):
                             closing.finalize_trigger = "language_switch"
+                            logger.debug(
+                                "[TriggerAssign] branch=hard_boundary trigger=%s hard_boundary=%s "
+                                "closing_speaker=%s segment_speaker=%s",
+                                closing.finalize_trigger, getattr(closing, "hard_boundary", False),
+                                closing.speaker, segment.speaker,
+                            )
                         elif segment.is_silence():
                             if getattr(closing, "gate_pending", False):
+                                logger.debug(
+                                    "[TriggerAssign] branch=gate_pending trigger=None(보류) is_silence=%s "
+                                    "gate_pending=%s closing_speaker=%s",
+                                    segment.is_silence(), getattr(closing, "gate_pending", False), closing.speaker,
+                                )
                                 pass  # 게이트 보류 — trigger 미설정(하류 확정 억제, §확정 유예 이원화)
+                            elif getattr(segment, "speaker_boundary", False):
+                                # Exp-187: 이 침묵 분할은 화자전환이 강제한 것(_gate_decide
+                                # split_grammar, speaker-mismatch)이다 — silence/punctuation으로
+                                # 흡수하지 않고 speaker_change 우선순위를 반영한다
+                                # (docs/SENTENCE_FINALIZATION_LOGIC.md §3.4: language_switch >
+                                # speaker_change > punctuation > silence).
+                                closing.finalize_trigger = "speaker_change"
+                                logger.debug(
+                                    "[TriggerAssign] branch=silence_speaker_boundary trigger=%s "
+                                    "speaker_boundary=%s closing_speaker=%s",
+                                    closing.finalize_trigger, getattr(segment, "speaker_boundary", False),
+                                    closing.speaker,
+                                )
                             else:
                                 closing.finalize_trigger = "punctuation" if closing.has_punctuation() else "silence"
+                                logger.debug(
+                                    "[TriggerAssign] branch=silence trigger=%s is_silence=%s "
+                                    "has_punctuation=%s closing_speaker=%s",
+                                    closing.finalize_trigger, segment.is_silence(),
+                                    closing.has_punctuation(), closing.speaker,
+                                )
                         elif segment.speaker != closing.speaker:
                             closing.finalize_trigger = "speaker_change"
+                            logger.debug(
+                                "[TriggerAssign] branch=speaker_change trigger=%s closing_speaker=%s "
+                                "segment_speaker=%s punct_boundary=%s",
+                                closing.finalize_trigger, closing.speaker, segment.speaker,
+                                getattr(closing, "punct_boundary", False),
+                            )
                         elif getattr(closing, "punct_boundary", False):
                             closing.finalize_trigger = "punctuation"
+                            logger.debug(
+                                "[TriggerAssign] branch=punct_boundary trigger=%s punct_boundary=%s "
+                                "closing_speaker=%s segment_speaker=%s",
+                                closing.finalize_trigger, getattr(closing, "punct_boundary", False),
+                                closing.speaker, segment.speaker,
+                            )
                         else:
                             closing.finalize_trigger = "speaker_change"
+                            logger.debug(
+                                "[TriggerAssign] branch=else(fallback) trigger=%s closing_speaker=%s "
+                                "segment_speaker=%s punct_boundary=%s",
+                                closing.finalize_trigger, closing.speaker, segment.speaker,
+                                getattr(closing, "punct_boundary", False),
+                            )
                     segments.append(segment)
 
         # 화자 전환이 발생한 세그먼트는 확정 완료 — 마지막 세그먼트(현재 발화 중)는 제외
@@ -670,10 +771,15 @@ class TokensAlignment:
             # 이원화가 깨진다(B 디코드 지연 중 조기 finalized=True → 번역 오발사).
             return
         if last.is_silence() and not prev.is_silence() and prev.text:
-            prev.finalized = flush or (audio_time - last.start) >= FINALIZE_GRACE_SECS
+            elapsed = audio_time - last.start
+            prev.finalized = flush or elapsed >= FINALIZE_GRACE_SECS
             prev.finalize_trigger = (
                 ("punctuation" if prev.has_punctuation() else "silence")
                 if prev.finalized else None
+            )
+            logger.debug(
+                "[FinalizeGrace] finalized=%s flush=%s elapsed=%.3f grace_secs=%.3f trigger=%s",
+                prev.finalized, flush, elapsed, FINALIZE_GRACE_SECS, prev.finalize_trigger,
             )
 
     # ─── 비-diar 경로 헬퍼(게이트 decide-late 지원) ──────────────────────────
@@ -685,6 +791,10 @@ class TokensAlignment:
             if seg is not None:
                 seg.finalized = True
                 seg.finalize_trigger = trigger
+                logger.debug(
+                    "[CloseLine] trigger=%s text_preview=%r",
+                    trigger, (seg.text or "")[:40],
+                )
                 self.validated_segments.append(seg)
             self.current_line_tokens = []
 

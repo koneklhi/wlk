@@ -226,6 +226,9 @@ class PuncSegment(Segment):
     hard_boundary: bool = False
     punct_boundary: bool = False   # 형태소 종결 온점 분할 경계(diar 병합 생존용). 내부 전용 — to_dict 미방출.
     gate_pending: bool = False     # silence-grammar-gate 판정 보류 중(B 미도착/미귀속). 내부 전용 — to_dict 미방출.
+    speaker_boundary: bool = False  # 이 침묵 분할이 화자전환으로 강제된 것(Exp-187, _gate_decide의
+    # "diar_mode and next_seg.speaker != closing.speaker" split_grammar 경로)임을 표시 —
+    # TriggerAssign이 silence/punctuation 대신 speaker_change로 라벨링하도록 정정. 내부 전용 — to_dict 미방출.
 
 class SilentSegment(Segment):
     def __init__(self, *args: Any, **kwargs: Any) -> None:

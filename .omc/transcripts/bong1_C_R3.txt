@@ -1,41 +1,39 @@
 파일: test_data\bong1.wav
 경로: C | 회차: R3 | 정답형식: 신형식
-WER: 29.6% | 화자분리F1: 57.1% | 문장분리F1: 8.3%
+WER: 27.2% | 화자분리F1: 68.4% | 문장분리F1: 28.6%
 
 [전사]
-Son, when you read the screenplay for the first time, what did you think? 누가 주인공일까 이런 생각을 제가 제일 많이 했어요. 누가 주인공일까 이런 생각을. The thought that I had the most is who is protagonist. 돌 들고 있는 저 아들놈이 아주 근소한 자유로 저보다 분량이 조금 많은데 자기가 주인공이라고 막 떠들고 지금 돌아다니고 있는데 영화 누가 주인공이 제가 주인공 맞죠? So my son who's holding up the rock over there has a little bit more screen time than I do in the film so he's been going around. Saying that he's the main character main protagonist but you've all seen the film who is the main protagonist? It's him. This man Dismap. So, the rock, what was the. So, the rock, what was the meta, what's the metaphor significance of significance of the rock. It keeps popping up. It's just a tree. 그냥 돌이에요. It's just a rock No I mean, put on good. You don't understand understand everyone here they're going to be like what's the meaning of the rock people will write two thousand word essays on the rock and it's just a. I could. Plus. 아니 그 플라스틱. 아니 저기 말랑말랑한 것도 만들어서 우리가 안전한 소품으로 물론. Of course it was rubbery and soft. It was just the prop when we were shooting the film. Okay. 그 주인공 주인공이 그러잖아요. 메타포리칼하다고 주인공이. 아니구나 참. 주인공은 참. 아틀렘이가. Sorry, I'm sorry, I'm sorry. about metaphorical,. so. 보통은 스쿼트 당신처럼 이렇게 기자나 평론가 분들이 영화를 보고 나서 상징적이다 이렇게 말하는 건데 극중 인물이 지가 지입으로 상징적이다라고 하고 자빠졌는데,. So just give you guys a brief context on why they were laughing, Director Bong was trying to explain a line from The Sun and called him the main character and apologized to Song over here for calling him the main character. But what Director Bong was saying is, you know, you have The Sun, the main, The Sun character say within, this is so metaphorical and usually that's something the reporter or a critic say when discussing the metaphors of the film. But here you have the character announcing it on screen.
+song when you read the screenplay for the first time what did you think? 누가 주인공일까 이런 생각을 제가 제일 많이 했어요. The thought that I had the most is who is the main protagonist. 그래서 저 돌들고 있는 저 아들 놈이 아주 근소한 자유로 저보다 분량이 조금 많은데 자기가 주인공이라고 막 떠들고 지금 돌아다니고 있는데 영화 누가 주인공이 제가 주인공 맞죠? So my son who's holding up the rock over there has a little bit more screen time than I do in the film. So he's been been going going around saying that he's the main character, main protagonist, but you've all seen the film, who is the main protagonist? It's him. This man. So So the rock, what was the-- what's the metaphor? What's significance rock that keeps popping up? 그냥 도리예요. It's just a rock a rock Honey, Potong. You don't to stand. Everyone here to say, everyone here, they're going to be like, what here, they're going to be like, what's the meaning of the rock? People will write 2,000 word essays on the rock and it's just a rock. I go,. I could. plus, sorry,. 말랑말랑한 것도 만들었죠. 우리가 안전한 소품으로 물론. Of course, it was rubbery and soft. It was just a prop when we were shooting the film. Okay for a car. I'm going to say. 주인공이 아니구나 참, 주인공은. Ha ha here. Yeah. Yeah. So. 보통은 스쿼트 당신처럼 기자나 평론가 분들이 영화를 보고나서 상징적이다 이렇게 말하는 지가 지 지가 지입으로 상징적이다라고 하고 자빠졌는데. So just give you guys a brief context on why they were laughing, Director Bong was trying to explain a line from The Sun and called him the main character and apologized to Song over here for calling him the main character. But what Director Bong was saying is, you know, you have The Sun, the main character, say within the film, this is so metaphorical and usually that's something that reporter or a critic say when discussing the metaphors of the film but here you have the character announcing it on screen
 
 [문장별 확정 트리거]
-1. Son, when you read the screenplay for the first time, what did you think?  ⟨punctuation⟩
-2. 누가 주인공일까 이런 생각을 제가 제일 많이 했어요.  ⟨punctuation⟩
-3. 누가 주인공일까 이런 생각을.  ⟨language_switch⟩
-4. The thought that I had the most is who is protagonist.  ⟨silence⟩
-5. 돌 들고 있는 저 아들놈이 아주 근소한 자유로 저보다 분량이 조금 많은데 자기가 주인공이라고 막 떠들고 지금 돌아다니고 있는데 영화 누가 주인공이 제가 주인공 맞죠?  ⟨punctuation⟩
-6. So my son who's holding up the rock over there has a little bit more screen time than I do in the film so he's been going around.  ⟨punctuation⟩
-7. Saying that he's the main character main protagonist but you've all seen the film who is the main protagonist? It's him.  ⟨silence⟩
-8. This man Dismap.  ⟨punctuation⟩
-9. So, the rock, what was the.  ⟨silence⟩
-10. So, the rock, what was the meta, what's the metaphor significance of significance of the rock.  ⟨speaker_change⟩
-11. It keeps popping up. It's just a tree.  ⟨language_switch⟩
-12. 그냥 돌이에요.  ⟨language_switch⟩
-13. It's just a rock No I mean, put on good.  ⟨speaker_change⟩
-14. You don't understand understand everyone here they're going to be like what's the meaning of the rock people will write two thousand word essays on the rock and it's just a.  ⟨silence⟩
-15. I could.  ⟨silence⟩
-16. Plus.  ⟨silence⟩
-17. 아니 그 플라스틱. 아니 저기 말랑말랑한 것도 만들어서 우리가 안전한 소품으로 물론.  ⟨language_switch⟩
-18. Of course it was rubbery and soft.  ⟨punctuation⟩
-19. It was just the prop when we were shooting the film.  ⟨speaker_change⟩
-20. Okay.  ⟨language_switch⟩
-21. 그 주인공 주인공이 그러잖아요.  ⟨punctuation⟩
-22. 메타포리칼하다고 주인공이.  ⟨silence⟩
-23. 아니구나 참. 주인공은 참.  ⟨punctuation⟩
-24. 아틀렘이가.  ⟨silence⟩
-25. Sorry, I'm sorry, I'm sorry. about metaphorical,.  ⟨silence⟩
-26. so.  ⟨speaker_change⟩
-27. 보통은 스쿼트 당신처럼 이렇게 기자나 평론가 분들이 영화를 보고 나서 상징적이다 이렇게 말하는 건데 극중 인물이 지가 지입으로 상징적이다라고 하고 자빠졌는데,.  ⟨language_switch⟩
-28. So just give you guys a brief context on why they were laughing, Director Bong was trying to explain a line from The Sun and called him the main character and apologized to Song over here for calling him the main character.  ⟨punctuation⟩
-29. But what Director Bong was saying is, you know, you have The Sun, the main, The Sun character say within, this is so metaphorical and usually that's something the reporter or a critic say when discussing the metaphors of the film.  ⟨punctuation⟩
-30. But here you have the character announcing it on screen.  ⟨silence⟩
+1. song when you read the screenplay for the first time what did you think?  ⟨punctuation⟩
+2. 누가 주인공일까 이런 생각을 제가 제일 많이 했어요.  ⟨speaker_change⟩
+3. The thought that I had the most is who is the main protagonist.  ⟨speaker_change⟩
+4. 그래서 저 돌들고 있는 저 아들 놈이 아주 근소한 자유로 저보다 분량이 조금 많은데 자기가 주인공이라고 막 떠들고 지금 돌아다니고 있는데 영화 누가 주인공이 제가 주인공 맞죠?  ⟨punctuation⟩
+5. So my son who's holding up the rock over there has a little bit more screen time than I do in the film.  ⟨punctuation⟩
+6. So he's been been going going around saying that he's the main character, main protagonist, but you've all seen the film, who is the main protagonist? It's him.  ⟨silence⟩
+7. This man.  ⟨speaker_change⟩
+8. So So the rock, what was the-- what's the metaphor? What's significance rock that keeps popping up?  ⟨punctuation⟩
+9. 그냥 도리예요.  ⟨language_switch⟩
+10. It's just a rock a rock Honey, Potong.  ⟨punctuation⟩
+11. You don't to stand.  ⟨speaker_change⟩
+12. Everyone here to say, everyone here, they're going to be like, what here, they're going to be like, what's the meaning of the rock? People will write 2,000 word essays on the rock and it's just a rock. I go,.  ⟨silence⟩
+13. I could.  ⟨speaker_change⟩
+14. plus, sorry,.  ⟨language_switch⟩
+15. 말랑말랑한 것도 만들었죠.  ⟨punctuation⟩
+16. 우리가 안전한 소품으로 물론.  ⟨language_switch⟩
+17. Of course, it was rubbery and soft.  ⟨punctuation⟩
+18. It was just a prop when we were shooting the film.  ⟨speaker_change⟩
+19. Okay for a car.  ⟨punctuation⟩
+20. I'm going to say.  ⟨silence⟩
+21. 주인공이 아니구나 참, 주인공은.  ⟨language_switch⟩
+22. Ha ha here.  ⟨punctuation⟩
+23. Yeah.  ⟨punctuation⟩
+24. Yeah.  ⟨punctuation⟩
+25. So.  ⟨silence⟩
+26. 보통은 스쿼트 당신처럼 기자나 평론가 분들이 영화를 보고나서 상징적이다 이렇게 말하는 지가 지 지가 지입으로 상징적이다라고 하고 자빠졌는데.  ⟨speaker_change⟩
+27. So just give you guys a brief context on why they were laughing, Director Bong was trying to explain a line from The Sun and called him the main character and apologized to Song over here for calling him the main character.  ⟨punctuation⟩
+28. But what Director Bong was saying is, you know, you have The Sun, the main character, say within the film, this is so metaphorical and usually that's something that reporter or a critic say when discussing the metaphors of the film but here you have the character announcing it on screen  ⟨-⟩
 
 [정답]
 Song, when you read the screenplay for the first time, what did you think? 누가 주인공일까 이런 생각을 제가 제일 많이 했어요. The thought that I had the most is who is the main protagonist. 그래서 저 돌 들고 있는 저 아들놈이 아주 근소한 차이로 저보다 분량이 조금 더 많은데 자기가 주인공이라고 막 떠들고 지금 돌아다니고 있는데 영화 보셔서 아시겠지만 누가 주인공 제가 주인공 맞죠? So my son who is holding up the rock over there has a little bit more screen time than I do in the film. So he's been going around saying that he's the main character, main protagonist. But you all seen the film. Who is the main protagonist? it's him. This man. So, the rock what was the What's the metaphor? What's the significance of the rock that keeps popping up? 그냥 돌이에요. It's just a rock. 보통 그. You don't understand. Everyone here, they're going to be like, what's the meaning of the rock? People who write 2,000 word essays on the rock and it's just a rock. 아니 그 플라스틱 말랑말랑한 것도 만들었죠 우리가 안전한 소품으로 물론. Of course it was rubbery and soft. It was just a prop when we were shooting the film. 주인공이 그러잖아요. 메타포리칼하다고. 주인공이 저기 주인공이 아니구나 참. 아틀렘이가? 죄송합니다 형님. 들고서 메타포리칼하다고 하잖아요. 그래서 그 보통은 이제 스쿼트 당신처럼 이제 기자나 평론가분들이 영화를 보고나서 상징적이다 이렇게 말하는 건데 극 중 인물이 지가 지 입으로 상징적이다 라고 하고 자빠졌는데. So i'll give you guys the brief context where they were laughing. Director Bong tried to explain the line from the son called him the main character and apologized Song over here for calling him the main character. But the director Bong was saying, as you know, you have the son the main son character say within the film this is so metaphorical and usually that's something that reporters or critics say when discussing the metaphor of the film but here you have the caracter announcing it on screen.
