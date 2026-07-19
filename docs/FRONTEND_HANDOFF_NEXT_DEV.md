@@ -87,12 +87,15 @@
 - (참고: 만약 "같은 연결에서 일시정지/재개" UX를 강하게 원하면 백엔드팀과 협의 가능하나, **재연결 방식이 더
   단순하고 안전**하다.)
 
-### 4-2. [높음] requestAnimationFrame null 참조 (파형 정리 버그)
+### 4-2. [높음] requestAnimationFrame 콜백의 null 참조
 - **증상**: 중지 클릭 시 콘솔 `Uncaught TypeError: Cannot read properties of null (reading 'current')`
-  (requestAnimationFrame 콜백에서 발생).
-- **원인**: 파형(canvas) 그리기 rAF 루프가 정리(cleanup)될 때 canvas/analyser ref가 이미 `null`.
-- **요구사항**: 중지/언마운트 시 `cancelAnimationFrame`으로 루프를 **확실히 종료**하고, `draw` 내부에서
-  ref·analyser가 null이면 즉시 중단하는 가드 추가. `analyser === null`이면 새 프레임 예약 금지.
+  (requestAnimationFrame 콜백에서 발생, 비동기 스택).
+- **원인**: `requestAnimationFrame`으로 도는 루프가 정리(cleanup)된 뒤에도 실행되어 **이미 `null`이 된 ref를
+  읽는다**. **정확한 발생 위치는 배포 dist 소스로 확인 필요**하다(§7 참조 — 백엔드팀이 받은 소스는 실제 배포
+  dist와 달라 rAF 사용처를 특정하지 못했다). 참고: **현재 배포 UI에는 주파수/파형 시각화가 없다**(있다면 그
+  그리기 루프를 의심하겠지만, 배포본엔 없으므로 rAF를 쓰는 다른 UI 로직을 소스에서 확인해야 한다).
+- **요구사항**: 해당 rAF 루프를 중지/언마운트 시 `cancelAnimationFrame`으로 **확실히 종료**하고, 콜백 안에서
+  읽는 ref가 null이면 즉시 중단하는 가드를 추가한다. 녹음이 끝나면(상태 전이 시) 새 프레임을 예약하지 않게 한다.
 
 ### 4-3. [높음] 관리자 페이지 이동 버튼 URL 조립 버그
 - **증상**: 관리자 메뉴 이동 클릭 시 URL이
