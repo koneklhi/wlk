@@ -158,6 +158,7 @@
   구분 불가 — 회귀 테스트 `test_diar_speaker_change_blocks_merge`가 이 구분을 검증). 순수 화자
   귀속 신뢰도 게이팅이라 정상적인(충분히 긴) 화자전환 로직·우선순위(§3.4)는 불변. 테스트:
   `tests/test_silence_grammar_gate.py::test_diar_short_segment_speaker_flip_does_not_force_case_b_split`.
+- **긴 침묵 안전망의 단어 중간 분절 방지 — Case B 수정(Exp-190)**: `_gate_decide`(및 비-diar `_gate_intake_nondiar_silence`)의 `split_hard` 분기는 `d_eff >= SILENCE_HARD_SECS(1.2s)`이면 문법·화자·언어 판정을 **모두 건너뛰고 무조건 분할**하는 안전망이었다(diarization/문법 판정이 영영 pending에 머무는 것 방지). 그러나 kor1(낭독체) 실측에서 문장 중간의 긴 호흡 pause(예 "2040년" 뒤 3.59s)에도 그대로 발동해 미종결 어절을 단어 중간에서 강제분할하는 Case B("2040년 국방."⏎"환경을…")를 만들었다(`[SilenceGate] d_eff=3.59 last_word='2040년' speakers=(1,1) langs=('ko','ko') path=split_hard`). 임계값 상향(방향 A)은 실측 3.59s가 상한 2.0s(backend long-silence 리셋과의 불변식)를 넘어 불가. 수정(방향 B): `split_hard` 분기에 **문법-조건부 가드** 추가 — `should_split_after_silence(closing, next)`가 명백한 미종결(`False`)을 반환하면 하드 분할을 건너뛰고 아래 memo/pending/문법·화자·언어 경로로 폴백한다(§3.1). 종결어미(`True`)·영어 다음어절 미도착(`None`)은 기존대로 즉시 분할해 안전망을 유지하고, 무한 pending 방지는 `PENDING_RESOLVE_CAP(2.0s)`이 담당한다. 미종결 어절이 같은 화자·같은 언어면 병합(→ "국방환경을 고려한…" 보존), 화자/언어가 다르면 폴백 경로의 기존 분기가 여전히 분할한다. **분할을 새로 만들지 않고 제거만 하므로 신규 Case B를 유발할 수 없다.** 테스트: `tests/test_silence_grammar_gate.py::test_diar_hard_secs_does_not_split_mid_word_case_b`(RED→GREEN) + `test_diar_hard_secs_splits_when_sentence_final`(안전망 미무력화 회귀가드). **주의**: kor1 "소모 강요" 지점의 Case B는 이 split_hard가 아니라 화자오귀속(diar-flip) 유발 `split_grammar`(Exp-188 소관)로 이 수정 범위 밖.
 
 ### 3.4 `punctuation` — 라벨 의미 (두 경로)
 
@@ -256,6 +257,8 @@ Whisper가 찍는 마침표(`.`/`。`)를 문장 분할 신호로 쓰되, **진�
 | `_NEW_SPEAKER_KEEP_MARGIN`(Exp-171~) | `0.3`s | `backend.py:48` | 화자전환 경계-앵커 유지 여유(damage B 수정) |
 | `_NEW_SPEAKER_MAX_KEEP`(Exp-171~) | `5.0`s | `backend.py:49` | 화자전환 유지 오디오 상한(과거 keep=4.5 환각 전례 반영) |
 | `MIN_SPEAKER_ATTRIBUTION_SECS`(Exp-188) | `0.5`s | `tokens_alignment.py` | 승자 diar 세그먼트가 이보다 짧고 직전 화자와 다르면 귀속 불신 → 직전 화자 승계(짧은 세그먼트 화자오귀속 노이즈 방지, §3.3) |
+| `SILENCE_HARD_SECS`(Exp-176~; Exp-185→1.2; Exp-190 문법-조건부화) | `1.2`s (≤2.0 불변식) | `tokens_alignment.py` | 침묵 안전망 문턱 — d_eff≥이 값이면 하드 분할. Exp-190부터 `should_split_after_silence`가 미종결(False) 판정 시 이 분기를 건너뛰고 pending/문법 경로 폴백(단어 중간 분절 방지) |
+| `PENDING_RESOLVE_CAP`(Exp-176~) | `2.0`s | `tokens_alignment.py` | 게이트가 B 도착을 기다리는 최대 시간(silence.end 기준) — 초과 시 문법 무관 분할확정(무한 pending 방지). Exp-190 이후 미종결 어절의 하드 분할 유예를 이 캡이 최종 보증 |
 
 디코더 파라미터(간접 영향: 어떤 텍스트가 나오는지에 영향, 경계는 §3의 3신호가 전담) —
 `frame_threshold`, `beams`, `logprob_threshold`, `compression_ratio_threshold` 등은
