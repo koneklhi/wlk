@@ -31,9 +31,9 @@
 
 - **개발 중**: 백엔드는 팀 개발 PC에서 구동된다. 프론트는 **`ws://<개발 서버 IP>:8900/asr`**(REST도 동일 호스트)로 붙는다 — 개발자 자신의 `localhost`가 아님에 주의.
   - **마이크(`getUserMedia`)는 보안 컨텍스트(`https` 또는 `localhost`)에서만 동작**하므로, React 개발 서버는 **개발자 자기 `localhost`에서 실행**한다(예: `http://localhost:5173`). WebSocket/REST 대상만 위 개발 서버 IP를 가리키면 된다.
-- **배포 = 방법 A(단일 프로그램)**: 단일 PC 로컬 전용. wlk 백엔드가 React **빌드 산출물(`dist/`)을 `/`에서 서빙**하도록 통합한다(정적 마운트 + SPA fallback — 기존 wl이 쓰던 방식과 동일). 사용자는 그 PC에서 `localhost:8900`으로 접속 → localhost라 마이크도 http로 정상, **HTTPS 불필요**. (백엔드 정적 서빙 배선은 빌드 `dist/`가 나오면 백엔드팀이 추가한다.)
+- **배포 = 방법 A(단일 프로그램)**: 단일 PC 로컬 전용. wlk 백엔드가 React **빌드 산출물(`dist/`)을 `/`에서 서빙**하도록 통합한다(정적 마운트 + SPA fallback — 기존 wl이 쓰던 방식과 동일). 사용자는 그 PC에서 `localhost:8900`으로 접속 → localhost라 마이크도 http로 정상, **HTTPS 불필요**. **구현 완료** — `whisperlivekit/basic_server.py` + `--frontend-dir` 플래그(기본값 `frontend/static`, 저장소 루트 기준 상대경로). `frontend/static/index.html`이 있으면 그 dist를 서빙하고 `assets`를 마운트, 그 외 경로는 SPA fallback으로 `index.html`을 반환한다. `index.html`이 없으면(개발 PC 등) 기존 내장 데모 UI로 자동 폴백한다. **dist가 Vite `base`(예 `/wlkies`)로 빌드된 경우**, 백엔드가 `index.html`의 자산 참조에서 base를 자동 추출해 그 하위(`/wlkies/assets`, `/wlkies/{spa}`)로 서빙하고 `GET /`는 base로 리다이렉트한다. base는 `--frontend-base`(기본값 `auto` = 자동추출; `''`/`'/'`=루트, `/wlkies` 등으로 명시 오버라이드 가능)로 조정한다. 루트(base `/`) 빌드도 동일 코드로 하위호환된다.
 - **백엔드 URL 구성(권장 패턴)**: 프론트는 백엔드 주소를 **same-origin 자동 유도(`window.location` 기반)를 기본값**으로 두고, **개발용 env 변수(예 `VITE_WLK_URL`)로만 오버라이드**한다. → 배포(방법 A = same-origin)에선 설정 없이 동작하고, 개발 중엔 env로 개발 서버 IP를 지정한다.
-  - 빌드 **base path는 `/`** 기준(방법 A에서 `dist/`가 루트에서 서빙됨). react-router 등 클라이언트 라우팅을 쓰면 백엔드 SPA fallback이 필요하다(백엔드에 반영).
+  - 빌드 **base path**는 `/`(루트)든 `/wlkies` 같은 하위 경로든 무방하다 — 백엔드가 `index.html`에서 base를 자동 추출(`--frontend-base auto`)해 그 하위로 자산·SPA를 서빙하고 `GET /`는 base로 리다이렉트하므로 자산 절대경로 URL이 맞춰진다. react-router 등 클라이언트 라우팅을 쓰면 백엔드 SPA fallback이 필요하다(백엔드에 반영).
 
 ### 1.2 이번 연동 구현 범위 (UI 지침 — 백엔드 계약과 별개)
 
@@ -237,9 +237,23 @@ Segment 예시:
 **`buffer_transcription` 표시:** 마지막 **진행중(`finalized:false`) 줄** 꼬리에만 이어붙인다. **확정된 줄에는 붙이지 말 것** —
 확정 줄에 붙이면 진행중 텍스트가 확정 블록과 중복돼 보인다.
 
+**`lines[]`가 비고 `buffer_*`만 있을 때(세션 초기):** 확정 줄이 아직 하나도 없는데 `buffer_transcription`/`buffer_diarization`만
+채워진 스냅샷에서는, 버퍼를 독립된 진행중 줄로 보이게 하기 위해 **임시 줄(예 `{speaker:1, text:""}`)을 하나 만들어 그 꼬리에
+버퍼를 붙인다**. 이 케이스를 처리하지 않으면 첫 발화가 확정되기 전까지 화면이 빈 채로 남는다. 참조 = `live_transcription.js:475-477`.
+
+**⚠️ 세션 종료 시 `buffer_*` 정착(fold-in) — 누락 시 마지막 발화 증발:** `ready_to_stop` 수신 후의 **마지막 렌더**에서는
+남은 `buffer_diarization`·`buffer_transcription`(및 `buffer_translation`)을 **연한 진행중 span으로 남기지 말고 마지막 줄 본문에
+일반 텍스트로 접합**한다(각 조각을 `trim`하고, 앞줄 본문과 버퍼가 모두 비어있지 않을 때만 단일 공백으로 join). 이 처리를 빼면
+**종료 순간 마지막 미확정 발화가 화면에서 그대로 사라진다** — 버퍼는 별도 줄이 아니라 확정 줄에 못 실린 진행중 꼬리이기 때문.
+참조 = `live_transcription.js:521-537`·`:539-547`(`isFinalizing` 분기).
+
 > 참조 구현 = 내장 테스트 UI `whisperlivekit/web/live_transcription.js`(누적 Map을 `id`로 키잉 + 진행중 줄과 같은 `id`
 > 확정판 억제). 배경: 이 규칙 미준수(`start|end|speaker` 누적)가 실측에서 kor 낭독체 WER을 3배 이상 부풀린 사례가 있었다
 > (성능 측정이 UI DOM을 스크래핑하므로 렌더 중복이 지표까지 오염 — 프론트 버그가 백엔드 지표로 오인됨).
+> **단, 내장 UI가 `finalizedHistory` Map으로 확정 줄을 누적하는 것은 과거 서버가 확정 줄을 5분 슬라이딩 윈도우로
+> 잘라내던 시절의 레거시다.** 현재 서버는 `lines[]`를 세션 전체 **무제한 유지·재전송**하므로(§2.4.2·§6), React는 그 Map
+> 누적/stale 억제 로직을 그대로 옮길 필요가 없다 — **전체 교체 렌더가 더 단순·안전**하고 위 ①②(`end` 성장·재개방)도
+> 자동 해소된다. 누적은 렌더 최적화(안정 key)가 필요할 때만, 그때도 키는 `id` 단독.
 
 ### 2.5 `status` 값
 
@@ -347,6 +361,10 @@ Segment 예시:
 - 파일 형식: `[화자 N] 텍스트`, 번역이 있으면 다음 줄에 `    ↳ 번역`(타임스탬프 없음).
 - 저장 버튼은 녹음 중에도 클릭 가능하며, 매 클릭마다 클릭 시점까지의 **전체 누적**을 새 타임스탬프 파일로 저장(증분 아님).
 - 권장 흐름: `finalized` 줄 전체 + 마지막 미확정 줄을 합쳐 `lines`로 구성해 호출.
+- **payload 구성 시 클라이언트 전처리(권장)**: 화면 표시와 별개로, 저장 payload는 클라이언트가 다듬어 보내는 것이 좋다 —
+  ① **침묵 세그먼트(`speaker === -2`)와 `text`·`translation`이 모두 빈 줄은 제외**, ② `text`/`translation`은 `trim`,
+  ③ 값 없는 `translation`은 필드 자체를 생략. 이 전처리를 하지 않아도 서버가 빈 줄은 파일에서 스킵하지만, `line_count`
+  왜곡과 침묵 줄 저장을 피하려면 클라이언트에서 걸러 보낸다. 참조 = 내장 UI `buildTranscriptPayload()` `live_transcription.js:247-251`.
 
 ### 3.3 단어교정 사전 — `/api/corrections`
 

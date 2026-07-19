@@ -11,3 +11,4 @@ goal 프롬프트 지침 파일을 보관한다. **완료·머지된 goal은 [do
 | [GOAL_CODESWITCH_BOUNDARY.md](GOAL_CODESWITCH_BOUNDARY.md) | 코드스위칭 경계 3증상 수정 루프 — Stage 0(Exp-172) 완료, Stage 1은 별도 goal(archive의 GOAL_SCRIPT_ANCHOR_REDETECT.md, Exp-175)로 분리 완료, **Stage 2(③ 계측기반 수정)는 미착수** | 부분 완료 — Stage 2 대기 |
 | [GOAL_BOUNDARY_QG_PRESERVE.md](GOAL_BOUNDARY_QG_PRESERVE.md) | 경계 복구 구간 QualityGate 버퍼 폐기 유실(Type B 삼킴) 제거 | 미실행 — 다음 예정 루프 |
 | [GOAL_SCRIPTANCHOR_ACRONYM_GUARD.md](GOAL_SCRIPTANCHOR_ACRONYM_GUARD.md) | ScriptAnchorRedetect 철자 낭독(약어) 오발동 가드 | 진행 중(워크트리 `scriptanchor-acronym-guard`) |
+| [GOAL_AUTO_KOREAN_FOLLOWUP.md](GOAL_AUTO_KOREAN_FOLLOWUP.md) | auto 모드 한국어 후속조치 3단계(Exp-186) — ①speaker_change 트리거 손실 규명 ②kor1 Case B 수정 ③kor1 언어오검출(ko→en) 원인조사, `feat/debug-diagnostics-logging`(67a58ad) 기반 | 미실행 — 다음 예정 루프 |

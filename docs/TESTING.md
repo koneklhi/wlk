@@ -33,6 +33,10 @@
 - 서버를 `--pcm-input` 플래그 없이 기동 → 브라우저가 `MediaRecorder` 방식으로 마이크 음성을 실시간 캡처
 - 브라우저에서 `http://localhost:8900/` 접속 → 내장 웹 UI
   ([whisperlivekit/web/live_transcription.html](../whisperlivekit/web/live_transcription.html))에서 마이크 직접 녹음
+  (`--frontend-dir`가 가리키는 디렉터리에 `index.html`이 있으면 — 기본값 `frontend/static` — 내장 UI 대신 React
+  dist가 서빙된다. dist가 Vite `base`(예 `/wlkies`)로 빌드됐으면 백엔드가 base를 자동 추출해 그 하위로 서빙하고
+  `GET /`는 base로 리다이렉트한다 — `--frontend-base`(기본값 `auto`)로 오버라이드. 개발 PC엔 보통 dist가 없으므로
+  이 절 그대로 내장 UI가 뜬다.)
 - 마이크에 직접 말하면서 전사 결과를 실시간 확인 (정성적 평가)
 - 서버 기동: `whisperlivekit-server` (모든 인자가 parse_args.py 기본값 — `--lan auto` + simulstreaming. `--periodic-lang-check` 기본 None(비활성 — turbo 기질 Exp-160 채택, PLC=4.0이 ytn2에서 스퓨리어스 전환→환각 유발 확인); 탐색 시 다른 값 명시. 상세는 [OPEN_QUESTIONS.md](OPEN_QUESTIONS.md) 참조)
 - 목적: 실제 마이크 입력에 대한 정성적 평가 (경로 C 정량 평가와 병행)

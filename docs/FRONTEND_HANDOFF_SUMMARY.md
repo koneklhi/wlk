@@ -110,7 +110,11 @@ rows.map((line, i) => (
 
 ### 3.1 엔드포인트
 - WebSocket: `ws://<host>:<port>/asr` (기본 `ws://localhost:8900/asr`), TLS면 `wss://`.
-- `GET /`는 내장 데모 UI를 서빙한다 — **React 배포 시엔 사용하지 않는다**, `/asr`만 쓰면 된다.
+- `GET /`는 기본적으로 내장 데모 UI를 서빙하지만, **`frontend/static/`에 React 빌드 산출물(dist)을 배치하면
+  (`index.html` 존재 기준) 자동으로 그 dist를 대신 서빙한다** — 배포 방법 A([API_SPEC.md §1.1](API_SPEC.md)) 구현 완료.
+  서빙 루트는 `--frontend-dir`(기본값 `frontend/static`)로 지정한다. **dist가 Vite `base`(예 `/wlkies`)로 빌드됐으면**
+  백엔드가 `index.html`에서 base를 자동 추출해 그 하위(`/wlkies/assets`, `/wlkies/{spa}`)로 서빙하고 `GET /`는 base로
+  리다이렉트한다(`--frontend-base`, 기본값 `auto`; 루트 빌드도 하위호환). `/asr`는 어느 경우든 동일하게 쓰면 된다.
 - `GET /health`는 헬스체크용(§9.2) — React가 연결 전 서버 기동 확인에 활용 가능.
 - 쿼리 파라미터(선택):
   - `?language=<code>` — **세션별 소스 언어 지정**. 허용값 `{auto, ko, en}`. **생략** = 서버 전역 `--lan`(기본 `auto`)을
@@ -419,8 +423,8 @@ WS `/asr`와 별개로, 사용자가 UI의 **저장 버튼을 눌렀을 때**만
 - [ ] 오디오 캡처 구현: **WebM(MediaRecorder) 기본**, 또는 PCM(AudioWorklet+Worker, 서버
       `--pcm-input` 시). 재사용 가능한 내장 코드는 §6.4 참고.
 - [ ] 필드 타입 변경: `start`/`end`는 `"HH:MM:SS"` 문자열(PC 실제 벽시계 시각, 센티초 없음),
-      `finalized`(=completed) bool, 언어는 `detected_language`(=lang). history Map 키는
-      `start` 단독이 아니라 `start`+`end`+`speaker` 복합키(같은 초 충돌 방지).
+      `finalized`(=completed) bool, 언어는 `detected_language`(=lang). **history Map 키(누적 시)는
+      `id` 단독**(§4.2·§4.4) — `start` 단독·`start`+`end`+`speaker` 복합키 **금지**(growing-prefix 중복).
 - [ ] 확정/미확정 스타일(2단계): `lines[]` 텍스트는 전부 진하게, `buffer_*`만 연하게.
       `finalized`는 색이 아니라 **히스토리 누적에만** 사용(§2.2 참조).
 - [ ] 화자 UI: `speaker` 배지/색 직접 구현, `-2`=침묵, `0`=diar 진행중, `buffer_diarization` 표시.
