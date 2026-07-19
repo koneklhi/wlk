@@ -110,6 +110,10 @@ rows.map((line, i) => (
 
 ### 3.1 엔드포인트
 - WebSocket: `ws://<host>:<port>/asr` (기본 `ws://localhost:8900/asr`), TLS면 `wss://`.
+  > ⚠️ **절대 URL 권장**: `new WebSocket('/asr')` 같은 **상대 URL은 구형·에어갭 브라우저가 거부**한다(`URL is invalid`).
+  > 프론트는 `` `${location.protocol==='https:'?'wss:':'ws:'}//${location.host}/asr` `` 로 **절대 URL을 조립**할 것.
+  > 임시 우회로 현재 백엔드가 index.html 서빙 시 상대 WS URL→절대 URL 정규화 shim을 `<head>`에 주입한다
+  > (`basic_server.py` `_WS_SHIM`). 프론트가 절대 URL로 고치면 shim은 무해하게 통과한다. 상세 = [FRONTEND_LANGUAGE_SELECT_PATCH.md §0](FRONTEND_LANGUAGE_SELECT_PATCH.md).
 - `GET /`는 기본적으로 내장 데모 UI를 서빙하지만, **`frontend/static/`에 React 빌드 산출물(dist)을 배치하면
   (`index.html` 존재 기준) 자동으로 그 dist를 대신 서빙한다** — 배포 방법 A([API_SPEC.md §1.1](API_SPEC.md)) 구현 완료.
   서빙 루트는 `--frontend-dir`(기본값 `frontend/static`)로 지정한다. **dist가 Vite `base`(예 `/wlkies`)로 빌드됐으면**

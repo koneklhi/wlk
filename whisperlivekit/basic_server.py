@@ -72,6 +72,35 @@ if _frontend_enabled:
     else:
         _frontend_base = _cfg_base.rstrip("/")
 
+
+# 일부(구형·에어갭) 브라우저는 상대 WebSocket URL(new WebSocket('/asr'))을 'URL is invalid'로
+# 거부한다. dist 재빌드 없이, 서버가 index.html 서빙 시 <head>에 이 shim을 주입해 슬래시로 시작하는
+# 상대 WS URL을 현재 origin 기준 절대 URL(ws[s]://host/asr)로 정규화한다(절대·프로토콜상대 URL은 통과).
+_WS_SHIM = (
+    "<script>(function(){var O=window.WebSocket;function W(u,p){"
+    "if(typeof u==='string'&&u.charAt(0)==='/'&&u.charAt(1)!=='/'){"
+    "u=(location.protocol==='https:'?'wss:':'ws:')+'//'+location.host+u;}"
+    "return p?new O(u,p):new O(u);}"
+    "W.prototype=O.prototype;W.CONNECTING=O.CONNECTING;W.OPEN=O.OPEN;"
+    "W.CLOSING=O.CLOSING;W.CLOSED=O.CLOSED;window.WebSocket=W;})();</script>"
+)
+
+
+def _index_html_response():
+    """index.html을 서빙하되 WS URL 정규화 shim(_WS_SHIM)을 <head>에 1회 주입한다.
+    읽기 실패 시 원본 FileResponse로 폴백."""
+    index_path = _frontend_dir / "index.html"
+    try:
+        html = index_path.read_text(encoding="utf-8")
+    except OSError:
+        return FileResponse(index_path)
+    if _WS_SHIM not in html:
+        html, n = re.subn(r"<head[^>]*>", lambda m: m.group(0) + _WS_SHIM, html, count=1)
+        if n == 0:
+            html = _WS_SHIM + html  # <head> 없으면 문서 맨 앞에 주입(최후 폴백)
+    return HTMLResponse(html)
+
+
 # 세션 언어 오버라이드 허용값(§3.2 한/영 두 언어 + auto). 그 외 값은 무시하고 서버 기본값 사용.
 _ALLOWED_SESSION_LANGUAGES = {"auto", "ko", "en"}
 
@@ -124,7 +153,7 @@ async def get():
     if _frontend_enabled and _frontend_base:
         return RedirectResponse(f"{_frontend_base}/")
     if _frontend_enabled:
-        return FileResponse(_frontend_dir / "index.html")
+        return _index_html_response()
     return HTMLResponse(get_inline_ui_html())
 
 
@@ -536,7 +565,7 @@ if _frontend_enabled:
                     return FileResponse(candidate)
             except (ValueError, OSError):
                 pass
-        return FileResponse(_frontend_dir / "index.html")
+        return _index_html_response()
 
     if _frontend_base:
         @app.get(_frontend_base)

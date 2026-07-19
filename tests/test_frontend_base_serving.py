@@ -148,9 +148,11 @@ def root_dist(tmp_path):
     """루트(base '/') 빌드 더미 dist — 하위호환 검증용."""
     dist = tmp_path / "rootdist"
     (dist / "assets").mkdir(parents=True)
+    # <head>가 있어야 shim 주입 위치(<head> 바로 뒤)를 검증할 수 있다.
     (dist / "index.html").write_text(
+        '<!doctype html><html><head>'
         '<script type="module" src="/assets/app.js"></script>'
-        '<div id="root">ROOT_INDEX</div>',
+        '</head><body><div id="root">ROOT_INDEX</div></body></html>',
         encoding="utf-8",
     )
     (dist / "assets" / "app.js").write_text("console.log(2)", encoding="utf-8")
@@ -175,3 +177,66 @@ def test_root_build_backward_compat(root_dist):
     r = client.get("/some/spa/route")
     assert r.status_code == 200
     assert "ROOT_INDEX" in r.text
+
+
+# ---------------------------------------------------------------------------
+# WS URL 정규화 shim 주입 테스트 — index.html 서빙 시 <head>에 1회 주입
+# ---------------------------------------------------------------------------
+
+_SHIM_MARK = "window.WebSocket=W"  # _WS_SHIM 특징 문자열
+
+
+def test_shim_injected_into_base_index(base_dist):
+    """base(/wlkies) 빌드: index.html 서빙(진입점/SPA fallback)에 shim이 <head> 바로 뒤 주입."""
+    bs = _load_basic_server(base_dist, frontend_base="auto")
+    client = TestClient(bs.app)
+
+    # base 루트(SPA 진입점) index.html에 shim 주입 + <head> 바로 뒤 위치
+    r = client.get("/wlkies/")
+    assert r.status_code == 200
+    assert "DUMMY_INDEX" in r.text  # 원본 내용 보존
+    assert _SHIM_MARK in r.text
+    assert bs._WS_SHIM in r.text
+    assert ("<head>" + bs._WS_SHIM) in r.text  # <head> 직후에 주입됨
+
+    # SPA fallback 경로도 index.html이므로 동일하게 shim 주입
+    r2 = client.get("/wlkies/some/spa/route")
+    assert r2.status_code == 200
+    assert _SHIM_MARK in r2.text
+
+
+def test_shim_not_injected_into_assets(base_dist):
+    """실제 자산(app.js)에는 shim이 주입되지 않는다(원본 JS 그대로)."""
+    bs = _load_basic_server(base_dist, frontend_base="auto")
+    client = TestClient(bs.app)
+
+    r = client.get("/wlkies/assets/app.js")
+    assert r.status_code == 200
+    assert "console.log(1)" in r.text
+    assert _SHIM_MARK not in r.text
+    assert bs._WS_SHIM not in r.text
+
+
+def test_shim_injected_once_per_response(base_dist):
+    """동일 요청을 두 번 호출해도 각 응답에 shim은 정확히 1회만 주입된다(중복 없음)."""
+    bs = _load_basic_server(base_dist, frontend_base="auto")
+    client = TestClient(bs.app)
+
+    r1 = client.get("/wlkies/")
+    r2 = client.get("/wlkies/")
+    assert r1.text.count(_SHIM_MARK) == 1
+    assert r2.text.count(_SHIM_MARK) == 1
+    assert r1.text == r2.text  # 재요청 시 응답 동일(디스크 원본 불변)
+
+
+def test_shim_injected_into_root_build_index(root_dist):
+    """루트(base '') 빌드: GET / 로 서빙되는 index.html에도 shim이 <head> 바로 뒤 주입."""
+    bs = _load_basic_server(root_dist, frontend_base="auto")
+    assert bs._frontend_base == ""
+    client = TestClient(bs.app)
+
+    r = client.get("/", follow_redirects=False)
+    assert r.status_code == 200
+    assert "ROOT_INDEX" in r.text
+    assert _SHIM_MARK in r.text
+    assert ("<head>" + bs._WS_SHIM) in r.text
