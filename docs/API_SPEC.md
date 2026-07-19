@@ -410,6 +410,12 @@ Segment 예시:
 조회·추가·삭제. 변경은 **즉시 반영**(다음 번역 요청부터) — 입력 문장에 실제 등장하는 용어만
 번역 프롬프트에 골라 주입되는 방식이라 §3.3 단어교정 사전과 별개로 동작한다.
 
+> **정본 경로 = `/api/prompts*`.** 배포 React admin은 이 세 엔드포인트를 `CORRECTIONS_URL` 기반으로
+> `/api/corrections/` 접두를 붙여 호출하므로(`GET /api/corrections/prompts`,
+> `POST /api/corrections/prompts/add-item`, `POST /api/corrections/prompts/delete-item`), 백엔드가
+> 이를 정본 경로의 **alias**로 함께 수용한다(basic_server의 FastAPI stacked decorator). alias는 배포
+> 프론트 호환용이며 기능·페이로드·응답은 정본과 동일하다. 신규 클라이언트는 정본 `/api/prompts*`를 쓴다.
+
 #### `GET /api/prompts`
 
 **응답 200**
