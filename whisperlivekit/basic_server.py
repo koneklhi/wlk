@@ -499,12 +499,14 @@ async def delete_correction(wrong_word: str):
 # ---------------------------------------------------------------------------
 
 @app.get("/api/prompts")
+@app.get("/api/corrections/prompts")  # 배포 React admin이 CORRECTIONS_URL 기반 경로로 호출 → alias
 async def get_prompts():
     """사용자 뷰: glossary는 사용자 추가분만, sentence는 전체(기본+사용자) 반환."""
     return get_prompt_manager().get_user_view_settings()
 
 
 @app.post("/api/prompts/add-item")
+@app.post("/api/corrections/prompts/add-item")  # 배포 React admin alias
 async def add_prompt_item(request: PromptItemRequest):
     """glossary_block 또는 sentence_block에 항목 추가. 즉시 반영."""
     if request.block_key not in ("glossary_block", "sentence_block"):
@@ -516,6 +518,7 @@ async def add_prompt_item(request: PromptItemRequest):
 
 
 @app.post("/api/prompts/delete-item")
+@app.post("/api/corrections/prompts/delete-item")  # 배포 React admin alias
 async def delete_prompt_item(request: PromptItemRequest):
     """glossary_block 또는 sentence_block에서 항목 삭제. 즉시 반영."""
     if request.block_key not in ("glossary_block", "sentence_block"):
