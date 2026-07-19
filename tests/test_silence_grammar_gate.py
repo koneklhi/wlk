@@ -188,11 +188,12 @@ def test_diar_en_next_not_arrived_pending():
 
 # ─── 4. SILENCE_HARD_SECS 안전망 ──────────────────────────────────────────────
 
-def test_diar_hard_secs_always_splits_even_case_b():
-    """긴 침묵(>=SILENCE_HARD_SECS)은 문법 무관 항상 분할 — Case B 문구여도 예외 없음."""
+def test_diar_hard_secs_does_not_split_mid_word_case_b():
+    """긴 침묵(>=SILENCE_HARD_SECS, cap 2.0s 초과)이어도 닫히는 어절이 문법상 미종결이면
+    단어 중간 강제분할(Case B)하지 않고 병합한다 — kor1 '2040년'/'국방환경' 3.59s 실측 계열."""
     proc = make_processor(diarization=True)
-    proc.state.new_diarization = [SpeakerSegment(start=0.0, end=3.0, speaker=0)]
-    hard_end = 0.9 + SILENCE_HARD_SECS + 0.2
+    proc.state.new_diarization = [SpeakerSegment(start=0.0, end=10.0, speaker=0)]
+    hard_end = 0.9 + SILENCE_HARD_SECS + 2.5   # d_eff ≈ 3.6s (실측 3.59s, cap 2.0s도 초과)
     segments, _, _ = feed(
         proc,
         [tok(0.0, 0.4, '지도를'), tok(0.4, 0.8, '올렸'),
@@ -200,11 +201,29 @@ def test_diar_hard_secs_always_splits_even_case_b():
         diarization=True, audio_time=hard_end + 0.5,
     )
     txts = text_segs(segments)
-    assert len(txts) == 2, f"긴 침묵인데 안전망이 분할 안 함: {[s.text for s in txts]}"
+    assert len(txts) == 1, f"미종결 어절인데 긴 침묵 안전망이 단어 중간 분절: {[s.text for s in txts]}"
+    assert '올렸습니다' in txts[0].text.replace(' ', ''), f"병합 실패: {[s.text for s in txts]}"
+
+
+def test_diar_hard_secs_splits_when_sentence_final():
+    """안전망 미무력화 검증 — 닫히는 어절이 종결어미(문법 True)면 긴 침묵에서 여전히 분할."""
+    proc = make_processor(diarization=True)
+    proc.state.new_diarization = [SpeakerSegment(start=0.0, end=10.0, speaker=0)]
+    hard_end = 0.9 + SILENCE_HARD_SECS + 2.5
+    segments, _, _ = feed(
+        proc,
+        [tok(0.0, 0.4, '말씀'), tok(0.4, 0.8, '드렸습니다'),
+         sil(0.9, hard_end), tok(hard_end + 0.1, hard_end + 0.5, '감사합니다')],
+        diarization=True, audio_time=hard_end + 0.5,
+    )
+    txts = text_segs(segments)
+    assert len(txts) == 2, f"종결어미인데 긴 침묵 안전망이 분할 안 함: {[s.text for s in txts]}"
 
 
 def test_diar_consecutive_silences_accumulate_d_eff():
-    """연속 침묵 span 누적 — 개별로는 HARD_SECS 미만이지만 합산은 초과."""
+    """연속 침묵 span 누적 — 개별 < HARD_SECS, 합산 >= HARD_SECS 이면 안전망(split_hard) 발동.
+    영어 closing + 다음어절 미도착(verdict=None): 문법 판정 불가라 오직 누적 안전망만이 분할을
+    강제 — 문법-조건부 가드 도입 후에도 누적 계산이 발동함을 격리 검증."""
     proc = make_processor(diarization=True)
     proc.state.new_diarization = [SpeakerSegment(start=0.0, end=3.0, speaker=0)]
     s1_end = 0.9 + (SILENCE_HARD_SECS / 2 + 0.05)
@@ -212,12 +231,19 @@ def test_diar_consecutive_silences_accumulate_d_eff():
     assert (s2_end - 0.9) >= SILENCE_HARD_SECS, "테스트 픽스처가 누적 조건을 못 만족함"
     segments, _, _ = feed(
         proc,
-        [tok(0.0, 0.4, '지도를'), tok(0.4, 0.8, '올렸'),
-         sil(0.9, s1_end), sil(s1_end, s2_end), tok(s2_end + 0.1, s2_end + 0.5, '습니다')],
-        diarization=True, audio_time=s2_end + 0.5,
+        [tok(0.0, 0.5, 'island'), sil(0.9, s1_end), sil(s1_end, s2_end)],
+        diarization=True, audio_time=s2_end + 0.1,
     )
     txts = text_segs(segments)
-    assert len(txts) == 2, f"연속 침묵 누적이 안 됨(개별로는 짧은데 분할 안 됨): {[s.text for s in txts]}"
+    # split_hard가 발동하면 침묵이 즉시 분할 확정돼 closing이 pending에서 풀린다(gate_pending=False).
+    # 누적이 HARD_SECS에 못 미치면 pending에 머물러 gate_pending=True가 된다(대조군: 짧은 단일 침묵).
+    # 이 단일-틱 하니스에선 후속 내용이 없어 finalized는 어느 경우든 False라, split_hard 발동 여부는
+    # gate_pending으로만 관측된다(실측 로그: decision=split path=split_hard vs decision=pending).
+    assert txts and txts[-1].gate_pending is False, (
+        f"연속 침묵 누적이 안전망(split_hard)을 발동시키지 못하고 pending에 머묾: "
+        f"{[(s.text, s.finalized, s.gate_pending) for s in txts]}"
+    )
+    assert 'island' in txts[-1].text
 
 
 # ─── 5. 구두점으로 이미 종결된 경우는 게이트 비대상(회귀 없음) ────────────────

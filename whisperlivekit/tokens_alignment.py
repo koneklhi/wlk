@@ -398,7 +398,9 @@ class TokensAlignment:
         if silence_seg.start is not None and silence_seg.end is not None:
             d_eff = silence_seg.end - silence_seg.start
 
-        if d_eff is not None and d_eff >= self.silence_hard_secs:
+        if (d_eff is not None and d_eff >= self.silence_hard_secs
+                and should_split_after_silence(
+                    closing.text, next_seg.text if next_seg is not None else None) is not False):
             return "split", "split_hard"
 
         key = self._pending_key(silence_seg)
@@ -819,7 +821,8 @@ class TokensAlignment:
         end = token.end
         d_eff = (end - start) if (start is not None and end is not None) else None
         closing_text = self._current_line_text()
-        if d_eff is not None and d_eff >= self.silence_hard_secs:
+        if (d_eff is not None and d_eff >= self.silence_hard_secs
+                and should_split_after_silence(closing_text, None) is not False):
             self._log_silence_gate(start, end, d_eff, last_word(closing_text), None,
                                     None, None, "split", "split_hard")
             self._close_current_line("silence")

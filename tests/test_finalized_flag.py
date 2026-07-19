@@ -112,9 +112,9 @@ def test_to_dict_finalized_false_for_trailing():
 def test_multiple_sentences_all_finalized():
     """무음이 여러 번 오면 각 validated 세그먼트가 모두 finalized=True여야 한다."""
     proc = make_processor()
-    # 두 침묵 모두 뒤에 새 문장이 이어지지만, 안전망(SILENCE_HARD_SECS)이 실제로
-    # 분할을 트리거해야 하는 의도이므로 각 침묵 길이를 문턱 + margin 0.5s로 둔다.
-    # 토큰 시각은 이전 구간이 끝난 직후부터 이어지도록 순차 배치한다.
+    # 닫힘 어절이 종결어미(문법 True)라 침묵 안전망(split_hard, verdict!=False)이 정상 발동해
+    # 각 문장이 분할·확정된다. 각 침묵 길이는 문턱 + margin 0.5s로 두고, 토큰 시각은 이전 구간이
+    # 끝난 직후부터 이어지도록 순차 배치한다.
     silence1_end = 1.0 + SILENCE_HARD_SECS + 0.5
     token3_start = silence1_end
     token4_start = token3_start + 0.5
@@ -122,10 +122,10 @@ def test_multiple_sentences_all_finalized():
     silence2_end = silence2_start + SILENCE_HARD_SECS + 0.5
     proc.new_tokens = [
         make_token(0.0, 0.5, '첫'),
-        make_token(0.5, 1.0, '문장'),
+        make_token(0.5, 1.0, '문장입니다'),
         make_silence(1.0, silence1_end),
         make_token(token3_start, token4_start, '두번째'),
-        make_token(token4_start, silence2_start, '문장'),
+        make_token(token4_start, silence2_start, '문장입니다'),
         make_silence(silence2_start, silence2_end),
     ]
 
