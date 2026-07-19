@@ -4269,3 +4269,54 @@ worst-case 소멸이었으므로 §4 "목표 필수 기능" 취지에 부합).
 (held-out 단회, 병합 후) ·
 **브랜치**: `exp/kor1-lang-misdetect`(`exp/kor1-caseb-fix@8ea32ef`에서 분기, master 병합 `2090592` 반영,
 커밋 완료 — master 미머지·미푸시)
+
+---
+
+## Exp-190 — SILENCE_HARD_SECS 유발 Case B(단어 중간 분절) 문법-조건부화 수정 [E5, `exp/silence-hard-caseb-fix`]
+
+### 가설
+`tokens_alignment.py`의 두 `split_hard` 분기(`_gate_decide`:401, `_gate_intake_nondiar_silence`:822)가
+`d_eff >= SILENCE_HARD_SECS(1.2s)`이면 문법·화자·언어 판정 **전에** 무조건 분할한다. kor1 낭독체 긴 호흡
+pause가 미종결 어절을 단어 중간에서 강제분할(Case B, CLAUDE.md §3.3 hard-fail)하는 근본원인일 것.
+(GOAL_KOR1_SILENCEHARD_CASEB.md — Exp-189가 후속 인계한 유일 미해결 hard-fail.)
+
+### 진단 (재현 kor1 auto --repeat 5, --trace-tokens — 이번 세션 로그 확정)
+- **국방환경 Case B = split_hard**: R1 전사 "2040년 국방."⟨silence⟩ | "환경을…". 서버로그
+  `[SilenceGate] start=12.09 end=15.68 d_eff=3.59 last_word='2040년' speakers=(1,1) langs=('ko','ko') path=split_hard`.
+  미종결·동일화자·동일언어 → 순수 침묵-길이 안전망 발동. stochastic 1/5.
+- **소모강요 Case B = split_grammar(diar-flip)**: R2 "소모 강."⟨speaker_change⟩ | "요 등…" — 화자오귀속
+  (Exp-188 MIN_SPEAKER_ATTRIBUTION_SECS 미포착 잔존)이라 **이 수정 범위 밖**. stochastic 1/5.
+- 방향 A(임계값↑) 기각: 실측 3.59s > 상한 2.0s(backend long-silence 리셋 불변식). 유닛으로도 2.0s로 못 막음 확인.
+
+### 변경 (방향 B, 최소변경 — if 조건 확장 2곳)
+두 split_hard 분기에 `and should_split_after_silence(closing, next) is not False` AND-가드 추가.
+verdict False(명백 미종결)면 하드 분할 건너뛰고 memo/pending/문법·화자·언어 폴백 경로로(동일화자·언어면 병합).
+verdict True(종결)·None(영어 다음어절 미도착)은 기존대로 즉시 분할(안전망 유지). 무한 pending 방지는
+PENDING_RESOLVE_CAP(2.0s)이 담당. **분할을 새로 만들지 않고 제거만 하므로 신규 Case B 유발 불가.**
+
+### TDD
+- 신규 `test_diar_hard_secs_does_not_split_mid_word_case_b`(RED→GREEN) — 옛 `..._always_splits_even_case_b`(구 Case B 수용 전제) 교체.
+- 신규 `test_diar_hard_secs_splits_when_sentence_final`(종결어미는 여전히 분할 = 안전망 미무력화 회귀가드).
+- `test_diar_consecutive_silences_accumulate_d_eff` 재설계(영어 verdict=None 격리, gate_pending 단언).
+- `test_finalized_flag.py::test_multiple_sentences_all_finalized` stale 픽스처 종결어미로 교정(동일 부류 stale, 전체 스위트 확인으로 이 1건만 확정).
+- **전체 448 passed / 1 skipped / 0 fail**, ruff 신규오류 0(pre-existing I001 1건 무관).
+
+### 측정 (경로 C, diar-ON, turbo, beams=2)
+- **스크리닝 --repeat 1**: kor1 auto 19.9/ko 12.3, bong1 29.0, ytn2 16.3, sbs1 10.7, kor2 19.3, kor3 31.1 — 전 파일 무회귀.
+  로그: 수정후 split_hard 잔존 last_word 전부 종결어미(발표하겠습니다/있습니다), 미종결 0건 = split_hard Case B 제거 결정적.
+- **채택확정 --repeat 3** (표 상단): kor1 auto **18.7**[17.0–21.1]/ko 20.5[14.6–20.5], bong1 26.9[26.3–34.7],
+  ytn2 20.7[19.2–20.7]σ0.9(재측정 N=3, timeout 0), sbs1 14.9[8.9–16.7], kor2 22.8[20.7–25.5], kor3 33.1[33.1–44.4].
+  화자F1: kor1~3 100*·bong1 70.6·ytn2 76.2·sbs1 33.3*. held-out ytn1 20.2/F1 88.9, eng1 2.9/F1 0*.
+  (ytn2 auto 최초 run은 병렬세션 GPU/VBCable 경합으로 서버 ready timeout 2회→1회차만 유효, 단일파일 재측정으로 N=3 확보.)
+- **Case B 하드게이트**: 전 kor1 N=3(auto 3+ko 3=6회차) split_hard 미종결 **0건**, 소모강요 diar-flip **0/6**. 전사 전 회차 병합. **총 Case B 0.**
+
+### 판정 = ✅ 채택 권고 (master 머지는 사용자 승인)
+하드게이트(Case B 신규 0) 통과 + 타깃(kor1) auto·ko 개선 + kor3·eng1 개선 + 나머지 무회귀. bong1 max34.7/sbs1 max16.7
+게이트 소폭초과는 사전존재 변동(웃음필러; 분할제거 수정과 인과 무관). ytn2 재측정 N=3 20.7% 무회귀.
+
+### 다음/별도 발견
+- **소모강요 diar-flip(split_grammar)**: Exp-188 MIN_SPEAKER_ATTRIBUTION_SECS=0.5 미포착 잔존 계열(이번 N=3 미출현이나 stochastic).
+  후속: 짧은 세그먼트 화자오귀속 문턱/로직 재검토(별도 Exp). Exp-187/188/189와 같은 Sortformer diar-flip 뿌리, split_hard(Exp-190)와는 다른 계열.
+
+### epoch
+게이트 내부 결정 정교화(split_hard 조건부화)로 디코더 파라미터·VAD·언어고정 불변 → Exp-187/188 선례대로 **E5 유지(epoch 미bump)**.
