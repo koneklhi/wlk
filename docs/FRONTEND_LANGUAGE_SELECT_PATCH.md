@@ -1,11 +1,32 @@
-# 프론트엔드 언어선택 배선 패치 스펙 (핸드오프)
+# 프론트엔드 배선 이슈 패치 스펙 — WS URL + 언어선택 (핸드오프)
 
 > 대상: 배포 React UI(`wlkies-frontend`) 개발자.
 > 배경: 배포 PC UI 백지 원인(Vite `base:/wlkies` ↔ 백엔드 루트 서빙 불일치)은 **백엔드에서 해결됨**
 > (master `fix/frontend-base-serving`, base 자동추출 하위 서빙). 이 문서는 그와 별개로, 조사 중 발견된
-> **언어선택 기능의 미배선 1건**을 프론트에서 마무리하기 위한 스펙이다.
+> **프론트 배선 2건**(① WebSocket 상대 URL 거부, ② 언어선택 미배선)을 프론트에서 마무리하기 위한 스펙이다.
 
-## 1. 무엇이 문제인가
+## 0. WebSocket 절대 URL 사용 (필수)
+
+**증상**: 배포 PC 브라우저에서 전사가 시작되지 않고, 콘솔에 `The URL '/asr' is invalid` 류 오류.
+
+**원인**: 프론트가 `new WebSocket('/asr')`처럼 **슬래시로 시작하는 상대 URL**을 넘긴다. 최신 브라우저는
+이를 현재 origin 기준으로 해석하지만, **구형·에어갭(폐쇄망) 브라우저는 상대 WebSocket URL을 거부**한다
+(WebSocket 생성자는 원래 절대 URL을 요구한다).
+
+**정식 해결(프론트)**: WS URL을 항상 **절대 URL로 조립**한다. `/asr`(그리고 §2의 `?language=`)를 붙이기 전에:
+
+```ts
+const wsBase = `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}`;
+connect(`${wsBase}/asr`); // 필요하면 `?language=${lang}` 추가 (§2)
+```
+
+**임시 우회(백엔드, 현재 적용 중)**: 백엔드가 index.html을 서빙할 때 `<head>`에 shim `<script>`를 1회 주입해,
+슬래시로 시작하는 상대 WS URL을 런타임에 `ws[s]://<host>/asr` 절대 URL로 정규화한다
+(`whisperlivekit/basic_server.py`의 `_WS_SHIM`/`_index_html_response`). 이 덕에 **dist 재빌드 없이도**
+현재 프론트가 배포 PC에서 동작한다. 프론트가 위 절대 URL 조립으로 고치면 shim은 **무해하게 통과**(이미
+절대 URL이면 그대로 반환)하며, 정식 수정 후에는 백엔드 shim을 제거해도 된다.
+
+## 1. 무엇이 문제인가 (언어선택)
 
 세션 언어모드(한국어/영어/자동)는 **세션 시작 시 사용자가 선택**하는 배포 요구사항이다(백엔드 CLAUDE.md §3.2).
 백엔드는 이를 위해 **WebSocket 접속 시 쿼리 파라미터 `?language=`를 이미 수용**한다:
