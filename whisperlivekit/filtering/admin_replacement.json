@@ -1,1 +1,754 @@
-[]
+[
+  {
+    "origin": "핵당학",
+    "replaced": "핵강압"
+  },
+  {
+    "origin": "소남별",
+    "replaced": "손한별"
+  },
+  {
+    "origin": "미핀나란",
+    "replaced": "비핀 나랑"
+  },
+  {
+    "origin": "소남열",
+    "replaced": "손한별"
+  },
+  {
+    "origin": "확장업체",
+    "replaced": "확장억제"
+  },
+  {
+    "origin": "저희력",
+    "replaced": "저위력"
+  },
+  {
+    "origin": "핵셋의",
+    "replaced": "핵태세"
+  },
+  {
+    "origin": "강거리 탄도미사일",
+    "replaced": "단거리탄도미사일"
+  },
+  {
+    "origin": "가요",
+    "replaced": "강요"
+  },
+  {
+    "origin": "제대식",
+    "replaced": "재래식"
+  },
+  {
+    "origin": "아이",
+    "replaced": "ai"
+  },
+  {
+    "origin": "핵협",
+    "replaced": "핵협의그룹의"
+  },
+  {
+    "origin": "억제구조지화입니다",
+    "replaced": "억제구조 진화입니다"
+  },
+  {
+    "origin": "합참이장의 기조현설이",
+    "replaced": "합참의장의 기조연설이"
+  },
+  {
+    "origin": "j세션의",
+    "replaced": "제1세션의"
+  },
+  {
+    "origin": "j세션",
+    "replaced": "제1세션"
+  },
+  {
+    "origin": "너뉴얼같아요 첫번째",
+    "replaced": "첫 번째"
+  },
+  {
+    "origin": "메사추세츠 공과다역의",
+    "replaced": "매사추세츠 공과대학의"
+  },
+  {
+    "origin": "나항유수이며",
+    "replaced": "나랑 교수이며"
+  },
+  {
+    "origin": "확증고복형에서",
+    "replaced": "확증보복형에서"
+  },
+  {
+    "origin": "확정형으로",
+    "replaced": "확전형으로"
+  },
+  {
+    "origin": "막장업계의",
+    "replaced": "확장억제의"
+  },
+  {
+    "origin": "절약재편이",
+    "replaced": "전략재편이"
+  },
+  {
+    "origin": "이후에",
+    "replaced": "이후의"
+  },
+  {
+    "origin": "산출체계와 대량 응징 보복",
+    "replaced": "다룹니다 한국형 삼축체계와 대량응징보복"
+  },
+  {
+    "origin": "이 세션의",
+    "replaced": "논의됩니다 제2세션의"
+  },
+  {
+    "origin": "핵당학과",
+    "replaced": "핵강압과"
+  },
+  {
+    "origin": "핵제 내식",
+    "replaced": "핵재래식"
+  },
+  {
+    "origin": "국방대학교 의 아산정책연구원 의",
+    "replaced": "국방대학교의 이재학 아산정책연구원의"
+  },
+  {
+    "origin": "숙민박사 는",
+    "replaced": "홍민 박사는"
+  },
+  {
+    "origin": "촉발료인과 분명 각전단계로",
+    "replaced": "촉발요인과 국면 확전단계로"
+  },
+  {
+    "origin": "교수 는",
+    "replaced": "손한별 교수는"
+  },
+  {
+    "origin": "폐해선원 으로",
+    "replaced": "폐회선언으로"
+  },
+  {
+    "origin": "화머",
+    "replaced": "방어"
+  },
+  {
+    "origin": "핵허상",
+    "replaced": "핵확산"
+  },
+  {
+    "origin": "핵학산의",
+    "replaced": "핵확산의"
+  },
+  {
+    "origin": "옥스퍼드대학교 말리오 칼리지 에서",
+    "replaced": "옥스퍼드 대학교 발리올 칼리지에서"
+  },
+  {
+    "origin": "피터슨은",
+    "replaced": "피터스는"
+  },
+  {
+    "origin": "엘리슨 국가원 모센터의",
+    "replaced": "앨리슨 국가안보센터의"
+  },
+  {
+    "origin": "대표하고",
+    "replaced": "개편하고"
+  },
+  {
+    "origin": "5미",
+    "replaced": "5 및"
+  },
+  {
+    "origin": "동맹국맹국",
+    "replaced": "동맹국"
+  },
+  {
+    "origin": "어시아의",
+    "replaced": "러시아의"
+  },
+  {
+    "origin": "베리 디지",
+    "replaced": "헤리티지"
+  },
+  {
+    "origin": "백전략과",
+    "replaced": "핵전략과"
+  },
+  {
+    "origin": "집속 한반도 평화학 외교자문위원회",
+    "replaced": "직속 한반도평화외교자문위원회"
+  },
+  {
+    "origin": "국회의원으로",
+    "replaced": "지상작전사령부 정책자문위원으로"
+  },
+  {
+    "origin": "국한발전야 연구단장 을",
+    "replaced": "북한발전전략연구단장을"
+  },
+  {
+    "origin": "국문론총위원장 으로",
+    "replaced": "국문논총 위원장으로"
+  },
+  {
+    "origin": "북방대학교 연락학부",
+    "replaced": "국방대학교 전략학부"
+  },
+  {
+    "origin": "해미사일방어연구센터장 으로",
+    "replaced": "핵미사일방어연구센터장으로"
+  },
+  {
+    "origin": "미래전 연구센터의 대관연구원",
+    "replaced": "미래전연구센터 객원연구원"
+  },
+  {
+    "origin": "정책장 위원으로",
+    "replaced": "정책자문위원으로"
+  },
+  {
+    "origin": "국가안보시 정책장 위원",
+    "replaced": "손한별 교수의 주요"
+  },
+  {
+    "origin": "특명여자대학교 동아시아연구소 석좌 교수입니다",
+    "replaced": "숙명여자대학교 석좌교수입니다"
+  },
+  {
+    "origin": "방위석청 항공기사학부",
+    "replaced": "방위사업청 항공기사업부"
+  },
+  {
+    "origin": "국제안모 핵전약과",
+    "replaced": "국제안보 핵전략과"
+  },
+  {
+    "origin": "석사학위 공군사관학교 에서",
+    "replaced": "석사학위를 공군사관학교에서"
+  },
+  {
+    "origin": "정책연구를 다소",
+    "replaced": "정책 연구를 다수"
+  },
+  {
+    "origin": "미국 평화연구소에",
+    "replaced": "미국평화연구소의"
+  },
+  {
+    "origin": "국방정책 이반자들과",
+    "replaced": "국방 정책 입안자들과"
+  },
+  {
+    "origin": "가정에",
+    "replaced": "가정해"
+  },
+  {
+    "origin": "실제하지만",
+    "replaced": "실재하지만"
+  },
+  {
+    "origin": "우산에",
+    "replaced": "우산의 신뢰성을"
+  },
+  {
+    "origin": "북한의 이해는",
+    "replaced": "북한에 이에는"
+  },
+  {
+    "origin": "매지하는",
+    "replaced": "배치하는"
+  },
+  {
+    "origin": "선택지다",
+    "replaced": "선택지가"
+  },
+  {
+    "origin": "조사하는",
+    "replaced": "격상하는"
+  },
+  {
+    "origin": "기획구조를",
+    "replaced": "기획 구조로"
+  },
+  {
+    "origin": "대량 응징보고기",
+    "replaced": "대량응징보복이"
+  },
+  {
+    "origin": "제레식",
+    "replaced": "재래식"
+  },
+  {
+    "origin": "담당하기 어려웠던",
+    "replaced": "감당하기 어려운 확전"
+  },
+  {
+    "origin": "구하려",
+    "replaced": "부과하려"
+  },
+  {
+    "origin": "근무기는",
+    "replaced": "핵무기는"
+  },
+  {
+    "origin": "별의병가는",
+    "replaced": "결의 평가는"
+  },
+  {
+    "origin": "대만의 협",
+    "replaced": "대만해협"
+  },
+  {
+    "origin": "자재나",
+    "replaced": "자제나"
+  },
+  {
+    "origin": "개인",
+    "replaced": "개입"
+  },
+  {
+    "origin": "한미양구",
+    "replaced": "한미 양국"
+  },
+  {
+    "origin": "구강으로 압시적 경계를",
+    "replaced": "고강도 가시적 전개를"
+  },
+  {
+    "origin": "한미양구의 3가지",
+    "replaced": "한반도의 세 가지"
+  },
+  {
+    "origin": "유의하기",
+    "replaced": "유일하게"
+  },
+  {
+    "origin": "논중해",
+    "replaced": "논증해"
+  },
+  {
+    "origin": "나란",
+    "replaced": "나랑"
+  },
+  {
+    "origin": "핵협 외그룹은 살아있어야",
+    "replaced": "핵협의그룹은 살아 있어야"
+  },
+  {
+    "origin": "핵제인의 실통합은 야거에",
+    "replaced": "핵재래식 통합은 약어에"
+  },
+  {
+    "origin": "카드웨어",
+    "replaced": "하드웨어"
+  },
+  {
+    "origin": "경우에",
+    "replaced": "경우의"
+  },
+  {
+    "origin": "억제해 1차적",
+    "replaced": "억제의 일차적"
+  },
+  {
+    "origin": "전국",
+    "replaced": "전구"
+  },
+  {
+    "origin": "상수할 핵공인",
+    "replaced": "상설 핵공유"
+  },
+  {
+    "origin": "영해 확장 억제는",
+    "replaced": "역내 확장억제는"
+  },
+  {
+    "origin": "전국 핵대세가",
+    "replaced": "전구 핵태세가"
+  },
+  {
+    "origin": "단어 나은데예",
+    "replaced": "간헐적 전개에"
+  },
+  {
+    "origin": "핵전역과",
+    "replaced": "핵전력과"
+  },
+  {
+    "origin": "대편의",
+    "replaced": "재편의"
+  },
+  {
+    "origin": "귀별은 억제의",
+    "replaced": "귀결은 억제"
+  },
+  {
+    "origin": "1차적",
+    "replaced": "일차적"
+  },
+  {
+    "origin": "핵제대식",
+    "replaced": "핵재래식"
+  },
+  {
+    "origin": "대대는 국제적",
+    "replaced": "핵재래식 통합에 구체적"
+  },
+  {
+    "origin": "정부에 지정한",
+    "replaced": "전구에 지정하는"
+  },
+  {
+    "origin": "선언은",
+    "replaced": "선호는"
+  },
+  {
+    "origin": "배지가능한",
+    "replaced": "배치 가능한"
+  },
+  {
+    "origin": "핵무계에",
+    "replaced": "핵무기에"
+  },
+  {
+    "origin": "재대시",
+    "replaced": "재래식"
+  },
+  {
+    "origin": "받아들인다",
+    "replaced": "받아들입니다"
+  },
+  {
+    "origin": "대배치는 위협환경이",
+    "replaced": "재배치는 위협 환경이"
+  },
+  {
+    "origin": "부담에",
+    "replaced": "부담의"
+  },
+  {
+    "origin": "행위력정책",
+    "replaced": "핵무력정책"
+  },
+  {
+    "origin": "헌법주안",
+    "replaced": "헌법 조항"
+  },
+  {
+    "origin": "담아",
+    "replaced": "담화"
+  },
+  {
+    "origin": "체결하는",
+    "replaced": "체계화하는"
+  },
+  {
+    "origin": "운영례의",
+    "replaced": "운용의"
+  },
+  {
+    "origin": "선원의",
+    "replaced": "선언의"
+  },
+  {
+    "origin": "운영의",
+    "replaced": "운용의"
+  },
+  {
+    "origin": "위기구면에",
+    "replaced": "위기 국면의"
+  },
+  {
+    "origin": "판가를",
+    "replaced": "판가름"
+  },
+  {
+    "origin": "활용한다",
+    "replaced": "활용하는가"
+  },
+  {
+    "origin": "희망이오 는",
+    "replaced": "시나리오는 한미의"
+  },
+  {
+    "origin": "업체태세에",
+    "replaced": "억제태세에"
+  },
+  {
+    "origin": "과시적제",
+    "replaced": "과시적 핵전략과 실제"
+  },
+  {
+    "origin": "강급",
+    "replaced": "간극"
+  },
+  {
+    "origin": "단계로 부터가",
+    "replaced": "단계로부터 판별되어야"
+  },
+  {
+    "origin": "제한만으로",
+    "replaced": "제약만으로"
+  },
+  {
+    "origin": "위험별",
+    "replaced": "유형별"
+  },
+  {
+    "origin": "두번째 칭의는",
+    "replaced": "두 번째 층위는"
+  },
+  {
+    "origin": "전체의 형상 이다 임종",
+    "replaced": "전체 형상이다 김정은"
+  },
+  {
+    "origin": "미자일은",
+    "replaced": "미사일은"
+  },
+  {
+    "origin": "운영",
+    "replaced": "운용"
+  },
+  {
+    "origin": "집중이다 화성 시위",
+    "replaced": "이중능력화 집중이다 화성-11"
+  },
+  {
+    "origin": "상반독",
+    "replaced": "한반도"
+  },
+  {
+    "origin": "십별 모호성의",
+    "replaced": "식별 모호성이"
+  },
+  {
+    "origin": "연락객",
+    "replaced": "전략핵"
+  },
+  {
+    "origin": "절약객 잠수함은 대미부복",
+    "replaced": "전략핵잠수함은 대미 보복"
+  },
+  {
+    "origin": "통한다 조적식별",
+    "replaced": "통한 표적식별"
+  },
+  {
+    "origin": "사이클을 통한다",
+    "replaced": "사이클의 통합이다"
+  },
+  {
+    "origin": "탄누수로",
+    "replaced": "탄두 수로"
+  },
+  {
+    "origin": "달성한다",
+    "replaced": "달성하는"
+  },
+  {
+    "origin": "방극",
+    "replaced": "간극"
+  },
+  {
+    "origin": "과시화",
+    "replaced": "과시와"
+  },
+  {
+    "origin": "강국이",
+    "replaced": "간극이"
+  },
+  {
+    "origin": "있는가 제아홉번째 단계가",
+    "replaced": "있는가이다 제9차 당대회가"
+  },
+  {
+    "origin": "5개년 계획은 현재의 능력본배",
+    "replaced": "5개년계획은 현재의 능력 공백"
+  },
+  {
+    "origin": "정의의",
+    "replaced": "전후의"
+  },
+  {
+    "origin": "고능 치안의",
+    "replaced": "공유 시한의"
+  },
+  {
+    "origin": "전쟁 목표의 상환을",
+    "replaced": "전쟁목표의 상한을"
+  },
+  {
+    "origin": "분석에 의한",
+    "replaced": "분석의 흔한"
+  },
+  {
+    "origin": "이야기에",
+    "replaced": "이야기의"
+  },
+  {
+    "origin": "나열 이다 기본",
+    "replaced": "나열이다 본"
+  },
+  {
+    "origin": "올라가는가 하는 세계의",
+    "replaced": "올라가는가라는 세 개의"
+  },
+  {
+    "origin": "분해한뒤 이",
+    "replaced": "분해한 뒤 세"
+  },
+  {
+    "origin": "운영으로 획끓임자",
+    "replaced": "운용으로 핵그림자"
+  },
+  {
+    "origin": "동맹분리와 외부계의",
+    "replaced": "동맹 분리와 외부 개입"
+  },
+  {
+    "origin": "연쟁제설정형은",
+    "replaced": "전쟁 재설정형은"
+  },
+  {
+    "origin": "초대이다 좋은",
+    "replaced": "최대이다 본"
+  },
+  {
+    "origin": "과식",
+    "replaced": "핵전략은 과시"
+  },
+  {
+    "origin": "4층의",
+    "replaced": "네 층위"
+  },
+  {
+    "origin": "간급을 핵전래식",
+    "replaced": "간극을 핵재래식"
+  },
+  {
+    "origin": "핵강화가능력의 협적",
+    "replaced": "핵강압 능력의 축적"
+  },
+  {
+    "origin": "이두",
+    "replaced": "이들"
+  },
+  {
+    "origin": "한미업체태세에 의하",
+    "replaced": "한미 억제태세의 양이 아니라"
+  },
+  {
+    "origin": "특별과 결신 동맹결속의",
+    "replaced": "식별과 결심 동맹 결속의"
+  },
+  {
+    "origin": "분명의",
+    "replaced": "동맹의"
+  },
+  {
+    "origin": "재봉하는",
+    "replaced": "제공하는"
+  },
+  {
+    "origin": "그려오는",
+    "replaced": "그려보는"
+  },
+  {
+    "origin": "강압에",
+    "replaced": "강압의"
+  },
+  {
+    "origin": "시나리오의 위기강화평 에서는",
+    "replaced": "시나리오 a인 위기강압형에서는"
+  },
+  {
+    "origin": "핵제 레시 통합은 위협신호",
+    "replaced": "핵재래식 통합은 위협 신호"
+  },
+  {
+    "origin": "니와 아이를",
+    "replaced": "cni와 ai를"
+  },
+  {
+    "origin": "뭐야",
+    "replaced": "보다"
+  },
+  {
+    "origin": "3축 체계에서 핵제례식 얽힌",
+    "replaced": "삼축체계에서 핵재래식 얽힘"
+  },
+  {
+    "origin": "두 명의",
+    "replaced": "동맹의"
+  },
+  {
+    "origin": "아이 기반을 효적화의",
+    "replaced": "ai 기반 표적화의"
+  },
+  {
+    "origin": "한미도맹의",
+    "replaced": "한미동맹의"
+  },
+  {
+    "origin": "단면한",
+    "replaced": "당면한"
+  },
+  {
+    "origin": "핵전약과",
+    "replaced": "핵전략과"
+  },
+  {
+    "origin": "의사결정과에",
+    "replaced": "의사결정과 전략적 계산에"
+  },
+  {
+    "origin": "미국",
+    "replaced": "미"
+  },
+  {
+    "origin": "있는",
+    "replaced": "있습니다"
+  },
+  {
+    "origin": "국방과",
+    "replaced": "국방부와"
+  },
+  {
+    "origin": "무기를",
+    "replaced": "한반도에서 핵무기를"
+  },
+  {
+    "origin": "자원",
+    "replaced": "핵전쟁을"
+  },
+  {
+    "origin": "억제 수단이",
+    "replaced": "확전은 명확한 단계가"
+  },
+  {
+    "origin": "이어",
+    "replaced": "지역으로"
+  },
+  {
+    "origin": "정부",
+    "replaced": "전구"
+  },
+  {
+    "origin": "강화",
+    "replaced": "강압"
+  },
+  {
+    "origin": "사용",
+    "replaced": "핵사용"
+  },
+  {
+    "origin": "i",
+    "replaced": "ai"
+  }
+]
