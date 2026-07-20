@@ -1,3 +1,4 @@
+import dataclasses
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Union
@@ -52,10 +53,18 @@ class TimedText(Timed):
 @dataclass()
 class ASRToken(TimedText):
     probability: Optional[float] = None
+    # 언어전환 경계 재조정(boundary_reconcile) tombstone 마크. True면 파생 뷰
+    # (compute_punctuations_segments)에서 보이지 않지만 all_tokens에는 남아 있어
+    # 재조정 resolve 시 복원(un-retract) 가능하다 — 파괴적 pop의 순유실 방지.
+    retracted: bool = False
 
     def with_offset(self, offset: float) -> "ASRToken":
-        """Return a new token with the time offset added."""
-        return ASRToken(self.start + offset, self.end + offset, self.text, self.speaker, detected_language=self.detected_language, probability=self.probability)
+        """Return a new token with the time offset added.
+
+        dataclasses.replace 기반 — 필드가 추가될 때 복사 누락(footgun)이 생기지 않도록
+        위치 인자 나열 대신 전 필드를 자동 복사하고 start/end만 이동한다.
+        """
+        return dataclasses.replace(self, start=self.start + offset, end=self.end + offset)
 
     def is_silence(self) -> bool:
         return False

@@ -41,6 +41,10 @@ class DecoderState:
     pending_prev_language: Optional[str] = None
     pending_retract_floor: Optional[float] = None
     lang_before_reset: Optional[str] = None
+    # backend.py SimulStreamingOnlineProcessor._last_emit_end의 미러(Exp-192 동적 keep).
+    # 소유자는 backend(setter에서 세팅) — 모델 계층(_apply_detected_language)이
+    # 언어전환 트림 keep 가변화에 읽기 전용으로 참조한다.
+    last_emit_end: Optional[float] = None
 
     speaker: int = -1
     log_segments: int = 0

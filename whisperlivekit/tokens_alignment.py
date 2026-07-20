@@ -3,6 +3,14 @@ import re
 from time import time
 from typing import Any, List, Optional, Tuple, Union
 
+from whisperlivekit import boundary_reconcile
+from whisperlivekit.boundary_reconcile import (
+    ZONE1,
+    ZONE2_OPPOSITE,
+    ZONE2_SAMESCRIPT,
+    BoundaryReconciler,
+    TombstoneEntry,
+)
 from whisperlivekit.sentence_boundary import is_genuine_sentence_end, last_word, should_split_after_silence
 from whisperlivekit.simul_whisper.align_att_base import LANG_SWITCH_KEEP_SECS
 from whisperlivekit.timed_objects import (
@@ -117,6 +125,10 @@ class TokensAlignment:
         self.all_diarization_segments: List[SpeakerSegment] = []
         self.all_translation_segments: List[Any] = []
 
+        # 언어전환 경계 재조정 계층(Exp-192). 플래그(RECONCILE_ENABLED)는 메서드
+        # 내부에서 런타임 조회되므로 인스턴스는 항상 만들어 둔다.
+        self.reconciler: BoundaryReconciler = BoundaryReconciler()
+
         self.new_tokens: List[ASRToken] = []
         self.new_diarization: List[SpeakerSegment] = []
         self.new_translation: List[Any] = []
@@ -160,35 +172,85 @@ class TokensAlignment:
           재디코딩·언어전환 등으로 불안정해진 구간에서 무관한 발화가 멀리 있는 침묵
           앞으로 잘못 병합되는 것을 막는다.
         """
-        for t in tokens:
+        idx = 0
+        n = len(tokens)
+        while idx < n:
+            t = tokens[idx]
             if t.is_silence() or t.is_boundary():
                 if isinstance(t, LanguageSwitch) and t.retract_from is not None:
-                    self._retract_stale_language_tokens(t.retract_from, t.prev_language, t.retract_floor)
+                    self._retract_stale_language_tokens(
+                        t.retract_from, t.prev_language, t.retract_floor,
+                        new_lang=t.detected_language,
+                    )
+                else:
+                    # D2: 다음 Silence/일반 LanguageSwitch 마커 도착 → 활성 재조정 창 마감.
+                    # (retract_from이 실린 새 LanguageSwitch는 위 철회 경로에서 arm이
+                    #  이전 창 resolve 후 재arm 한다.)
+                    self.reconciler.on_boundary_marker(
+                        "silence" if t.is_silence() else "language_switch"
+                    )
                 self.all_tokens.append(t)
+                idx += 1
                 continue
-            i = len(self.all_tokens)
-            while (i > 0 and self.all_tokens[i - 1].is_silence()
-                   and t.start + TAIL_REATTACH_EPS < self.all_tokens[i - 1].start
-                   and self.all_tokens[i - 1].start - t.start <= TAIL_REATTACH_MAX_LOOKBACK_SECS):
-                i -= 1
-            self.all_tokens.insert(i, t)
+            # 연속 텍스트 토큰 run 수집 — 시간 소유권 dedup은 배치(run) 커버리지로
+            # 방향(①드롭/②supersede)을 판정해야 하므로 run 단위로 적용한다.
+            run: List[ASRToken] = [t]
+            idx += 1
+            while idx < n and not (tokens[idx].is_silence() or tokens[idx].is_boundary()):
+                run.append(tokens[idx])
+                idx += 1
+            run = self.reconciler.dedup_batch(run, self.all_tokens)
+            for tok in run:
+                i = len(self.all_tokens)
+                while i > 0:
+                    prev = self.all_tokens[i - 1]
+                    if getattr(prev, "retracted", False):
+                        # tombstone 투명 통과 — 레거시(파괴적 pop)에서는 존재하지 않던 토큰이므로
+                        # 재귀속 walk의 판정에 참여시키지 않는다(거동 동일 보존).
+                        i -= 1
+                        continue
+                    if (prev.is_silence()
+                            and tok.start + TAIL_REATTACH_EPS < prev.start
+                            and prev.start - tok.start <= TAIL_REATTACH_MAX_LOOKBACK_SECS):
+                        i -= 1
+                        continue
+                    break
+                self.all_tokens.insert(i, tok)
+                # 재조정 창 관측: 신언어 토큰 도착 → 커버 마킹 + D1 진행도 마감 판정
+                # (resolve 후 유예 구간에서는 늦은 커버 재대체).
+                self.reconciler.observe_new_token(tok)
 
-    def _retract_stale_language_tokens(self, boundary_t: float, prev_lang: Optional[str], redecode_floor: Optional[float] = None) -> None:
+    def _retract_stale_language_tokens(
+        self,
+        boundary_t: float,
+        prev_lang: Optional[str],
+        redecode_floor: Optional[float] = None,
+        new_lang: Optional[str] = None,
+    ) -> None:
         """언어전환 경계에서 prev_lang으로 커밋된 잔존 토큰을 all_tokens 꼬리에서 철회.
 
+        철회는 파괴적 pop이 아니라 retracted=True(tombstone) 마킹이다 — 토큰은
+        all_tokens에 남고 파생 뷰(compute_punctuations_segments)에서만 숨는다.
+        철회분은 TombstoneEntry로 재조정 창(BoundaryReconciler.arm)에 등록되어,
+        신언어 토큰이 해당 구간을 커버하면 대체(영구), 못 덮으면 복원(un-retract)된다.
+        RECONCILE_ENABLED=False면 레거시 파괴적 pop 거동을 그대로 재현한다(전체 롤백).
         LanguageSwitch 마커가 실제로 방출될 때(=새 언어 토큰이 도착했을 때)만 호출된다 —
         재디코딩이 무산되면 마커 자체가 안 나오므로 아무것도 철회되지 않는다(안전한 실패 모드).
 
         구역 1 — token.start >= boundary_t - RETRACT_EPS: 텍스트 토큰이고
           detected_language == prev_lang이면 무조건 철회.
         구역 2 — [하한, boundary_t - RETRACT_EPS): 같은 조건 + 반대-스크립트(_is_opposite_script)
-          일 때만 철회. 혼합 스크립트는 보수적으로 보존.
+          면 철회(zone2_opposite). 추가로 재조정 활성 + RECONCILE_SAMESCRIPT_SUBZONE_ENABLED면
+          boundary_t - SAMESCRIPT_SUBZONE_SECS 이내 같은 스크립트 토큰("미니스터")도 잠정
+          철회(zone2_samescript) — 복원 보장 위에서만 안전한 공격적 철회.
         하한 = redecode_floor(재디코딩 창 시작) 또는 미지정 시 boundary_t - LANG_SWITCH_KEEP_SECS - 1.0.
         역방향 스캔 중 Silence나 boundary 토큰을 만나면 즉시 중단(경계를 넘어 철회하지 않음).
         prev_lang과 반대 방향 언어로 스탬프된 토큰은 절대 건드리지 않는다.
         """
         if prev_lang is None:
             return
+        reconcile_on = boundary_reconcile.RECONCILE_ENABLED
+        subzone_on = reconcile_on and boundary_reconcile.RECONCILE_SAMESCRIPT_SUBZONE_ENABLED
         # 철회 하한 = 재디코딩 창 시작. redecode_floor가 주어지면 그것을 쓴다 — 트림이
         # 잘라낸(재디코딩 불가) 서두 토큰을 철회하지 않기 위함(① 서두유실 방지, Exp-173).
         # 미지정(구 마커 하위호환) 시 기존 KEEP_SECS 기반 하한으로 폴백.
@@ -199,9 +261,16 @@ class TokensAlignment:
         j = len(self.all_tokens) - 1
         scanned = 0
         removed = 0
+        zone_counts = {ZONE1: 0, ZONE2_OPPOSITE: 0, ZONE2_SAMESCRIPT: 0}
+        entries: List[TombstoneEntry] = []
         stopped_by = "start_of_buffer"
         while j >= 0:
             token = self.all_tokens[j]
+            if getattr(token, "retracted", False):
+                # 이미 tombstone된 토큰은 투명 통과 — 레거시(pop)에서는 리스트에 없던
+                # 토큰이므로 scanned/removed 카운트에 넣지 않는다(의미 보존).
+                j -= 1
+                continue
             if token.is_silence() or token.is_boundary():
                 stopped_by = "silence" if token.is_silence() else "boundary"
                 break
@@ -210,16 +279,28 @@ class TokensAlignment:
                 break
             scanned += 1
             if token.detected_language == prev_lang:
+                zone = None
                 if token.start >= boundary_t - RETRACT_EPS:
-                    remove = True
-                else:
-                    remove = _is_opposite_script(token.text, prev_lang)
-                if remove:
+                    zone = ZONE1
+                elif _is_opposite_script(token.text, prev_lang):
+                    zone = ZONE2_OPPOSITE
+                elif (subzone_on
+                        and token.start >= boundary_t - boundary_reconcile.SAMESCRIPT_SUBZONE_SECS):
+                    # 구역2 확대: 같은 스크립트 prev_lang 토큰의 잠정 철회 — 신언어가
+                    # 커버하면 이중언어 중복("미니스터."→"Minister...")이 소멸하고,
+                    # 못 덮으면 resolve에서 복원되므로 순유실이 없다.
+                    zone = ZONE2_SAMESCRIPT
+                if zone is not None:
                     logger.info(
-                        "[Retract] 철회: %r start=%.2f prev_lang=%s",
-                        token.text, token.start, prev_lang,
+                        "[Retract] 철회: %r start=%.2f prev_lang=%s zone=%s",
+                        token.text, token.start, prev_lang, zone,
                     )
-                    self.all_tokens.pop(j)
+                    if reconcile_on:
+                        token.retracted = True
+                        entries.append(TombstoneEntry(token=token, zone=zone))
+                    else:
+                        self.all_tokens.pop(j)  # 레거시 파괴적 철회(롤백 거동)
+                    zone_counts[zone] += 1
                     removed += 1
             j -= 1
         # 진단용 요약 — [Retract] 0건이 "대상 없음"인지 "Silence/하한에 조기 차단"인지
@@ -227,10 +308,21 @@ class TokensAlignment:
         # stopped_by="silence"면 마커 직전에 바로 침묵이 있어 애초에 스캔 자체가
         # 거의 일어나지 못한 것 — 이 비율이 높으면 Silence 정지 규칙이 과도하게
         # 보수적인지(예: 아주 짧은 Silence는 통과) 재검토가 필요하다는 신호.
+        # zones 필드는 말미 추가라 기존 [RetractScan] 파서(search 기반)와 호환된다.
         logger.info(
-            "[RetractScan] boundary_t=%.2f prev_lang=%s scanned=%d removed=%d stopped_by=%s",
+            "[RetractScan] boundary_t=%.2f prev_lang=%s scanned=%d removed=%d stopped_by=%s "
+            "zones=z1:%d,z2opp:%d,z2same:%d",
             boundary_t, prev_lang, scanned, removed, stopped_by,
+            zone_counts[ZONE1], zone_counts[ZONE2_OPPOSITE], zone_counts[ZONE2_SAMESCRIPT],
         )
+        if reconcile_on:
+            # 재조정 창 arm — 철회 0건이어도 창은 연다(시간 소유권 dedup이 경계 구간
+            # 재방출 중복을 잡으려면 창 컨텍스트가 필요). 활성 창이 있으면 arm이
+            # 먼저 resolve 한다(활성 최대 1개 불변식).
+            self.reconciler.arm(
+                boundary_t=boundary_t, floor=lower_bound,
+                prev_lang=prev_lang, new_lang=new_lang, entries=entries,
+            )
 
     def _prune(self) -> None:
         """Drop tokens/segments older than ``_retention_seconds`` from the latest token."""
@@ -280,9 +372,11 @@ class TokensAlignment:
                 break
 
 
-    def _punct_split_justified(self, idx: int) -> bool:
-        """온점 토큰(all_tokens[idx])에서 세그먼트를 끊을 음향적 근거가 있는지 판정.
+    def _punct_split_justified(self, tokens: List[ASRToken], idx: int) -> bool:
+        """온점 토큰(tokens[idx])에서 세그먼트를 끊을 음향적 근거가 있는지 판정.
 
+        tokens는 호출자(compute_punctuations_segments)가 만든 가시(비-retracted) 토큰
+        리스트다 — tombstone 토큰이 판정에 끼어들지 않도록 인자로 받는다(내부 전용).
         온점 뒤에 (a) 발화 끝 또는 (b) 실제 Silence 토큰이 있을 때만 True. 그 외(다음
         토큰이 일반 텍스트 토큰인 모든 경우, 갭이 크든 작든)는 항상 False로 분할하지
         않는다 — 갭 기반 분기(과거 (c))는 Exp-166 FIX 1에서 제거했다(위 주석 참조).
@@ -290,7 +384,6 @@ class TokensAlignment:
         수 있어(버퍼 트림·AlignAtt 유보 등) 신뢰 가능한 분할 근거가 못 된다 — 오직
         VAD가 실제로 검출한 침묵(Silence 토큰)과 발화 종료만 근거로 인정한다.
         """
-        tokens = self.all_tokens
         if idx + 1 >= len(tokens):
             return True  # 발화 끝
         nxt = tokens[idx + 1]
@@ -298,31 +391,38 @@ class TokensAlignment:
             return True
         return False
 
-    def _punct_split_here(self, idx: int, start_idx: int) -> bool:
+    def _punct_split_here(self, tokens: List[ASRToken], idx: int, start_idx: int) -> bool:
         """온점 토큰에서 분할할지: (a)발화끝/(b)Silence[기존] 또는 (c)형태소 종결[신규].
 
+        tokens는 가시 토큰 리스트(위 _punct_split_justified와 동일 — 내부 전용).
         (c)는 온점(.。) 전용 — ?/! 는 소수점·약어 위험이 없어 (a)/(b) 경로만 유지(현행 불변).
         판별은 닫히는 세그먼트 누적 텍스트(온점 앞 어절의 스크립트·종결어미·약어)로 한다.
         """
-        if self._punct_split_justified(idx):
+        if self._punct_split_justified(tokens, idx):
             return True
-        closing = "".join(t.text for t in self.all_tokens[start_idx: idx + 1])
+        closing = "".join(t.text for t in tokens[start_idx: idx + 1])
         stripped = closing.rstrip()
         if not stripped or stripped[-1] not in (".", "。"):
             return False
-        nxt = self.all_tokens[idx + 1] if idx + 1 < len(self.all_tokens) else None
+        nxt = tokens[idx + 1] if idx + 1 < len(tokens) else None
         next_text = nxt.text if (nxt is not None and not nxt.is_silence()
                                  and not nxt.is_boundary()) else None
         return is_genuine_sentence_end(closing, next_text)
 
-    def compute_punctuations_segments(self, tokens: Optional[List[ASRToken]] = None) -> List[PuncSegment]:
-        """Group tokens into segments split by punctuation and explicit silence."""
+    def compute_punctuations_segments(self) -> List[PuncSegment]:
+        """Group tokens into segments split by punctuation and explicit silence.
+
+        단일 초크포인트: retracted(tombstone) 토큰은 여기서 한 번만 걸러진다 — 본문
+        전체(인덱스 슬라이스 포함)가 가시(visible) 리스트만 사용하므로, 철회/복원은
+        all_tokens의 retracted 플래그 토글만으로 파생 뷰에 반영된다.
+        """
+        visible = [t for t in self.all_tokens if not getattr(t, "retracted", False)]
         segments = []
         segment_start_idx = 0
-        for i, token in enumerate(self.all_tokens):
+        for i, token in enumerate(visible):
             if token.is_silence():
                 previous_segment = PuncSegment.from_tokens(
-                        tokens=self.all_tokens[segment_start_idx: i],
+                        tokens=visible[segment_start_idx: i],
                     )
                 if previous_segment:
                     segments.append(previous_segment)
@@ -335,7 +435,7 @@ class TokensAlignment:
             elif token.is_boundary():
                 # 언어 전환 경계: 이전 세그먼트를 닫되 침묵 세그먼트는 만들지 않는다.
                 previous_segment = PuncSegment.from_tokens(
-                    tokens=self.all_tokens[segment_start_idx: i],
+                    tokens=visible[segment_start_idx: i],
                 )
                 if previous_segment:
                     previous_segment.hard_boundary = True
@@ -347,16 +447,16 @@ class TokensAlignment:
                     segments[-1].hard_boundary = True
                 segment_start_idx = i+1
             else:
-                if token.has_punctuation() and self._punct_split_here(i, segment_start_idx):
+                if token.has_punctuation() and self._punct_split_here(visible, i, segment_start_idx):
                     segment = PuncSegment.from_tokens(
-                        tokens=self.all_tokens[segment_start_idx: i+1],
+                        tokens=visible[segment_start_idx: i+1],
                     )
                     segment.punct_boundary = True
                     segments.append(segment)
                     segment_start_idx = i+1
 
         final_segment = PuncSegment.from_tokens(
-            tokens=self.all_tokens[segment_start_idx:],
+            tokens=visible[segment_start_idx:],
         )
         if final_segment:
             segments.append(final_segment)
@@ -947,6 +1047,10 @@ class TokensAlignment:
         """
         # Fallback for ongoing silence: prefer audio stream time over wall-clock
         _silence_now = audio_time if audio_time is not None else (time() - self.beg_loop)
+
+        # D3: 재조정 창 마감 캡 — audio_time 기준(벽시계 금지, 위 fallback 주석과 동일
+        # 이유). 세그먼트 조립 전에 호출해 복원/대체가 이번 틱 파생 뷰에 반영되게 한다.
+        self.reconciler.check_deadline(audio_time)
 
         if diarization:
             segments, diarization_buffer = self.get_lines_diarization(audio_time=audio_time, flush=flush)
