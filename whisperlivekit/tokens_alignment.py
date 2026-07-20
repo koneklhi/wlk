@@ -167,15 +167,27 @@ class TokensAlignment:
                 self.all_tokens.append(t)
                 continue
             i = len(self.all_tokens)
-            while (i > 0 and self.all_tokens[i - 1].is_silence()
-                   and t.start + TAIL_REATTACH_EPS < self.all_tokens[i - 1].start
-                   and self.all_tokens[i - 1].start - t.start <= TAIL_REATTACH_MAX_LOOKBACK_SECS):
-                i -= 1
+            while i > 0:
+                prev = self.all_tokens[i - 1]
+                if getattr(prev, "retracted", False):
+                    # tombstone 투명 통과 — 레거시(파괴적 pop)에서는 존재하지 않던 토큰이므로
+                    # 재귀속 walk의 판정에 참여시키지 않는다(거동 동일 보존).
+                    i -= 1
+                    continue
+                if (prev.is_silence()
+                        and t.start + TAIL_REATTACH_EPS < prev.start
+                        and prev.start - t.start <= TAIL_REATTACH_MAX_LOOKBACK_SECS):
+                    i -= 1
+                    continue
+                break
             self.all_tokens.insert(i, t)
 
     def _retract_stale_language_tokens(self, boundary_t: float, prev_lang: Optional[str], redecode_floor: Optional[float] = None) -> None:
         """언어전환 경계에서 prev_lang으로 커밋된 잔존 토큰을 all_tokens 꼬리에서 철회.
 
+        철회는 파괴적 pop이 아니라 retracted=True(tombstone) 마킹이다 — 토큰은
+        all_tokens에 남고 파생 뷰(compute_punctuations_segments)에서만 숨는다.
+        재조정 계층(boundary_reconcile)이 resolve 시 미커버 tombstone을 복원할 수 있다.
         LanguageSwitch 마커가 실제로 방출될 때(=새 언어 토큰이 도착했을 때)만 호출된다 —
         재디코딩이 무산되면 마커 자체가 안 나오므로 아무것도 철회되지 않는다(안전한 실패 모드).
 
@@ -202,6 +214,11 @@ class TokensAlignment:
         stopped_by = "start_of_buffer"
         while j >= 0:
             token = self.all_tokens[j]
+            if getattr(token, "retracted", False):
+                # 이미 tombstone된 토큰은 투명 통과 — 레거시(pop)에서는 리스트에 없던
+                # 토큰이므로 scanned/removed 카운트에 넣지 않는다(의미 보존).
+                j -= 1
+                continue
             if token.is_silence() or token.is_boundary():
                 stopped_by = "silence" if token.is_silence() else "boundary"
                 break
@@ -219,7 +236,7 @@ class TokensAlignment:
                         "[Retract] 철회: %r start=%.2f prev_lang=%s",
                         token.text, token.start, prev_lang,
                     )
-                    self.all_tokens.pop(j)
+                    token.retracted = True
                     removed += 1
             j -= 1
         # 진단용 요약 — [Retract] 0건이 "대상 없음"인지 "Silence/하한에 조기 차단"인지
@@ -280,9 +297,11 @@ class TokensAlignment:
                 break
 
 
-    def _punct_split_justified(self, idx: int) -> bool:
-        """온점 토큰(all_tokens[idx])에서 세그먼트를 끊을 음향적 근거가 있는지 판정.
+    def _punct_split_justified(self, tokens: List[ASRToken], idx: int) -> bool:
+        """온점 토큰(tokens[idx])에서 세그먼트를 끊을 음향적 근거가 있는지 판정.
 
+        tokens는 호출자(compute_punctuations_segments)가 만든 가시(비-retracted) 토큰
+        리스트다 — tombstone 토큰이 판정에 끼어들지 않도록 인자로 받는다(내부 전용).
         온점 뒤에 (a) 발화 끝 또는 (b) 실제 Silence 토큰이 있을 때만 True. 그 외(다음
         토큰이 일반 텍스트 토큰인 모든 경우, 갭이 크든 작든)는 항상 False로 분할하지
         않는다 — 갭 기반 분기(과거 (c))는 Exp-166 FIX 1에서 제거했다(위 주석 참조).
@@ -290,7 +309,6 @@ class TokensAlignment:
         수 있어(버퍼 트림·AlignAtt 유보 등) 신뢰 가능한 분할 근거가 못 된다 — 오직
         VAD가 실제로 검출한 침묵(Silence 토큰)과 발화 종료만 근거로 인정한다.
         """
-        tokens = self.all_tokens
         if idx + 1 >= len(tokens):
             return True  # 발화 끝
         nxt = tokens[idx + 1]
@@ -298,31 +316,38 @@ class TokensAlignment:
             return True
         return False
 
-    def _punct_split_here(self, idx: int, start_idx: int) -> bool:
+    def _punct_split_here(self, tokens: List[ASRToken], idx: int, start_idx: int) -> bool:
         """온점 토큰에서 분할할지: (a)발화끝/(b)Silence[기존] 또는 (c)형태소 종결[신규].
 
+        tokens는 가시 토큰 리스트(위 _punct_split_justified와 동일 — 내부 전용).
         (c)는 온점(.。) 전용 — ?/! 는 소수점·약어 위험이 없어 (a)/(b) 경로만 유지(현행 불변).
         판별은 닫히는 세그먼트 누적 텍스트(온점 앞 어절의 스크립트·종결어미·약어)로 한다.
         """
-        if self._punct_split_justified(idx):
+        if self._punct_split_justified(tokens, idx):
             return True
-        closing = "".join(t.text for t in self.all_tokens[start_idx: idx + 1])
+        closing = "".join(t.text for t in tokens[start_idx: idx + 1])
         stripped = closing.rstrip()
         if not stripped or stripped[-1] not in (".", "。"):
             return False
-        nxt = self.all_tokens[idx + 1] if idx + 1 < len(self.all_tokens) else None
+        nxt = tokens[idx + 1] if idx + 1 < len(tokens) else None
         next_text = nxt.text if (nxt is not None and not nxt.is_silence()
                                  and not nxt.is_boundary()) else None
         return is_genuine_sentence_end(closing, next_text)
 
-    def compute_punctuations_segments(self, tokens: Optional[List[ASRToken]] = None) -> List[PuncSegment]:
-        """Group tokens into segments split by punctuation and explicit silence."""
+    def compute_punctuations_segments(self) -> List[PuncSegment]:
+        """Group tokens into segments split by punctuation and explicit silence.
+
+        단일 초크포인트: retracted(tombstone) 토큰은 여기서 한 번만 걸러진다 — 본문
+        전체(인덱스 슬라이스 포함)가 가시(visible) 리스트만 사용하므로, 철회/복원은
+        all_tokens의 retracted 플래그 토글만으로 파생 뷰에 반영된다.
+        """
+        visible = [t for t in self.all_tokens if not getattr(t, "retracted", False)]
         segments = []
         segment_start_idx = 0
-        for i, token in enumerate(self.all_tokens):
+        for i, token in enumerate(visible):
             if token.is_silence():
                 previous_segment = PuncSegment.from_tokens(
-                        tokens=self.all_tokens[segment_start_idx: i],
+                        tokens=visible[segment_start_idx: i],
                     )
                 if previous_segment:
                     segments.append(previous_segment)
@@ -335,7 +360,7 @@ class TokensAlignment:
             elif token.is_boundary():
                 # 언어 전환 경계: 이전 세그먼트를 닫되 침묵 세그먼트는 만들지 않는다.
                 previous_segment = PuncSegment.from_tokens(
-                    tokens=self.all_tokens[segment_start_idx: i],
+                    tokens=visible[segment_start_idx: i],
                 )
                 if previous_segment:
                     previous_segment.hard_boundary = True
@@ -347,16 +372,16 @@ class TokensAlignment:
                     segments[-1].hard_boundary = True
                 segment_start_idx = i+1
             else:
-                if token.has_punctuation() and self._punct_split_here(i, segment_start_idx):
+                if token.has_punctuation() and self._punct_split_here(visible, i, segment_start_idx):
                     segment = PuncSegment.from_tokens(
-                        tokens=self.all_tokens[segment_start_idx: i+1],
+                        tokens=visible[segment_start_idx: i+1],
                     )
                     segment.punct_boundary = True
                     segments.append(segment)
                     segment_start_idx = i+1
 
         final_segment = PuncSegment.from_tokens(
-            tokens=self.all_tokens[segment_start_idx:],
+            tokens=visible[segment_start_idx:],
         )
         if final_segment:
             segments.append(final_segment)
