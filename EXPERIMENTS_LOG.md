@@ -4320,3 +4320,103 @@ PENDING_RESOLVE_CAP(2.0s)이 담당. **분할을 새로 만들지 않고 제거�
 
 ### epoch
 게이트 내부 결정 정교화(split_hard 조건부화)로 디코더 파라미터·VAD·언어고정 불변 → Exp-187/188 선례대로 **E5 유지(epoch 미bump)**.
+
+## Exp-192 — 언어전환 경계 재조정(reconciliation) 계층 + 동적 keep [E5, `exp/boundary-reconcile`]
+
+### 배경 — 배포 실사용 제보 + Exp-191 실패
+배포 PC 실사용 제보 2증상(GOAL_BOUNDARY_TAIL_DUP.md): ① 코드스위칭 시 직전 발화 꼬리 단어 유실
+("반갑습니다"류), ② 새 발화 서두 단어 중복 확정("미니스터."→"Minister Jiang..."). 직전 세션(Exp-191,
+`exp/boundary-tail-dup`, 미머지)이 goal 문서의 방안 ⓐ(재디코딩 창 하한)·ⓑ(구언어 flush 디코드)·ⓓ(커밋 후
+텍스트 n-gram dedup)를 구현했으나 **ⓐⓑ는 최종 비활성화, 표적 지표(구언어 꼬리 유실률) before 14.3%→
+after 15.9%로 오히려 악화** — 실패로 판정됨. 조사 결과 ⓐ 기각 근거였던 bong1 화자F1 worst(N=3)는
+동일 설정 재측정에서 62.5%/stdev0.21 → 52.9%/stdev8.2로 재현 불가한 **노이즈 오염**(45~65% 상시 밴드,
+`docs/research/BOUNDARY_TAIL_DUP_FINAL_ADOPTION_D_ONLY_20260720.md`)이었음이 드러났다. 사용자 지시:
+"약간의 WER/F1 하락 허용하니 반드시 해결, 기존 실험 기록에 과의존 말고 새 방안 설계"(2026-07-20).
+
+### 근본 원인 (코드 확정)
+- 언어전환 시 `_apply_detected_language`(align_att_base.py)가 버퍼를 최근 2.5s로 절단 후 **신언어로만**
+  재디코딩 — 재디코딩 창이 이미 방출된 구언어 오디오를 포함(중복 근원)하면서도 구언어 꼬리는 원리상
+  복구 불가.
+- 철회(`_retract_stale_language_tokens`, tokens_alignment.py)가 **파괴적 `pop`** — 재디코딩이 미복구하면
+  순유실(유실 계열 ⓐ). 구역2(경계 직전)는 반대 스크립트만 철회해 "미니스터"(한글 음차)는 보존 →
+  단독 확정 후 "Minister..." 재방출과 의미 중복(증상 2).
+- CrossBatchFilter(backend.py)는 직전 1단어 완전일치만 제거 + 경계에서 `_last_emitted_word=None` 리셋 →
+  구/부분변형 재방출 무비교 통과.
+- **구조적 기회**: diar 확정 라인은 매 틱 `all_tokens`에서 무상태 재계산되는 파생 뷰 → 토큰별 시각·언어가
+  세션 내내 보존되면 "복원 가능한 철회"가 가능. 단 토큰 `end`는 `start+0.1` 고정(가짜)이라 겹침율이 아닌
+  **start 근접 판정**만 유효.
+
+### 구현 — 경계 재조정 계층 (신규 모듈 `whisperlivekit/boundary_reconcile.py`)
+master(`2a1391f`, Exp-190 포함)에서 신규 분기(Exp-191 브랜치는 ⓐⓑ휴면+ⓓ ON 21커밋이 섞여 귀속 오염
+위험 → 재사용 안 함, 분석 스크립트만 `git checkout -- ` 선별 이식).
+1. **Tombstone 철회**: `ASRToken.retracted` 필드. 파괴적 `pop` → 플래그 마킹, 파생 뷰
+   (`compute_punctuations_segments`)에서만 제외 — 단일 초크포인트로 가시(visible) 리스트 생성.
+2. **구역2 확대**: `boundary_t−1.2s` 이내 같은 스크립트 구언어 토큰도 잠정 tombstone("미니스터" 표적) —
+   복원 보장이 있어야 안전한 공격적 철회(전용 플래그 `RECONCILE_SAMESCRIPT_SUBZONE_ENABLED`).
+3. **ReconcileWindow**(활성 최대 1개): 마감 3중 — D1(신언어 진행도가 boundary_t+0.25s 통과, 주신호)/
+   D2(다음 Silence·LanguageSwitch 마커 도착, 새 마커면 이전 창 resolve 후 재arm)/D3(get_lines 훅에서
+   audio_time 기준 3.0s 캡, 벽시계 금지). resolve = **단일 컷포인트 원자성**(신언어 최소 start를 컷 T로,
+   `start≥T−τ` 전량 대체·`<T−τ` 전량 복원, 부분 복원 구멍 금지 — 하위단어 파편 Case B 방지, 단어 시작
+   방향 스냅). 신언어 미도착 시 전량 복원(유실 해결 최우선).
+4. **시간 소유권 dedup**(`RECONCILE_ENABLED` 전체 롤백 플래그): 최초 구현은 "start 근접(0.4s)만으로
+   신규 드롭"이었으나 **계측 r1에서 치명적 오탐 발견** — 창 내 정상 연속 방출 단어(예 ytn2 " is"/" remain"/
+   " reviewed", Δstart 0.14~0.40s)를 재방출로 오인해 드롭, WER 오히려 악화(ytn2 18.7%→22.7%). **정규화
+   텍스트 결합 매칭으로 재설계**(`46a9e34`): 매칭 조건 = start 근접 **AND** (정규화 완전일치 OR 접두어
+   관계). 방향 판정 — 신규가 기존 커버리지 확장("In."→"In support of these...") → 기존 supersede +
+   인접 구두점 동반 소멸 + id(start) 승계(UI `finalizedHistory` 유령 방지); 신규가 기존의 부분 재방출
+   ("상당한 상당한") → 정규화 완전일치 매칭분만 drop. 비매칭 토큰은 어느 방향도 불가침.
+5. **동적 keep**(`LANG_SWITCH_DYNAMIC_KEEP_ENABLED`, align_att_base.py): 서두 유실(비-fire 계열,
+   "In support of these" 유형)은 재조정만으론 못 잡음 — `_apply_detected_language`의 트림 keep을
+   `clamp(버퍼끝−last_emit_end+0.3, 2.5, 5.0)`으로 가변화(`last_emit_end`는 backend.py 소유 → decoder
+   state 미러 필드로 모델 계층에 전달). 상한 5.0s(Exp-166 환각 전례 감시 대상).
+
+### TDD
+신규 `tests/test_boundary_reconcile.py`(복원/대체/dedup 방향분기/id승계/정상반복보호/다중경계/D3캡/
+단일컷원자성/플래그OFF레거시재현/with_offset필드보존/동적keep클램프 등), `test_boundary_retract.py`
+가시 뷰 헬퍼로 치환(하한·Silence정지·반대방향불가침 의미 보존). **전체 540 passed / 1 skipped / 0 fail**,
+ruff 신규오류 0(main 저장소 동일 스코프 대비 pre-existing 26건과 일치 확인).
+
+### 측정 (경로 C, diar-ON, turbo, beams=2, `--trace-tokens`)
+**계측 r1→r2 (ytn2+bong1, 오탐 발견·수정 검증)**:
+| | ytn2 WER | ytn2 F1 | bong1 WER | bong1 F1 |
+|---|---|---|---|---|
+| r1(오탐 있음) | 22.7% | 73.7% | 41.1% | 56.3% |
+| r2(수정 후) | 16.3% | 73.7% | 25.4% | 72.2% |
+
+**스크리닝 --repeat 1** (수정 후, provenance `exp/boundary-reconcile@d1412e9`):
+- auto(bong1/ytn2/sbs1): bong1 30.2%/F1 66.7%, ytn2 16.3%/F1 70.0%, sbs1 10.1%/F1 40.0%(단일화자 F1
+  아티팩트, Exp-186 기지). 직전 Exp-190 스크리닝(bong1 29.0/ytn2 16.3/sbs1 10.7) 대비 bong1 +1.2pp
+  (허용한도 +3pp 이내)·ytn2 동일·sbs1 개선 — **무회귀**.
+- ko(kor1~3, `--lan ko`): kor1 18.7%/F1 100%(개선), kor2 20.7%/F1 0%(단일화자 아티팩트), kor3 35.8%/F1
+  100%(직전 31.1% 대비 +4.7pp — **재조정 로그 3파일 전부 0건으로 dormant 확인**, 코드 경로 자체가
+  안 타므로 인과 없는 단일회 노이즈로 판정, §3.2 ko 모드 요구사항대로 코드스위칭 재감지 완전 비활성).
+- **표적 지표**(analyze_boundary_tail_dup.py, auto 3파일): 경계 23곳 중 정상 18(78%)·구언어꼬리
+  3·비fire 1·기타1, 인접n-gram중복 2건. 정성: "미니스터."류 유령 라인·"Okay." 환각 대체 소멸 확인,
+  복원(Restore) 이벤트 정상 발동.
+- **Case B**: 전 스크리닝 파일 정성 전수 확인, bong1 1건("자빠졌"⏎유사 계열)은 재조정 로그 무연관·
+  서버로그 대조 결과 기존 silence-gate 계열(Exp-190 스코프)로 분류 — 신규 유발 아님.
+
+**짝지음 A/B (동적 keep ON/OFF, ytn2+bong1)**: OFF ytn2 14.8%/F1 90.0%, bong1 28.4%/F1 64.7% vs ON
+(r2) ytn2 16.3%/F1 73.7%, bong1 25.4%/F1 72.2%. 스크리닝 로그에서 동적 keep 발동 20건 중 2.5s 상한
+클램프 미해제(비-fire 장기정지 케이스 희소) — 두 레그 차이가 개선/회귀 어느 쪽 귀속인지 판단 불가한
+표본 크기. **ON 유지**(서두 유실 대응이 설계 목적이므로 비활성화 근거 없이 OFF 고정 안 함).
+
+### 판정 = 스크리닝 유망 — **확정(N=3)·held-out 측정 미실시** (사용자 지시로 조기 종료)
+확정 측정(auto 3종×3회 fail-fast 금지) 진행 중 사용자가 시간 제약으로 중단 지시("스크리닝 결과 괜찮아
+보였다, 이 버전으로 커밋하고 배포 이전작업") — `bc7akc84e` 태스크 중단, 잔존 프로세스 없음 확인.
+**따라서 CLAUDE.md §4 "채택 확정 = repeat 3" 게이트는 통과된 것이 아니라 생략됨** — 아래는 스크리닝
+1회 수치 기준 방향 신호이며, 회차 편차(±30~120%p 관측 선례)를 고려한 재확인 없이는 최종 채택 결론이
+아니다. 브랜치 `exp/boundary-reconcile`(`8ff041b`) 커밋 완료, **master 미머지**(사용자 최종 결정 대기).
+
+### 다음/후속
+- 확정 r3 + held-out(ytn1 auto/eng1 en) 미실시 — 배포 착수 후 여유 시 재개 권장.
+- 구언어꼬리 유실(비-fire 아닌 flush 계열, backlog §1-ⓑ)은 이번 루프에서도 3건 잔존(auto 3파일) —
+  구언어 flush 디코드(Exp-191 ⓑ 방향)는 QualityGate 우회 결함 때문에 이번 루프에서 재시도하지 않음,
+  근본 해결은 별도 설계 필요.
+- Exp-191 브랜치(`exp/boundary-tail-dup`) 처리 재결정 필요 — 본 실험이 그 표적을 상위 호환(시간 레벨)
+  하므로 폐기 권고, 단 사용자 확인 필요.
+
+### epoch
+언어전환 경계의 철회 실패모드를 파괴적→복원가능으로 구조 변경(Exp-171/172/173/174 철회 관련 결론은
+tombstone 메커니즘으로 **대체**되며 모순 아님, 선례대로 **E5 유지(epoch 미bump)** — 디코더·VAD·언어고정
+불변, 정렬 계층 국소 변경).
