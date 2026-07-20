@@ -170,7 +170,12 @@ def test_marker_without_retract_from_is_noop():
 
 def test_insert_with_reattachment_retracts_before_appending_marker():
     """전체 경로: 철회 대상 토큰이 이미 all_tokens에 있고, retract_from이 실린 마커가
-    _insert_with_reattachment로 들어오면 마커 append 전에 철회가 먼저 일어난다."""
+    _insert_with_reattachment로 들어오면 마커 append 전에 철회가 먼저 일어난다.
+
+    Exp-192 재조정 이후: 신언어 토큰이 철회 구간을 start 근접으로 커버(13.30 vs
+    13.06, Δ=0.24 <= COVER_TOL)하므로 resolve(D1) 후에도 stale은 영구 tombstone으로
+    남는다. 미커버 시 복원되는 경로는 test_boundary_reconcile.py에서 검증한다.
+    """
     ta = _make_alignment()
     ta.all_tokens = [
         ASRToken(start=13.06, end=13.50, text="? Who is the.", detected_language="en"),
@@ -179,7 +184,7 @@ def test_insert_with_reattachment_retracts_before_appending_marker():
         start=13.60, end=13.60, detected_language="ko",
         retract_from=13.0, prev_language="en",
     )
-    new_ko_token = ASRToken(start=13.60, end=14.0, text="인공일까", detected_language="ko")
+    new_ko_token = ASRToken(start=13.30, end=14.0, text="인공일까", detected_language="ko")
     ta._insert_with_reattachment([marker, new_ko_token])
     assert _visible_texts(ta) == ["인공일까"]
 
