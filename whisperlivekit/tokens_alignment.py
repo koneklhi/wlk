@@ -172,7 +172,10 @@ class TokensAlignment:
           재디코딩·언어전환 등으로 불안정해진 구간에서 무관한 발화가 멀리 있는 침묵
           앞으로 잘못 병합되는 것을 막는다.
         """
-        for t in tokens:
+        idx = 0
+        n = len(tokens)
+        while idx < n:
+            t = tokens[idx]
             if t.is_silence() or t.is_boundary():
                 if isinstance(t, LanguageSwitch) and t.retract_from is not None:
                     self._retract_stale_language_tokens(
@@ -187,24 +190,35 @@ class TokensAlignment:
                         "silence" if t.is_silence() else "language_switch"
                     )
                 self.all_tokens.append(t)
+                idx += 1
                 continue
-            i = len(self.all_tokens)
-            while i > 0:
-                prev = self.all_tokens[i - 1]
-                if getattr(prev, "retracted", False):
-                    # tombstone 투명 통과 — 레거시(파괴적 pop)에서는 존재하지 않던 토큰이므로
-                    # 재귀속 walk의 판정에 참여시키지 않는다(거동 동일 보존).
-                    i -= 1
-                    continue
-                if (prev.is_silence()
-                        and t.start + TAIL_REATTACH_EPS < prev.start
-                        and prev.start - t.start <= TAIL_REATTACH_MAX_LOOKBACK_SECS):
-                    i -= 1
-                    continue
-                break
-            self.all_tokens.insert(i, t)
-            # 재조정 창 관측: 신언어 토큰 도착 → 커버 마킹 + D1 진행도 마감 판정.
-            self.reconciler.observe_new_token(t)
+            # 연속 텍스트 토큰 run 수집 — 시간 소유권 dedup은 배치(run) 커버리지로
+            # 방향(①드롭/②supersede)을 판정해야 하므로 run 단위로 적용한다.
+            run: List[ASRToken] = [t]
+            idx += 1
+            while idx < n and not (tokens[idx].is_silence() or tokens[idx].is_boundary()):
+                run.append(tokens[idx])
+                idx += 1
+            run = self.reconciler.dedup_batch(run, self.all_tokens)
+            for tok in run:
+                i = len(self.all_tokens)
+                while i > 0:
+                    prev = self.all_tokens[i - 1]
+                    if getattr(prev, "retracted", False):
+                        # tombstone 투명 통과 — 레거시(파괴적 pop)에서는 존재하지 않던 토큰이므로
+                        # 재귀속 walk의 판정에 참여시키지 않는다(거동 동일 보존).
+                        i -= 1
+                        continue
+                    if (prev.is_silence()
+                            and tok.start + TAIL_REATTACH_EPS < prev.start
+                            and prev.start - tok.start <= TAIL_REATTACH_MAX_LOOKBACK_SECS):
+                        i -= 1
+                        continue
+                    break
+                self.all_tokens.insert(i, tok)
+                # 재조정 창 관측: 신언어 토큰 도착 → 커버 마킹 + D1 진행도 마감 판정
+                # (resolve 후 유예 구간에서는 늦은 커버 재대체).
+                self.reconciler.observe_new_token(tok)
 
     def _retract_stale_language_tokens(
         self,

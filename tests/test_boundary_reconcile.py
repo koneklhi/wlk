@@ -339,12 +339,137 @@ def test_observe_ignores_non_new_lang_tokens():
 
 
 def test_d1_requires_pass_eps_progress():
-    """D1은 신언어 진행도가 boundary_t+PASS_EPS를 넘어야 발동한다."""
+    """D1은 신언어 진행도가 boundary_t+PASS_EPS를 넘어야 발동한다.
+
+    토큰 간격은 OWN_TOL(0.4)보다 크게 둔다 — 근접 연속 토큰은 시간 소유권
+    dedup(①)의 대상이라 이 테스트의 관심사(D1 진행도)와 분리한다.
+    """
     ta = _make_alignment()
     ta.all_tokens = [_tok(11.5, 11.9, " 꼬리", "ko")]
     ta._insert_with_reattachment([_retract_marker(12.0, "en", "ko", 10.0)])
-    ta._insert_with_reattachment([_tok(12.0 + PASS_EPS - 0.05, 12.3, " early", "en")])
+    ta._insert_with_reattachment([_tok(11.9, 12.1, " early", "en")])  # 11.9 < 12.25
     assert ta.reconciler.window.resolved is False
-    ta._insert_with_reattachment([_tok(12.0 + PASS_EPS, 12.5, " past", "en")])
+    ta._insert_with_reattachment([_tok(12.35, 12.5, " past", "en")])  # 12.35 >= 12.25
     assert ta.reconciler.window.resolved is True
     assert ta.reconciler.window.resolve_reason == "d1"
+
+
+# ─── 커밋4: 시간 소유권 dedup ─────────────────────────────────────────────────
+
+
+def test_timededup_drops_identical_reemission():
+    """① 동일 재방출: 기존 커버리지가 신규를 포함 + start 근접 → 신규 배치 드롭."""
+    ta = _make_alignment()
+    ta._insert_with_reattachment([_retract_marker(12.4, "en", "ko", 10.0)])
+    batch1 = [_tok(12.5, 12.6, " It's", "en"), _tok(12.8, 12.9, " just", "en"),
+              _tok(13.1, 13.2, " a", "en")]
+    ta._insert_with_reattachment(batch1)
+    n_before = len(ta.all_tokens)
+    # 재디코딩 창 겹침 이중방출 — 같은 구간을 같은 start로 다시 방출
+    dup = [_tok(12.5, 12.6, " It's", "en"), _tok(12.8, 12.9, " just", "en"),
+           _tok(13.1, 13.2, " a", "en")]
+    ta._insert_with_reattachment(dup)
+    assert len(ta.all_tokens) == n_before  # 전량 드롭
+    assert _visible_texts(ta).count(" It's") == 1
+
+
+def test_timededup_drops_varied_partial_reemission():
+    """① 부분 변형 재방출: 지터(Δstart<=OWN_TOL) 있는 부분 재방출도 시간만으로 드롭
+    — 텍스트가 달라도("상당한"→"상당한 부분") 시간 소유권은 기존에 있다."""
+    ta = _make_alignment()
+    ta._insert_with_reattachment([_retract_marker(12.4, "en", "ko", 10.0)])
+    ta._insert_with_reattachment([_tok(12.5, 12.6, " Everyone", "en"),
+                                  _tok(12.9, 13.0, " here", "en")])
+    n_before = len(ta.all_tokens)
+    dup = [_tok(12.55, 12.65, " Every", "en"), _tok(12.95, 13.05, " here", "en")]
+    ta._insert_with_reattachment(dup)
+    assert len(ta.all_tokens) == n_before
+    assert all(t.text != " Every" for t in ta.all_tokens)
+
+
+def test_ghost_prefix_supersede_direction_and_id_inheritance():
+    """② 유령 접두어: 기존("In.")이 신규 배치 커버리지의 부분집합 + 신규가 그 너머 확장
+    → 기존 tombstone + 신규 채택 + id(start) 승계(소멸 세그먼트의 최초 start 이어받기)."""
+    ta = _make_alignment()
+    ta._insert_with_reattachment([_retract_marker(12.4, "en", "ko", 10.0)])
+    ghost = _tok(13.0, 13.1, " In.", "en")
+    ta._insert_with_reattachment([ghost])  # D1 resolve(13.0 >= 12.65)
+    full = [_tok(13.05, 13.15, " In", "en"), _tok(13.5, 13.6, " support", "en"),
+            _tok(13.85, 13.95, " of", "en")]
+    ta._insert_with_reattachment(full)
+    assert ghost.retracted is True  # 기존 tombstone
+    assert full[0].start == 13.0    # id(start) 승계 — UI finalizedHistory 유령 방지
+    assert _visible_texts(ta) == [" In", " support", " of"]
+
+
+def test_normal_repeat_outside_window_is_protected():
+    """정상 반복("네, 네")은 창 구간(dedup_limit) 밖 새 오디오라 드롭되지 않는다.
+
+    dedup_limit은 경계 앵커 고정(boundary_t+PASS_EPS+유예)이라 발화 프런티어를
+    쫓아가며 자기확장하지 않는다 — 경계에서 멀어진 반복은 자동 보호.
+    """
+    ta = _make_alignment()
+    ta._insert_with_reattachment([_retract_marker(12.4, "ko", "en", 10.0)])
+    ta._insert_with_reattachment([_tok(14.0, 14.1, " 네,", "ko")])
+    n_before = len(ta.all_tokens)
+    ta._insert_with_reattachment([_tok(14.3, 14.4, " 네", "ko")])
+    assert len(ta.all_tokens) == n_before + 1  # 드롭 없음
+    assert _visible_texts(ta) == [" 네,", " 네"]
+
+
+def test_timededup_no_action_on_forward_continuation():
+    """정상 연속 배치(프런티어 전진)는 ①/② 어느 방향도 발동하지 않는다."""
+    ta = _make_alignment()
+    ta._insert_with_reattachment([_retract_marker(12.4, "en", "ko", 10.0)])
+    ta._insert_with_reattachment([_tok(12.5, 12.6, " In", "en")])
+    cont = [_tok(13.0, 13.1, " support", "en"), _tok(13.4, 13.5, " of", "en")]
+    ta._insert_with_reattachment(cont)
+    assert _visible_texts(ta) == [" In", " support", " of"]
+    assert all(not t.retracted for t in ta.all_tokens if not t.is_boundary())
+
+
+def test_late_cover_after_early_d2_resolve_within_grace():
+    """D2 조기 resolve로 복원된 tombstone을, 유예(+0.5s) 안에 도착한 신언어 커버가
+    재대체한다 — 복원분 중복 방지."""
+    ta = _make_alignment()
+    tail = _tok(11.9, 12.3, " 미니스터.", "ko")
+    ta.all_tokens = [tail]
+    ta._insert_with_reattachment([_retract_marker(12.4, "en", "ko", 10.0)])
+    assert tail.retracted is True
+    # D2 조기 resolve(신언어 무도착) → 복원
+    ta._insert_with_reattachment([Silence(start=12.5, end=12.7)])
+    assert tail.retracted is False
+    # 유예 안 늦은 커버 도착(|12.0-11.9|=0.1 <= COVER_TOL, start 12.0 <= dedup_limit)
+    ta._insert_with_reattachment([_tok(12.0, 12.4, " Minister", "en")])
+    assert tail.retracted is True  # 재대체 — 이중언어 중복 소멸
+
+
+def test_late_cover_far_from_restored_tombstone_no_replace():
+    """resolve 후 도착한 신언어 토큰이라도 복원분과 start 근접이 아니면 재대체하지 않는다."""
+    ta = _make_alignment()
+    tail = _tok(11.0, 11.4, " 반갑습니다", "ko")
+    ta.all_tokens = [tail]
+    ta._insert_with_reattachment([_retract_marker(12.0, "en", "ko", 10.0)])
+    ta._insert_with_reattachment([Silence(start=12.1, end=12.2)])  # D2 → 복원
+    assert tail.retracted is False
+    ta._insert_with_reattachment([_tok(12.6, 12.7, " Nice", "en")])  # Δ=1.6 > COVER_TOL
+    assert tail.retracted is False
+
+
+def test_dedup_noop_when_flag_off(monkeypatch):
+    """RECONCILE_ENABLED=False면 dedup_batch도 완전 무동작(레거시 거동)."""
+    monkeypatch.setattr(boundary_reconcile, "RECONCILE_ENABLED", False)
+    ta = _make_alignment()
+    ta._insert_with_reattachment([_tok(12.5, 12.6, " It's", "en")])
+    ta._insert_with_reattachment([_tok(12.5, 12.6, " It's", "en")])
+    assert _visible_texts(ta) == [" It's", " It's"]  # 드롭 없음(레거시)
+
+
+def test_window_released_after_grace_via_check_deadline():
+    """resolve된 창은 dedup 유예가 지나면 check_deadline에서 해제된다(참조 정리)."""
+    ta = _make_alignment()
+    ta._insert_with_reattachment([_retract_marker(12.0, "en", "ko", 10.0)])
+    ta._insert_with_reattachment([_tok(12.5, 12.6, " New", "en")])  # D1 resolve
+    assert ta.reconciler.window is not None
+    ta.reconciler.check_deadline(ta.reconciler.window.dedup_limit() + 0.01)
+    assert ta.reconciler.window is None

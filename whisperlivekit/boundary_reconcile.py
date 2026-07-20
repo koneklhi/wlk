@@ -52,6 +52,8 @@ PASS_EPS: float = 0.25           # D1: 신언어 진행도가 boundary_t + 이 �
 RECONCILE_DEADLINE_SECS: float = 3.0   # D3: arm 후 audio_time 기준 최대 대기
 SAMESCRIPT_SUBZONE_SECS: float = 1.2   # 구역2 확대 범위(boundary_t 이전)
 _WORD_SNAP_GAP_SECS: float = 0.3       # 공백 접두 없는 토큰의 단어 시작 판정 보조 갭
+OWN_TOL: float = 0.4             # 시간 소유권 dedup의 start 근접 허용
+DEDUP_RELEASE_GRACE_SECS: float = 0.5  # 조기 resolve 후 dedup/늦은 커버 유지 유예
 
 # 존 라벨
 ZONE1 = "zone1"
@@ -115,6 +117,18 @@ class ReconcileWindow:
     def d1_reached(self) -> bool:
         return (self.new_high_start is not None
                 and self.new_high_start >= self.boundary_t + PASS_EPS)
+
+    def dedup_limit(self) -> float:
+        """시간 소유권 dedup·늦은 커버가 유효한 batch 시작(start) 상한.
+
+        경계 앵커 고정: boundary_t + PASS_EPS + DEDUP_RELEASE_GRACE_SECS.
+        일부러 관측 고수위(new_high_start)를 따라가지 않는다 — 고수위 추종이면
+        한계가 발화 프런티어를 계속 쫓아가 "네, 네" 같은 창 밖 정상 반복까지
+        dedup 대상이 되는 자기확장 구멍이 생긴다. 경계 재방출(재디코딩 창 겹침)은
+        정의상 경계 부근에서 시작하므로 앵커 고정으로 충분하고, D2 조기 resolve 후
+        늦은 커버 도착도 +DEDUP_RELEASE_GRACE_SECS 유예가 흡수한다.
+        """
+        return self.boundary_t + PASS_EPS + DEDUP_RELEASE_GRACE_SECS
 
     def resolve(self, reason: str) -> None:
         """단일 컷포인트 원자성으로 tombstone들을 대체/복원 확정한다.
@@ -217,17 +231,39 @@ class BoundaryReconciler:
     # ── 관측/마감 ────────────────────────────────────────────────────────────
 
     def observe_new_token(self, token: ASRToken) -> None:
-        """신규 텍스트 토큰 도착 훅 (tokens_alignment._insert_with_reattachment)."""
+        """신규 텍스트 토큰 도착 훅 (tokens_alignment._insert_with_reattachment).
+
+        창 활성 중엔 커버 마킹+D1 진행도. resolve 후에도 dedup_limit 유예 안이면
+        늦은 커버를 반영한다 — D2 조기 resolve로 복원된 tombstone을 뒤늦게 도착한
+        신언어 토큰이 커버하면 재대체(복원분 중복 방지).
+        """
         if not RECONCILE_ENABLED:
             return
         w = self.window
-        if w is None or w.resolved:
+        if w is None:
             return
         if token.detected_language != w.new_lang:
             return  # 구언어 재귀속 꼬리 등 — 창 관측 대상 아님
-        w.observe(token)
-        if w.d1_reached():
-            w.resolve("d1")
+        if not w.resolved:
+            w.observe(token)
+            if w.d1_reached():
+                w.resolve("d1")
+            return
+        # ── resolve 후 유예: 늦은 커버 → 복원분 재대체 ──
+        if token.start is None or token.start > w.dedup_limit():
+            return
+        for e in w.entries:
+            if (not e.replaced and not e.token.retracted
+                    and e.token.start is not None
+                    and abs(token.start - e.token.start) <= COVER_TOL):
+                e.replaced = True
+                e.covered = True
+                e.token.retracted = True
+                logger.info(
+                    "[Replace] 늦은 대체(late): %r start=%.2f dstart=%.2f boundary_t=%.2f zone=%s",
+                    e.token.text, e.token.start, e.token.start - token.start,
+                    w.boundary_t, e.zone,
+                )
 
     def on_boundary_marker(self, kind: str) -> None:
         """D2: 다음 Silence/일반 LanguageSwitch 마커 도착 → 활성 창 즉시 resolve.
@@ -242,11 +278,106 @@ class BoundaryReconciler:
             w.resolve(f"d2_{kind}")
 
     def check_deadline(self, audio_time: Optional[float]) -> None:
-        """D3: get_lines() 훅 — audio_time 기준 마감 캡(벽시계 금지)."""
+        """D3: get_lines() 훅 — audio_time 기준 마감 캡(벽시계 금지).
+
+        resolve된 창도 dedup 유예(dedup_limit)까지 지나면 해제한다(참조 정리).
+        """
         if not RECONCILE_ENABLED:
             return
         w = self.window
-        if w is None or w.resolved:
+        if w is None or audio_time is None:
             return
-        if audio_time is not None and audio_time - w.boundary_t >= RECONCILE_DEADLINE_SECS:
-            w.resolve("d3")
+        if not w.resolved:
+            if audio_time - w.boundary_t >= RECONCILE_DEADLINE_SECS:
+                w.resolve("d3")
+            return
+        if audio_time > w.dedup_limit():
+            self.window = None
+
+    # ── 시간 소유권 dedup (방향 분기) ────────────────────────────────────────
+
+    def dedup_batch(self, run: List[ASRToken], all_tokens: List) -> List[ASRToken]:
+        """활성 창 구간(+유예) 내 신규 텍스트 토큰 run에 시간 소유권 규칙을 적용한다.
+
+        비교는 시간(start 근접 OWN_TOL)만 — 텍스트 비교 없음. "한 시간 구간의
+        소유자는 하나, 더 완전한(커버리지 넓은) 쪽이 승자, 패자는 tombstone".
+
+        ① 신규가 기존의 부분 재방출(기존 커버리지가 신규를 포함) → 신규 드롭.
+           ("상당한 상당한", "It's just a It's just a" — 재디코딩 창 겹침 이중방출.)
+        ② 기존이 신규 배치 커버리지의 시간 부분집합 + 신규가 그 너머 확장
+           ("In."→"In support of these...") → 기존 tombstone + 신규 채택 +
+           id(start) 승계: 첫 신규 토큰이 소멸 토큰의 최초 start를 이어받아
+           UI finalizedHistory Map(id→line)에 유령 라인이 남지 않게 한다.
+        창 구간 밖 새 오디오("네, 네" 정상 반복)는 dedup_limit 게이트로 자동 보호.
+
+        주의(보정 대상): OWN_TOL=0.4는 잠정값 — 유예 구간 안에서 정상 연속 토큰이
+        직전 커밋과 0.4s 이내로 붙어 나오면 ①이 오탐할 수 있다. 계측 r1의 Δstart
+        분포로 보정한다.
+        """
+        if not RECONCILE_ENABLED:
+            return run
+        w = self.window
+        if w is None or w.new_lang is None:
+            return run
+        batch = [t for t in run
+                 if t.start is not None and t.detected_language == w.new_lang]
+        if not batch:
+            return run
+        b_min = min(t.start for t in batch)
+        b_max = max(t.start for t in batch)
+        limit = w.dedup_limit()
+        if b_min > limit:
+            return run  # 창 구간 밖 새 오디오 — 정상 반복 보호
+        committed = [
+            tok for tok in all_tokens
+            if not tok.is_silence() and not tok.is_boundary()
+            and not getattr(tok, "retracted", False)
+            and tok.detected_language == w.new_lang
+            and tok.start is not None
+            # 상한 = b_max + OWN_TOL: 배치 커버리지 너머의 무관한 커밋(먼 미래분)이
+            # ②의 "기존 전부가 신규 근접" 판정을 오염시키지 않게 배치 기준으로 자른다.
+            and (w.floor - OWN_TOL) <= tok.start <= b_max + OWN_TOL
+        ]
+        if not committed:
+            return run
+
+        def _nearest(x: float, pool: List[ASRToken]) -> float:
+            return min(abs(x - p.start) for p in pool)
+
+        e_min = min(t.start for t in committed)
+        e_max = max(t.start for t in committed)
+
+        # ① 신규 = 기존의 부분 재방출 → 신규 드롭
+        if (b_min >= e_min - OWN_TOL and b_max <= e_max + OWN_TOL
+                and all(_nearest(t.start, committed) <= OWN_TOL for t in batch)):
+            for t in batch:
+                logger.info(
+                    "[TimeDedup] action=drop text=%r start=%.2f dstart=%.2f boundary_t=%.2f",
+                    t.text, t.start, _nearest(t.start, committed), w.boundary_t,
+                )
+            dropped_ids = {id(t) for t in batch}
+            return [t for t in run if id(t) not in dropped_ids]
+
+        # ② 기존 = 신규 커버리지의 부분집합 + 신규 확장 → 기존 tombstone + id 승계
+        if (e_min >= b_min - OWN_TOL and b_max > e_max + OWN_TOL
+                and all(_nearest(tok.start, batch) <= OWN_TOL for tok in committed)):
+            first_new = min(batch, key=lambda t: t.start)
+            for tok in committed:
+                tok.retracted = True
+                logger.info(
+                    "[TimeDedup] action=supersede text=%r start=%.2f dstart=%.2f "
+                    "boundary_t=%.2f new_text=%r new_start=%.2f",
+                    tok.text, tok.start, _nearest(tok.start, batch),
+                    w.boundary_t, first_new.text, first_new.start,
+                )
+            if e_min < first_new.start:
+                # id(start) 승계 — 소멸 세그먼트의 최초 start를 이어받는다
+                # (exp/boundary-tail-dup ⓓ-2의 cur.start = prev.start 패턴).
+                logger.info(
+                    "[TimeDedup] action=inherit_id new_text=%r start=%.2f dstart=%.2f boundary_t=%.2f",
+                    first_new.text, e_min, first_new.start - e_min, w.boundary_t,
+                )
+                first_new.start = e_min
+            return run
+
+        return run
