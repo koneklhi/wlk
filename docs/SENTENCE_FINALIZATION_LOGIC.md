@@ -98,12 +98,39 @@
   - `MIN_DURATION_SHORT_LANG_RESET = 0.5`초 — `backend.py:37`.
   - `periodic_lang_check_secs` = 기본 `None`(비활성) — `parse_args.py`(CLI `--periodic-lang-check`).
   - `lang_restrict_koen = True` (한/영 2언어 고정) — `parse_args.py`(`--lang-restrict-koen`).
-- **경계 직전/직후 잔존 오언어 텍스트 철회(retraction, Exp-171~174 머지 완료)**: `LanguageSwitch` 마커가
-  `retract_from`(재디코딩 구간 시작 절대시각)·`prev_language`(전환 전 언어)를 실어 방출되면(`_apply_detected_language`가
-  `is_switch`일 때 arm — `align_att_base.py:218-224`, 마커 부착은 `backend.py:623-627`), 마커가 `all_tokens`에
-  append되기 *직전* `_insert_with_reattachment`가 `_retract_stale_language_tokens`를 호출해 diar 이벤트 지연
-  동안 구언어 잠금으로 잘못 커밋된 텍스트를 제거한다 — 상세는 §4 표 참조. **경계 개수·위치는 불변** — 마커 자체를
-  없애는 게 아니라 마커 앞의 잔존 텍스트만 사라진다.
+- **경계 직전/직후 잔존 오언어 텍스트 철회(retraction, Exp-171~174 머지 완료; Exp-192 tombstone화)**:
+  `LanguageSwitch` 마커가 `retract_from`(재디코딩 구간 시작 절대시각)·`prev_language`(전환 전 언어)를 실어
+  방출되면(`_apply_detected_language`가 `is_switch`일 때 arm — `align_att_base.py`, 마커 부착은 `backend.py`
+  process_iter), 마커가 `all_tokens`에 append되기 *직전* `_insert_with_reattachment`가
+  `_retract_stale_language_tokens`를 호출해 diar 이벤트 지연 동안 구언어 잠금으로 잘못 커밋된 텍스트를 숨긴다 —
+  상세는 §4 표 참조. **경계 개수·위치는 불변** — 마커 자체를 없애는 게 아니라 마커 앞의 잔존 텍스트만 숨는다.
+- **철회의 tombstone화 + 경계 재조정 계층(Exp-192, `whisperlivekit/boundary_reconcile.py`)**: 철회는 더 이상
+  파괴적 `pop`이 아니라 `ASRToken.retracted=True`(tombstone) 마킹이다 — 토큰은 `all_tokens`에 남고 파생 뷰
+  (`compute_punctuations_segments`의 `visible` 필터, 단일 초크포인트)에서만 숨는다. 마커 도착 시
+  `ReconcileWindow`가 arm되어(활성 최대 1개) 신언어 토큰의 도착을 관찰한다:
+  - **커버 판정** = start 근접(`COVER_TOL`) — 토큰 end는 start+0.1 고정(가짜)이라 근접 판정만 유효.
+  - **마감 3중**: D1 = 신언어 진행도(start 고수위)가 `boundary_t+PASS_EPS` 통과 / D2 = 다음 Silence·LanguageSwitch
+    마커 도착(새 LanguageSwitch면 이전 창 resolve 후 재arm) / D3 = `get_lines()` 훅에서 audio_time 기준
+    `RECONCILE_DEADLINE_SECS` 경과(벽시계 금지).
+  - **resolve = 단일 컷포인트 원자성**: 신언어 최소 start를 컷 T로, 철회 토큰 `start ≥ T−COVER_TOL` 전부
+    대체(영구 tombstone) / `< T−COVER_TOL` 전부 복원(`retracted=False` — 가시 뷰 시간순 재등장). 부분 복원 구멍
+    금지 — 컷이 하위단어 연속 중간이면 단어 시작 방향 스냅(Case B 파편 방지). 신언어 무도착 시 **전량 복원**
+    (유실 해결 > WER 소폭 허용). 로그 `[Reconcile] arm/resolve`, `[Restore]`, `[Replace]`.
+  - **구역2 확대**(`RECONCILE_SAMESCRIPT_SUBZONE_ENABLED`): `boundary_t−SAMESCRIPT_SUBZONE_SECS(1.2s)` 이내
+    같은 스크립트 prev_lang 토큰("미니스터")도 잠정 tombstone — 복원 보장 위에서만 안전한 공격적 철회로
+    "미니스터."→"Minister..." 이중언어 중복 확정을 소멸시킨다.
+  - **시간 소유권 dedup**(`dedup_batch`, 텍스트 비교 없음): 활성 창 구간(+유예) 내 신규 텍스트 run에 대해
+    ① 신규가 기존의 부분 재방출(기존 커버리지 포함+`OWN_TOL` 근접)이면 신규 드롭, ② 기존이 신규 배치
+    커버리지의 시간 부분집합이고 신규가 그 너머 확장이면(유령 접두어 "In."→"In support...") 기존 tombstone +
+    신규 채택 + **id(start) 승계**(UI `finalizedHistory Map(id→line)` 유령 잔존 방지). dedup 한계는 경계 앵커
+    고정(`boundary_t+PASS_EPS+DEDUP_RELEASE_GRACE_SECS`) — "네, 네" 등 창 밖 정상 반복 자동 보호. 로그
+    `[TimeDedup] action=drop/supersede/inherit_id`.
+  - **전체 롤백**: `RECONCILE_ENABLED=False`(모듈 상수)면 레거시 파괴적 pop 거동 재현.
+- **언어전환 트림 keep 동적 확장(Exp-192, `align_att_base.compute_dynamic_keep`)**: 전환 시 재절단 keep을
+  고정 2.5s에서 `clamp(버퍼끝 절대시각 − last_emit_end + 0.3, 2.5, 5.0)`으로 가변화 — 고정 재절단이 확장
+  창을 무효화해 신언어 서두("In support of these"류)가 재디코딩 범위 밖으로 잘리던 유실을 막는다.
+  `last_emit_end`는 backend 소유 → decoder state 미러(`_last_emit_end` property setter). 플래그
+  `LANG_SWITCH_DYNAMIC_KEEP_ENABLED`, 로그 `[LangSwitch] dynamic keep=...`.
 
 ### 3.3 `speaker_change` — 화자 전환 경계 (diarization ON 한정)
 
@@ -218,12 +245,14 @@ Whisper가 찍는 마침표(`.`/`。`)를 문장 분할 신호로 쓰되, **진�
 | 과거분 제거 `_prune` | `tokens_alignment.py:220-254` (`_DEFAULT_RETENTION_SECONDS=inf`, `:21`) | 제거됨(no-op) | 무제한 리텐션으로 변경(`300.0`→`inf` 패치)되어 상시 조기 반환 — 더 이상 세그먼트를 드롭하지 않음. 신규 경계 무관 |
 | `filter_segments` | `whisperlivekit/filtering/__init__.py` | 드롭/치환 | CJK·가나·비음성주석·환각·구두점-only 세그먼트 드롭 + 단어 치환. 라인이 사라질 순 있으나 새 경계 생성 안 함 |
 | `_append_terminal_punctuation` | `audio_processor.py:32-43` | 표시 수정자 | finalized 세그먼트 끝에 온점 부착(멱등, WER·경계 무영향) |
-| 환각/반복 필터 (BatchRepeat/CrossBatch/단일음절/ScriptMismatch/AnchorStorm) | `backend.py:354-413, 448-465, 505-548` | 드롭 | 토큰/배치 드롭. Silence/LanguageSwitch 마커 미방출 → 경계 직접 생성 안 함(텍스트 억제로 간접 영향) |
+| 환각/반복 필터 (BatchRepeat/CrossBatch/단일음절/ScriptMismatch/AnchorStorm) | `backend.py` — CrossBatchFilter 실위치는 `_filter_cross_batch_repetitions`(`backend.py:516~`)이며 `filtering/__init__.py` 아님(위 `filter_segments`와 별개 계층 — 과거 혼동 오류 정정, Exp-192) | 드롭 | 토큰/배치 드롭. Silence/LanguageSwitch 마커 미방출 → 경계 직접 생성 안 함(텍스트 억제로 간접 영향). 직전 1단어 완전일치만 비교 + 경계에서 `_last_emitted_word=None` 리셋 → 경계 중복은 못 잡음(경계 중복은 Exp-192 시간 소유권 dedup이 전담) |
 | QualityGate (logprob/compression) | `align_att_base.py:592-645` (`quality_gate_reset_after=3`) | 드롭/디코더리셋 | 저품질 세그먼트 억제. refresh는 디코더 내부 상태만 리셋, 마커 미방출 |
 | stall 복구 refresh | `backend.py:554-563` (`STALL_RECOVER_SEC=10.0`, `:41`) | 디코더리셋 | 마커 미방출 → 경계 직접 생성 안 함 |
 | 버퍼 최대길이 트림 `audio_max_len` | config/`parse_args.py` (`--audio-max-len`) | 타이밍 수정자 | 디코더 버퍼 상한 — 타임스탬프 영향, 경계 미생성 |
 | 스트림 종료 flush (SENTINEL/`_finish_transcription`) | `audio_processor.py:28,311-338,740-746` | flush | 남은 토큰 flush. **강제 finalize/경계 생성 없음** — 마지막 줄은 Silence/boundary가 없으면 `finalized=false`로 남음(트리거 null) |
-| 언어전환 경계 철회 `_retract_stale_language_tokens` (Exp-171~174 머지 완료) | `tokens_alignment.py:141-178` (`RETRACT_EPS=0.05`, 잠정) | 드롭(구언어 잔존) | `LanguageSwitch` 마커 append 직전 `all_tokens` 꼬리를 역스캔해 `prev_language` 스탬프 텍스트 토큰 제거 — 구역1(`start≥boundary_t-EPS`): 언어매치만으로 제거, 구역2(하한~구역1 사이): +반대스크립트일 때만 제거. Silence/boundary 만나면 스캔 중단. 마커·경계 개수 불변, 마커 앞 잔존 텍스트만 사라짐 |
+| 언어전환 경계 철회 `_retract_stale_language_tokens` (Exp-171~174; **Exp-192 tombstone화**) | `tokens_alignment.py` (`RETRACT_EPS=0.05`, 잠정) | tombstone(복원 가능 숨김) | `LanguageSwitch` 마커 append 직전 `all_tokens` 꼬리를 역스캔해 `prev_language` 스탬프 텍스트 토큰을 `retracted=True` 마킹(파괴적 pop 아님 — `RECONCILE_ENABLED=False`면 레거시 pop 재현) — 구역1(`start≥boundary_t-EPS`): 언어매치만으로, 구역2(하한~구역1 사이): +반대스크립트, 구역2 확대(subzone 플래그): +같은스크립트 `boundary_t−1.2s` 이내 잠정. Silence/boundary 만나면 스캔 중단, 이미 retracted면 투명 통과. 마커·경계 개수 불변 |
+| 경계 재조정 `ReconcileWindow` (Exp-192) | `whisperlivekit/boundary_reconcile.py` + `tokens_alignment.py` 훅(`_insert_with_reattachment`/`get_lines`) | 복원/대체(텍스트 가시성) | 마커 arm → 신언어 토큰 커버 관찰(start 근접 `COVER_TOL`) → 마감 3중(D1 진행도/D2 다음 마커/D3 audio_time 3.0s 캡) 시 단일 컷포인트로 tombstone을 복원(un-retract) 또는 영구 대체. §3.2 상세. 경계 마커/세그먼트 신설 없음 |
+| 시간 소유권 dedup `dedup_batch` (Exp-192) | `whisperlivekit/boundary_reconcile.py` | 드롭/대체 + id 승계 | 활성 창 구간(+0.5s 유예) 내 신규 텍스트 run을 기 커밋 같은언어 토큰과 start 근접(`OWN_TOL`) 비교 — 부분 재방출은 신규 드롭, 유령 접두어는 기존 tombstone+id(start) 승계. 텍스트 비교 없음. 경계 미생성 |
 
 ---
 
@@ -239,7 +268,10 @@ Whisper가 찍는 마침표(`.`/`。`)를 문장 분할 신호로 쓰되, **진�
 | `FINALIZE_GRACE_SECS` | `2.0`s | `tokens_alignment.py:20` | 침묵 후 확정 유예창 |
 | `TAIL_REATTACH_EPS` | `0.05`s | `tokens_alignment.py:19` | 꼬리 재귀속 지터 여유 |
 | `TAIL_REATTACH_MAX_LOOKBACK_SECS` | `1.5`s | `tokens_alignment.py:25` | 삽입 재귀속 최대 소급 |
-| `LANG_SWITCH_KEEP_SECS` | `2.5`s | `align_att_base.py:13` | 전환 시 유지 오디오 |
+| `LANG_SWITCH_KEEP_SECS` | `2.5`s (Exp-192부터 동적 keep의 **하한**) | `align_att_base.py` | 전환 시 유지 오디오 — `LANG_SWITCH_DYNAMIC_KEEP_ENABLED=True`면 `compute_dynamic_keep`이 미방출 구간 기반으로 2.5~5.0s 가변 |
+| `LANG_SWITCH_DYNAMIC_KEEP_ENABLED`(Exp-192) | `True` | `align_att_base.py` | 동적 keep 롤백 플래그(False=고정 2.5s) |
+| `LANG_SWITCH_KEEP_MAX_SECS`(Exp-192) | `5.0`s | `align_att_base.py` | 동적 keep 상한(Exp-166 고정 keep 4.5s 환각 전례 감시 캡) |
+| `LANG_SWITCH_KEEP_MARGIN_SECS`(Exp-192) | `0.3`s | `align_att_base.py` | 동적 keep 여유 마진 |
 | `MIN_DURATION_SHORT_LANG_RESET` | `0.5`s | `backend.py:37` | 짧은 침묵 언어 리셋 문턱 |
 | `STALL_RECOVER_SEC` | `10.0`s | `backend.py:41` | stall 복구 refresh |
 | `periodic_lang_check_secs` | `None`(비활성) | `parse_args.py` `--periodic-lang-check` | 주기 언어 재감지 간격 |
@@ -259,6 +291,14 @@ Whisper가 찍는 마침표(`.`/`。`)를 문장 분할 신호로 쓰되, **진�
 | `MIN_SPEAKER_ATTRIBUTION_SECS`(Exp-188) | `0.5`s | `tokens_alignment.py` | 승자 diar 세그먼트가 이보다 짧고 직전 화자와 다르면 귀속 불신 → 직전 화자 승계(짧은 세그먼트 화자오귀속 노이즈 방지, §3.3) |
 | `SILENCE_HARD_SECS`(Exp-176~; Exp-185→1.2; Exp-190 문법-조건부화) | `1.2`s (≤2.0 불변식) | `tokens_alignment.py` | 침묵 안전망 문턱 — d_eff≥이 값이면 하드 분할. Exp-190부터 `should_split_after_silence`가 미종결(False) 판정 시 이 분기를 건너뛰고 pending/문법 경로 폴백(단어 중간 분절 방지) |
 | `PENDING_RESOLVE_CAP`(Exp-176~) | `2.0`s | `tokens_alignment.py` | 게이트가 B 도착을 기다리는 최대 시간(silence.end 기준) — 초과 시 문법 무관 분할확정(무한 pending 방지). Exp-190 이후 미종결 어절의 하드 분할 유예를 이 캡이 최종 보증 |
+| `RECONCILE_ENABLED`(Exp-192) | `True` | `boundary_reconcile.py` | 재조정 계층 전체 롤백 플래그(False=레거시 파괴적 pop) |
+| `RECONCILE_SAMESCRIPT_SUBZONE_ENABLED`(Exp-192) | `True` | `boundary_reconcile.py` | 구역2 확대(같은 스크립트 잠정 철회)만 롤백 |
+| `COVER_TOL`(Exp-192, **잠정**) | `0.5`s | `boundary_reconcile.py` | 커버 판정 start 근접 허용(τ — 컷 파티션 동일 사용). 계측 r1 Δstart 분포로 보정 |
+| `PASS_EPS`(Exp-192, **잠정**) | `0.25`s | `boundary_reconcile.py` | D1 마감: 신언어 진행도가 boundary_t+이 값 통과 시 resolve |
+| `RECONCILE_DEADLINE_SECS`(Exp-192) | `3.0`s | `boundary_reconcile.py` | D3 마감 캡(audio_time 기준, 벽시계 금지) |
+| `SAMESCRIPT_SUBZONE_SECS`(Exp-192, **잠정**) | `1.2`s | `boundary_reconcile.py` | 구역2 확대 범위(boundary_t 이전) |
+| `OWN_TOL`(Exp-192, **잠정**) | `0.4`s | `boundary_reconcile.py` | 시간 소유권 dedup start 근접 허용. 계측 r1 Δstart 분포로 보정 |
+| `DEDUP_RELEASE_GRACE_SECS`(Exp-192) | `0.5`s | `boundary_reconcile.py` | 조기 resolve 후 dedup/늦은 커버 유지 유예 |
 
 디코더 파라미터(간접 영향: 어떤 텍스트가 나오는지에 영향, 경계는 §3의 3신호가 전담) —
 `frame_threshold`, `beams`, `logprob_threshold`, `compression_ratio_threshold` 등은
@@ -289,6 +329,7 @@ Whisper가 찍는 마침표(`.`/`。`)를 문장 분할 신호로 쓰되, **진�
 | 경계 신호 생성 조건 변경 (Silence 토큰 문턱, LanguageSwitch arm 진입점, 화자경계 로직) | §3 해당 절 |
 | §5 파라미터 상수의 **값** 변경 | §5 표(현재값), 그리고 그 값을 언급한 §3 본문 |
 | §4 메커니즘(grace/재귀속/필터/QualityGate 등)의 경계 영향 방식 변경 | §4 표 |
+| `boundary_reconcile.py` 재조정 규칙(마감 3중·컷 파티션·dedup 방향·상수) 또는 tombstone/가시 뷰 필터 변경 | §3.2(철회·재조정 절), §4 표, §5 표 |
 
 > 검증: 값을 바꾼 뒤 `grep`으로 이 문서에서 옛 수치가 남아있지 않은지 확인.
 > 트리거 라벨을 추가/변경하면 반드시 [live_transcription.js](../whisperlivekit/web/live_transcription.js)의
