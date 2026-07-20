@@ -44,6 +44,12 @@ def compute_dynamic_keep(buffer_end_abs: Optional[float], last_emit_end: Optiona
 SESSION_START_LANG_PROBE_ENABLED = True  # False = 완전 기존 동작(무기한 보류) — 짝지음 A/B 롤백 플래그
 SESSION_START_LANG_MIN_PROB = 0.85  # 프로브 적용 확신도 게이트(틀린 언어 커밋 방지, 무조건 적용 폴백 없음)
 
+# held/UTF-8 방출 계층 seam 수렴 수정 (연속발화 단어 유실, 예 "이러한 플랫폼을 구축하는"→
+# "이러한 구축하는"): ① 스테일 pending 재-prepend가 phantom 중간 U+FFFD를 만들어 무공백
+# 한국어에서 구 전체가 한 단어로 묶여 skip-소멸(+mojibake 누적), ② 중간 위치 U+FFFD 단어가
+# builder에선 skip되는데 handler는 마지막 단어만 hold해 영구 유실되는 계약 불일치를 고친다.
+SEAM_CONVERGENCE_FIX_ENABLED = True  # False = 완전 기존 동작 — 짝지음 A/B 측정용 롤백 플래그
+
 # QG 억제가 구두점/공백만 담고 있으면 refresh streak에 산입하지 않기 위한 문자 집합.
 # 실단어가 하나도 없는 억제는 버퍼 폐기(단어 유실) 위험을 감수할 만한 garbage가 아니다.
 _PUNCT_ONLY_CHARS = frozenset({'.', '?', '!', '。', '！', '？', ',', ';', ':'})
@@ -509,12 +515,7 @@ class AlignAttBase(ABC):
 
         # Post-decode: split tokens and build timestamped words
         tokens_to_split = self._tokens_to_list(current_tokens, token_len_before)
-        if self.state.pending_incomplete_tokens:
-            logger.debug(
-                f"[UTF-8 Fix] Prepending {len(self.state.pending_incomplete_tokens)} "
-                f"pending tokens: {self.state.pending_incomplete_tokens}"
-            )
-            tokens_to_split = self.state.pending_incomplete_tokens + tokens_to_split
+        tokens_to_split = self._merge_pending_tokens(tokens_to_split)
 
         new_hypothesis, split_words, split_tokens = self._split_tokens(
             tokens_to_split, fire_detected, is_last
@@ -550,6 +551,40 @@ class AlignAttBase(ABC):
 
     # === Post-decode shared helpers ===
 
+    def _merge_pending_tokens(self, new_tokens):
+        """Prepend held incomplete UTF-8 tokens, guarded by a seam convergence gate.
+
+        Gate (SEAM_CONVERGENCE_FIX_ENABLED): if decode(pending + new) still contains
+        U+FFFD while decode(new) alone is clean, the held bytes can never converge with
+        this chunk's re-decoded tokens (stale seam). Re-prepending them would glue a
+        phantom U+FFFD into the first new word — in spaceless Korean the whole phrase
+        becomes ONE word, gets skipped downstream, and mojibake accumulates across
+        retries. Discard the stale pending and process the fresh tokens as-is.
+        A legitimate continuation (e.g. held "미�" + the trailing bytes of "디어")
+        decodes to U+FFFD on its own, so the gate does NOT fire there and the
+        hold-then-reemit-full-word design from Exp-087 (which fixed the "미 미디어"
+        leading-fragment duplication) is preserved.
+        """
+        pending = self.state.pending_incomplete_tokens
+        if not pending:
+            return new_tokens
+        if SEAM_CONVERGENCE_FIX_ENABLED and new_tokens:
+            replacement_char = "�"
+            if (
+                replacement_char in self.tokenizer.decode(pending + new_tokens)
+                and replacement_char not in self.tokenizer.decode(new_tokens)
+            ):
+                logger.debug(
+                    f"[UTF-8 Fix] Discarding stale pending (seam divergence): {pending}"
+                )
+                self.state.pending_incomplete_tokens = []
+                self.state.pending_retries = 0
+                return new_tokens
+        logger.debug(
+            f"[UTF-8 Fix] Prepending {len(pending)} pending tokens: {pending}"
+        )
+        return pending + new_tokens
+
     def _split_tokens(self, tokens_list, fire_detected, is_last):
         """Split token list into words. Returns (hypothesis, split_words, split_tokens)."""
         if fire_detected or is_last:
@@ -576,6 +611,19 @@ class AlignAttBase(ABC):
                 # _handle_pending_tokens holds the incomplete token for retry and the next
                 # chunk re-emits the FULL word ("미디어") exactly once. Emitting the partial
                 # here is what produced leading-fragment duplication ("미 미디어").
+                if SEAM_CONVERGENCE_FIX_ENABLED:
+                    # Contract alignment with _handle_pending_tokens: stop emission at the
+                    # FIRST incomplete word. Clean words after it are deferred to the next
+                    # chunk (held together for retry) instead of emitted now — the old
+                    # skip-and-continue emitted them while only the LAST word was ever
+                    # held, so a mid-position incomplete word was silently lost forever.
+                    # Still no partial emission: that would reintroduce the Exp-087
+                    # "미 미디어" duplication this skip+hold design fixed.
+                    logger.debug(
+                        f"[UTF-8 Filter] Halting emission at incomplete word "
+                        f"(held for retry): {repr(word)}"
+                    )
+                    break
                 logger.debug(f"[UTF-8 Filter] Skipping incomplete (held for retry): {repr(word)}")
                 timestamp_idx += len(word_tokens)
                 continue
@@ -608,24 +656,46 @@ class AlignAttBase(ABC):
         MAX_PENDING_RETRIES = 2
         replacement_char = "\ufffd"
 
-        if split_words and replacement_char in split_words[-1]:
+        if SEAM_CONVERGENCE_FIX_ENABLED:
+            # Contract alignment with _build_timestamped_words (which halts emission at
+            # the first incomplete word): hold everything from the FIRST U+FFFD word on,
+            # not just the last word. The old last-word-only check leaked mid-position
+            # incomplete words \u2014 skipped by the builder but never held, hence lost.
+            # Deferred clean words after the seam are re-emitted with the next chunk,
+            # keeping the exactly-once contract from Exp-087 ("\ubbf8 \ubbf8\ub514\uc5b4" fix).
+            incomplete_idx = next(
+                (i for i, w in enumerate(split_words) if replacement_char in w), None
+            )
+            held_tokens = (
+                [t for toks in split_tokens[incomplete_idx:] for t in toks]
+                if incomplete_idx is not None
+                else None
+            )
+        else:
+            held_tokens = (
+                split_tokens[-1]
+                if split_words and replacement_char in split_words[-1]
+                else None
+            )
+
+        if held_tokens is not None:
             self.state.pending_retries += 1
             if self.state.pending_retries > MAX_PENDING_RETRIES:
                 logger.warning(
-                    f"[UTF-8 Fix] Dropping {len(split_tokens[-1])} incomplete tokens "
+                    f"[UTF-8 Fix] Dropping {len(held_tokens)} incomplete tokens "
                     f"after {MAX_PENDING_RETRIES} retries (won't resolve)"
                 )
                 self.state.pending_incomplete_tokens = []
                 self.state.pending_retries = 0
-            elif len(split_tokens[-1]) <= MAX_PENDING_TOKENS:
-                self.state.pending_incomplete_tokens = split_tokens[-1]
+            elif len(held_tokens) <= MAX_PENDING_TOKENS:
+                self.state.pending_incomplete_tokens = held_tokens
                 logger.debug(
                     f"[UTF-8 Fix] Holding {len(self.state.pending_incomplete_tokens)} "
                     f"incomplete tokens for next chunk (retry {self.state.pending_retries})"
                 )
             else:
                 logger.warning(
-                    f"[UTF-8 Fix] Skipping {len(split_tokens[-1])} tokens "
+                    f"[UTF-8 Fix] Skipping {len(held_tokens)} tokens "
                     f"(exceeds limit of {MAX_PENDING_TOKENS}, likely hallucination)"
                 )
                 self.state.pending_incomplete_tokens = []
