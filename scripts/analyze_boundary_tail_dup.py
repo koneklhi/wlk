@@ -227,6 +227,31 @@ _NEWSPEAKER_AFTER_RE = re.compile(
     r"\[NewSpeaker\] spk=(\S+) det_after=(\S+) \(eager_applied=(\S+)\) "
     r"keep_secs=([\d.]+) kept_segments_len=([\d.]+)s global_time_offset=([\-\d.]+)"
 )
+# Exp-192 재조정 계층 신규 태그 (boundary_reconcile.py / tokens_alignment.py 포맷과 동기).
+_RECONCILE_ARM_RE = re.compile(
+    r"\[Reconcile\] arm boundary_t=([\d.]+) prev_lang=(\S+) new_lang=(\S+) "
+    r"floor=([\-\d.]+) tombstones=(\d+)"
+)
+_RECONCILE_RESOLVE_RE = re.compile(
+    r"\[Reconcile\] resolve reason=(\S+) boundary_t=([\d.]+) cut=(\S+) "
+    r"covered=(\d+) restored=(\d+) replaced=(\d+)"
+)
+_RESTORE_RE = re.compile(
+    r"\[Restore\] 복원: (.+) start=([\-\d.]+) dstart=(\S+) boundary_t=([\d.]+) zone=(\S+)"
+)
+# '대체'와 '늦은 대체(late)'를 함께 잡는다 — late 여부는 그룹 1로 구분.
+_REPLACE_RE = re.compile(
+    r"\[Replace\] (대체|늦은 대체\(late\)): (.+) start=([\-\d.]+) dstart=(\S+) "
+    r"boundary_t=([\d.]+) zone=(\S+)"
+)
+_TIMEDEDUP_RE = re.compile(
+    r"\[TimeDedup\] action=(\w+) (?:text|new_text)=(.+?) start=([\-\d.]+) "
+    r"dstart=([\-\d.]+) boundary_t=([\d.]+)"
+)
+# 동적 keep (커밋5) — 발동값 분포 확인용.
+_DYNAMIC_KEEP_RE = re.compile(
+    r"\[LangSwitch\] dynamic keep=([\d.]+)s \(buffer_end=([\-\d.]+) last_emit_end=(\S+)\)"
+)
 
 
 @dataclass
@@ -256,12 +281,73 @@ class NewSpeakerAfterEvent:
 
 
 @dataclass
+class ReconcileArmEvent:
+    line_no: int
+    boundary_t: float
+    prev_lang: str
+    new_lang: str
+    floor: float
+    tombstones: int
+
+
+@dataclass
+class ReconcileResolveEvent:
+    line_no: int
+    reason: str
+    boundary_t: float
+    cut: Optional[float]  # 'NA'(신언어 무도착 전량복원)면 None
+    covered: int
+    restored: int
+    replaced: int
+
+
+@dataclass
+class ReconcileTokenEvent:
+    """[Restore]/[Replace]/[TimeDedup] 공통 — 토큰 1건의 재조정/소유권 판정 기록."""
+    line_no: int
+    kind: str      # 'restore' | 'replace' | 'replace_late' | 'dedup_drop' | 'dedup_supersede' | 'dedup_inherit_id'
+    text: str
+    start: float
+    dstart: Optional[float]  # 'NA'(컷 부재)면 None
+    boundary_t: float
+    zone: Optional[str] = None  # Restore/Replace만
+
+
+@dataclass
+class DynamicKeepEvent:
+    line_no: int
+    keep_secs: float
+    buffer_end: float
+    last_emit_end: Optional[float]  # 'None'(폴백)이면 None
+
+
+def _strip_repr_quotes(text: str) -> str:
+    text = text.strip()
+    if (text.startswith("'") and text.endswith("'")) or (text.startswith('"') and text.endswith('"')):
+        return text[1:-1]
+    return text
+
+
+def _parse_optional_float(s: str) -> Optional[float]:
+    if s in ("NA", "None"):
+        return None
+    try:
+        return float(s)
+    except ValueError:
+        return None
+
+
+@dataclass
 class BoundaryLog:
     path: str
     retract_scans: List[RetractScanEvent] = field(default_factory=list)
     retract_removed: List[Tuple[int, str, str]] = field(default_factory=list)  # (line_no, text, prev_lang)
     lang_switch_emits: List[LangSwitchEmitEvent] = field(default_factory=list)
     new_speaker_afters: List[NewSpeakerAfterEvent] = field(default_factory=list)
+    reconcile_arms: List[ReconcileArmEvent] = field(default_factory=list)
+    reconcile_resolves: List[ReconcileResolveEvent] = field(default_factory=list)
+    reconcile_tokens: List[ReconcileTokenEvent] = field(default_factory=list)
+    dynamic_keeps: List[DynamicKeepEvent] = field(default_factory=list)
     trace_tokens_on: bool = False
 
 
@@ -280,10 +366,7 @@ def parse_boundary_log(path: str, lines: List[str]) -> BoundaryLog:
             continue
         m = _RETRACT_REMOVE_RE.search(line)
         if m:
-            text = m.group(1).strip()
-            if (text.startswith("'") and text.endswith("'")) or (text.startswith('"') and text.endswith('"')):
-                text = text[1:-1]
-            r.retract_removed.append((i, text, m.group(3)))
+            r.retract_removed.append((i, _strip_repr_quotes(m.group(1)), m.group(3)))
             continue
         m = _LANGSWITCH_EMIT_RE.search(line)
         if m:
@@ -296,6 +379,53 @@ def parse_boundary_log(path: str, lines: List[str]) -> BoundaryLog:
             r.new_speaker_afters.append(NewSpeakerAfterEvent(
                 line_no=i, det_after=m.group(2), eager_applied=(m.group(3) == "True"),
                 keep_secs=float(m.group(4)), kept_segments_len=float(m.group(5)),
+            ))
+            continue
+        m = _RECONCILE_ARM_RE.search(line)
+        if m:
+            r.reconcile_arms.append(ReconcileArmEvent(
+                line_no=i, boundary_t=float(m.group(1)), prev_lang=m.group(2),
+                new_lang=m.group(3), floor=float(m.group(4)), tombstones=int(m.group(5)),
+            ))
+            continue
+        m = _RECONCILE_RESOLVE_RE.search(line)
+        if m:
+            r.reconcile_resolves.append(ReconcileResolveEvent(
+                line_no=i, reason=m.group(1), boundary_t=float(m.group(2)),
+                cut=_parse_optional_float(m.group(3)), covered=int(m.group(4)),
+                restored=int(m.group(5)), replaced=int(m.group(6)),
+            ))
+            continue
+        m = _RESTORE_RE.search(line)
+        if m:
+            r.reconcile_tokens.append(ReconcileTokenEvent(
+                line_no=i, kind="restore", text=_strip_repr_quotes(m.group(1)),
+                start=float(m.group(2)), dstart=_parse_optional_float(m.group(3)),
+                boundary_t=float(m.group(4)), zone=m.group(5),
+            ))
+            continue
+        m = _REPLACE_RE.search(line)
+        if m:
+            kind = "replace_late" if "late" in m.group(1) else "replace"
+            r.reconcile_tokens.append(ReconcileTokenEvent(
+                line_no=i, kind=kind, text=_strip_repr_quotes(m.group(2)),
+                start=float(m.group(3)), dstart=_parse_optional_float(m.group(4)),
+                boundary_t=float(m.group(5)), zone=m.group(6),
+            ))
+            continue
+        m = _TIMEDEDUP_RE.search(line)
+        if m:
+            r.reconcile_tokens.append(ReconcileTokenEvent(
+                line_no=i, kind=f"dedup_{m.group(1)}", text=_strip_repr_quotes(m.group(2)),
+                start=float(m.group(3)), dstart=float(m.group(4)),
+                boundary_t=float(m.group(5)),
+            ))
+            continue
+        m = _DYNAMIC_KEEP_RE.search(line)
+        if m:
+            r.dynamic_keeps.append(DynamicKeepEvent(
+                line_no=i, keep_secs=float(m.group(1)), buffer_end=float(m.group(2)),
+                last_emit_end=_parse_optional_float(m.group(3)),
             ))
             continue
     return r
@@ -320,6 +450,10 @@ class BoundaryVerdict:
     missing: Dict[str, List[str]]
     series: List[str]
     evidence: List[str]
+    # Exp-192 재조정 결과 상태(로그 [Reconcile] resolve 매칭 시): '복원됨'/'대체됨'/
+    # '혼합(복원+대체)'/'대상없음'. 로그 부재·매칭 실패면 None. 계열(series)은
+    # before 이력과의 비교 가능성을 위해 불변 — 상태는 별도 필드로만 붙인다.
+    reconcile_status: Optional[str] = None
 
 
 def classify_boundaries(
@@ -335,11 +469,33 @@ def classify_boundaries(
     확정할 것.
     """
     retract_scans = log.retract_scans if log else []
+    resolves = log.reconcile_resolves if log else []
     verdicts: List[BoundaryVerdict] = []
     for idx, boundary in enumerate(boundaries):
         missing = boundary_missing_words(ops, boundary)
         series: List[str] = []
         evidence: List[str] = []
+        reconcile_status: Optional[str] = None
+
+        # 재조정 상태 매칭 — RetractScan과 [Reconcile] resolve는 같은 boundary_t를
+        # 공유하므로(arm이 철회 스캔 직후 동일 값으로 발생) 값으로 매칭한다.
+        rs_for_status = retract_scans[idx] if idx < len(retract_scans) else None
+        if rs_for_status is not None:
+            rv = next((x for x in resolves
+                       if abs(x.boundary_t - rs_for_status.boundary_t) < 0.05), None)
+            if rv is not None:
+                if rv.restored == 0 and rv.replaced == 0:
+                    reconcile_status = "대상없음"
+                elif rv.restored > 0 and rv.replaced > 0:
+                    reconcile_status = "혼합(복원+대체)"
+                elif rv.restored > 0:
+                    reconcile_status = "복원됨"
+                else:
+                    reconcile_status = "대체됨"
+                evidence.append(
+                    f"reconcile resolve(line {rv.line_no}) reason={rv.reason} "
+                    f"cut={rv.cut} covered={rv.covered} restored={rv.restored} replaced={rv.replaced}"
+                )
 
         if missing["before_del"]:
             series.append(_SERIES_OLD_LANG_TAIL)
@@ -369,7 +525,10 @@ def classify_boundaries(
 
         if not series:
             series.append(_SERIES_NORMAL)
-        verdicts.append(BoundaryVerdict(boundary=boundary, missing=missing, series=series, evidence=evidence))
+        verdicts.append(BoundaryVerdict(
+            boundary=boundary, missing=missing, series=series, evidence=evidence,
+            reconcile_status=reconcile_status,
+        ))
     return verdicts
 
 
@@ -490,6 +649,10 @@ class FileAnalysis:
     n_words: int = 0
     lang_switch_trigger_count: int = 0
     retract_scan_count: int = 0
+    # Exp-192 재조정/dedup/동적 keep 이벤트 (로그 있을 때만 채움)
+    reconcile_resolves: List[ReconcileResolveEvent] = field(default_factory=list)
+    reconcile_tokens: List[ReconcileTokenEvent] = field(default_factory=list)
+    dynamic_keeps: List[DynamicKeepEvent] = field(default_factory=list)
 
 
 def analyze_file(
@@ -527,6 +690,9 @@ def analyze_file(
                 log_lines = f.readlines()
             log = parse_boundary_log(log_path, log_lines)
             fa.retract_scan_count = len(log.retract_scans)
+            fa.reconcile_resolves = log.reconcile_resolves
+            fa.reconcile_tokens = log.reconcile_tokens
+            fa.dynamic_keeps = log.dynamic_keeps
         except OSError as e:
             print(f"[skip-log] {log_path}: {e}", file=sys.stderr)
 
@@ -553,8 +719,9 @@ def _print_file_report(fa: FileAnalysis, detail: bool = True) -> None:
         if detail:
             for v in fa.verdicts:
                 b = v.boundary
+                status = f"  reconcile={v.reconcile_status}" if v.reconcile_status else ""
                 print(f"    경계#{b.boundary_idx} {b.before_speaker}({b.before_lang})→"
-                      f"{b.after_speaker}({b.after_lang})  series={v.series}")
+                      f"{b.after_speaker}({b.after_lang})  series={v.series}{status}")
                 if v.missing["before_del"] or v.missing["after_del"]:
                     print(f"      before_del={v.missing['before_del']}  after_del={v.missing['after_del']}")
                 if v.missing["before_sub"] or v.missing["after_sub"]:
@@ -567,6 +734,38 @@ def _print_file_report(fa: FileAnalysis, detail: bool = True) -> None:
         for run in fa.dup_runs:
             print(f"    [dup] word {run.start_word_idx}-{run.end_word_idx} n={run.n} "
                   f"×{run.repeat_count}  ngram={run.ngram!r}")
+    if fa.reconcile_resolves or fa.reconcile_tokens or fa.dynamic_keeps:
+        kind_counter = Counter(ev.kind for ev in fa.reconcile_tokens)
+        reason_counter = Counter(rv.reason for rv in fa.reconcile_resolves)
+        print(f"  재조정(Exp-192): resolve {len(fa.reconcile_resolves)}건 {dict(reason_counter)}  "
+              f"토큰이벤트 {dict(kind_counter)}  dynamic_keep {len(fa.dynamic_keeps)}건")
+        if detail:
+            for ev in fa.reconcile_tokens:
+                d = f"{ev.dstart:.2f}" if ev.dstart is not None else "NA"
+                z = f" zone={ev.zone}" if ev.zone else ""
+                print(f"    [{ev.kind}] {ev.text!r} start={ev.start:.2f} dstart={d} "
+                      f"boundary_t={ev.boundary_t:.2f}{z}")
+            for dk in fa.dynamic_keeps:
+                le = f"{dk.last_emit_end:.2f}" if dk.last_emit_end is not None else "None"
+                print(f"    [dynamic_keep] keep={dk.keep_secs:.2f}s buffer_end={dk.buffer_end:.2f} "
+                      f"last_emit_end={le}")
+
+
+def _print_dstart_distribution(analyses: List["FileAnalysis"]) -> None:
+    """[Restore]/[Replace]/[TimeDedup] Δstart 분포 — 계측 r1에서 τ(COVER_TOL)/OWN_TOL
+    보정에 쓰는 리포트. dstart=NA(전량 복원 등 컷 부재)는 수치 분포에서 제외한다."""
+    by_kind: Dict[str, List[float]] = {}
+    for fa in analyses:
+        for ev in fa.reconcile_tokens:
+            if ev.dstart is not None:
+                by_kind.setdefault(ev.kind, []).append(ev.dstart)
+    if not by_kind:
+        return
+    print("  Δstart 분포 (kind별, 초):")
+    for kind in sorted(by_kind):
+        vals = sorted(by_kind[kind])
+        print(f"    {kind}: n={len(vals)} min={vals[0]:.2f} "
+              f"median={statistics.median(vals):.2f} max={vals[-1]:.2f}")
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -640,6 +839,21 @@ def main(argv: Optional[List[str]] = None) -> int:
     if dup_counts:
         print(f"  인접 n-gram 중복 건수: 합계={sum(dup_counts)} "
               f"median={statistics.median(dup_counts):.1f} max={max(dup_counts)}")
+    status_counter: Counter = Counter(
+        v.reconcile_status for fa in analyses for v in fa.verdicts if v.reconcile_status
+    )
+    if status_counter:
+        print(f"  재조정 상태 분포(경계 매칭분): {dict(status_counter)}")
+    token_kind_counter: Counter = Counter(
+        ev.kind for fa in analyses for ev in fa.reconcile_tokens
+    )
+    if token_kind_counter:
+        print(f"  재조정 토큰 이벤트 합계: {dict(token_kind_counter)}")
+    _print_dstart_distribution(analyses)
+    keeps = [dk.keep_secs for fa in analyses for dk in fa.dynamic_keeps]
+    if keeps:
+        print(f"  dynamic keep 발동: n={len(keeps)} min={min(keeps):.2f} "
+              f"median={statistics.median(keeps):.2f} max={max(keeps):.2f}")
     return 0
 
 

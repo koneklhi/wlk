@@ -472,3 +472,153 @@ def test_main_handles_missing_reference_gracefully(tmp_path):
     )
     rc = main(["--transcripts", str(txt), "--reference-dir", str(tmp_path / "nope"), "--per-file"])
     assert rc == 0
+
+
+# ── Exp-192 재조정 신규 태그 파서 ─────────────────────────────────────────────
+# 아래 라인들은 boundary_reconcile.py / tokens_alignment.py / align_att_base.py의
+# logger 포맷 문자열과 동기 — 실제 코드 출력과의 일치 여부는 아래 end-to-end
+# caplog 테스트가 별도로 고정한다(포맷 드리프트 가드).
+
+_RECONCILE_LOG_LINES = [
+    "INFO:whisperlivekit.tokens_alignment:[RetractScan] boundary_t=12.40 prev_lang=ko "
+    "scanned=2 removed=1 stopped_by=lower_bound zones=z1:0,z2opp:0,z2same:1\n",
+    "INFO:whisperlivekit.tokens_alignment:[Reconcile] arm boundary_t=12.40 prev_lang=ko "
+    "new_lang=en floor=10.00 tombstones=1\n",
+    "INFO:whisperlivekit.tokens_alignment:[Replace] 대체: ' 미니스터.' start=11.90 "
+    "dstart=-0.10 boundary_t=12.40 zone=zone2_samescript\n",
+    "INFO:whisperlivekit.tokens_alignment:[Reconcile] resolve reason=d1 boundary_t=12.40 "
+    "cut=12.00 covered=1 restored=0 replaced=1\n",
+    "INFO:whisperlivekit.tokens_alignment:[Restore] 복원: ' 반갑습니다' start=11.00 "
+    "dstart=NA boundary_t=15.00 zone=zone2_samescript\n",
+    "INFO:whisperlivekit.tokens_alignment:[Reconcile] resolve reason=d3 boundary_t=15.00 "
+    "cut=NA covered=0 restored=1 replaced=0\n",
+    "INFO:whisperlivekit.tokens_alignment:[Replace] 늦은 대체(late): ' 미니스터.' start=11.90 "
+    "dstart=-0.10 boundary_t=12.40 zone=zone2_samescript\n",
+    "INFO:whisperlivekit.tokens_alignment:[TimeDedup] action=drop text=\" It's\" start=12.50 "
+    "dstart=0.00 boundary_t=12.40\n",
+    "INFO:whisperlivekit.tokens_alignment:[TimeDedup] action=supersede text=' In.' start=13.00 "
+    "dstart=0.05 boundary_t=12.40 new_text=' In' new_start=13.05\n",
+    "INFO:whisperlivekit.tokens_alignment:[TimeDedup] action=inherit_id new_text=' In' "
+    "start=13.00 dstart=0.05 boundary_t=12.40\n",
+    "INFO:whisperlivekit.simul_whisper.align_att_base:[LangSwitch] dynamic keep=3.80s "
+    "(buffer_end=20.00 last_emit_end=16.50)\n",
+    "INFO:whisperlivekit.simul_whisper.align_att_base:[LangSwitch] dynamic keep=2.50s "
+    "(buffer_end=20.00 last_emit_end=None)\n",
+]
+
+
+def test_parse_retract_scan_with_zones_suffix_still_compatible():
+    """[RetractScan] 말미 zones 필드 추가 후에도 기존 파서가 그대로 매칭된다."""
+    r = parse_boundary_log("fake.log", _RECONCILE_LOG_LINES)
+    assert len(r.retract_scans) == 1
+    assert r.retract_scans[0].removed == 1
+    assert r.retract_scans[0].stopped_by == "lower_bound"
+
+
+def test_parse_reconcile_arm_and_resolve():
+    r = parse_boundary_log("fake.log", _RECONCILE_LOG_LINES)
+    assert len(r.reconcile_arms) == 1
+    arm = r.reconcile_arms[0]
+    assert (arm.boundary_t, arm.prev_lang, arm.new_lang, arm.floor, arm.tombstones) == \
+        (12.40, "ko", "en", 10.00, 1)
+    assert len(r.reconcile_resolves) == 2
+    d1 = r.reconcile_resolves[0]
+    assert (d1.reason, d1.cut, d1.covered, d1.restored, d1.replaced) == ("d1", 12.00, 1, 0, 1)
+
+
+def test_parse_resolve_cut_na_means_full_restore():
+    r = parse_boundary_log("fake.log", _RECONCILE_LOG_LINES)
+    d3 = r.reconcile_resolves[1]
+    assert d3.reason == "d3"
+    assert d3.cut is None  # 신언어 무도착 → 전량 복원
+    assert d3.restored == 1
+
+
+def test_parse_restore_and_replace_token_events():
+    r = parse_boundary_log("fake.log", _RECONCILE_LOG_LINES)
+    kinds = [ev.kind for ev in r.reconcile_tokens]
+    assert "restore" in kinds and "replace" in kinds and "replace_late" in kinds
+    restore = next(ev for ev in r.reconcile_tokens if ev.kind == "restore")
+    assert restore.text == " 반갑습니다"
+    assert restore.dstart is None  # NA
+    assert restore.zone == "zone2_samescript"
+    replace = next(ev for ev in r.reconcile_tokens if ev.kind == "replace")
+    assert replace.text == " 미니스터."
+    assert replace.dstart == -0.10
+    assert replace.boundary_t == 12.40
+
+
+def test_parse_timededup_events_including_quoted_apostrophe():
+    r = parse_boundary_log("fake.log", _RECONCILE_LOG_LINES)
+    drop = next(ev for ev in r.reconcile_tokens if ev.kind == "dedup_drop")
+    assert drop.text == " It's"  # 이중따옴표 repr(어포스트로피 포함)도 벗겨진다
+    assert drop.dstart == 0.00
+    sup = next(ev for ev in r.reconcile_tokens if ev.kind == "dedup_supersede")
+    assert sup.text == " In."
+    assert sup.boundary_t == 12.40
+    inh = next(ev for ev in r.reconcile_tokens if ev.kind == "dedup_inherit_id")
+    assert inh.text == " In"
+    assert inh.start == 13.00
+
+
+def test_parse_dynamic_keep_events():
+    r = parse_boundary_log("fake.log", _RECONCILE_LOG_LINES)
+    assert len(r.dynamic_keeps) == 2
+    assert r.dynamic_keeps[0].keep_secs == 3.80
+    assert r.dynamic_keeps[0].last_emit_end == 16.50
+    assert r.dynamic_keeps[1].last_emit_end is None  # 폴백 발동 케이스
+
+
+def test_classify_attaches_reconcile_status_without_changing_series():
+    """재조정 상태(복원됨/대체됨)는 별도 필드로만 붙는다 — series는 before 이력과 호환."""
+    from analyze_boundary_tail_dup import ReconcileResolveEvent
+    boundary = _rb(["안녕"], ["you", "don't", "understand"], before_lang="ko", after_lang="en")
+    ops = ["match", "del", "del", "del"]
+    log = BoundaryLog(path="x", retract_scans=[
+        RetractScanEvent(line_no=10, boundary_t=5.0, prev_lang="ko", scanned=9, removed=4,
+                         stopped_by="lower_bound"),
+    ], reconcile_resolves=[
+        ReconcileResolveEvent(line_no=12, reason="d1", boundary_t=5.0, cut=5.3,
+                              covered=2, restored=3, replaced=1),
+    ])
+    verdicts = classify_boundaries([boundary], ops, log)
+    assert verdicts[0].series == ["ⓐ철회미복구"]  # 기존 계열 판정 불변
+    assert verdicts[0].reconcile_status == "혼합(복원+대체)"
+    assert any("reconcile resolve" in e for e in verdicts[0].evidence)
+
+
+def test_parser_matches_actual_reconcile_log_format_end_to_end(caplog):
+    """포맷 드리프트 가드: 실제 코드(tokens_alignment+boundary_reconcile)가 찍는 로그를
+    caplog로 채집해 파서에 넣어도 이벤트가 추출돼야 한다 — 테스트 상수 라인과 실코드
+    포맷이 어긋나면 여기서 잡힌다."""
+    import logging
+
+    from whisperlivekit.timed_objects import ASRToken, LanguageSwitch
+    from whisperlivekit.tokens_alignment import TokensAlignment
+
+    class _Args:
+        diarization = False
+
+    class _State:
+        new_tokens = []
+        new_diarization = []
+        new_translation = []
+        new_tokens_buffer = []
+        new_translation_buffer = None
+
+    ta = TokensAlignment(_State(), _Args(), sep="")
+    ta.all_tokens = [ASRToken(start=11.9, end=12.3, text=" 미니스터.", detected_language="ko")]
+    marker = LanguageSwitch(start=12.4, end=12.4, detected_language="en",
+                            retract_from=12.4, prev_language="ko", retract_floor=10.0)
+    with caplog.at_level(logging.INFO, logger="whisperlivekit.tokens_alignment"):
+        ta._insert_with_reattachment([
+            marker,
+            ASRToken(start=12.0, end=12.4, text=" Minister", detected_language="en"),
+            ASRToken(start=12.8, end=12.9, text=" of", detected_language="en"),
+        ])
+    lines = [f"INFO:{rec.name}:{rec.getMessage()}\n" for rec in caplog.records]
+    parsed = parse_boundary_log("generated.log", lines)
+    assert len(parsed.retract_scans) == 1 and parsed.retract_scans[0].removed == 1
+    assert len(parsed.reconcile_arms) == 1 and parsed.reconcile_arms[0].tombstones == 1
+    assert len(parsed.reconcile_resolves) == 1 and parsed.reconcile_resolves[0].reason == "d1"
+    assert any(ev.kind == "replace" and ev.text == " 미니스터." for ev in parsed.reconcile_tokens)
