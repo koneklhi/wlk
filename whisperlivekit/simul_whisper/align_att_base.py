@@ -21,7 +21,7 @@ LANG_SWITCH_KEEP_SECS = 2.5  # 언어 전환 시 유지할 최근 오디오(초)
 # 노출 빈도는 낮고 재조정 dedup+QG가 백스톱이지만 상한으로 캡한다.
 # last_emit_end는 backend.py(SimulStreamingOnlineProcessor._last_emit_end)가 소유하며
 # decoder state의 last_emit_end 미러 필드로 전달된다(모델 계층에서 직접 안 보임).
-LANG_SWITCH_DYNAMIC_KEEP_ENABLED = False  # False = 고정 2.5s(기존 동작) — 짝지음 A/B 롤백 플래그
+LANG_SWITCH_DYNAMIC_KEEP_ENABLED = True  # False = 고정 2.5s(기존 동작) — 짝지음 A/B 롤백 플래그
 LANG_SWITCH_KEEP_MAX_SECS = 5.0
 LANG_SWITCH_KEEP_MARGIN_SECS = 0.3
 
