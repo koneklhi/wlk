@@ -61,6 +61,19 @@ ZONE2_OPPOSITE = "zone2_opposite"
 ZONE2_SAMESCRIPT = "zone2_samescript"
 
 
+# dedup 매칭용 텍스트 정규화에서 양끝에서 제거할 구두점·인용부호 집합.
+# 내부 문자(어퍼스트로피 "It's" 등)는 보존된다 — strip은 양끝만 깎는다.
+_DEDUP_PUNCT_CHARS = ".,?!…~\"'`“”‘’()[]{}<>:;·-–—。、，！？ \t"
+
+
+def _dedup_norm(text: Optional[str]) -> str:
+    """시간 소유권 dedup의 텍스트 매칭 정규화: strip → 양끝 구두점 제거 → 소문자.
+
+    순수 구두점 토큰은 빈 문자열이 되어 매칭 후보에서 제외된다.
+    """
+    return (text or "").strip(_DEDUP_PUNCT_CHARS).lower()
+
+
 def _starts_new_word(token: ASRToken, prev_token: Optional[ASRToken]) -> bool:
     """token이 새 단어의 시작인지 판정 (하위단어 연속 여부).
 
@@ -294,25 +307,32 @@ class BoundaryReconciler:
         if audio_time > w.dedup_limit():
             self.window = None
 
-    # ── 시간 소유권 dedup (방향 분기) ────────────────────────────────────────
+    # ── 시간 소유권 dedup (시간창 + 정규화 텍스트 결합 매칭) ─────────────────
 
     def dedup_batch(self, run: List[ASRToken], all_tokens: List) -> List[ASRToken]:
         """활성 창 구간(+유예) 내 신규 텍스트 토큰 run에 시간 소유권 규칙을 적용한다.
 
-        비교는 시간(start 근접 OWN_TOL)만 — 텍스트 비교 없음. "한 시간 구간의
-        소유자는 하나, 더 완전한(커버리지 넓은) 쪽이 승자, 패자는 tombstone".
+        계측 r1(ytn2/bong1) 실측 정정: 순수 시간 근접(OWN_TOL) 매칭은 창 내에서
+        **연속 증분 방출되는 다음 단어**(조밀 간격 0.1~0.3s < OWN_TOL)를 재방출로
+        오인해 정당 신규 단어를 소실시켰다(ytn2 " There is…to be done" 소실,
+        "정경두"→"경두" 손상). 그래서 매칭은 **시간창 + 정규화 텍스트**를 결합한다:
 
-        ① 신규가 기존의 부분 재방출(기존 커버리지가 신규를 포함) → 신규 드롭.
-           ("상당한 상당한", "It's just a It's just a" — 재디코딩 창 겹침 이중방출.)
-        ② 기존이 신규 배치 커버리지의 시간 부분집합 + 신규가 그 너머 확장
-           ("In."→"In support of these...") → 기존 tombstone + 신규 채택 +
-           id(start) 승계: 첫 신규 토큰이 소멸 토큰의 최초 start를 이어받아
-           UI finalizedHistory Map(id→line)에 유령 라인이 남지 않게 한다.
+        - 매칭 쌍 (t=신규, c=창 내 live 같은언어 커밋): |t.start − c.start| <= OWN_TOL
+          AND (정규화 완전일치 OR 한쪽이 다른쪽의 접두어[비공백 1자 이상]).
+          정규화 = strip → 양끝 구두점 제거 → 소문자. 순수 구두점 토큰(정규화 후
+          빈 문자열)은 매칭 후보에서 제외.
+        - **방향 결정(배치 단위 1회, 매칭 쌍 1개 이상일 때만)**:
+          ① 신규가 확장(b_max > 매칭된 committed 최대 start + OWN_TOL) → supersede:
+             매칭 committed 전부 tombstone + 매칭 run에 인접(사이/직후)한
+             구두점-only committed도 함께 tombstone(유령 "In."의 '.' 잔존 방지) +
+             id(start) 승계(소멸 최초 start < 첫 신규 start일 때). 접두어 매칭
+             허용 — committed ' 우'가 신규 ' 우선'에 흡수된다.
+          ② 비확장(순수 부분 재방출) → drop: **정규화 완전일치로 매칭된 신규
+             토큰만** 드롭. 접두어 매칭·비매칭 신규는 절대 드롭하지 않는다(더
+             완전한 신규를 버리지 않는다).
+        - 비매칭 토큰은 어느 방향에서도 건드리지 않는다 — ' is'/' remain'/
+          ' reviewed'/' 정' 실측 오탐 사례가 회귀 테스트로 고정됨.
         창 구간 밖 새 오디오("네, 네" 정상 반복)는 dedup_limit 게이트로 자동 보호.
-
-        주의(보정 대상): OWN_TOL=0.4는 잠정값 — 유예 구간 안에서 정상 연속 토큰이
-        직전 커밋과 0.4s 이내로 붙어 나오면 ①이 오탐할 수 있다. 계측 r1의 Δstart
-        분포로 보정한다.
         """
         if not RECONCILE_ENABLED:
             return run
@@ -323,10 +343,9 @@ class BoundaryReconciler:
                  if t.start is not None and t.detected_language == w.new_lang]
         if not batch:
             return run
-        b_min = min(t.start for t in batch)
         b_max = max(t.start for t in batch)
         limit = w.dedup_limit()
-        if b_min > limit:
+        if min(t.start for t in batch) > limit:
             return run  # 창 구간 밖 새 오디오 — 정상 반복 보호
         committed = [
             tok for tok in all_tokens
@@ -334,35 +353,56 @@ class BoundaryReconciler:
             and not getattr(tok, "retracted", False)
             and tok.detected_language == w.new_lang
             and tok.start is not None
-            # 상한 = b_max + OWN_TOL: 배치 커버리지 너머의 무관한 커밋(먼 미래분)이
-            # ②의 "기존 전부가 신규 근접" 판정을 오염시키지 않게 배치 기준으로 자른다.
+            # 상한 = b_max + OWN_TOL: 배치 커버리지 너머의 무관한 커밋(먼 미래분) 배제.
             and (w.floor - OWN_TOL) <= tok.start <= b_max + OWN_TOL
         ]
         if not committed:
             return run
 
+        # 매칭 쌍 수집 — (신규 t, 커밋 c, 'exact'|'prefix')
+        pairs: List[tuple] = []
+        for t in batch:
+            nt = _dedup_norm(t.text)
+            if not nt:
+                continue  # 순수 구두점 신규 토큰은 매칭 후보 아님
+            for c in committed:
+                nc = _dedup_norm(c.text)
+                if not nc:
+                    continue  # 순수 구두점 커밋 토큰도 직접 매칭 대상 아님
+                if abs(t.start - c.start) > OWN_TOL:
+                    continue
+                if nt == nc:
+                    pairs.append((t, c, "exact"))
+                elif nt.startswith(nc) or nc.startswith(nt):
+                    pairs.append((t, c, "prefix"))
+        if not pairs:
+            return run
+
+        matched_committed = {}
+        for _, c, _kind in pairs:
+            matched_committed[id(c)] = c
+        matched_c_max = max(c.start for c in matched_committed.values())
+
         def _nearest(x: float, pool: List[ASRToken]) -> float:
             return min(abs(x - p.start) for p in pool)
 
-        e_min = min(t.start for t in committed)
-        e_max = max(t.start for t in committed)
-
-        # ① 신규 = 기존의 부분 재방출 → 신규 드롭
-        if (b_min >= e_min - OWN_TOL and b_max <= e_max + OWN_TOL
-                and all(_nearest(t.start, committed) <= OWN_TOL for t in batch)):
-            for t in batch:
-                logger.info(
-                    "[TimeDedup] action=drop text=%r start=%.2f dstart=%.2f boundary_t=%.2f",
-                    t.text, t.start, _nearest(t.start, committed), w.boundary_t,
-                )
-            dropped_ids = {id(t) for t in batch}
-            return [t for t in run if id(t) not in dropped_ids]
-
-        # ② 기존 = 신규 커버리지의 부분집합 + 신규 확장 → 기존 tombstone + id 승계
-        if (e_min >= b_min - OWN_TOL and b_max > e_max + OWN_TOL
-                and all(_nearest(tok.start, batch) <= OWN_TOL for tok in committed)):
+        if b_max > matched_c_max + OWN_TOL:
+            # ① supersede — 신규가 기존 커버리지 너머로 확장
+            supers = list(matched_committed.values())
+            # 매칭 run에 인접(사이/직후)한 구두점-only committed도 함께 소멸 —
+            # 유령 접두어 "In."에서 '.'만 남는 잔존 방지. committed는 all_tokens
+            # 순서를 보존하므로 직전 토큰이 매칭(또는 그 구두점 연쇄)이면 흡수.
+            last_matched = False
+            for c in committed:
+                if id(c) in matched_committed:
+                    last_matched = True
+                    continue
+                if last_matched and not _dedup_norm(c.text):
+                    supers.append(c)
+                    continue  # 구두점 연쇄 통과(사이) — last_matched 유지
+                last_matched = False
             first_new = min(batch, key=lambda t: t.start)
-            for tok in committed:
+            for tok in supers:
                 tok.retracted = True
                 logger.info(
                     "[TimeDedup] action=supersede text=%r start=%.2f dstart=%.2f "
@@ -370,6 +410,7 @@ class BoundaryReconciler:
                     tok.text, tok.start, _nearest(tok.start, batch),
                     w.boundary_t, first_new.text, first_new.start,
                 )
+            e_min = min(tok.start for tok in supers)
             if e_min < first_new.start:
                 # id(start) 승계 — 소멸 세그먼트의 최초 start를 이어받는다
                 # (exp/boundary-tail-dup ⓓ-2의 cur.start = prev.start 패턴).
@@ -380,4 +421,16 @@ class BoundaryReconciler:
                 first_new.start = e_min
             return run
 
-        return run
+        # ② drop — 비확장(순수 부분 재방출): 완전일치 매칭 신규만 드롭
+        drop_map = {}
+        for t, c, kind in pairs:
+            if kind == "exact":
+                drop_map.setdefault(id(t), (t, abs(t.start - c.start)))
+        if not drop_map:
+            return run
+        for t, dstart in drop_map.values():
+            logger.info(
+                "[TimeDedup] action=drop text=%r start=%.2f dstart=%.2f boundary_t=%.2f",
+                t.text, t.start, dstart, w.boundary_t,
+            )
+        return [t for t in run if id(t) not in drop_map]

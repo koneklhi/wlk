@@ -119,11 +119,15 @@
   - **구역2 확대**(`RECONCILE_SAMESCRIPT_SUBZONE_ENABLED`): `boundary_t−SAMESCRIPT_SUBZONE_SECS(1.2s)` 이내
     같은 스크립트 prev_lang 토큰("미니스터")도 잠정 tombstone — 복원 보장 위에서만 안전한 공격적 철회로
     "미니스터."→"Minister..." 이중언어 중복 확정을 소멸시킨다.
-  - **시간 소유권 dedup**(`dedup_batch`, 텍스트 비교 없음): 활성 창 구간(+유예) 내 신규 텍스트 run에 대해
-    ① 신규가 기존의 부분 재방출(기존 커버리지 포함+`OWN_TOL` 근접)이면 신규 드롭, ② 기존이 신규 배치
-    커버리지의 시간 부분집합이고 신규가 그 너머 확장이면(유령 접두어 "In."→"In support...") 기존 tombstone +
-    신규 채택 + **id(start) 승계**(UI `finalizedHistory Map(id→line)` 유령 잔존 방지). dedup 한계는 경계 앵커
-    고정(`boundary_t+PASS_EPS+DEDUP_RELEASE_GRACE_SECS`) — "네, 네" 등 창 밖 정상 반복 자동 보호. 로그
+  - **시간 소유권 dedup**(`dedup_batch`, **시간창+정규화 텍스트 결합 매칭** — 계측 r1에서 순수 시간 매칭이
+    창 내 연속 증분 방출 단어를 오탐 드롭해 텍스트 조건을 추가): 활성 창 구간(+유예) 내 신규 텍스트 run의
+    각 토큰을 창 내 live 같은언어 커밋 토큰과 `|Δstart| ≤ OWN_TOL` AND (정규화 완전일치 OR 접두어) 조건으로
+    매칭한다(정규화 = strip→양끝 구두점 제거→소문자; 순수 구두점 토큰은 후보 제외). 매칭 쌍이 있을 때만
+    배치 단위 방향 결정: ① 신규가 매칭 커버리지 너머로 확장이면(유령 접두어 "In."→"In support...") 매칭
+    커밋 tombstone + 인접 구두점-only 커밋 동반 tombstone + 신규 채택 + **id(start) 승계**(UI
+    `finalizedHistory Map(id→line)` 유령 잔존 방지), ② 비확장(순수 부분 재방출)이면 **완전일치 매칭 신규만**
+    드롭(접두어·비매칭 신규는 불가침). dedup 한계는 경계 앵커 고정(`boundary_t+PASS_EPS+
+    DEDUP_RELEASE_GRACE_SECS`) — "네, 네" 등 창 밖 정상 반복 자동 보호. 로그
     `[TimeDedup] action=drop/supersede/inherit_id`.
   - **전체 롤백**: `RECONCILE_ENABLED=False`(모듈 상수)면 레거시 파괴적 pop 거동 재현.
 - **언어전환 트림 keep 동적 확장(Exp-192, `align_att_base.compute_dynamic_keep`)**: 전환 시 재절단 keep을
@@ -252,7 +256,7 @@ Whisper가 찍는 마침표(`.`/`。`)를 문장 분할 신호로 쓰되, **진�
 | 스트림 종료 flush (SENTINEL/`_finish_transcription`) | `audio_processor.py:28,311-338,740-746` | flush | 남은 토큰 flush. **강제 finalize/경계 생성 없음** — 마지막 줄은 Silence/boundary가 없으면 `finalized=false`로 남음(트리거 null) |
 | 언어전환 경계 철회 `_retract_stale_language_tokens` (Exp-171~174; **Exp-192 tombstone화**) | `tokens_alignment.py` (`RETRACT_EPS=0.05`, 잠정) | tombstone(복원 가능 숨김) | `LanguageSwitch` 마커 append 직전 `all_tokens` 꼬리를 역스캔해 `prev_language` 스탬프 텍스트 토큰을 `retracted=True` 마킹(파괴적 pop 아님 — `RECONCILE_ENABLED=False`면 레거시 pop 재현) — 구역1(`start≥boundary_t-EPS`): 언어매치만으로, 구역2(하한~구역1 사이): +반대스크립트, 구역2 확대(subzone 플래그): +같은스크립트 `boundary_t−1.2s` 이내 잠정. Silence/boundary 만나면 스캔 중단, 이미 retracted면 투명 통과. 마커·경계 개수 불변 |
 | 경계 재조정 `ReconcileWindow` (Exp-192) | `whisperlivekit/boundary_reconcile.py` + `tokens_alignment.py` 훅(`_insert_with_reattachment`/`get_lines`) | 복원/대체(텍스트 가시성) | 마커 arm → 신언어 토큰 커버 관찰(start 근접 `COVER_TOL`) → 마감 3중(D1 진행도/D2 다음 마커/D3 audio_time 3.0s 캡) 시 단일 컷포인트로 tombstone을 복원(un-retract) 또는 영구 대체. §3.2 상세. 경계 마커/세그먼트 신설 없음 |
-| 시간 소유권 dedup `dedup_batch` (Exp-192) | `whisperlivekit/boundary_reconcile.py` | 드롭/대체 + id 승계 | 활성 창 구간(+0.5s 유예) 내 신규 텍스트 run을 기 커밋 같은언어 토큰과 start 근접(`OWN_TOL`) 비교 — 부분 재방출은 신규 드롭, 유령 접두어는 기존 tombstone+id(start) 승계. 텍스트 비교 없음. 경계 미생성 |
+| 시간 소유권 dedup `dedup_batch` (Exp-192; 계측 r1로 텍스트 결합 매칭 정정) | `whisperlivekit/boundary_reconcile.py` | 드롭/대체 + id 승계 | 활성 창 구간(+0.5s 유예) 내 신규 텍스트 run을 기 커밋 같은언어 토큰과 **start 근접(`OWN_TOL`) AND 정규화 텍스트(완전일치/접두어)** 결합 매칭 — 순수 부분 재방출은 완전일치 신규만 드롭, 유령 접두어(신규 확장)는 기존+인접 구두점 tombstone+id(start) 승계. 비매칭 토큰 불가침(연속 증분 방출 단어 오탐 방지). 경계 미생성 |
 
 ---
 

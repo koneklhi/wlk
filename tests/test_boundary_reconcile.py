@@ -372,18 +372,102 @@ def test_timededup_drops_identical_reemission():
     assert _visible_texts(ta).count(" It's") == 1
 
 
-def test_timededup_drops_varied_partial_reemission():
-    """① 부분 변형 재방출: 지터(Δstart<=OWN_TOL) 있는 부분 재방출도 시간만으로 드롭
-    — 텍스트가 달라도("상당한"→"상당한 부분") 시간 소유권은 기존에 있다."""
+def test_timededup_drops_jittered_exact_reemission():
+    """② 지터(Δstart<=OWN_TOL)·표기 변형(대소문자/양끝 구두점)이 있어도 정규화
+    완전일치 재방출은 드롭된다."""
     ta = _make_alignment()
     ta._insert_with_reattachment([_retract_marker(12.4, "en", "ko", 10.0)])
     ta._insert_with_reattachment([_tok(12.5, 12.6, " Everyone", "en"),
                                   _tok(12.9, 13.0, " here", "en")])
     n_before = len(ta.all_tokens)
-    dup = [_tok(12.55, 12.65, " Every", "en"), _tok(12.95, 13.05, " here", "en")]
+    dup = [_tok(12.55, 12.65, " everyone,", "en"), _tok(12.95, 13.05, " here.", "en")]
     ta._insert_with_reattachment(dup)
     assert len(ta.all_tokens) == n_before
-    assert all(t.text != " Every" for t in ta.all_tokens)
+    assert all(t.text not in (" everyone,", " here.") for t in ta.all_tokens)
+
+
+def test_no_drop_for_consecutive_new_words_ytn2_regression():
+    """실측 회귀(ytn2 98.97): 창 내 조밀 간격(0.14s)의 **연속 증분 방출 다음 단어**는
+    텍스트 비매칭이므로 절대 드롭/supersede되지 않는다 — " There is…to be done" 보존."""
+    ta = _make_alignment()
+    ta._insert_with_reattachment([_retract_marker(98.9, "en", "ko", 96.0)])
+    there = _tok(98.97, 99.05, " There", "en")
+    ta._insert_with_reattachment([there])
+    cont = [_tok(99.11, 99.2, " is", "en"), _tok(99.3, 99.4, " to", "en"),
+            _tok(99.45, 99.5, " be", "en"), _tok(99.6, 99.7, " done", "en")]
+    ta._insert_with_reattachment(cont)
+    assert there.retracted is False  # supersede 오탐 금지(' There'←' more' 사례)
+    assert _visible_texts(ta) == [" There", " is", " to", " be", " done"]
+
+
+def test_no_supersede_for_unmatched_subword_continuation():
+    """실측 회귀(ytn2 56.29 "정경두"→"경두"): 비매칭 하위단어 연속('경두'는 ' 정'과
+    완전일치도 접두어도 아님)은 supersede 대상이 아니다."""
+    ta = _make_alignment()
+    ta._insert_with_reattachment([_retract_marker(56.2, "ko", "en", 54.0)])
+    jung = _tok(56.29, 56.35, " 정", "ko")
+    ta._insert_with_reattachment([jung])
+    ta._insert_with_reattachment([_tok(56.35, 56.45, "경두", "ko"),
+                                  _tok(56.9, 57.0, " 국방부", "ko")])
+    assert jung.retracted is False
+    assert _visible_texts(ta) == [" 정", "경두", " 국방부"]
+
+
+def test_prefix_absorption_supersede_with_id_inheritance():
+    """접두어 흡수: committed ' 우'가 신규 ' 우선…'(확장 배치)의 접두어면 supersede +
+    id(start) 승계 — "우 사안 중에서는 우선" 유형 완전 정리."""
+    ta = _make_alignment()
+    ta._insert_with_reattachment([_retract_marker(12.9, "ko", "en", 10.5)])
+    woo = _tok(13.0, 13.1, " 우", "ko")
+    ta._insert_with_reattachment([woo])
+    full = [_tok(13.05, 13.15, " 우선", "ko"), _tok(13.5, 13.6, " 사안", "ko"),
+            _tok(13.85, 13.95, " 중에서는", "ko")]
+    ta._insert_with_reattachment(full)
+    assert woo.retracted is True
+    assert full[0].start == 13.0  # id(start) 승계
+    assert _visible_texts(ta) == [" 우선", " 사안", " 중에서는"]
+
+
+def test_ghost_prefix_adjacent_punct_token_absorbed_in_supersede():
+    """supersede 시 매칭 run에 인접한 구두점-only committed('.')도 함께 tombstone —
+    유령 "In."의 '.'만 잔존하는 구멍 방지."""
+    ta = _make_alignment()
+    ta._insert_with_reattachment([_retract_marker(12.4, "en", "ko", 10.0)])
+    ghost_in = _tok(13.0, 13.1, " In", "en")
+    ghost_dot = _tok(13.1, 13.2, ".", "en")
+    ta._insert_with_reattachment([ghost_in, ghost_dot])
+    full = [_tok(13.05, 13.15, " In", "en"), _tok(13.5, 13.6, " support", "en"),
+            _tok(13.85, 13.95, " of", "en")]
+    ta._insert_with_reattachment(full)
+    assert ghost_in.retracted is True
+    assert ghost_dot.retracted is True  # 인접 구두점 동반 소멸
+    assert full[0].start == 13.0
+    assert _visible_texts(ta) == [" In", " support", " of"]
+
+
+def test_prefix_matched_new_token_not_dropped_in_nonextend():
+    """비확장(drop 방향)에서 접두어 매칭 신규는 드롭 금지 — 더 완전한 신규를 버리지
+    않는다(완전일치만 드롭)."""
+    ta = _make_alignment()
+    ta._insert_with_reattachment([_retract_marker(12.4, "ko", "en", 10.0)])
+    full_word = _tok(12.5, 12.6, " 우선", "ko")
+    ta._insert_with_reattachment([full_word])
+    short = _tok(12.55, 12.65, " 우", "ko")
+    ta._insert_with_reattachment([short])
+    assert short in ta.all_tokens  # 접두어 매칭이지만 드롭되지 않음
+    assert full_word.retracted is False
+
+
+def test_pure_punct_tokens_never_match():
+    """순수 구두점 토큰(정규화 후 빈 문자열)은 매칭 후보에서 제외 — 드롭/supersede 없음."""
+    ta = _make_alignment()
+    ta._insert_with_reattachment([_retract_marker(12.4, "en", "ko", 10.0)])
+    dot1 = _tok(12.5, 12.6, ".", "en")
+    ta._insert_with_reattachment([dot1])
+    dot2 = _tok(12.55, 12.65, ".", "en")
+    ta._insert_with_reattachment([dot2])
+    assert dot1.retracted is False
+    assert dot2 in ta.all_tokens
 
 
 def test_ghost_prefix_supersede_direction_and_id_inheritance():
