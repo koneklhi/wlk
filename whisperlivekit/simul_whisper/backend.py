@@ -278,6 +278,28 @@ class SimulStreamingOnlineProcessor:
             self.model.tokenizer = asr.tokenizer
             self.model.state.tokenizer = asr.tokenizer
 
+    @property
+    def _last_emit_end(self) -> float:
+        return self.__last_emit_end
+
+    @_last_emit_end.setter
+    def _last_emit_end(self, value: float) -> None:
+        """마지막 방출 시점 audio end. decoder state의 last_emit_end로 미러한다(Exp-192).
+
+        미러 이유: 언어전환 트림의 동적 keep(_apply_detected_language,
+        align_att_base.compute_dynamic_keep)이 모델 계층에서 이 값을 읽어야 하는데
+        소유자는 backend라 직접 보이지 않는다. setter 미러로 모든 기존 대입 지점
+        (__init__/end_silence/new_speaker/stall 워치독/배치필터/process_iter)이
+        자동 동기화된다.
+        """
+        self.__last_emit_end = value
+        # 방어적 미러: 테스트 스텁 등 model/state가 아직 없는 인스턴스에서도 대입 자체는
+        # 성공해야 한다(미러 실패 시 compute_dynamic_keep이 None 폴백으로 안전).
+        model = getattr(self, "model", None)
+        state = getattr(model, "state", None) if model is not None else None
+        if state is not None:
+            state.last_emit_end = value
+
     def _resolve_session_cfg(self, language):
         """세션 언어 오버라이드가 있으면 AlignAttConfig 얕은 사본을 반환한다.
 

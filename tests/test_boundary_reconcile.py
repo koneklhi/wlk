@@ -10,7 +10,6 @@
 from whisperlivekit import boundary_reconcile
 from whisperlivekit.boundary_reconcile import (
     COVER_TOL,
-    PASS_EPS,
     RECONCILE_DEADLINE_SECS,
     ReconcileWindow,
     TombstoneEntry,
@@ -473,3 +472,42 @@ def test_window_released_after_grace_via_check_deadline():
     assert ta.reconciler.window is not None
     ta.reconciler.check_deadline(ta.reconciler.window.dedup_limit() + 0.01)
     assert ta.reconciler.window is None
+
+
+# ─── 커밋5: 동적 keep 클램프 ──────────────────────────────────────────────────
+
+
+def test_dynamic_keep_lower_clamp():
+    """미방출 구간이 짧으면(기본값 이하) 기존 고정값 2.5s 하한으로 클램프."""
+    from whisperlivekit.simul_whisper.align_att_base import (
+        LANG_SWITCH_KEEP_SECS,
+        compute_dynamic_keep,
+    )
+    # 미방출 1.0s + margin 0.3 = 1.3 < 2.5 → 하한
+    assert compute_dynamic_keep(20.0, 19.0) == LANG_SWITCH_KEEP_SECS
+
+
+def test_dynamic_keep_upper_clamp():
+    """미방출 구간이 길어도 5.0s 상한 캡(Exp-166 방송클로징 환각 전례 감시)."""
+    from whisperlivekit.simul_whisper.align_att_base import (
+        LANG_SWITCH_KEEP_MAX_SECS,
+        compute_dynamic_keep,
+    )
+    # 미방출 10.0s + 0.3 = 10.3 > 5.0 → 상한
+    assert compute_dynamic_keep(30.0, 20.0) == LANG_SWITCH_KEEP_MAX_SECS
+
+
+def test_dynamic_keep_tracks_unemitted_span_with_margin():
+    """클램프 사이 구간에서는 keep = (버퍼끝 − last_emit_end) + margin(0.3)."""
+    from whisperlivekit.simul_whisper.align_att_base import compute_dynamic_keep
+    assert compute_dynamic_keep(20.0, 16.5) == 3.8  # 3.5 + 0.3
+
+
+def test_dynamic_keep_none_falls_back_to_fixed():
+    """last_emit_end 미설정(None) 또는 버퍼끝 불명이면 기존 고정 2.5s 폴백."""
+    from whisperlivekit.simul_whisper.align_att_base import (
+        LANG_SWITCH_KEEP_SECS,
+        compute_dynamic_keep,
+    )
+    assert compute_dynamic_keep(20.0, None) == LANG_SWITCH_KEEP_SECS
+    assert compute_dynamic_keep(None, 19.0) == LANG_SWITCH_KEEP_SECS

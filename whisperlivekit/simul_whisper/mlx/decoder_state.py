@@ -39,6 +39,7 @@ class MLXDecoderState:
     pending_language_switch: Optional[float] = None  # CUDA state 패리티: 전환 경계 마커 arm 시각(초)
     lang_before_reset: Optional[str] = None
     last_attend_frame: int = 0
+    last_emit_end: Optional[float] = None  # CUDA state 패리티: backend _last_emit_end 미러(동적 keep)
 
     speaker: int = -1
     log_segments: int = 0

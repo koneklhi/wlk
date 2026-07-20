@@ -13,6 +13,29 @@ from .config import AlignAttConfig
 DEC_PAD = 50257
 LANG_SWITCH_KEEP_SECS = 2.5  # 언어 전환 시 유지할 최근 오디오(초): 감지창 2.0s + 완충 0.5s
 
+# 동적 keep (Exp-192 커밋5): 언어전환 트림의 keep을 "마지막 방출 지점 이후 미방출
+# 오디오" 길이에 맞춰 가변화한다 — 고정 2.5s 재절단이 확장 창을 무효화해 신언어
+# 서두("In support of these"류)가 재디코딩 범위 밖으로 잘려나가는 유실을 막는다.
+# keep = clamp(버퍼끝 절대시각 − last_emit_end + margin, LANG_SWITCH_KEEP_SECS, MAX).
+# 상한 5.0s: Exp-166 전례(고정 keep 4.5s에서 방송클로징 환각) 감시 대상 — 동적이라
+# 노출 빈도는 낮고 재조정 dedup+QG가 백스톱이지만 상한으로 캡한다.
+# last_emit_end는 backend.py(SimulStreamingOnlineProcessor._last_emit_end)가 소유하며
+# decoder state의 last_emit_end 미러 필드로 전달된다(모델 계층에서 직접 안 보임).
+LANG_SWITCH_DYNAMIC_KEEP_ENABLED = True  # False = 고정 2.5s(기존 동작) — 짝지음 A/B 롤백 플래그
+LANG_SWITCH_KEEP_MAX_SECS = 5.0
+LANG_SWITCH_KEEP_MARGIN_SECS = 0.3
+
+
+def compute_dynamic_keep(buffer_end_abs: Optional[float], last_emit_end: Optional[float]) -> float:
+    """언어전환 트림 keep(초)을 계산한다 — 순수 함수(유닛 고정용).
+
+    last_emit_end가 None(미설정/미러 부재)이면 기존 고정값 LANG_SWITCH_KEEP_SECS 폴백.
+    """
+    if last_emit_end is None or buffer_end_abs is None:
+        return LANG_SWITCH_KEEP_SECS
+    keep = buffer_end_abs - last_emit_end + LANG_SWITCH_KEEP_MARGIN_SECS
+    return min(max(keep, LANG_SWITCH_KEEP_SECS), LANG_SWITCH_KEEP_MAX_SECS)
+
 # 세션 초입 언어 프로브 (콜드스타트 데드락 해소): --lan auto에서 first_timestamp(첫 토큰 커밋)
 # 설정 전엔 감지가 무기한 보류되는데, 미감지 토크나이저 기본값 <|en|>으로 한국어 단독 음성을
 # 디코드하면 garbage → QualityGate 억제 → 커밋 불가 → first_timestamp 영원히 None(데드락).
@@ -215,7 +238,22 @@ class AlignAttBase(ABC):
         is_switch = prev_lang is not None and prev_lang != lang
 
         if is_switch and not skip_trim:
-            self._trim_segments_to_recent(LANG_SWITCH_KEEP_SECS)
+            keep_secs = LANG_SWITCH_KEEP_SECS
+            if LANG_SWITCH_DYNAMIC_KEEP_ENABLED:
+                # 버퍼끝 절대시각 = global + cumulative + 현재 버퍼 길이 (토큰 절대
+                # 타임스탬프 계산식과 동일 좌표계 — infer의 frame*0.02+cumulative,
+                # with_offset(global) 참조). 트림 전에 계산해야 한다.
+                buffer_end_abs = (self.state.global_time_offset
+                                  + self.state.cumulative_time_offset
+                                  + self.segments_len())
+                last_emit_end = getattr(self.state, "last_emit_end", None)
+                keep_secs = compute_dynamic_keep(buffer_end_abs, last_emit_end)
+                logger.info(
+                    "[LangSwitch] dynamic keep=%.2fs (buffer_end=%.2f last_emit_end=%s)",
+                    keep_secs, buffer_end_abs,
+                    ("%.2f" % last_emit_end) if last_emit_end is not None else "None",
+                )
+            self._trim_segments_to_recent(keep_secs)
 
         self.create_tokenizer(lang)
         self.init_tokens()
