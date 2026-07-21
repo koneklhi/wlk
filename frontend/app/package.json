@@ -8,8 +8,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "lint": "eslint .",
-    "typecheck": "tsc --noEmit",
-    "postinstall": "rms doctor"
+    "typecheck": "tsc --noEmit"
   },
   "pnpm": {
     "overrides": {
