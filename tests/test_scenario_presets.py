@@ -169,6 +169,29 @@ def test_apply_scenario_preset_does_not_overwrite_explicit_value():
     assert args.silence_hard_secs == 1.8
 
 
+# ─── 6. --no-speech-threshold (개별 플래그, 프리셋 비대상) ────────────────────
+# AlignAttConfig.nonspeech_prob CLI 승격 — 시나리오 프리셋(SCENARIO_PRESETS)에는
+# 편입하지 않은 단독 노브라 위 _NEW_TUNING_FIELDS(프리셋이 건드리는 필드 목록)에는
+# 넣지 않고 별도 테스트로 검증한다.
+
+def test_no_speech_threshold_flag_sets_config(monkeypatch):
+    config = _parse(monkeypatch, ["--no-speech-threshold", "0.3"])
+    assert config.no_speech_threshold == 0.3
+
+
+def test_no_speech_threshold_default_is_none(monkeypatch):
+    config = _parse(monkeypatch, [])
+    assert config.no_speech_threshold is None
+
+
+def test_no_speech_threshold_not_in_any_scenario_preset():
+    """개별 플래그 전용 노브임을 재확인 — 프리셋에 실수로 편입되면 이 테스트가 잡는다."""
+    for scenario_name, preset in SCENARIO_PRESETS.items():
+        assert "no_speech_threshold" not in preset, (
+            f"scenario={scenario_name} 에 no_speech_threshold가 있으면 안 됨(개별 플래그 전용)"
+        )
+
+
 def test_scenario_presets_dict_keys_are_known_dest_names():
     """SCENARIO_PRESETS의 모든 키가 실제 parse_args CLI dest와 일치하는지 확인.
 

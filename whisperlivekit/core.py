@@ -184,6 +184,7 @@ class TranscriptionEngine:
                     "script_anchor_n_words": config.script_anchor_n_words,
                     "new_speaker_max_keep_secs": config.new_speaker_max_keep_secs,
                     "lang_detect_general_secs": config.lang_detect_general_secs,
+                    "no_speech_threshold": config.no_speech_threshold,
                 }
 
                 self.tokenizer = None

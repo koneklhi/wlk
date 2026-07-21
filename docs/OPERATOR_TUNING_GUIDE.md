@@ -54,10 +54,15 @@ WER/F1 정량 개선을 주장하지 않는다.
 | `--script-anchor-n-words` | `3`단어 | `simul_whisper/backend.py:203` (`_SCRIPT_ANCHOR_N_WORDS`) | 연속 반대-스크립트 단어를 더 많이 요구 → 언어전환 오탐 감소 (노이즈 많은 겹침 상황 유리) | 적은 단어로도 전환 인정 → 빠른 전환을 즉시 포착 (오탐 위험↑) |
 | `--new-speaker-max-keep-secs` | `5.0`s | `simul_whisper/backend.py:51` (`_NEW_SPEAKER_MAX_KEEP`) | 화자전환 시 재디코딩용 onset 문맥을 더 길게 보존 (빠른 교대에서 초반 단어 유실 방지 유리) | 문맥 짧게 유지 (환각 위험 감소 방향이나 초반 단어 유실 위험 상승 — Exp-171 이전 keep=4.5s 환각 전례 있음, 모니터 필요) |
 | `--lang-detect-general-secs` | `2.0`s | `simul_whisper/align_att_base.py:50` (`LANG_DETECT_GENERAL_SECS`) | 보수적 재감지 (오탐↓) | eager (텀 긴 순차통역 유리, 오탐 위험↑). 화자전환 직후 eager 분기(1.5s+확신도 0.85 이상)는 이 값과 무관하게 별도 동작 |
+| `--no-speech-threshold` | `0.5` | `simul_whisper/config.py:15` (`AlignAttConfig.nonspeech_prob`) | 무음 판정 기준이 엄격해짐(no-speech 확률이 더 커야 무음으로 걸림) → 세그먼트 디코딩이 잘 안 멈춤, "Thank you" 류 필러 환각 위험↑ | 무음 판정이 관대해짐(더 낮은 확률로도 무음 인정) → 세그먼트 디코딩이 쉽게 멈춰 필러 환각↓ (단, 작게 말한 실제 발화까지 잘릴 위험 상승) |
 
 **정합성 노트**: `--frame-threshold`를 크게 올려 디코딩을 더 보수적으로 만들면(겹침·다화자 대응), 그만큼
 확정까지 걸리는 시간도 늘어나므로 `--finalize-grace-secs`도 함께 키우는 편이 정합적이다 — 유예창이
 디코딩 지평보다 짧으면 아직 안 나온 꼬리를 유예 없이 확정해버릴 수 있다.
+
+**`--no-speech-threshold` 비고**: 위 표의 다른 9개 knob과 달리 `--scenario` 프리셋 대상이 아니다(개별
+플래그로만 조정 가능, §3/§4 프리셋 매트릭스에는 반영되지 않음) — 필러 환각 대응이라는 단일 목적의
+개별 노브로 승격됐다.
 
 ---
 
