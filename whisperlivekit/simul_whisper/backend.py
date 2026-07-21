@@ -266,6 +266,10 @@ class SimulStreamingOnlineProcessor:
         self._consecutive_char_repeat: int = 0
         self._short_silence_check_at: float = 0.0
         self._last_eager_lang_check_end: Optional[float] = None  # Exp-189 버스트 쿨다운
+        # 직전 eager 감지 결과(실패 시 None). 쿨다운으로 재감지를 건너뛴 화자전환에서
+        # "언어가 그대로인가" 판정에만 재사용한다 — 쿨다운 창(_EAGER_LANG_COOLDOWN_SECS)
+        # 안에서만 참조하므로 값의 노후도는 그 창 길이로 자동 상한이 걸린다.
+        self._last_eager_lang_result: Optional[str] = None
         self._recent_emitted_words: List[str] = []  # 중복 방출 계측용 최근 방출 단어(정규화) tail
         # P2 스크립트 불일치 게이트: 실측(TokenTrace)상 배치가 보통 1~3 토큰 단위라
         # 한 배치만으로는 TTR 판정 표본이 부족하다 — detected_language와 반대
@@ -444,6 +448,10 @@ class SimulStreamingOnlineProcessor:
         # 현재 버퍼 시작의 절대 시각 그대로다 — 화자전환 절대시각과의 차이가 버퍼상대 오프셋.
         lang_locked = self.model.cfg.language != "auto"
         boundary_offset = change_speaker.start - self.model.global_time_offset
+        # 쿨다운으로 재감지를 건너뛴 경우의 직전 결과. eager와 분리해 둔다 — eager에 그대로
+        # 실으면 아래 _apply_detected_language까지 타서 Exp-189가 억제하려던 flip-flop 구간의
+        # 토크나이저 재적용이 되살아난다. 이 값은 재디코딩 스킵 판정에만 쓴다.
+        eager_cached = None
         if lang_locked:
             # 언어 고정 세션: 화자전환 시 언어 재감지 안 함(인코더 forward 절약 +
             # 오전환에 의한 세션 고정 파괴 방지). 경계 재디코딩 자체는 아래에서 유지.
@@ -458,11 +466,15 @@ class SimulStreamingOnlineProcessor:
                     self.end - last_check_end, _EAGER_LANG_COOLDOWN_SECS,
                 )
                 eager = None
+                eager_cached = getattr(self, "_last_eager_lang_result", None)
             else:
                 eager = self.model.detect_current_language(
                     window_secs=1.5, min_prob=0.85, since_offset=boundary_offset,
                 )
                 self._last_eager_lang_check_end = self.end
+                # 감지 실패(None)도 그대로 저장한다 — 더 오래된 성공값이 남아 재사용되면
+                # 실제보다 확신이 센 판정이 된다.
+                self._last_eager_lang_result = eager
         logger.info(
             "[NewSpeaker] spk=%s→%s det_before=%s eager=%s",
             self.model.state.speaker, change_speaker.speaker,
@@ -475,14 +487,22 @@ class SimulStreamingOnlineProcessor:
         # 다시 전사해 중복 방출을 만든다 — ytn2 "우선 우선"/"왕성 왕성한"이 전부 언어가 바뀌지
         # 않은(det_before=ko, eager=ko) 화자 라벨 변경 경계에서 재현됐다. 화자 귀속만 갱신하면
         # 화자전환 문장 분리는 token.speaker 변화로 그대로 실현된다.
-        # eager가 None(쿨다운·감지 실패)이면 언어 동일을 확신할 수 없으므로 기존 경로를 탄다.
+        # 근거는 이번 eager 감지 결과, 없으면 쿨다운 직전 결과(eager_cached)를 쓴다. 후자는
+        # 쿨다운 창 안에서만 존재하므로 최대 _EAGER_LANG_COOLDOWN_SECS 만큼만 낡았고, 쿨다운이
+        # 없었다면 어차피 그 값이 이번 판정에 쓰였을 값이다.
+        # 둘 다 None(감지 실패)이면 언어 동일을 확신할 수 없으므로 기존 재디코딩 경로를 탄다 —
+        # 화자전환 창은 두 화자 음성이 섞여 확신도가 떨어지는데, 그 지점이 곧 실제 언어가
+        # 바뀌는 지점일 수 있다. 잘못 스킵하면 새 화자 발화를 이전 언어로 전사해 붕괴하므로
+        # (중복 1건보다 훨씬 나쁘다) 불확실할 때는 재디코딩을 택한다.
+        lang_evidence = eager if eager is not None else eager_cached
         if (
-            eager is not None
+            lang_evidence is not None
             and self.model.state.detected_language is not None
-            and eager == self.model.state.detected_language
+            and lang_evidence == self.model.state.detected_language
         ):
             logger.info(
-                "[NewSpeaker] 같은 언어(%s) 확정 — 경계 재디코딩 스킵 (중복 방출 방지)", eager
+                "[NewSpeaker] 같은 언어(%s) 확정%s — 경계 재디코딩 스킵 (중복 방출 방지)",
+                lang_evidence, "" if eager is not None else " (쿨다운 직전 결과 재사용)",
             )
             self.model.speaker = change_speaker.speaker
             return
