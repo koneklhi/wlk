@@ -543,6 +543,18 @@ def create_parser():
         "영향받지 않는다.",
     )
     scenario_group.add_argument(
+        "--no-speech-threshold",
+        type=float,
+        default=None,
+        dest="no_speech_threshold",
+        help="무음판정 확률 임계값(AlignAttConfig.nonspeech_prob). 세그먼트 시작 시점의 no-speech 확률이 "
+        "이 값을 초과하면(>) 무음으로 판정해 해당 세그먼트 디코딩을 즉시 중단한다. 낮추면(↓) 무음 판정이 "
+        "관대해져(더 쉽게 무음으로 걸림) 'Thank you' 류 필러 환각이 줄어들지만, 실제로 작게 말한 발화까지 "
+        "잘릴 위험이 있다. 높이면(↑) 무음 판정이 엄격해져(더 큰 확률이 필요) 디코딩이 잘 멈추지 않으므로 "
+        "필러 환각 위험이 커진다. 기본값(None)은 AlignAttConfig.nonspeech_prob(현재 0.5)를 사용.",
+    )
+
+    scenario_group.add_argument(
         "--scenario",
         type=str,
         default=None,
