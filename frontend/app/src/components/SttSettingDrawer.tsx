@@ -30,8 +30,23 @@ import { LANGUAGE_OPTIONS, type SourceLanguage } from '@/types/stt';
 import { toSavePayload } from '@/utils/transcriptRows';
 import { AnimatePresence, motion } from 'framer-motion';
 import { X } from 'lucide-react';
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { toast } from 'react-toastify';
+
+/**
+ * 녹음 중인데 이 시간이 지나도록 표시할 전사가 한 줄도 없으면 "입력 음성 없음" 으로 알린다.
+ *
+ * ⚠️ 서버의 `status: "no_audio_detected"` 는 이 판정에 쓸 수 없다. 무음이 이어지면 서버가
+ *    침묵 세그먼트(speaker:-2, text:"")를 만들어 `lines` 가 더 이상 비지 않으므로, 그 status
+ *    는 세션 첫 스냅샷(seq=1)에만 잠깐 나오고 이후로는 계속 active_transcription 이다
+ *    (실측 확인). 그래서 "화면에 내보낼 줄이 하나도 없는가" 를 신호로 쓴다 — 침묵 세그먼트는
+ *    transcriptRows 의 isVisible() 이 이미 걸러낸다.
+ *
+ * 잡아내려는 것은 "연결은 됐는데 마이크에 소리가 아예 안 들어오는" 경우다(권한·장치 오선택).
+ * 한 줄이라도 전사된 뒤 도중에 마이크가 죽는 경우는 이 신호로 잡지 못한다 — 그건 발화 중
+ * 긴 침묵과 구분되지 않아 오경보가 더 해롭다.
+ */
+const NO_AUDIO_GRACE_MS = 8_000;
 
 const SELECT_CLASS =
   'h-10 px-3 text-sm bg-background border border-input rounded-md text-foreground outline-none w-[120px] disabled:opacity-50 disabled:cursor-not-allowed';
@@ -58,6 +73,17 @@ export const SttSettingDrawer = ({
 
   const rows = useTranscriptRows();
   const [saving, setSaving] = useState(false);
+
+  // 소리가 안 들어오는 상태를 상태 라벨로 드러낸다. 예전에는 마이크가 엉뚱한 장치로
+  // 잡혀도 화면이 '인식 중' 그대로여서 사용자가 원인을 알 길이 없었다.
+  const [noAudio, setNoAudio] = useState(false);
+  const silent = phase === 'recording' && rows.length === 0;
+  useEffect(() => {
+    // 세우는 것도 내리는 것도 타이머를 거친다 — effect 본문에서 곧바로 setState 하면
+    // 렌더가 연쇄된다(react-hooks/set-state-in-effect).
+    const t = setTimeout(() => setNoAudio(silent), silent ? NO_AUDIO_GRACE_MS : 0);
+    return () => clearTimeout(t);
+  }, [silent]);
 
   // 세션이 살아있는 동안(connecting/stopping)에는 소켓 재생성이 필요한 조작을 막는다.
   const busy = phase === 'connecting' || phase === 'stopping';
@@ -151,9 +177,9 @@ export const SttSettingDrawer = ({
                   <div className="flex items-center gap-1.5 text-sm font-mono">
                     <span
                       className="w-2 h-2 rounded-full shrink-0"
-                      style={{ backgroundColor: phaseColor(phase, backendStatus) }}
+                      style={{ backgroundColor: phaseColor(phase, backendStatus, noAudio) }}
                     />
-                    {phaseLabel(phase, backendStatus)}
+                    {phaseLabel(phase, backendStatus, noAudio)}
                   </div>
                 </div>
 
@@ -411,13 +437,13 @@ export const SttSettingDrawer = ({
   );
 };
 
-function phaseLabel(phase: string, backend: string): string {
+function phaseLabel(phase: string, backend: string, noAudio: boolean): string {
   if (backend === 'unhealthy') return '서버 연결 불가';
   switch (phase) {
     case 'connecting':
       return '연결 중';
     case 'recording':
-      return '인식 중';
+      return noAudio ? '입력 음성 없음' : '인식 중';
     case 'stopping':
       return '마무리 중';
     case 'paused':
@@ -429,9 +455,10 @@ function phaseLabel(phase: string, backend: string): string {
   }
 }
 
-function phaseColor(phase: string, backend: string): string {
+function phaseColor(phase: string, backend: string, noAudio: boolean): string {
   if (backend === 'unhealthy' || phase === 'error') return '#ef4444';
-  if (phase === 'recording') return '#22c55e';
+  // 무음은 오류가 아니라 주의 — 연결 중과 같은 노란색을 쓴다(새 색을 도입하지 않는다).
+  if (phase === 'recording') return noAudio ? '#eab308' : '#22c55e';
   if (phase === 'connecting' || phase === 'stopping') return '#eab308';
   return '#6b7280';
 }

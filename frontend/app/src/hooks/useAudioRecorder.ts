@@ -17,6 +17,29 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 /** 서버가 200ms 단위로 처리하므로 100ms 청크면 충분히 촘촘하다. */
 const TIMESLICE_MS = 100;
 
+/**
+ * getUserMedia 실패를 "무엇을 해야 하는가"가 담긴 한국어 문장으로 바꾼다.
+ *
+ * 폐쇄망 배포 PC 에서 실제로 겪은 실패가 전부 여기로 모인다 — 권한 프롬프트를 놓쳤거나,
+ * 브라우저가 사이트별로 기억해 둔 마이크가 이미 사라진 장치이거나(VBCable 재설치 등),
+ * 다른 앱이 장치를 독점한 경우. 원문 DOMException 메시지로는 구분이 안 된다.
+ */
+export function micErrorMessage(e: unknown): string {
+  const name = e instanceof DOMException ? e.name : '';
+  switch (name) {
+    case 'NotAllowedError':
+    case 'SecurityError':
+      return '마이크 권한이 거부되었습니다. 주소창의 자물쇠 아이콘에서 마이크를 허용해 주세요.';
+    case 'NotFoundError':
+    case 'OverconstrainedError':
+      return '마이크 장치를 찾을 수 없습니다. Windows 소리 설정에서 입력 장치를 확인해 주세요.';
+    case 'NotReadableError':
+      return '마이크를 사용할 수 없습니다. 다른 프로그램이 장치를 점유하고 있는지 확인해 주세요.';
+    default:
+      return `마이크를 열지 못했습니다: ${e instanceof Error ? e.message : String(e)}`;
+  }
+}
+
 export interface AudioRecorderApi {
   /** 파형 시각화용. teardown 하면 null 이 된다. */
   analyser: AnalyserNode | null;
@@ -59,9 +82,15 @@ export function useAudioRecorder(onChunk: (data: Blob) => void): AudioRecorderAp
     }
 
     // STT 전처리와 충돌하지 않도록 브라우저측 오디오 가공은 전부 끈다.
-    const stream = await navigator.mediaDevices.getUserMedia({
-      audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
-    });
+    let stream: MediaStream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
+      });
+    } catch (e) {
+      // DOMException 원문("Permission denied")은 화면에 띄워봐야 무엇을 해야 할지 알 수 없다.
+      throw new Error(micErrorMessage(e));
+    }
     streamRef.current = stream;
 
     const ctx = new AudioContext();

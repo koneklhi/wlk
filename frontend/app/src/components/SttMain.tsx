@@ -19,6 +19,7 @@ import useSettingSidebarStore from '@/stores/stt-sidebar-store';
 import { useSttStore } from '@/stores/stt.store';
 import { useThemeStore } from '@/stores/theme.store';
 import { useEffect, useRef } from 'react';
+import { toast } from 'react-toastify';
 
 const HEALTH_POLL_MS = 15_000;
 /** 이 픽셀 이내로 바닥에 붙어 있을 때만 자동 스크롤한다. */
@@ -31,6 +32,8 @@ function SttMainInner() {
   const phase = useSttStore((s) => s.phase);
   const backendStatus = useSttStore((s) => s.backendStatus);
   const checkBackend = useSttStore((s) => s.checkBackend);
+  const lastError = useSttStore((s) => s.lastError);
+  const errorSeq = useSttStore((s) => s.errorSeq);
 
   const rows = useTranscriptRows();
   const session = useSttSession();
@@ -48,6 +51,13 @@ function SttMainInner() {
     const nearBottom = box.scrollHeight - box.scrollTop - box.clientHeight < AUTOSCROLL_THRESHOLD_PX;
     if (nearBottom) endRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [rows]);
+
+  // 세션 오류를 화면에 내보낸다. 이게 없으면 마이크 권한 거부·연결 실패가 전부
+  // "시작을 눌러도 아무 일도 안 일어남" 으로만 보인다(상태점만 빨개진다).
+  // errorSeq 를 구독하는 이유는 같은 오류가 연속으로 나도 매번 알리기 위함.
+  useEffect(() => {
+    if (errorSeq > 0 && lastError) toast.error(lastError, { autoClose: 8000 });
+  }, [errorSeq, lastError]);
 
   // 백엔드 헬스 폴링 (세션과 무관 — 서버가 살아있는지만 본다)
   useEffect(() => {

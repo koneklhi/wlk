@@ -82,6 +82,12 @@ interface SttStore {
   lastSeq: number;
   desyncCount: number;
   lastError: string | null;
+  /**
+   * 오류가 발생할 때마다 증가. lastError 문자열만 보면 **같은 오류가 연속으로 나면
+   * 값이 안 바뀌어** 화면 알림이 한 번만 뜬다(마이크 권한 거부를 두 번 눌러도 조용함).
+   * 알림 표시는 이 값을 구독한다.
+   */
+  errorSeq: number;
   backendStatus: BackendStatus;
 
   // ── 액션 ──
@@ -133,6 +139,7 @@ export const useSttStore = create<SttStore>()((set, get) => ({
   lastSeq: 0,
   desyncCount: 0,
   lastError: null,
+  errorSeq: 0,
   backendStatus: 'unknown',
 
   setLanguage: (language) => set({ language }),
@@ -183,19 +190,20 @@ export const useSttStore = create<SttStore>()((set, get) => ({
     configTimer = clearTimer(configTimer);
     configTimer = setTimeout(() => {
       if (stale()) return;
+      // phase/lastError 는 여기서 세우지 않는다 — reject 가 호출측(useSttSession.start)의
+      // catch 로 흘러가 failSession 이 한 번만 돌게 한다. 여기서도 세우면 알림이 두 번 뜬다.
       configDeferred?.reject(new Error('서버가 응답하지 않습니다.'));
       configDeferred = null;
-      set({ phase: 'error', lastError: '서버가 응답하지 않습니다.' });
     }, CONFIG_TIMEOUT_MS);
 
     let ws: WebSocket;
     try {
       ws = new WebSocket(buildWsUrl(s.language));
-    } catch (e) {
+    } catch {
       configTimer = clearTimer(configTimer);
       configDeferred = null;
-      set({ phase: 'error', lastError: 'WebSocket 주소가 올바르지 않습니다.' });
-      return Promise.reject(e);
+      // 위와 같은 이유로 여기서도 상태를 세우지 않고 호출측 catch 에 맡긴다.
+      return Promise.reject(new Error('WebSocket 주소가 올바르지 않습니다.'));
     }
 
     ws.addEventListener('message', (e) => {
@@ -303,7 +311,7 @@ export const useSttStore = create<SttStore>()((set, get) => ({
         : typeof reason === 'string'
           ? reason
           : '알 수 없는 오류가 발생했습니다.';
-    set({ phase: 'error', lastError: message });
+    set({ phase: 'error', lastError: message, errorSeq: get().errorSeq + 1 });
   },
 
   checkBackend: async () => {
@@ -409,9 +417,17 @@ export const useSttStore = create<SttStore>()((set, get) => ({
 
     if (phase === 'connecting') {
       configTimer = clearTimer(configTimer);
-      configDeferred?.reject(new Error(`연결 실패 (code ${e.code})`));
-      configDeferred = null;
-      set({ phase: 'error', lastError: `연결에 실패했습니다 (code ${e.code})` });
+      const message = `서버 연결에 실패했습니다 (code ${e.code})`;
+      if (configDeferred) {
+        // 아직 아무도 결과를 못 받았다 → reject 만. 상태 확정은 호출측 catch → failSession
+        // 한 곳에서 한다(양쪽에서 세우면 알림이 두 번 뜬다).
+        configDeferred.reject(new Error(message));
+        configDeferred = null;
+      } else {
+        // config 는 이미 받았는데 markRecording 전에 끊긴 경우 — 기다리는 쪽이 없으므로
+        // 여기서 확정하지 않으면 phase 가 'connecting' 에 영영 머문다.
+        get().failSession(message);
+      }
       return;
     }
 
