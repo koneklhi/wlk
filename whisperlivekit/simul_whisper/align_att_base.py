@@ -190,6 +190,10 @@ class AlignAttBase(ABC):
         self.state.log_segments += 1
         self.state.pending_incomplete_tokens = []
         self.state.pending_retries = 0
+        logger.info(
+            "[RefreshSegment] complete=%s lang=%s discarded=%.2fs kept=%.2fs",
+            complete, self.state.detected_language, discarded_len, self.segments_len(),
+        )
 
     def segments_len(self):
         return sum(s.shape[0] for s in self.state.segments) / 16000
@@ -396,8 +400,12 @@ class AlignAttBase(ABC):
             _, language_probs = self.lang_id(encoder_feature)
             probs = language_probs[0] if isinstance(language_probs, list) else language_probs
             top_lan, p = max(probs.items(), key=lambda x: x[1])
-            logger.info("[ShortSilenceLangCheck] 최근 %.1fs → %s (p=%.2f)", window_secs, top_lan, p)
-            return top_lan if p >= min_prob else None
+            passed = p >= min_prob
+            logger.info(
+                "[ShortSilenceLangCheck] 최근 %.1fs → %s (p=%.4f, thr=%.2f, %s)",
+                window_secs, top_lan, p, min_prob, "PASS" if passed else "FAIL",
+            )
+            return top_lan if passed else None
         except Exception as e:
             logger.debug("[ShortSilenceLangCheck] 감지 실패: %s", e)
             return None
@@ -708,7 +716,10 @@ class AlignAttBase(ABC):
                 # 억제된 텍스트를 함께 로깅 (단계 C 계측: 정상 한국어가 잘못 버려지는 비율 산출용).
                 # 디코드는 warning 경로에서만 수행 → 드묾, 성능 영향 미미.
                 text = self.tokenizer.decode(hypothesis).strip()
-                logger.warning("[QualityGate] avg_logprob %.3f < %.3f — suppressing: %.200s", avg_lp, lp_thr, text)
+                logger.warning(
+                    "[QualityGate] avg_logprob %.3f < %.3f — suppressing (lang=%s): %.200s",
+                    avg_lp, lp_thr, self.state.detected_language, text,
+                )
                 return True
         if cr_thr is not None:
             from whisperlivekit.whisper.utils import compression_ratio
@@ -716,7 +727,10 @@ class AlignAttBase(ABC):
             if text:
                 cr = compression_ratio(text)
                 if cr > cr_thr:
-                    logger.warning("[QualityGate] compression_ratio %.2f > %.2f — suppressing: %.200s", cr, cr_thr, text)
+                    logger.warning(
+                        "[QualityGate] compression_ratio %.2f > %.2f — suppressing (lang=%s): %.200s",
+                        cr, cr_thr, self.state.detected_language, text,
+                    )
                     return True
         return False
 
@@ -745,7 +759,10 @@ class AlignAttBase(ABC):
         self.state.quality_suppress_streak = streak
         reset_after = self.cfg.quality_gate_reset_after
         if reset_after and streak >= reset_after:
-            logger.warning("[QualityGate] %d consecutive suppressions — refresh_segment", streak)
+            logger.warning(
+                "[QualityGate] %d consecutive suppressions — refresh_segment (lang=%s)",
+                streak, self.state.detected_language,
+            )
             self.refresh_segment(complete=True)
             self.state.quality_suppress_streak = 0
 

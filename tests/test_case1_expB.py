@@ -112,7 +112,7 @@ def test_b1_punct_at_end_splits():
 def _make_fake_decoder(decode_str: str, reset_after: int = 3):
     fs = SimpleNamespace(
         tokenizer=SimpleNamespace(decode=lambda h: decode_str),
-        state=SimpleNamespace(quality_suppress_streak=0),
+        state=SimpleNamespace(quality_suppress_streak=0, detected_language=None),
         cfg=SimpleNamespace(quality_gate_reset_after=reset_after),
     )
     fs._clean_cache = lambda: None
