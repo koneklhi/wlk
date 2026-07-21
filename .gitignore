@@ -171,3 +171,7 @@ whisperlivekit/llm_translation/*.db
 deploy/
 
 test_data.zip
+
+# React 배포 UI — 빌드 산출물(백엔드 --frontend-dir 기본 서빙 루트). 소스는 frontend/app/.
+frontend/static/
+frontend/app/node_modules/
