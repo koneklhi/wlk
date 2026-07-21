@@ -269,7 +269,7 @@ Whisper가 찍는 마침표(`.`/`。`)를 문장 분할 신호로 쓰되, **진�
 | `MIN_DURATION_REAL_SILENCE` (audio) | `0.4`s | `audio_processor.py:29` | UI 침묵 경계 생성 문턱 |
 | VAC `threshold` | `0.3` | `audio_processor.py:120,122` | Silero VAD 민감도 |
 | `MIN_DURATION_REAL_SILENCE` (backend) | `2`s | `backend.py:36` | 디코더 long-silence 리셋(경계 아님) |
-| `FINALIZE_GRACE_SECS` | `2.0`s | `tokens_alignment.py:20` | 침묵 후 확정 유예창 |
+| `FINALIZE_GRACE_SECS` | `2.0`s | `tokens_alignment.py:20` | 침묵 후 확정 유예창. **CLI `--finalize-grace-secs`로 오버라이드 가능**(기본값은 동일, Phase A 시나리오 튜닝 — [OPERATOR_TUNING_GUIDE.md](OPERATOR_TUNING_GUIDE.md)) |
 | `TAIL_REATTACH_EPS` | `0.05`s | `tokens_alignment.py:19` | 꼬리 재귀속 지터 여유 |
 | `TAIL_REATTACH_MAX_LOOKBACK_SECS` | `1.5`s | `tokens_alignment.py:25` | 삽입 재귀속 최대 소급 |
 | `LANG_SWITCH_KEEP_SECS` | `2.5`s (Exp-192부터 동적 keep의 **하한**) | `align_att_base.py` | 전환 시 유지 오디오 — `LANG_SWITCH_DYNAMIC_KEEP_ENABLED=True`면 `compute_dynamic_keep`이 미방출 구간 기반으로 2.5~5.0s 가변 |
@@ -292,9 +292,9 @@ Whisper가 찍는 마침표(`.`/`。`)를 문장 분할 신호로 쓰되, **진�
 | 스크립트-앵커 재감지 창(Exp-175~, **잠정**) | `2.0`s·p≥`0.90` | `backend.py:187-188` | 트리거 시 `detect_current_language` 창·확신 문턱 |
 | `_NEW_SPEAKER_KEEP_MARGIN`(Exp-171~) | `0.3`s | `backend.py:48` | 화자전환 경계-앵커 유지 여유(damage B 수정) |
 | `_NEW_SPEAKER_MAX_KEEP`(Exp-171~) | `5.0`s | `backend.py:49` | 화자전환 유지 오디오 상한(과거 keep=4.5 환각 전례 반영) |
-| `MIN_SPEAKER_ATTRIBUTION_SECS`(Exp-188) | `0.5`s | `tokens_alignment.py` | 승자 diar 세그먼트가 이보다 짧고 직전 화자와 다르면 귀속 불신 → 직전 화자 승계(짧은 세그먼트 화자오귀속 노이즈 방지, §3.3) |
-| `SILENCE_HARD_SECS`(Exp-176~; Exp-185→1.2; Exp-190 문법-조건부화) | `1.2`s (≤2.0 불변식) | `tokens_alignment.py` | 침묵 안전망 문턱 — d_eff≥이 값이면 하드 분할. Exp-190부터 `should_split_after_silence`가 미종결(False) 판정 시 이 분기를 건너뛰고 pending/문법 경로 폴백(단어 중간 분절 방지) |
-| `PENDING_RESOLVE_CAP`(Exp-176~) | `2.0`s | `tokens_alignment.py` | 게이트가 B 도착을 기다리는 최대 시간(silence.end 기준) — 초과 시 문법 무관 분할확정(무한 pending 방지). Exp-190 이후 미종결 어절의 하드 분할 유예를 이 캡이 최종 보증 |
+| `MIN_SPEAKER_ATTRIBUTION_SECS`(Exp-188) | `0.5`s | `tokens_alignment.py` | 승자 diar 세그먼트가 이보다 짧고 직전 화자와 다르면 귀속 불신 → 직전 화자 승계(짧은 세그먼트 화자오귀속 노이즈 방지, §3.3). **CLI `--min-speaker-attribution-secs`로 오버라이드 가능**(기본값은 동일, Phase A — [OPERATOR_TUNING_GUIDE.md](OPERATOR_TUNING_GUIDE.md)) |
+| `SILENCE_HARD_SECS`(Exp-176~; Exp-185→1.2; Exp-190 문법-조건부화) | `1.2`s (≤2.0 불변식) | `tokens_alignment.py` | 침묵 안전망 문턱 — d_eff≥이 값이면 하드 분할. Exp-190부터 `should_split_after_silence`가 미종결(False) 판정 시 이 분기를 건너뛰고 pending/문법 경로 폴백(단어 중간 분절 방지). **CLI `--silence-hard-secs`로 오버라이드 가능**(2.0s 초과 불가, Phase A) |
+| `PENDING_RESOLVE_CAP`(Exp-176~) | `2.0`s | `tokens_alignment.py` | 게이트가 B 도착을 기다리는 최대 시간(silence.end 기준) — 초과 시 문법 무관 분할확정(무한 pending 방지). Exp-190 이후 미종결 어절의 하드 분할 유예를 이 캡이 최종 보증. **CLI `--pending-resolve-cap-secs`로 오버라이드 가능**(기본값은 동일, Phase A — [OPERATOR_TUNING_GUIDE.md](OPERATOR_TUNING_GUIDE.md)) |
 | `RECONCILE_ENABLED`(Exp-192) | `True` | `boundary_reconcile.py` | 재조정 계층 전체 롤백 플래그(False=레거시 파괴적 pop) |
 | `RECONCILE_SAMESCRIPT_SUBZONE_ENABLED`(Exp-192) | `True` | `boundary_reconcile.py` | 구역2 확대(같은 스크립트 잠정 철회)만 롤백 |
 | `COVER_TOL`(Exp-192, **잠정**) | `0.5`s | `boundary_reconcile.py` | 커버 판정 start 근접 허용(τ — 컷 파티션 동일 사용). 계측 r1 Δstart 분포로 보정 |

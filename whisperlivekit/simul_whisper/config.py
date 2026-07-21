@@ -26,3 +26,4 @@ class AlignAttConfig():
     quality_gate_reset_after: int = 3
     periodic_lang_check_secs: Optional[float] = field(default=None)
     lang_restrict_koen: bool = True
+    lang_detect_general_secs: Optional[float] = field(default=None)

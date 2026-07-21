@@ -65,6 +65,11 @@ whisperlivekit-server
 인자 없이 기동해도 eval.py/closed_test.py 자동 기동 설정과 동일하다.
 단, eval/closed_test는 서버를 **8901**로 자동 기동한다(수동 서버 8900과 포트 충돌 없이 병행 가능).
 
+> **배포 상황별 파라미터 튜닝(`--scenario`, Phase A)**: `--scenario {mono,dialogue,sequential,codeswitch,multi}`로
+> 문장 확정/화자 귀속/언어 재감지 관련 9개 파라미터 + `--frame-threshold`/`--silence-hard-secs`를 상황별
+> 프리셋으로 한 번에 적용할 수 있다(개별 플래그가 프리셋보다 우선). 미지정 시 기존 마스터와 100% 동일하게
+> 동작(무회귀). 상세는 [OPERATOR_TUNING_GUIDE.md](OPERATOR_TUNING_GUIDE.md) 참조.
+
 > **세션 언어모드(CLAUDE.md §3.2)**: `--lan auto`가 코드스위칭(auto) 세션의 기본값. 한국어/영어 단일 세션을
 > 측정하려면 `--lan ko` / `--lan en`으로 기동한다(eval.py 사용 시 `--lan` 인자로 전달 — 아래 파일 목록의
 > 언어모드 태그와 일치시킬 것). `--lan`은 서버 1회 기동당 전역 1값이므로 언어모드가 다른 파일은 별도 실행으로 측정한다.

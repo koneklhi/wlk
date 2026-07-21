@@ -44,6 +44,11 @@ def compute_dynamic_keep(buffer_end_abs: Optional[float], last_emit_end: Optiona
 SESSION_START_LANG_PROBE_ENABLED = True  # False = 완전 기존 동작(무기한 보류) — 짝지음 A/B 롤백 플래그
 SESSION_START_LANG_MIN_PROB = 0.85  # 프로브 적용 확신도 게이트(틀린 언어 커밋 방지, 무조건 적용 폴백 없음)
 
+# 일반(비-eager) 언어감지 누적 오디오 문턱(초). 화자전환 eager 경로의 1.5s와는 별도 —
+# CLI --lang-detect-general-secs(cfg.lang_detect_general_secs)로 오버라이드 가능(시나리오
+# 튜닝 Phase A). cfg 쪽이 숫자가 아니면(None 미지정·테스트 목객체 등) 이 상수로 폴백한다.
+LANG_DETECT_GENERAL_SECS = 2.0
+
 # QG 억제가 구두점/공백만 담고 있으면 refresh streak에 산입하지 않기 위한 문자 집합.
 # 실단어가 하나도 없는 억제는 버퍼 폐기(단어 유실) 위험을 감수할 만한 garbage가 아니다.
 _PUNCT_ONLY_CHARS = frozenset({'.', '?', '!', '。', '！', '？', ',', ';', ':'})
@@ -314,7 +319,13 @@ class AlignAttBase(ABC):
                 )
                 return
             # 화자전환 직후엔 1.5s+확신도≥0.85로 빠른 감지 — 잘못된 언어 고착 방지
-            threshold = 1.5 if self.state.eager_lang_detect else 2.0
+            # general(비-eager) 문턱만 cfg.lang_detect_general_secs로 오버라이드 가능 —
+            # isinstance 가드는 cfg가 숫자가 아닌 값(None·테스트 Mock 등)일 때 기존 상수로
+            # 안전하게 폴백하기 위함(무회귀).
+            general_secs = getattr(self.cfg, "lang_detect_general_secs", None)
+            if not isinstance(general_secs, (int, float)):
+                general_secs = LANG_DETECT_GENERAL_SECS
+            threshold = 1.5 if self.state.eager_lang_detect else general_secs
             if seconds_since_start >= threshold:
                 language_tokens, language_probs = self.lang_id(encoder_feature)
                 top_lan, p = max(language_probs[0].items(), key=lambda x: x[1])

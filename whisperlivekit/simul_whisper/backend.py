@@ -254,6 +254,13 @@ class SimulStreamingOnlineProcessor:
         self.buffer = []
         self._session_cfg = self._resolve_session_cfg(language)
         self.model = self._create_alignatt()
+        # 시나리오 튜닝(Phase A) — asr(kwargs)로 전달된 CLI 오버라이드, 미지정 시 기존
+        # 모듈 상수로 폴백(무회귀). 사용 지점에서는 getattr(self, ..., None) or CONST로
+        # 재조회한다 — 테스트가 __new__로 __init__을 우회해 인스턴스를 만드는 경우에도
+        # 안전한 기본값 폴백을 보장하기 위함(§backend.py 유닛테스트 관례).
+        self.short_lang_reset_secs = getattr(asr, "short_lang_reset_secs", None) or MIN_DURATION_SHORT_LANG_RESET
+        self.new_speaker_max_keep_secs = getattr(asr, "new_speaker_max_keep_secs", None) or _NEW_SPEAKER_MAX_KEEP
+        self.script_anchor_n_words = getattr(asr, "script_anchor_n_words", None) or _SCRIPT_ANCHOR_N_WORDS
         self._last_emitted_word: str = None
         self._last_emit_end: float = 0.0  # 마지막으로 토큰을 방출한 시점의 audio end (stall 복구 baseline)
         self._consecutive_char_repeat: int = 0
@@ -342,10 +349,13 @@ class SimulStreamingOnlineProcessor:
         """Handle silence period."""
         self.end += silence_duration
         long_silence = silence_duration >= MIN_DURATION_REAL_SILENCE
+        # 시나리오 튜닝(Phase A) — CLI --short-lang-reset-secs 오버라이드, 미지정/미설정
+        # (__init__ 우회 테스트 포함) 시 기존 모듈 상수로 폴백.
+        short_lang_reset_secs = getattr(self, "short_lang_reset_secs", None) or MIN_DURATION_SHORT_LANG_RESET
         # 계측용(행동 비변경): 어느 분기를 타는지는 아래 if/elif와 동일 조건으로 별도 계산해
         # 로그 라벨만 만든다 — 기존 if/elif 조건식 자체는 건드리지 않는다.
         _short_cond = (
-            silence_duration >= MIN_DURATION_SHORT_LANG_RESET
+            silence_duration >= short_lang_reset_secs
             and self.model.cfg.language == "auto"
             and self.model.state.detected_language is not None
         )
@@ -387,7 +397,7 @@ class SimulStreamingOnlineProcessor:
             self._anchor_repeat_window = []
             self._reset_script_anchor_streak()
         elif (
-            silence_duration >= MIN_DURATION_SHORT_LANG_RESET
+            silence_duration >= short_lang_reset_secs
             and self.model.cfg.language == "auto"
             and self.model.state.detected_language is not None
         ):
@@ -464,7 +474,10 @@ class SimulStreamingOnlineProcessor:
         # 정책적으로 잘려나가지 않는다. MAX_KEEP으로 상한을 두고(과거 환각 전례),
         # max(..., MARGIN)은 계획에 없는 방어적 클램프 — change_speaker.start가 self.end보다
         # 늦게 도착하는 극단 케이스(음수/0에 가까운 keep_secs)에서도 최소 여유를 보장한다.
-        keep_secs = min(self.end - change_speaker.start + _NEW_SPEAKER_KEEP_MARGIN, _NEW_SPEAKER_MAX_KEEP)
+        # 시나리오 튜닝(Phase A) — CLI --new-speaker-max-keep-secs 오버라이드, 미지정/미설정
+        # (__init__ 우회 테스트 포함) 시 기존 모듈 상수로 폴백.
+        new_speaker_max_keep_secs = getattr(self, "new_speaker_max_keep_secs", None) or _NEW_SPEAKER_MAX_KEEP
+        keep_secs = min(self.end - change_speaker.start + _NEW_SPEAKER_KEEP_MARGIN, new_speaker_max_keep_secs)
         keep_secs = max(keep_secs, _NEW_SPEAKER_KEEP_MARGIN)
         self.model.refresh_segment(complete=False, keep_secs=keep_secs)
         self.buffer = []
@@ -696,7 +709,10 @@ class SimulStreamingOnlineProcessor:
             self._reset_script_anchor_streak()  # 잠긴 스크립트 포함 → 정상 콘텐츠 재개
         if not self._script_anchor_streak:
             return False
-        if len(self._script_anchor_streak) >= _SCRIPT_ANCHOR_N_WORDS:
+        # 시나리오 튜닝(Phase A) — CLI --script-anchor-n-words 오버라이드, 미지정/미설정
+        # (__init__ 우회 테스트 포함) 시 기존 모듈 상수로 폴백.
+        script_anchor_n_words = getattr(self, "script_anchor_n_words", None) or _SCRIPT_ANCHOR_N_WORDS
+        if len(self._script_anchor_streak) >= script_anchor_n_words:
             return True
         return (
             self._script_anchor_streak_start is not None
@@ -1020,6 +1036,7 @@ class SimulStreamingASR:
                 compression_ratio_threshold=self.compression_ratio_threshold,
                 lang_restrict_koen=getattr(self, 'lang_restrict_koen', True),
                 periodic_lang_check_secs=getattr(self, 'periodic_lang_check_secs', None),
+                lang_detect_general_secs=getattr(self, 'lang_detect_general_secs', None),
         )
 
         # Set up tokenizer for translation if needed
