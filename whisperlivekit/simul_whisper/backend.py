@@ -468,6 +468,24 @@ class SimulStreamingOnlineProcessor:
             self.model.state.speaker, change_speaker.speaker,
             self.model.state.detected_language, eager,
         )
+        # 1-b. 같은 언어가 확정된 화자전환은 경계 재디코딩을 건너뛴다.
+        # 경계 재디코딩의 목적은 "새 화자의 언어로 다시 읽기"인데, 언어가 그대로면 그 목적이
+        # 없다. 그런데도 refresh_segment는 init_tokens()로 디코더 prefix(이미 확정한 토큰)를
+        # 버리면서 그 발화가 담긴 오디오는 keep_secs만큼 남겨, 다음 패스가 같은 구간을 백지에서
+        # 다시 전사해 중복 방출을 만든다 — ytn2 "우선 우선"/"왕성 왕성한"이 전부 언어가 바뀌지
+        # 않은(det_before=ko, eager=ko) 화자 라벨 변경 경계에서 재현됐다. 화자 귀속만 갱신하면
+        # 화자전환 문장 분리는 token.speaker 변화로 그대로 실현된다.
+        # eager가 None(쿨다운·감지 실패)이면 언어 동일을 확신할 수 없으므로 기존 경로를 탄다.
+        if (
+            eager is not None
+            and self.model.state.detected_language is not None
+            and eager == self.model.state.detected_language
+        ):
+            logger.info(
+                "[NewSpeaker] 같은 언어(%s) 확정 — 경계 재디코딩 스킵 (중복 방출 방지)", eager
+            )
+            self.model.speaker = change_speaker.speaker
+            return
         # 2. flush 생략 + 경계 오디오 유지(complete=False) + 미확정 음역 폐기
         # damage B 수정: 고정 [-2:] 대신, 화자전환 시각(change_speaker.start)부터 현재(self.end)
         # 까지의 실제 경계 오디오 길이만큼만 유지한다 — 그래야 경계 앞쪽(새 화자 발화 서두)이
