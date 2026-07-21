@@ -8,7 +8,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "lint": "eslint .",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc -b --noEmit"
   },
   "pnpm": {
     "overrides": {
@@ -16,7 +16,10 @@
       "@rollup/rollup-win32-x64-msvc": "4.57.1",
       "esbuild": "0.27.3",
       "rollup": "4.57.1"
-    }
+    },
+    "ignoredBuiltDependencies": [
+      "esbuild"
+    ]
   },
   "dependencies": {
     "@radix-ui/react-alert-dialog": "^1.1.5",
@@ -41,6 +44,7 @@
     "@tailwindcss/vite": "4.1.16",
     "@tanstack/router-devtools": "1.166.7",
     "@tanstack/router-plugin": "1.166.7",
+    "@types/node": "^22",
     "@types/react": "19.2.14",
     "@types/react-dom": "19.2.3",
     "@types/uuid": "^9.0.8",
