@@ -26,6 +26,9 @@ type STTThemeState = {
   imageSizeLogo: number;
   logoSize: 'sm' | 'md' | 'lg' | 'xl';
 
+  // 전사 시각(HH:MM:SS) 표시 여부. 투사 화면에선 방해가 될 수 있어 기본 off.
+  showTimestamp: boolean;
+
   // 액션
   setBackgroundColor: (v: string) => void;
   setTitleBackgroundColor: (v: string) => void;
@@ -38,6 +41,7 @@ type STTThemeState = {
   setColorSystemForeground: (v: string) => void;
   setColorTitleForeground: (v: string) => void;
   setLogoSize: (size: 'sm' | 'md' | 'lg' | 'xl') => void;
+  setShowTimestamp: (v: boolean) => void;
   reset: () => void;
 };
 
@@ -56,6 +60,7 @@ const DEFAULTS = {
   colorTranslationForeground: '#C88C14',
   colorSystemForeground: '#9cdcfe',
   colorTitleForeground: '#ffffff',
+  showTimestamp: false,
 };
 
 // ponytail: 4-digit hex (#rgb) → 6-digit (#rrggbb) for <input type="color">
@@ -95,8 +100,11 @@ export const useThemeStore = create<STTThemeState>()(
             break;
         }
       },
+      setShowTimestamp: (v: boolean) => set(() => ({ showTimestamp: v })),
       reset: () => set(() => ({ ...DEFAULTS })),
     }),
-    { name: 'stt-theme-v1' },
+    // showTimestamp 추가로 키를 올린다 — 기존 v1 저장분에는 이 필드가 없어
+    // persist 병합 시 undefined 가 되고, 그러면 토글이 아무 반응도 하지 않는 것처럼 보인다.
+    { name: 'stt-theme-v2' },
   ),
 );

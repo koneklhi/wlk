@@ -1,5 +1,11 @@
 /**
  * @fileoverview STT 메인 화면 — stt-frontend 스타일 (로고-제목-로고 헤더 + 전사 영역)
+ *
+ * 화면 구성은 기존 배포 UI 그대로다. 바뀐 것은 데이터 출처뿐 —
+ * 세션 제어는 useSttSession() 이 담당하고 여기는 렌더만 한다.
+ *
+ * 마운트 시 자동 연결은 하지 않는다: 연결 = 서버 세션 생성(FFmpeg + 파이프라인 기동)이라
+ * 아무도 녹음하지 않는 페이지 로드마다 고아 세션이 생긴다.
  */
 import logoAirforce from '@/assets/images/logo-airforce.png';
 import logoRight from '@/assets/images/logo-right.png';
@@ -7,156 +13,51 @@ import { BackendErrorOverlay } from '@/components/BackendErrorOverlay';
 import { SttSettingDrawer } from '@/components/SttSettingDrawer';
 import { SttTextViewer } from '@/components/SttTextViewer';
 import { STTThemeProvider, useSttTextStyle } from '@/components/SttThemeProvider';
-import { Server } from '@/constants';
-import { useAudioRecorder } from '@/hooks/useAudioRecorder';
+import { useSttSession } from '@/hooks/useSttSession';
+import { useTranscriptRows } from '@/hooks/useTranscriptRows';
 import useSettingSidebarStore from '@/stores/stt-sidebar-store';
-import { useSTTStore } from '@/stores/stt.store';
-import { useCallback, useEffect, useMemo, useRef } from 'react';
+import { useSttStore } from '@/stores/stt.store';
+import { useThemeStore } from '@/stores/theme.store';
+import { useEffect, useRef } from 'react';
 
-interface ProcessSentence {
-  content: string;
-  translation?: string;
-  status: 'complete' | 'process';
-}
+const HEALTH_POLL_MS = 15_000;
+/** 이 픽셀 이내로 바닥에 붙어 있을 때만 자동 스크롤한다. */
+const AUTOSCROLL_THRESHOLD_PX = 120;
 
 function SttMainInner() {
   const systemStyle = useSttTextStyle('system');
+  const showTimestamp = useThemeStore((s) => s.showTimestamp);
 
-  const finalizedHistory = useSTTStore((s) => s.finalizedHistory);
-  const currentLines = useSTTStore((s) => s.currentLines);
-  const bufferTranscription = useSTTStore((s) => s.bufferTranscription);
-  const bufferTranslation = useSTTStore((s) => s.bufferTranslation);
-  const recordFlow = useSTTStore((s) => s.recordFlow);
-  const connectionStatus = useSTTStore((s) => s.connectionStatus);
-  const checkBackend = useSTTStore((s) => s.checkBackend);
-  const backendStatus = useSTTStore((s) => s.backendStatus);
-  const lastHttpStatus = useSTTStore((s) => s.lastHttpStatus);
-  const { connect, sendAudioChunk, setRecordFlow, pauseRecording, resumeRecording, stopRecording } = useSTTStore();
+  const phase = useSttStore((s) => s.phase);
+  const backendStatus = useSttStore((s) => s.backendStatus);
+  const checkBackend = useSttStore((s) => s.checkBackend);
 
-  // 마지막 실제 콘텐츠 DOM 노드 ref — scrollIntoView 타겟
-  const lastContentRef = useRef<HTMLDivElement | null>(null);
+  const rows = useTranscriptRows();
+  const session = useSttSession();
 
-  useEffect(() => {
-    if (finalizedHistory.length > 0 || currentLines.length > 0 || bufferTranscription) {
-      lastContentRef.current?.scrollIntoView({ behavior: 'smooth' });
-    }
-  }, [finalizedHistory.length, currentLines.length, bufferTranscription, bufferTranslation]);
-
-  // ── 초기 헬스체크 + 자동 WebSocket 연결 ──
-  useEffect(() => {
-    checkBackend();
-    const interval = setInterval(checkBackend, 15_000);
-    return () => clearInterval(interval);
-  }, [checkBackend]);
-
-  useEffect(() => {
-    let cancelled = false;
-    const attempt = async () => {
-      const ws = useSTTStore.getState().ws;
-      if (ws?.readyState === WebSocket.OPEN) return;
-      useSTTStore.getState().connect(Server.WS_URL, 'AUTO');
-      for (let i = 0; i < 3; i++) {
-        if (cancelled) return;
-        await new Promise((r) => setTimeout(r, 1500));
-        const ws2 = useSTTStore.getState().ws;
-        if (ws2?.readyState === WebSocket.OPEN) return;
-      }
-    };
-    attempt();
-    return () => { cancelled = true; };
-  }, []);
-
-  // ── audio recorder ──
-  const { analyser, startRecording, endRecording, pauseRecording: recorderPause, resumeRecording: recorderResume } = useAudioRecorder(
-    (data) => sendAudioChunk(data),
-  );
-
-  // ── wlk → 참조 스타일 매핑 ──
-  const isRecording = recordFlow === 'recording';
-  const isPaused = recordFlow === 'paused';
-
-  // 완료된 문장 (finalizedHistory) — 번역 포함
-  const completedSentences: ProcessSentence[] = useMemo(() => {
-    return finalizedHistory.map((entry) => ({
-      content: entry.text,
-      translation: entry.translation || undefined,
-      status: 'complete' as const,
-    }));
-  }, [finalizedHistory]);
-
-  // 진행 중 문장: 마지막 미확정 currentLine + 버퍼
-  const processingSentence: ProcessSentence | null = useMemo(() => {
-    const unfinalized = currentLines.filter(
-      (seg) => seg.finalized !== true && seg.completed !== true,
-    );
-
-    const activeSegment = [...unfinalized]
-      .reverse()
-      .find((seg) => seg.text && seg.speaker !== -2 && seg.speaker !== 0);
-
-    if (!activeSegment) {
-      if (bufferTranscription) {
-        return {
-          content: bufferTranscription,
-          translation: bufferTranslation || undefined,
-          status: 'process' as const,
-        };
-      }
-      return null;
-    }
-
-    return {
-      content: activeSegment.text || '',
-      translation: activeSegment.translation || bufferTranslation || undefined,
-      status: 'process' as const,
-    };
-  }, [currentLines, bufferTranscription, bufferTranslation]);
-
-  const isConnecting = connectionStatus === 'connecting';
-
-  // ── 녹음 제어 ──
-  const handleStartRecording = useCallback(async () => {
-    try {
-      await startRecording();
-      setRecordFlow('recording');
-    } catch {
-      console.error('녹음 시작 실패');
-    }
-  }, [startRecording, setRecordFlow]);
-
-  const handlePauseRecording = useCallback(() => {
-    recorderPause();
-    pauseRecording();
-  }, [recorderPause, pauseRecording]);
-
-  const handleResumeRecording = useCallback(() => {
-    recorderResume();
-    resumeRecording();
-  }, [recorderResume, resumeRecording]);
-
-  const handleConfirmStop = useCallback(() => {
-    if (isPaused) {
-      handleResumeRecording();
-    }
-    stopRecording();
-    endRecording();
-    setRecordFlow('stopping');
-  }, [isPaused, handleResumeRecording, stopRecording, endRecording, setRecordFlow]);
-
-  const handleReset = useCallback(() => {
-    useSTTStore.getState().init();
-  }, []);
-
-
-
-  const showTranscript = isRecording || isPaused || finalizedHistory.length > 0;
   const isOpenSidebar = useSettingSidebarStore((s) => s.isOpenSidebar);
 
-  // 마지막 콘텐츠 인덱스 — ref 할당용
-  const hasProcessing = !!processingSentence;
-  const lastIndex = hasProcessing
-    ? completedSentences.length
-    : completedSentences.length - 1;
+  // 목록 끝 sentinel — 행마다 ref 를 갈아끼우지 않고 여기 한 곳만 스크롤 타겟으로 쓴다.
+  const endRef = useRef<HTMLDivElement | null>(null);
+  const scrollBoxRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    const box = scrollBoxRef.current;
+    if (!box) return;
+    // 사용자가 위로 올려 다시 읽는 중이면 끌어내리지 않는다.
+    const nearBottom = box.scrollHeight - box.scrollTop - box.clientHeight < AUTOSCROLL_THRESHOLD_PX;
+    if (nearBottom) endRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [rows]);
+
+  // 백엔드 헬스 폴링 (세션과 무관 — 서버가 살아있는지만 본다)
+  useEffect(() => {
+    void checkBackend();
+    const t = setInterval(() => void checkBackend(), HEALTH_POLL_MS);
+    return () => clearInterval(t);
+  }, [checkBackend]);
+
+  const hasTranscript = rows.length > 0;
+  const isConnecting = phase === 'connecting';
 
   return (
     <div className="w-full h-full relative flex flex-col">
@@ -203,49 +104,25 @@ function SttMainInner() {
 
       {/* ── Transcript Area ── */}
       <div className="flex-1 h-full">
-        {backendStatus === 'unhealthy' && lastHttpStatus === 500 ? (
-          <BackendErrorOverlay
-            isConnecting={isConnecting}
-            onClose={
-              connectionStatus === 'closed'
-                ? () => useSTTStore.getState().connect(Server.WS_URL, 'AUTO')
-                : undefined
-            }
-            status={lastHttpStatus}
-          />
-        ) : !showTranscript ? (
+        {backendStatus === 'unhealthy' && !hasTranscript ? (
+          <BackendErrorOverlay isConnecting={isConnecting} onClose={() => void checkBackend()} />
+        ) : !hasTranscript ? (
           <div className="w-full h-full flex items-center justify-center flex-grow-0">
-            <span style={systemStyle}>연결 대기중...</span>
+            <span style={systemStyle}>{idleMessage(phase)}</span>
           </div>
         ) : (
           <div
+            ref={scrollBoxRef}
             className="w-full h-full overflow-y-auto pt-8 pb-12 px-16 custom-scrollbar"
             style={isOpenSidebar ? { paddingRight: '512px' } : undefined}
           >
             <div className="flex flex-col gap-14">
-              {completedSentences.map((sentence, index) => (
-                <div
-                  key={`completed-${index}`}
-                  ref={index === lastIndex ? lastContentRef : undefined}
-                >
-                  <SttTextViewer
-                    content={sentence.content}
-                    translation={sentence.translation}
-                    status={sentence.status}
-                    index={index}
-                  />
-                </div>
+              {rows.map((row) => (
+                // key 는 안정 세그먼트 id 기반 — 배열 index 를 쓰면 백엔드가 최근 줄을
+                // 소급 수정할 때 React 가 엉뚱한 DOM 노드를 재사용한다.
+                <SttTextViewer key={row.key} row={row} showTimestamp={showTimestamp} />
               ))}
-              {processingSentence && (
-                <div key="processing" ref={lastContentRef}>
-                  <SttTextViewer
-                    content={processingSentence.content}
-                    translation={processingSentence.translation}
-                    status={processingSentence.status}
-                    index={completedSentences.length}
-                  />
-                </div>
-              )}
+              <div ref={endRef} />
             </div>
           </div>
         )}
@@ -253,16 +130,21 @@ function SttMainInner() {
 
       {/* ── Settings Drawer ── */}
       <SttSettingDrawer
-        recordFlow={recordFlow}
-        analyser={analyser}
-        startRecording={handleStartRecording}
-        onPauseRecording={handlePauseRecording}
-        onResumeRecording={handleResumeRecording}
-        onStopRecording={handleConfirmStop}
-        onReset={handleReset}
+        analyser={session.analyser}
+        onStart={session.startOrResume}
+        onPause={session.pause}
+        onStop={session.stop}
+        onReset={session.reset}
       />
     </div>
   );
+}
+
+/** 전사가 없을 때의 안내 문구. 자동 연결을 하지 않으므로 '연결 대기중'은 더 이상 맞지 않는다. */
+function idleMessage(phase: string): string {
+  if (phase === 'connecting') return '연결 중...';
+  if (phase === 'recording') return '음성 인식 중...';
+  return '음성 인식을 시작하면 전사 결과가 여기에 표시됩니다';
 }
 
 export function SttMain() {

@@ -5,7 +5,14 @@ import { createFileRoute } from '@tanstack/react-router';
 import { BookOpen, Loader2, Languages, MessageSquare, Plus, Trash2, ArrowRight, type LucideIcon } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { toast } from 'react-toastify';
-import { Server } from '@/constants';
+import {
+  addCorrection,
+  addPromptItem,
+  deleteCorrection,
+  deletePromptItem,
+  getCorrections,
+  getPrompts,
+} from '@/api/corrections';
 import { Input } from '@/components/ui/input';
 import { cn } from '@/utils';
 
@@ -17,7 +24,16 @@ export const Route = createFileRoute('/admin')({
 
 /* ═══════ Types ═══════ */
 
+/**
+ * 화면 상단 탭. '번역교정' 탭 하나가 좌우 2분할로 번역용어+번역예시를 함께 보여준다.
+ * ⚠️ 데이터 소스 종류(ItemKind)와는 다른 개념이다 — 예전엔 둘을 한 타입으로 뭉쳐서
+ *    useItems('translate_words') 같은 실제 호출값이 타입에 없었고, 그 결과
+ *    `type === 'translate_words'` 비교가 전부 "겹치지 않는 비교"로 죽은 코드 취급됐다.
+ */
 type TabId = 'words' | 'translate_split';
+
+/** 실제 데이터 소스 종류. useItems/SectionUI/AddDialog 가 받는 값. */
+type ItemKind = 'words' | 'translate_words' | 'translate_sentence';
 
 interface TabDef {
   id: TabId;
@@ -30,55 +46,9 @@ const TABS: TabDef[] = [
   { id: 'translate_split', label: '번역교정' },
 ];
 
-/* ═══════ API helpers ═══════ */
-
-async function getPrompts(): Promise<{ glossary_block: Record<string, string>; sentence_block: Record<string, string> }> {
-  const res = await fetch(`${Server.CORRECTIONS_URL}/prompts`);
-  if (!res.ok) throw new Error(`prompts API error: ${res.status}`);
-  return res.json();
-}
-
-async function addPrompt({ block_key, origin, translation }: { block_key: string; origin: string; translation: string }) {
-  const res = await fetch(`${Server.CORRECTIONS_URL}/prompts/add-item`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ block_key, origin, translation }),
-  });
-  if (!res.ok) throw new Error(`prompts add-item error: ${res.status}`);
-  return res.json();
-}
-
-async function deletePrompt({ block_key, origin }: { block_key: string; origin: string }) {
-  const res = await fetch(`${Server.CORRECTIONS_URL}/prompts/delete-item`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ block_key, origin }),
-  });
-  if (!res.ok) throw new Error(`prompts delete-item error: ${res.status}`);
-  return res.json();
-}
-
-async function addWordCorrection(wrong: string, correct: string) {
-  const res = await fetch(Server.CORRECTIONS_URL, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ wrong_word: wrong.trim(), correct_word: correct.trim() }),
-  });
-  if (!res.ok) throw new Error(`corrections POST error: ${res.status}`);
-  return res.json();
-}
-
-async function deleteWordCorrection(wrong: string) {
-  const res = await fetch(`${Server.CORRECTIONS_URL}/${encodeURIComponent(wrong)}`, {
-    method: 'DELETE',
-  });
-  if (!res.ok) throw new Error(`corrections DELETE error: ${res.status}`);
-  return res.json();
-}
-
 /* ═══════ Labels per tab ═══════ */
 
-const TAB_LABELS: Record<string, { title: string; addBtn: string; srcLabel: string; dstLabel: string }> = {
+const TAB_LABELS: Record<ItemKind, { title: string; addBtn: string; srcLabel: string; dstLabel: string }> = {
   words: { title: '단어교정', addBtn: '단어 추가', srcLabel: '오인식 단어', dstLabel: '목표 단어' },
   translate_words: { title: '번역용어', addBtn: '용어 추가', srcLabel: '원본 단어', dstLabel: '번역 단어' },
   translate_sentence: { title: '번역예시', addBtn: '예시 추가', srcLabel: '원본 문장', dstLabel: '번역 문장' },
@@ -91,7 +61,13 @@ interface ItemEntry {
   dst: string;
 }
 
-function useItems(type: TabId) {
+/** 번역 사전은 두 블록으로 나뉜다. 단어교정('words')은 별도 API 라 여기 해당 없음. */
+const BLOCK_KEY = {
+  translate_words: 'glossary_block',
+  translate_sentence: 'sentence_block',
+} as const;
+
+function useItems(type: ItemKind) {
   const [items, setItems] = useState<ItemEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -102,25 +78,24 @@ function useItems(type: TabId) {
     setError(null);
 
     if (type === 'words') {
-      fetch(`${Server.CORRECTIONS_URL}`)
-        .then((r) => r.json() as Promise<Record<string, string>>)
+      getCorrections()
         .then((data) => setItems(Object.entries(data).map(([src, dst]) => ({ src, dst }))))
         .catch(() => setError('단어교정 목록을 불러오지 못했습니다.'))
         .finally(() => setLoading(false));
     } else {
-      const blockKey = type === 'translate_words' ? 'glossary_block' : 'sentence_block';
+      const blockKey = BLOCK_KEY[type];
       getPrompts()
         .then((data) => {
           const block = data[blockKey] as Record<string, string> | undefined;
-          if (typeof block === 'object' && block !== null) {
-            setItems(Object.entries(block).map(([src, dst]) => ({ src, dst })));
-          } else {
-            setItems([]);
-          }
+          setItems(
+            block && typeof block === 'object'
+              ? Object.entries(block).map(([src, dst]) => ({ src, dst }))
+              : [],
+          );
           setNotSupported(false);
         })
         .catch((e) => {
-          if ((e as Error).message.includes('404')) {
+          if ((e as Error & { status?: number }).status === 404) {
             setNotSupported(true);
             setItems([]);
           } else {
@@ -137,16 +112,14 @@ function useItems(type: TabId) {
     setError(null);
     try {
       if (type === 'words') {
-        await addWordCorrection(src, dst);
+        await addCorrection(src, dst);
       } else {
-        const blockKey = type === 'translate_words' ? 'glossary_block' : 'sentence_block';
-        await addPrompt({ block_key: blockKey, origin: src, translation: dst });
+        await addPromptItem(BLOCK_KEY[type], src, dst);
       }
       toast.success(`[${src} → ${dst}] 등록 성공`);
       load();
     } catch {
-      const label = type === 'words' ? '단어교정' : type === 'translate_words' ? '번역용어' : '번역예시';
-      toast.error(`${label} 추가 중 문제가 발생했습니다.`);
+      toast.error(`${TAB_LABELS[type].title} 추가 중 문제가 발생했습니다.`);
     }
   }, [type, load]);
 
@@ -154,10 +127,14 @@ function useItems(type: TabId) {
     setError(null);
     try {
       if (type === 'words') {
-        await deleteWordCorrection(src);
+        await deleteCorrection(src);
       } else {
-        const blockKey = type === 'translate_words' ? 'glossary_block' : 'sentence_block';
-        await deletePrompt({ block_key: blockKey, origin: src });
+        // 기본 glossary 항목은 삭제할 수 없다 — 서버가 HTTP 200 + status:'warning' 으로 알려준다.
+        const res = await deletePromptItem(BLOCK_KEY[type], src);
+        if (res.status === 'warning') {
+          toast.warn(res.message ?? '삭제할 수 없는 항목입니다.');
+          return;
+        }
       }
       toast.success(`[${src}] 삭제 성공`);
       load();
@@ -173,7 +150,7 @@ function useItems(type: TabId) {
 
 function AddDialog({ open, type, onClose, onConfirm }: {
   open: boolean;
-  type: TabId;
+  type: ItemKind;
   onClose: () => void;
   onConfirm: (src: string, dst: string) => void;
 }) {
@@ -279,7 +256,7 @@ function SectionUI({
   search, setSearch, addOpen, setAddOpen,
   addItem, removeItem,
 }: {
-  type: TabId;
+  type: ItemKind;
   Icon?: LucideIcon;
   labels: { title: string; addBtn: string; srcLabel: string; dstLabel: string };
   className?: string;
@@ -345,8 +322,10 @@ function SectionUI({
         </div>
       ) : (
         <div className="space-y-2 flex-1 min-h-0 overflow-y-auto pr-1">
-          {filtered.map((item, i) => (
-            <ItemCard key={i} src={item.src} dst={item.dst} onRemove={() => removeItem(item.src)} />
+          {filtered.map((item) => (
+            // key 는 원본 단어(dict 키라 목록 내 유일). 배열 index 를 쓰면 삭제·필터 시
+            // 남은 항목이 앞 항목의 DOM 을 재사용해 엉뚱한 행이 지워진 것처럼 보인다.
+            <ItemCard key={item.src} src={item.src} dst={item.dst} onRemove={() => removeItem(item.src)} />
           ))}
         </div>
       )}
@@ -360,7 +339,7 @@ function SectionUI({
 
 /* ═══════ Section Card (single-column) ═══════ */
 
-function SectionCard({ type, Icon }: { type: TabId; Icon: LucideIcon }) {
+function SectionCard({ type, Icon }: { type: ItemKind; Icon: LucideIcon }) {
   const { items, loading, error, notSupported, addItem, removeItem } = useItems(type);
   const [search, setSearch] = useState('');
   const [addOpen, setAddOpen] = useState(false);

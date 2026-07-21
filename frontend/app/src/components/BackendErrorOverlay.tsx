@@ -1,3 +1,10 @@
+/**
+ * @fileoverview 백엔드 도달 불가 안내 오버레이. (UI 는 기존 그대로)
+ *
+ * 예전에는 `lastHttpStatus === 500` 일 때만 떠서 사실상 죽은 코드였다 —
+ * 헬스 경로가 틀려(/wlkies/health) SPA fallback 이 HTML 을 돌려줬고, 그러면 status 가 잡히지
+ * 않아 조건이 영원히 거짓이었다. 지금은 헬스 실패 자체를 조건으로 쓴다.
+ */
 import { ArrowUpFromLine, RotateCw, WifiOff } from 'lucide-react';
 
 export function BackendErrorOverlay({
