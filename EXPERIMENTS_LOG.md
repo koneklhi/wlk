@@ -4752,3 +4752,64 @@ E5 유지(epoch 미bump) — 계측 전용이라 실패 모드를 바꾸지 않�
 산출물: `docs/research/SOT_LANG_PROBE_STAGE0.md`(분석 정본) ·
 `docs/backlog/LANG_LOCK_STAGE0_HANDOFF.md`(인계·정지 사유) ·
 `.omc/benchmarks/stage0_probe/*_tau097.txt`(프로브 전수 분석 6파일).
+
+---
+
+## Exp-196 — 화자전환 시 동일언어 확정 경계 재디코딩 스킵 (samelang 머지, Exp-190 계열 후속) (2026-07-22) [E5→E6, `fix/samelang-no-refresh`(master 머지 `3ad14a6`)]
+
+**언어모드**: auto(bong1·ytn2·sbs1) — 다른 세션(별도 워크트리)에서 구현·측정·머지, 이 세션(`exp/lang-lock-stage0`)은
+`git merge master`로 반영만 하고 후속 문서 정리를 담당.
+**코드 변경**: `whisperlivekit/simul_whisper/backend.py`만.
+
+### 배경 — Exp-155와의 관계 (같은 가설, 두 번째 시도)
+**Exp-155**(2026-07-03, **E4 base 기질**, 브랜치 `exp/conditional-speaker-reset`)가 이미 같은 방향을 시도해
+**기각**됐다 — "동일언어 화자전환이면 new_speaker 리셋(`refresh_segment`·`detected_language=None`·`_apply`)을
+통째로 생략"하는 넓은 범위 설계였다. bong1의 new_speaker 15/15가 전부 동일언어로 판정돼 리셋이 100% 생략됐고,
+그 안에 섞여 있던 **진짜 다른 화자(영어 화자 2명·한국어 화자 2명)를 "같은 언어"라는 이유로 블렌딩**해
+화자F1 -4.1(38.1%p WER 악화 동반)로 악화됐다. 타겟이었던 sbs1은 new_speaker 자체가 0회 발동해 애초에
+검증 불능이었다.
+
+이번 시도는 다르다:
+- **기질(substrate)**: 이번은 **E5 turbo**(Exp-155는 E4 base) — 코드스위칭 실패모드 자체가 다르다(EXPERIMENTS.md
+  이월 핵심사실 참조: turbo는 "Thank you" 필러 환각형, base는 방송클로징 환각형).
+- **리셋 범위**: Exp-155는 리셋 블록 전체(화자 귀속 갱신까지 포함)를 생략했지만, 이번은 **경계 재디코딩
+  (`refresh_segment` 호출) 하나만** 스킵하고 화자 귀속(`token.speaker`)·`global_time_offset`은 그대로
+  갱신한다. 즉 "같은 화자처럼 취급"이 아니라 "화자는 바뀌었다고 기록하되 그 경계의 오디오를 다시 읽지는
+  않는다"는 설계 — Exp-155가 실패한 정확한 지점(진짜 다른 화자를 같은 화자로 뭉갬)을 피해간다.
+
+### 변경 내용 (커밋 순)
+| 커밋 | 내용 |
+|---|---|
+| `47fd76c` | 화자전환 시 eager 언어감지가 기존 언어와 동일함을 확정하면 경계 재디코딩(`refresh_segment`)을 생략. `refresh_segment`가 디코더 prefix는 버리면서 오디오(keep_secs분)는 남겨, 다음 패스가 같은 구간을 백지에서 다시 전사해 중복 방출(ytn2 "우선 우선"/"왕성 왕성한")을 만들던 것이 근본원인 — 언어가 안 바뀌었으면 "새 화자의 언어로 다시 읽기"라는 재디코딩 목적 자체가 성립하지 않는다는 관찰. eager=None(쿨다운·감지실패)이면 동일언어를 확신 못 해 기존 경로(재디코딩) 유지 |
+| `4448288` | Exp-189 쿨다운(1.5s)에 eager 감지가 걸려 `eager=None`이 되면 "동일 언어 확정"에 실패해 재디코딩이 강행되던 사각지대 수정 — 직전 감지결과를 `_last_eager_lang_result`에 캐시해 쿨다운 구간의 스킵 판정에만 재사용(캐시값은 `eager` 자체와 분리 보관해 `_apply_detected_language`까지 타지 않게 함 — Exp-189가 억제한 flip-flop 재적용 방지). bong1 화자전환 25건 중 8건이 이 쿨다운 사각지대였다 |
+
+### 측정 (경로 C, `--lan auto`, `--repeat 1` 스크리닝, diar ON — 다른 세션 측정, 커밋 메시지 인용)
+| 파일 | 지표 | 전 | 후 |
+|---|---|---|---|
+| ytn2 | WER | 15.8% | 12.3% |
+| ytn2 | 화자분리 F1 | 80.0% | 94.7% |
+| bong1 | 화자분리 F1 | 73.7% | **78.8%**(자체 최고) |
+| sbs1 | 화자분리 F1 | 80~100% 밴드 | 회귀 없음 |
+
+정성: bong1 "everyone here Everyone here" 등 중복 해소.
+
+### 판정 — 이번 세션은 반영·정리만
+이 실험은 `worktrees/bong1-eval-diagnostics`(`exp/lang-lock-stage0`)가 아닌 별도 세션에서 구현·측정·머지됐다
+(`3ad14a6`). 이 세션은 `git merge master`로 반영했을 뿐 — 코드 파일 충돌 0건(브랜치는
+`align_att_base.py`/`simul_whisper.py`/`scripts/`/`metrics.py`를, 이 머지는 `backend.py`만 건드려 파일
+집합이 완전히 분리돼 있었다). **ko/en 세션에는 영향 없음** — `lang_locked` 분기에서 `eager=None`·
+`eager_cached=None`이라 `lang_evidence=None`이 되어 스킵 판정 자체가 early return으로 미진입한다(Exp-195의
+ko/en 오탐 수치 23건·0.61%·게이트 통과 0/23은 그대로 유효). **auto 세션은 영향 있음** — 동일언어 화자전환에서
+`refresh_segment` 미호출로 버퍼가 안 잘려 세그먼트가 계속 자라므로(재디코딩이 스킵되니 잘릴 계기가 없다),
+Exp-195의 auto 오탐/참양성 수치(ytn1 25건 등)는 이 머지 이후 **직접 비교 불가**해졌다.
+
+**✅ 채택(머지 완료 확인, 이 세션은 재기각하지 않음)** — 위 수치는 N=1 스크리닝이나 이미 master에 머지된
+상태(다른 세션의 결정)이며, CLAUDE.md §4 채택 확정(`--repeat 3`) 게이트 적용은 그 세션의 범위였다. 이 세션은
+merge 반영 + epoch 정합성 정리만 담당한다.
+
+### epoch
+**E5 → E6 bump** — new_speaker의 실패모드를 바꾸는 구조 변경이다(경계 재디코딩이 화자전환마다 무조건
+발동하던 것에서, 동일언어 확정 시 조건부 스킵으로 변경). E5에서 new_speaker/경계재디코딩 경로에 얹혀
+있던 결론(frame_threshold 배포레버 Exp-193·boundary_reconcile Exp-192·keep_secs Exp-171/174 등)은
+`[E5·재검증]` 대상 — 그 경로들이 도달하는 빈도·조건이 스킵 신설로 달라졌기 때문이다. 상세는
+STATE(`EXPERIMENTS.md`) "코드 세대(Epoch)" 절 참조.
