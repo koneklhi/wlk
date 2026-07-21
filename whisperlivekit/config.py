@@ -78,6 +78,18 @@ class WhisperLiveKitConfig:
     silence_grammar_gate: bool = True
     silence_hard_secs: Optional[float] = None
 
+    # 시나리오 튜닝 (Phase A) — 미지정(None)이면 각 소비 지점의 기존 하드코딩 상수로 폴백한다.
+    min_real_silence_secs: Optional[float] = None
+    vad_threshold: Optional[float] = None
+    pending_resolve_cap_secs: Optional[float] = None
+    min_speaker_attribution_secs: Optional[float] = None
+    finalize_grace_secs: Optional[float] = None
+    short_lang_reset_secs: Optional[float] = None
+    script_anchor_n_words: Optional[int] = None
+    new_speaker_max_keep_secs: Optional[float] = None
+    lang_detect_general_secs: Optional[float] = None
+    no_speech_threshold: Optional[float] = None
+
     # Diarization — Sortformer
     sortformer_model: str = "nvidia/diar_streaming_sortformer_4spk-v2"
 

@@ -98,6 +98,12 @@ class AudioProcessor:
         self.bytes_per_sec = self.samples_per_sec * self.bytes_per_sample
         self.max_bytes_per_sec = 32000 * 5  # 5 seconds of audio at 32 kHz
         self.is_pcm_input = self.args.pcm_input
+        # 시나리오 튜닝(Phase A) — CLI --min-real-silence-secs/--vad-threshold 오버라이드,
+        # 미지정 시 기존 하드코딩 상수로 폴백(무회귀).
+        self.min_real_silence_secs: float = float(
+            getattr(self.args, "min_real_silence_secs", None) or MIN_DURATION_REAL_SILENCE
+        )
+        self.vad_threshold: float = float(getattr(self.args, "vad_threshold", None) or 0.3)
 
         # State management
         self.is_stopping: bool = False
@@ -119,9 +125,9 @@ class AudioProcessor:
             # 두 줄로 쪼개지는 것을 막기 위해 min_silence를 100→200ms로 올린다.
             if models.vac_session is not None:
                 vac_model = OnnxWrapper(session=models.vac_session)
-                self.vac = FixedVADIterator(vac_model, threshold=0.3, min_silence_duration_ms=200)
+                self.vac = FixedVADIterator(vac_model, threshold=self.vad_threshold, min_silence_duration_ms=200)
             else:
-                self.vac = FixedVADIterator(load_jit_vad(), threshold=0.3, min_silence_duration_ms=200)
+                self.vac = FixedVADIterator(load_jit_vad(), threshold=self.vad_threshold, min_silence_duration_ms=200)
         self.ffmpeg_manager: Optional[FFmpegManager] = None
         self.ffmpeg_reader_task: Optional[asyncio.Task] = None
         self._ffmpeg_error: Optional[str] = None
@@ -212,7 +218,7 @@ class AudioProcessor:
         self.metrics.n_silence_events += 1
         if self.current_silence.duration is not None:
             self.metrics.total_silence_duration_s += self.current_silence.duration
-        if self.current_silence.duration and self.current_silence.duration > MIN_DURATION_REAL_SILENCE:
+        if self.current_silence.duration and self.current_silence.duration > self.min_real_silence_secs:
             self.state.new_tokens.append(self.current_silence)
         # Push the completed silence as the end event (separate from the start event)
         await self._push_silence_event()

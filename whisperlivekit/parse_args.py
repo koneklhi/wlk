@@ -283,9 +283,11 @@ def create_parser():
     simulstreaming_group.add_argument(
         "--frame-threshold",
         type=int,
-        default=25,
+        default=None,
         dest="frame_threshold",
-        help="Threshold for the attention-guided decoding. The AlignAtt policy will decode only until this number of frames from the end of audio. In frames: one frame is 0.02 seconds for large-v3 model.",
+        help="Threshold for the attention-guided decoding. The AlignAtt policy will decode only until this number of frames from the end of audio. In frames: one frame is 0.02 seconds for large-v3 model."
+        " 기본값(None)은 25 — --scenario 프리셋으로 오버라이드 가능(시나리오 튜닝 Phase A). parse_args()가"
+        " 미지정 시 25로 폴백한다(WhisperLiveKitConfig.frame_threshold 기본값과 동일, 무회귀).",
     )
 
     simulstreaming_group.add_argument(
@@ -440,7 +442,7 @@ def create_parser():
         default=None,
         dest="silence_hard_secs",
         help="문법-조건부 침묵 게이트의 안전망 문턱(초) — 이 이상 침묵이면 문법 판정 없이 항상 분할. "
-        "기본값(None)은 tokens_alignment.SILENCE_HARD_SECS(현재 0.8s)를 사용. 실험용 스윕 오버라이드, 2.0s 초과 불가.",
+        "기본값(None)은 tokens_alignment.SILENCE_HARD_SECS(현재 1.2s)를 사용. 실험용 스윕 오버라이드, 2.0s 초과 불가.",
     )
 
     # LLM 번역 인자
@@ -475,6 +477,104 @@ def create_parser():
         help="번역 모델명. 기본값: gpt-oss-20b (배포 PC). dev는 qwen2.5:7b 지정.",
     )
 
+    # 배포 시나리오 튜닝 인자 (Phase A — CLI 승격, 기본값은 기존 하드코딩 상수와 동일).
+    # 미지정(None)이면 각 소비 지점의 기존 상수로 폴백한다(무회귀).
+    scenario_group = parser.add_argument_group('Scenario tuning arguments (Phase A)')
+
+    scenario_group.add_argument(
+        "--min-real-silence-secs",
+        type=float,
+        default=None,
+        dest="min_real_silence_secs",
+        help="UI 침묵 경계(Silence 토큰) 생성 최소 길이(초). 기본값(None)은 "
+        "audio_processor.MIN_DURATION_REAL_SILENCE(현재 0.4s)를 사용.",
+    )
+    scenario_group.add_argument(
+        "--vad-threshold",
+        type=float,
+        default=None,
+        dest="vad_threshold",
+        help="Silero VAD(FixedVADIterator) 민감도 임계값. 기본값(None)은 0.3을 사용.",
+    )
+    scenario_group.add_argument(
+        "--pending-resolve-cap-secs",
+        type=float,
+        default=None,
+        dest="pending_resolve_cap_secs",
+        help="문법-조건부 침묵 게이트가 다음 발화 도착을 기다리는 최대 시간(초, safety valve). "
+        "기본값(None)은 tokens_alignment.PENDING_RESOLVE_CAP(현재 2.0s)를 사용.",
+    )
+    scenario_group.add_argument(
+        "--min-speaker-attribution-secs",
+        type=float,
+        default=None,
+        dest="min_speaker_attribution_secs",
+        help="화자 귀속을 신뢰하는 최소 diarization 세그먼트 길이(초). 기본값(None)은 "
+        "tokens_alignment.MIN_SPEAKER_ATTRIBUTION_SECS(현재 0.5s)를 사용.",
+    )
+    scenario_group.add_argument(
+        "--finalize-grace-secs",
+        type=float,
+        default=None,
+        dest="finalize_grace_secs",
+        help="침묵 직후 직전 세그먼트 확정을 유예하는 시간(초, 유보 꼬리 도착 대기). "
+        "기본값(None)은 tokens_alignment.FINALIZE_GRACE_SECS(현재 2.0s)를 사용.",
+    )
+    scenario_group.add_argument(
+        "--short-lang-reset-secs",
+        type=float,
+        default=None,
+        dest="short_lang_reset_secs",
+        help="짧은 침묵 후 언어 재감지를 스케줄링하는 최소 침묵 길이(초). 기본값(None)은 "
+        "simul_whisper.backend.MIN_DURATION_SHORT_LANG_RESET(현재 0.5s)를 사용.",
+    )
+    scenario_group.add_argument(
+        "--script-anchor-n-words",
+        type=int,
+        default=None,
+        dest="script_anchor_n_words",
+        help="스크립트-앵커 재감지 트리거 연속 반대-스크립트 단어 수 문턱. 기본값(None)은 "
+        "simul_whisper.backend._SCRIPT_ANCHOR_N_WORDS(현재 3)를 사용.",
+    )
+    scenario_group.add_argument(
+        "--new-speaker-max-keep-secs",
+        type=float,
+        default=None,
+        dest="new_speaker_max_keep_secs",
+        help="화자전환 시 경계 재디코딩을 위해 유지하는 최근 오디오 길이 상한(초). 기본값(None)은 "
+        "simul_whisper.backend._NEW_SPEAKER_MAX_KEEP(현재 5.0s)를 사용.",
+    )
+    scenario_group.add_argument(
+        "--lang-detect-general-secs",
+        type=float,
+        default=None,
+        dest="lang_detect_general_secs",
+        help="일반(비-eager) 언어감지 누적 오디오 문턱(초). 기본값(None)은 "
+        "align_att_base의 general 분기 상수(현재 2.0s)를 사용. eager(화자전환) 분기의 1.5s는 "
+        "영향받지 않는다.",
+    )
+    scenario_group.add_argument(
+        "--no-speech-threshold",
+        type=float,
+        default=None,
+        dest="no_speech_threshold",
+        help="무음판정 확률 임계값(AlignAttConfig.nonspeech_prob). 세그먼트 시작 시점의 no-speech 확률이 "
+        "이 값을 초과하면(>) 무음으로 판정해 해당 세그먼트 디코딩을 즉시 중단한다. 낮추면(↓) 무음 판정이 "
+        "관대해져(더 쉽게 무음으로 걸림) 'Thank you' 류 필러 환각이 줄어들지만, 실제로 작게 말한 발화까지 "
+        "잘릴 위험이 있다. 높이면(↑) 무음 판정이 엄격해져(더 큰 확률이 필요) 디코딩이 잘 멈추지 않으므로 "
+        "필러 환각 위험이 커진다. 기본값(None)은 AlignAttConfig.nonspeech_prob(현재 0.5)를 사용.",
+    )
+
+    scenario_group.add_argument(
+        "--scenario",
+        type=str,
+        default=None,
+        choices=["mono", "dialogue", "sequential", "codeswitch", "multi"],
+        help="배포 음성 상황 프리셋 (mono=단일화자단일언어, dialogue=동일언어2인교대, "
+        "sequential=순차통역텀김, codeswitch=코드스위칭텀짧음, multi=다화자겹침). "
+        "명시한 개별 플래그가 프리셋 값보다 우선한다.",
+    )
+
     return parser
 
 
@@ -487,5 +587,13 @@ def parse_args():
     delattr(args, 'no_vad')
     delattr(args, 'no_vac')
 
+    from whisperlivekit.scenario_presets import apply_scenario_preset
+    args = apply_scenario_preset(args)
+
     from whisperlivekit.config import WhisperLiveKitConfig
+    # --frame-threshold는 시나리오 프리셋 오버라이드를 허용하기 위해 CLI 기본값을 None
+    # 센티널로 뒀다(§scenario_presets). CLI/프리셋 둘 다 미지정이면 기존 기본값(25,
+    # WhisperLiveKitConfig.frame_threshold와 동일)으로 폴백해 무회귀를 보장한다.
+    if args.frame_threshold is None:
+        args.frame_threshold = WhisperLiveKitConfig.frame_threshold
     return WhisperLiveKitConfig.from_namespace(args)
