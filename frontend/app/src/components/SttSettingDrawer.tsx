@@ -85,12 +85,18 @@ export const SttSettingDrawer = ({
     return () => clearTimeout(t);
   }, [silent]);
 
-  // 세션이 살아있는 동안(connecting/stopping)에는 소켓 재생성이 필요한 조작을 막는다.
-  const busy = phase === 'connecting' || phase === 'stopping';
+  // 소켓을 새로 여는 중(connecting)에만 조작을 막는다.
+  //
+  // ⚠️ 'stopping'(EOS 보내고 서버 flush 대기)은 **막지 않는다**. flush 는 서버 사정으로 몇 초씩
+  //    걸리는데(번역 활성 시 10초 폴백까지 걸리는 것을 실측), 그동안 버튼이 전부 잠겨
+  //    "일시중단하면 한참 동안 재개를 못 누른다"가 됐다. 재개는 어차피 **새 소켓**이라
+  //    이전 세션의 flush 완료를 기다릴 이유가 없고, 화면 내용은 beginSession 이 동결한다.
+  const busy = phase === 'connecting';
   const isPaused = phase === 'paused';
-  const canStart = !busy && (phase === 'idle' || isPaused || phase === 'error');
-  const canPauseOrResume = phase === 'recording' || isPaused;
-  const canStop = phase === 'recording' || isPaused;
+  const isStopping = phase === 'stopping';
+  const canStart = !busy && (phase === 'idle' || isPaused || isStopping || phase === 'error');
+  const canPauseOrResume = phase === 'recording' || isPaused || isStopping;
+  const canStop = phase === 'recording' || isPaused || isStopping;
   const canChangeLanguage = phase === 'idle' || phase === 'error';
   const hasTranscript = rows.length > 0;
 
@@ -190,18 +196,18 @@ export const SttSettingDrawer = ({
                     <Button
                       onClick={() => void onStart()}
                       variant="outline"
-                      disabled={!canStart || isPaused}
+                      disabled={!canStart || isPaused || isStopping}
                     >
                       시작
                     </Button>
                     {/* 일시중단 상태에서 '재개'는 새 WS 세션을 연다 —
                         서버는 1연결=1세션이라 기존 연결로는 다시 전사할 수 없다. */}
                     <Button
-                      onClick={isPaused ? () => void onStart() : onPause}
+                      onClick={isPaused || isStopping ? () => void onStart() : onPause}
                       variant="outline"
                       disabled={!canPauseOrResume || busy}
                     >
-                      {isPaused ? '재개' : '일시 중단'}
+                      {isPaused || isStopping ? '재개' : '일시 중단'}
                     </Button>
                     <AlertDialog>
                       <AlertDialogTrigger asChild>

@@ -5,7 +5,7 @@
  * id 가 충돌해도 서로를 지우면 안 된다.
  */
 import { describe, expect, it } from 'vitest';
-import { buildRows, toSavePayload, type RowInput } from './transcriptRows';
+import { buildRows, freezeLines, toSavePayload, type RowInput } from './transcriptRows';
 import { lineKey } from './deltaProtocol';
 import type { Segment, VolatileState } from '@/types/stt';
 
@@ -178,5 +178,51 @@ describe('toSavePayload', () => {
       { speaker: 1, text: '저장될 줄', translation: null },
       { speaker: 1, text: '진행중 꼬리', translation: null },
     ]);
+  });
+});
+
+describe('freezeLines — 일시중단 시 세션 동결', () => {
+  it('미확정 줄을 확정으로 굳힌다', () => {
+    const out = freezeLines([seg(1, '확정본'), seg(2, '진행중', { finalized: false })], VOLATILE);
+    expect(out.map((s) => [s.text, s.finalized])).toEqual([
+      ['확정본', true],
+      ['진행중', true],
+    ]);
+  });
+
+  it('buffer 꼬리를 마지막 줄 본문에 정착시킨다', () => {
+    // 이게 없으면 일시중단 직전 buffer 에만 있던 발화가 재개 순간 통째로 사라진다.
+    const out = freezeLines([seg(1, '앞부분')], {
+      ...VOLATILE,
+      buffer_transcription: ' 뒷부분입니다.',
+      buffer_translation: ' the rest.',
+    });
+    expect(out).toHaveLength(1);
+    expect(out[0].text).toBe('앞부분 뒷부분입니다.');
+    expect(out[0].translation).toBe('the rest.');
+  });
+
+  it('확정 줄이 하나도 없고 buffer 만 있으면 캐리어 줄을 만든다', () => {
+    // 첫 문장이 확정되기 전에 일시중단하면 화면의 전사가 전부 buffer 뿐이다.
+    const out = freezeLines([], { ...VOLATILE, buffer_transcription: '첫 문장이요' });
+    expect(out.map((s) => [s.text, s.finalized])).toEqual([['첫 문장이요', true]]);
+  });
+
+  it('buffer_diarization 을 buffer_transcription 앞에 붙인다', () => {
+    const out = freezeLines([], {
+      ...VOLATILE,
+      buffer_diarization: '화자대기 ',
+      buffer_transcription: '전사꼬리',
+    });
+    expect(out[0].text).toBe('화자대기 전사꼬리');
+  });
+
+  it('침묵 세그먼트는 동결 대상에서 제외한다', () => {
+    const out = freezeLines([seg(1, null, { speaker: -2 }), seg(2, '내용')], VOLATILE);
+    expect(out.map((s) => s.text)).toEqual(['내용']);
+  });
+
+  it('아무것도 없으면 빈 배열', () => {
+    expect(freezeLines([], VOLATILE)).toEqual([]);
   });
 });
