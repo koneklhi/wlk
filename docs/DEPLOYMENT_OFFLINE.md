@@ -123,6 +123,7 @@ USB 반입·적용 여부는 매번 별도로 확인해야 한다. **`whisperliv
 | 화자분할(sortformer) | `nemo-toolkit[asr]` (**무겁다** — lightning/hydra 등 다수 의존) | `diarization-sortformer` |
 | 경로 C 자동측정 | `playwright`, `comtypes`, **`sounddevice`**(+chromium 바이너리) | `vbcable` |
 | 번역(LLM) | `httpx` (이미 `uv.lock`에 포함) | (별도 extra 불필요) |
+| 번역 RAG(Stage 2, Qdrant 벡터 유사 예시 검색) | `qdrant-client`, `sentence-transformers` | `translation-rag` (선택 — RAG를 쓰기로 결정했을 때만 wheelhouse에 포함) |
 | GPU(RTX 30/50) | torch/torchaudio **cu128** 휠 | `cu128` |
 
 > **[정정]** 과거 이 문서는 "`listen`(sounddevice) extra는 경로 B/C에 불필요"라고 적었으나 **틀렸다** —
@@ -153,6 +154,9 @@ New-Item -ItemType Directory -Force deploy\wheelhouse, deploy\uv-installer | Out
 #    --no-emit-project 필수: 빼면 프로젝트 자체가 editable(-e .)로 박혀 hash 모드 pip download가 실패한다.
 uv export --frozen --no-dev --no-emit-project `
   --extra diarization-sortformer --extra vbcable --extra cu128 -o deploy\requirements-deploy.txt
+#    번역 RAG(Stage 2)를 배포 PC에서 실제로 켜기로 했다면 `--extra translation-rag`를 위 명령에
+#    추가해야 wheelhouse에 qdrant-client/sentence-transformers가 포함된다(기본 export엔 미포함 —
+#    §2.1 참조, RAG는 선택 기능이라 쓰기로 결정한 경우에만 추가).
 
 # 2) 모든 wheel 다운로드 (torch cu128 인덱스 포함)
 #    uv엔 pip download 서브커맨드가 없다. .venv에 pip를 넣고 그 python으로 받는다
@@ -390,6 +394,10 @@ C:\Python312\python.exe -m whisperlivekit.basic_server
 ```
 → 브라우저에서 **http://localhost:8900/** 접속 → 내장 웹 UI에서 마이크로 발화, 실시간 전사·화자 확인.
 
+> 배포 PC처럼 `frontend/static`에 React dist가 들어 있으면 `GET /`는 배포 UI로 넘어간다. 그때 내장 UI로
+> 교차 확인하려면 **http://localhost:8900/dev** 를 쓴다(dist 유무와 무관하게 항상 내장 UI). 배포 UI에서
+> 증상이 보일 때 백엔드 계약 문제인지 프론트 문제인지 가르는 가장 빠른 방법이다.
+
 ### 4.3 경로 A — 파일 직접 송신 (빠른 스모크, 참고)
 
 VBCable 없이 코드 회귀만 빠르게 보는 용도(성능 판정 아님):
@@ -587,10 +595,13 @@ C:\Python312\python.exe -m whisperlivekit.basic_server `
 | 한글이 깨져서 전송됨 | curl로 직접 호출 시 인코딩 문제 | httpx(wlk 내부)는 `ensure_ascii`로 정상 처리됨 — curl 자체 결함이니 wlk 실사용에는 무관 |
 
 **알려진 차이 — 기존 whisperlive 대비(버그 아님, 의도적 보류)**:
-- **Qdrant 벡터 few-shot 미이식(Stage 2)**: 기존 whisperlive는 Qdrant(bge-m3 임베딩) 벡터 검색으로
-  입력과 유사한 예시 문장을 동적으로 골라 프롬프트에 주입한다. wlk는 이 벡터 검색 단계만 미이식이다 —
-  용어집(`glossary_block`) 동적 주입·고정 예시 문장(`sentence_block`) 주입은 이미 이식·연결 완료됐다
-  (Stage 1, §6.3 참조). 동일 입력이라도 예시 선택 방식 차이로 번역 품질/용어 일관성이 기존과 다를 수 있다.
+- **Qdrant 벡터 few-shot — 이식 완료, 배포 PC 실물 데이터 미검증(Stage 2, 2026-07-21)**: 기존
+  whisperlive는 Qdrant(bge-m3 임베딩) 벡터 검색으로 입력과 유사한 예시 문장을 동적으로 골라 프롬프트에
+  주입한다. wlk도 이제 이 벡터 검색 단계 코드를 이식했다(`whisperlivekit/llm_translation/rag_manager.py`,
+  §6.3 참조) — 용어집(`glossary_block`) 동적 주입·고정 예시 문장(`sentence_block`) 주입(Stage 1)에 더해
+  Stage 2 RAG 블록까지 프롬프트 조립 경로에 연결돼 있다. 단 Qdrant 로컬 DB·bge-m3 임베딩 모델 실물 파일은
+  배포 PC에만 있어 dev 환경에서는 단위 테스트(가짜 모듈 주입)로만 검증했고 **배포 PC 실물 데이터로는
+  아직 검증되지 않았다** — §6.3의 미검증 가정 2가지를 배포 전 반드시 확인할 것.
 - **스트리밍 미사용**: 기존은 SSE 스트리밍(`_stream`), wlk는 단일 non-streaming POST(`stream:false`). 최종
   번역 결과는 동등하나, 화면에 토큰 단위로 흘러나오는 연출은 없다.
 
@@ -639,9 +650,48 @@ C:\Python312\python.exe -m whisperlivekit.basic_server `
 | `admin_translation_glossary.json` | `whisperlivekit/llm_translation/` | 배포 원본의 실제 용어집으로 내용 교체. **포맷은 `{origin: translation}` dict** — 단어교정 `admin_replacement.json`의 리스트 포맷(§6.1)과 다르므로 혼동 금지 |
 | `user_translation_glossary.db` | `whisperlivekit/llm_translation/` | 기존 사용자 glossary를 이어쓰려면 배포 DB 파일 복사, 새로 시작이면 불필요(매니저가 테이블 자동 생성) |
 
-**미이식으로 남은 것은 Stage 2(Qdrant 벡터 유사 예시 검색)뿐**이다 — `sentence_block`(few-shot 예시 문장)
-자체는 이미 동작하며 항상 전체가 주입된다, "입력과 유사도가 가장 높은 예시만 동적으로 고른다"는 부분만
-아직 없다. 설계 상세: [docs/superpowers/specs/2026-07-16-translation-glossary-design.md](superpowers/specs/2026-07-16-translation-glossary-design.md) §8.
+**Stage 2(Qdrant 벡터 유사 예시 검색)도 코드 이식이 완료됐다**(2026-07-21,
+`whisperlivekit/llm_translation/rag_manager.py`) — 단 **배포 PC 실물 데이터로는 아직 검증되지
+않았다**. `sentence_block`(few-shot 고정 예시 문장)은 항상 전체가 주입되고, Stage 2 RAG는 그 위에
+"입력과 유사도가 가장 높은 예시만 동적으로 고른다"는 블록을 추가로 붙인다. 설계 상세:
+[docs/superpowers/specs/2026-07-16-translation-glossary-design.md](superpowers/specs/2026-07-16-translation-glossary-design.md) §8.
+
+RAG는 아래 4개 CLI 플래그로 제어한다(`parse_args.py`). **기본값은 전부 비활성** — 경로를 지정하지 않거나
+지정한 경로가 실제로 존재하지 않으면 `TranslationRagManager`가 조용히 비활성화되고 서버는 RAG 블록 없이
+정상 동작한다(dev 환경 기본 동작):
+
+| 플래그 | 기본값 | 설명 |
+|---|---|---|
+| `--translation-rag-qdrant-path` | `None`(비활성) | Qdrant 로컬 임베디드 DB 디렉터리 경로(배포 PC 전용) |
+| `--translation-rag-embedding-model-path` | `None`(비활성) | bge-m3 로컬 임베딩 모델 디렉터리 경로(배포 PC 전용) |
+| `--translation-rag-collection` | `official_translation` | Qdrant 컬렉션 이름(기존 whisperlive 배포 컬렉션명과 동일 기본값) |
+| `--translation-rag-top-k` | `3` | 유사 예시 검색 개수 |
+
+**RAG는 문장이 확정될 때만 주입된다.** 번역 경로는 두 갈래인데(확정 문장 → `lines[].translation`,
+진행 중 버퍼 → `buffer_translation`; [API_SPEC.md §4](API_SPEC.md) 참조), RAG 블록은 **확정 경로에만**
+붙는다. 구현상 `TranslatorBase.build_system_blocks(..., use_rag)` 플래그로 갈리며,
+`TranslationManager._translate_and_cache()`(확정)만 `use_rag=True`로,
+`_translate_interim_and_store()`(미확정)는 `use_rag=False`로 호출한다. 미확정 버퍼는 발화 중 초당 수 회
+갱신되므로 거기까지 RAG를 태우면 bge-m3 인코딩 + Qdrant 검색이 그 빈도로 반복돼 실시간성이 무너진다.
+`use_rag` 기본값은 `False`라 새 호출자가 플래그를 빠뜨려도 미확정 경로로 새지 않는다(fail-safe).
+확정 번역은 `(start, text)` 키로 캐시되므로, finalize-grace 재오픈 등으로 같은 문장이 다시 확정돼도
+캐시 히트로 걸러져 RAG 재검색은 일어나지 않는다.
+
+RAG를 켜려면 `--translation-rag-qdrant-path`와 `--translation-rag-embedding-model-path` **둘 다** 배포
+PC의 실제 경로로 지정해야 한다(하나만 주면 비활성 유지).
+
+> **⚠️ 배포 PC 미검증 가정 2가지 — 실제 데이터로 테스트하기 전 반드시 확인**:
+> 1. **payload 스키마 가정**: 기존 Qdrant 컬렉션은 langchain의 `Qdrant` vectorstore로 색인됐다고
+>    가정해 payload를 `metadata.source`/`metadata.target` 중첩 구조로 읽는다(langchain-qdrant 기본
+>    `metadata_payload_key="metadata"`; flat payload도 폴백으로 지원은 하지만 우선순위는 중첩).
+>    실제 배포 PC 컬렉션의 payload 스키마가 이와 다르면 RAG가 "활성화됐는데 결과가 계속 빈 문자열"로
+>    조용히 실패할 수 있다. 배포 PC에서
+>    `qdrant_client.QdrantClient(path=...).scroll(collection_name="official_translation", limit=1)`로
+>    실제 payload 구조를 먼저 확인해볼 것.
+> 2. **`client.search()` API 버전 이슈**: qdrant-client의 구 API인 `search()`를 사용했다(광범위한 버전
+>    호환을 위한 선택). 배포 PC에 설치된 qdrant-client 버전이 최신(1.12+ 일부)이라 `search()`가
+>    제거/deprecated됐다면 `whisperlivekit/llm_translation/rag_manager.py`의 `search_similar()`를
+>    `client.query_points()`로 교체해야 한다.
 
 > **⚠️ 배포 PC 반영 확인 필수**: `whisperlivekit/llm_translation/` 서브패키지 raw 소스 파일 복사가
 > 누락되면(§8 트랩 "raw 소스 파일 복사 누락") 이 API 자체가 없는 것처럼(404) 보인다. 배포 후

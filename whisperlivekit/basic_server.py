@@ -168,6 +168,11 @@ if _frontend_enabled:
     if _frontend_assets_dir.is_dir():
         app.mount(f"{_frontend_base}/assets", StaticFiles(directory=str(_frontend_assets_dir)), name="frontend_assets")
 
+def _inline_ui_response():
+    """개발용 내장 데모 UI(단일 HTML, 자산 전부 인라인)를 반환한다."""
+    return HTMLResponse(get_inline_ui_html())
+
+
 @app.get("/")
 async def get():
     # dist가 base 경로로 빌드된 경우 그 base로 리다이렉트해 router basepath와 URL을 일치시킨다.
@@ -175,7 +180,17 @@ async def get():
         return RedirectResponse(f"{_frontend_base}/")
     if _frontend_enabled:
         return _index_html_response()
-    return HTMLResponse(get_inline_ui_html())
+    return _inline_ui_response()
+
+
+# 내장 UI 전용 경로. `GET /`는 dist 유무에 따라 배포 UI(React)와 내장 UI 중 하나만 내주므로,
+# dist를 frontend/static에 빌드해 넣는 순간 내장 UI가 접근 불가능해진다. 이 경로는 _frontend_enabled와
+# 무관하게 항상 내장 UI를 서빙해 두 UI가 같은 서버(포트)에서 경로로만 갈리도록 한다.
+# SPA fallback은 _frontend_base(예: /wlkies) 하위에만 등록되므로 여기를 가로채지 않는다.
+@app.get("/dev")
+@app.get("/dev/")
+async def get_inline_ui():
+    return _inline_ui_response()
 
 
 @app.get("/health")

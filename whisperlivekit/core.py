@@ -241,6 +241,16 @@ class TranscriptionEngine:
                     nllb_size=config.nllb_size,
                 )
 
+        # Stage 2 RAG 매니저 서버 기동 시 1회 구성. 경로가 None/미존재면 TranslationRagManager
+        # 생성자 안에서 자동으로 비활성 처리되므로 여기서 조건 분기 불필요.
+        from whisperlivekit.llm_translation import configure_rag_manager
+        configure_rag_manager(
+            qdrant_path=config.translation_rag_qdrant_path,
+            embedding_model_path=config.translation_rag_embedding_model_path,
+            collection_name=config.translation_rag_collection,
+            top_k=config.translation_rag_top_k,
+        )
+
 
 def online_factory(args, asr, language=None):
     """Create an online ASR processor for a session.
