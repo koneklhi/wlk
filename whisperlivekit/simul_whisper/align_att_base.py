@@ -66,6 +66,18 @@ SOT_PROBE_MISMATCH_P = 0.9      # 잠긴 언어의 반대쪽 재정규화 확률
 SOT_PROBE_RESID_HIGH = 0.5      # 비정규화 언어질량 잔차가 이 이상 → off-manifold 후보
 SOT_PROBE_TRANSLATE_HIGH = 0.1  # task 위치 <|translate|> 확률이 이 이상 → 이상탐지 후보
 
+# ── Stage 1 섀도우 게이트 (계측 전용 — would_fire 로깅만, 실제 언어 재감지 트리거 없음) ──
+# SOT 프로브(위)가 계산하는 p_opp(잠긴 언어의 반대쪽 재정규화 확률)에 게이트를 씌웠을 때
+# 실제로 몇 번 발동하는지를 재는 계측이다(언어잠금-Stage0 §"안 B"). 게이트를 전부 통과해도
+# `_apply_detected_language`를 절대 호출하지 않는다 — 로깅만. False면 계측 자체가 돌지
+# 않는다(짝지음 A/B 롤백 스위치).
+STAGE1_SHADOW_ENABLED = True   # 짝지음 A/B 롤백 스위치
+STAGE1_TAU = 0.97              # p_opp 문턱
+STAGE1_MIN_SEGLEN = 2.0        # 최소 버퍼 — 가장 중요(Exp-189 고신뢰 오탐 배제)
+STAGE1_MIN_BATCHES = 3         # 연속 K
+STAGE1_MIN_DURATION = 1.0      # 지속 T (10Hz라 K만으론 0.3s)
+STAGE1_COOLDOWN_SECS = 3.0     # last_lang_switch_time 재사용
+
 logger = logging.getLogger(__name__)
 
 
@@ -212,6 +224,11 @@ class AlignAttBase(ABC):
             "[RefreshSegment] complete=%s lang=%s discarded=%.2fs kept=%.2fs",
             complete, self.state.detected_language, discarded_len, self.segments_len(),
         )
+        # Stage 1 섀도우 게이트 증거 리셋 — 버퍼가 잘리므로 이전 seglen 누적 증거는 무효.
+        # samelang 머지(Exp-196) 이후 이 한 곳이 refresh·new_speaker 전체재디코딩·긴침묵을
+        # 모두 커버한다(동일언어 화자전환 skip 경로는 refresh_segment를 안 부르지만 버퍼도
+        # 언어도 안 바꾸므로 리셋이 원래 불필요하다).
+        self._stage1_shadow_reset_evidence()
 
     def segments_len(self):
         return sum(s.shape[0] for s in self.state.segments) / 16000
@@ -302,6 +319,8 @@ class AlignAttBase(ABC):
 
         logger.info("[LangSwitch] 토크나이저 적용: %s (prev=%s, switch=%s, skip_trim=%s)",
                     lang, prev_lang, is_switch, skip_trim)
+        # Stage 1 섀도우 게이트 증거 리셋 — 언어가 바뀌면(또는 최초 감지) 이전 증거는 무효.
+        self._stage1_shadow_reset_evidence()
 
     def _detect_language_if_needed(self, encoder_feature):
         if (
@@ -486,6 +505,15 @@ class AlignAttBase(ABC):
         p_en = info.get("p_en")
         resid = info.get("resid")
         p_translate = info.get("p_translate")
+
+        # Stage 1 섀도우 게이트(계측 전용) — locked/p_ko/p_en을 그대로 재사용한다.
+        # getattr 방어: 이 메서드를 SimpleNamespace 이중체(fake)에 types.MethodType으로
+        # 부분 바인딩해 재사용하는 기존 SOT 프로브 단위테스트(test_sot_lang_probe.py)가
+        # 이 신규 훅 부재로 깨지지 않게 한다 — 실제 AlignAtt 인스턴스는 항상 보유한다.
+        stage1_gate = getattr(self, "_stage1_shadow_gate", None)
+        if stage1_gate is not None:
+            stage1_gate(locked, p_ko, p_en)
+
         # mismatch 후보 = 잠긴 언어의 "반대쪽" 재정규화 확률이 문턱 이상 (적용은 하지 않는다)
         if locked == "en" and p_ko is not None and p_ko >= SOT_PROBE_MISMATCH_P:
             stats["mismatch_candidates"] += 1
@@ -546,12 +574,152 @@ class AlignAttBase(ABC):
         except Exception as e:  # 계측 실패가 디코딩을 절대 막지 않게 한다
             logger.debug("[LangDriftStats] 요약 실패(무시): %s", e)
 
+    # === Stage 1 섀도우 게이트 (계측 전용) ===
+
+    def _stage1_shadow_state(self) -> dict:
+        """Stage 1 섀도우 게이트 증거/세션 상태 — `_sot_probe_stats()`와 동일한 인스턴스
+        (세션) 단위 lazy 생성 패턴을 따른다.
+
+        count/first_t/lang = G1~G4를 만족한 연속 증거(G5 판정용, refresh_segment·
+        _apply_detected_language에서 리셋됨). would_fire/blocked_by = 세션 누적 통계
+        ([Stage1ShadowStats] 요약용) — DecoderState에 필드를 추가하지 않는다(섀도우는
+        디코더 상태가 아니라 계측이다).
+        """
+        state = getattr(self, "_stage1_shadow_gate_state", None)
+        if state is None:
+            state = {
+                "count": 0,
+                "first_t": None,
+                "lang": None,
+                "would_fire": 0,
+                "blocked_by": {"g1": 0, "g2": 0, "g3": 0, "g4": 0, "g5": 0, "g6": 0, "g7": 0},
+            }
+            self._stage1_shadow_gate_state = state
+        return state
+
+    def _stage1_shadow_reset_evidence(self) -> None:
+        """증거(count/first_t/lang) 리셋 — refresh_segment()·_apply_detected_language()에서 호출.
+
+        섀도우 상태가 아직 생성되지 않았으면(계측 비활성 등) 아무 것도 하지 않는다 —
+        여기서 lazy 생성을 유발해 부작용을 만들지 않기 위함이다.
+        """
+        state = getattr(self, "_stage1_shadow_gate_state", None)
+        if state is None:
+            return
+        state["count"] = 0
+        state["first_t"] = None
+        state["lang"] = None
+
+    def _stage1_shadow_gate(self, locked, p_ko, p_en) -> None:
+        """[Stage1Shadow] would_fire 계측 진입점.
+
+        게이트를 전부 통과해도 `_apply_detected_language`를 절대 호출하지 않는다 — 순수
+        로깅(섀도우 모드). False면 계측 자체가 돌지 않는다(짝지음 A/B 롤백 스위치).
+        """
+        if not STAGE1_SHADOW_ENABLED:
+            return
+        try:
+            self._stage1_shadow_gate_impl(locked, p_ko, p_en)
+        except Exception as e:  # 계측 실패가 디코딩을 절대 막지 않게 한다
+            logger.debug("[Stage1Shadow] 산출 실패(무시): %s", e)
+
+    def _stage1_shadow_gate_impl(self, locked, p_ko, p_en) -> None:
+        st = self._stage1_shadow_state()
+
+        # G1: auto 세션만(ko/en 고정 세션은 원천 차단 — 인계서 §4 기각 조건)
+        if getattr(self.cfg, "language", "auto") != "auto":
+            st["blocked_by"]["g1"] += 1
+            return
+        # G2: "잠긴 언어의 반대쪽"이 성립하려면 언어가 이미 감지돼 있어야 한다
+        if self.state.detected_language is None:
+            st["blocked_by"]["g2"] += 1
+            return
+
+        seglen = self.segments_len()
+        # G3: 최소 버퍼 길이 — 가장 중요(Exp-189/195 고신뢰 오탐이 전부 짧은 버퍼에서 발생)
+        if seglen < STAGE1_MIN_SEGLEN:
+            st["blocked_by"]["g3"] += 1
+            self._stage1_shadow_reset_evidence()
+            return
+
+        if locked == "en":
+            p_opp = p_ko
+        elif locked == "ko":
+            p_opp = p_en
+        else:
+            p_opp = None
+
+        # G4: p_opp 문턱
+        if p_opp is None or p_opp < STAGE1_TAU:
+            st["blocked_by"]["g4"] += 1
+            self._stage1_shadow_reset_evidence()
+            return
+
+        # t_abs는 SOT 프로브·토큰 절대 타임스탬프와 동일 좌표계
+        t_abs = (self.state.global_time_offset
+                 + self.state.cumulative_time_offset
+                 + seglen)
+
+        # G1~G4 만족 → 증거 누적(언어가 바뀌면 새 증거로 취급)
+        if st["lang"] != locked:
+            st["count"] = 0
+            st["first_t"] = None
+        st["lang"] = locked
+        if st["count"] == 0:
+            st["first_t"] = t_abs
+        st["count"] += 1
+        duration = t_abs - st["first_t"]
+
+        # G5: 연속 K & 지속 T(둘 다 필요 — 10Hz라 K만으론 T 미달)
+        if st["count"] < STAGE1_MIN_BATCHES or duration < STAGE1_MIN_DURATION:
+            st["blocked_by"]["g5"] += 1
+            return
+        # G6: 쿨다운(직전 실제 언어전환 이후 최소 경과)
+        if t_abs - self.state.last_lang_switch_time < STAGE1_COOLDOWN_SECS:
+            st["blocked_by"]["g6"] += 1
+            return
+        # G7: 진행 중인 전환·eager 감지가 없어야 한다
+        if self.state.pending_language_switch is not None or self.state.eager_lang_detect:
+            st["blocked_by"]["g7"] += 1
+            return
+
+        st["would_fire"] += 1
+        logger.warning(
+            "[Stage1Shadow] would_fire=True lang=%s p_opp=%.4f t=%.2f seglen=%.2f k=%d dur=%.2f",
+            locked, p_opp, t_abs, seglen, st["count"], duration,
+        )
+
+    def _log_stage1_shadow_stats(self) -> None:
+        """[Stage1ShadowStats] WARNING 세션 요약 — would_fire·게이트별 차단 카운트.
+
+        기존 `[LangDriftStats]` 포맷은 건드리지 않는다(analyze_sot_lang_probe.py 파서
+        호환 유지 — 별도 로그 태그로 낸다). would_fire=0 회차도 명시적으로 1회 찍는다
+        (0-firing = 노이즈 대조군 식별용, `_log_lang_drift_stats`와 동일 관례).
+        """
+        if not STAGE1_SHADOW_ENABLED:
+            return
+        try:
+            st = self._stage1_shadow_state()
+            last = getattr(self, "_stage1_shadow_last_summary", None)
+            if last is not None and last == st["would_fire"]:
+                return
+            self._stage1_shadow_last_summary = st["would_fire"]
+            b = st["blocked_by"]
+            logger.warning(
+                "[Stage1ShadowStats] would_fire=%d blocked_g1=%d blocked_g2=%d blocked_g3=%d "
+                "blocked_g4=%d blocked_g5=%d blocked_g6=%d blocked_g7=%d",
+                st["would_fire"], b["g1"], b["g2"], b["g3"], b["g4"], b["g5"], b["g6"], b["g7"],
+            )
+        except Exception as e:  # 계측 실패가 디코딩을 절대 막지 않게 한다
+            logger.debug("[Stage1ShadowStats] 요약 실패(무시): %s", e)
+
     # === Template infer() ===
 
     def infer(self, is_last=False):
         """Main inference — template method calling abstract hooks for tensor ops."""
         if is_last:
             self._log_lang_drift_stats()
+            self._log_stage1_shadow_stats()
         new_segment = True
 
         if len(self.state.segments) == 0:
