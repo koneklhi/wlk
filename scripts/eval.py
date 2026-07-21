@@ -198,11 +198,27 @@ def _aggregate_runs(runs: list) -> dict:
 
 
 def parse_reference_sentences(ref_text: str) -> list:
-    """빈 줄(\\n\\n)로 구분된 블록 = 문장 1개."""
-    return [b.strip() for b in re.split(r"\n\s*\n", ref_text) if b.strip()]
+    """빈 줄(\\n\\n)로 구분된 블록 = 문장 1개. 비언어적 태그는 제외."""
+    out = []
+    for b in re.split(r"\n\s*\n", ref_text):
+        s = _strip_nonverbal_tags(b.strip())
+        if s:
+            out.append(s)
+    return out
 
 
 _SPEAKER_HEADER_RE = re.compile(r"^\[(spk\d+)\]\s*$", re.MULTILINE)
+_NONVERBAL_TAG_RE = re.compile(r"\([^)]*\)")
+
+
+def _strip_nonverbal_tags(text: str) -> str:
+    """정답 텍스트에서 비언어적 표시((웃음)(박수)(환호)(잡음)(더듬) 등 괄호 태그)를 제거한다.
+
+    괄호로 감싼 내용은 키워드 무관하게 전부 비언어 잡음/디스플루언시 주석으로 간주해
+    WER·화자분리F1·문장분리F1 계산 대상에서 제외한다.
+    """
+    text = _NONVERBAL_TAG_RE.sub(" ", text)
+    return re.sub(r"\s+", " ", text).strip()
 
 
 def parse_speaker_sentence_reference(ref_text: str) -> Optional[dict]:
@@ -229,7 +245,11 @@ def parse_speaker_sentence_reference(ref_text: str) -> Optional[dict]:
         start = m.end()
         end = headers[idx + 1].start() if idx + 1 < len(headers) else len(ref_text)
         block_text = ref_text[start:end]
-        sentences = [s.strip() for s in re.split(r"\n\s*\n", block_text) if s.strip()]
+        sentences = []
+        for raw in re.split(r"\n\s*\n", block_text):
+            s = _strip_nonverbal_tags(raw.strip())
+            if s:
+                sentences.append(s)
         blocks.append({"speaker": speaker, "sentences": sentences})
         all_sentences.extend(sentences)
 
@@ -363,9 +383,10 @@ def _build_result(audio_path: Path, transcription: str, hyp_sentences: list, pat
         ref_format = "new"
     else:
         if ref_path.exists():
-            reference = ref_path.read_text(encoding="utf-8").strip()
+            ref_blocks = parse_reference_sentences(ref_path.read_text(encoding="utf-8"))
+            reference = " ".join(ref_blocks)
             wer = compute_wer(reference, transcription.strip())["wer"]
-            seg = compute_segmentation(parse_reference_sentences(reference), hyp_sentences)
+            seg = compute_segmentation(ref_blocks, hyp_sentences)
             seg_f1, seg_precision, seg_recall = seg["f1"], seg["precision"], seg["recall"]
             ref_sentences_count, hyp_sentences_count = seg["ref_sentences"], seg["hyp_sentences"]
             ref_format = "old"
