@@ -6,7 +6,7 @@ text normalization, and word-level timestamp accuracy metrics with greedy alignm
 
 import re
 import unicodedata
-from typing import Dict, List
+from typing import Dict, List, Optional, Tuple
 
 
 def normalize_text(text: str) -> str:
@@ -82,15 +82,25 @@ def compute_wer(reference: str, hypothesis: str) -> Dict:
     }
 
 
-def _align_words(ref_words: List[str], hyp_words: List[str]) -> List[int]:
-    """Levenshtein 정렬 backtrace로 각 가설 경계 위치를 정답 단어 공간에 투영한다.
+def _align_ops(ref_words: List[str], hyp_words: List[str]) -> List[Tuple[str, Optional[int], Optional[int]]]:
+    """Levenshtein 정렬 backtrace를 (연산, 정답 인덱스, 가설 인덱스) 리스트로 반환한다.
+
+    ``_align_words``가 오랫동안 내부에서만 계산하고 버리던 연산 시퀀스를 그대로 노출한 것이다
+    (DP·backtrace 본문은 이동만 했고 로직 변경 없음). 인덱스가 함께 실려 있으므로 호출부가
+    "어떤 정답 단어가 어떤 가설 단어로 치환됐는지"를 직접 조회할 수 있다.
 
     Args:
         ref_words: 정답 단어 리스트.
         hyp_words: 가설 단어 리스트.
 
     Returns:
-        길이 ``len(hyp_words)+1`` 배열. 각 가설 경계 위치 j(0..m)를 정답 위치 i(0..n)로 투영.
+        ``[(op, ref_idx, hyp_idx), ...]`` (정방향). ``op`` ∈ {"match", "sub", "del", "ins"}.
+        ``del``이면 ``hyp_idx``가 None, ``ins``이면 ``ref_idx``가 None이다.
+
+    Note:
+        backtrace 동점 우선순위(diagonal > up(del) > left(ins))는 고정 규약이다 —
+        compute_segmentation·compute_speaker_sentence_segmentation의 기존 F1 수치가
+        이 결정론에 의존하므로 바꾸면 안 된다.
     """
     n = len(ref_words)
     m = len(hyp_words)
@@ -108,29 +118,40 @@ def _align_words(ref_words: List[str], hyp_words: List[str]) -> List[int]:
                 dp[i][j] = 1 + min(dp[i - 1][j - 1], dp[i - 1][j], dp[i][j - 1])
 
     # Backtrace (n,m)→(0,0). 동점 우선순위 고정: diagonal > up(del) > left(ins).
-    ops: List[str] = []
+    ops: List[Tuple[str, Optional[int], Optional[int]]] = []
     i, j = n, m
     while i > 0 or j > 0:
         if i > 0 and j > 0 and ref_words[i - 1] == hyp_words[j - 1] and dp[i][j] == dp[i - 1][j - 1]:
-            ops.append("match")
+            ops.append(("match", i - 1, j - 1))
             i -= 1
             j -= 1
         elif i > 0 and j > 0 and dp[i][j] == dp[i - 1][j - 1] + 1:
-            ops.append("sub")
+            ops.append(("sub", i - 1, j - 1))
             i -= 1
             j -= 1
         elif i > 0 and dp[i][j] == dp[i - 1][j] + 1:
-            ops.append("del")
+            ops.append(("del", i - 1, None))
             i -= 1
         else:
-            ops.append("ins")
+            ops.append(("ins", None, j - 1))
             j -= 1
     ops.reverse()
+    return ops
 
-    # 정방향 순회로 hyp_to_ref 구성.
-    hyp_to_ref = [0] * (m + 1)
+
+def _align_words(ref_words: List[str], hyp_words: List[str]) -> List[int]:
+    """Levenshtein 정렬 backtrace로 각 가설 경계 위치를 정답 단어 공간에 투영한다.
+
+    Args:
+        ref_words: 정답 단어 리스트.
+        hyp_words: 가설 단어 리스트.
+
+    Returns:
+        길이 ``len(hyp_words)+1`` 배열. 각 가설 경계 위치 j(0..m)를 정답 위치 i(0..n)로 투영.
+    """
+    hyp_to_ref = [0] * (len(hyp_words) + 1)
     ci = cj = 0
-    for op in ops:
+    for op, _ri, _hj in _align_ops(ref_words, hyp_words):
         if op in ("match", "sub"):
             ci += 1
             cj += 1
@@ -140,6 +161,225 @@ def _align_words(ref_words: List[str], hyp_words: List[str]) -> List[int]:
             cj += 1
         hyp_to_ref[cj] = ci
     return hyp_to_ref
+
+
+# 스크립트(문자 체계) 판정 패턴. whisperlivekit/tokens_alignment.py의 _HANGUL_PATTERN /
+# _LATIN_PATTERN과 동일한 패턴을 **로컬로 재정의**한다 — 평가 모듈(metrics.py)은 "외부 의존성
+# 없음"이 설계 원칙이라 런타임 모듈을 import하지 않는다(모듈 최상단 독스트링). 두 정의가
+# 갈라지지 않는지는 tests/test_metrics_language_mismatch.py의 드리프트 가드가 검증한다.
+_HANGUL_PATTERN = re.compile(r"[가-힣]")
+_LATIN_PATTERN = re.compile(r"[A-Za-z]")
+
+
+def _word_script(word: str) -> str:
+    """단어 하나의 문자 체계를 판정한다.
+
+    Returns:
+        "KO"(한글만) | "EN"(라틴만) | "MIX"(둘 다 포함) | "NEU"(숫자·기호 등 둘 다 없음).
+        MIX/NEU는 언어 뒤집힘 판정에서 제외되는 중립 범주다.
+    """
+    has_ko = bool(_HANGUL_PATTERN.search(word))
+    has_en = bool(_LATIN_PATTERN.search(word))
+    if has_ko and has_en:
+        return "MIX"
+    if has_ko:
+        return "KO"
+    if has_en:
+        return "EN"
+    return "NEU"
+
+
+def compute_language_mismatch(reference: str, hypothesis: str) -> Dict:
+    """언어 불일치율(LMR) — 정답 단어가 반대 스크립트로 "뒤집혀" 전사된 비율을 측정한다.
+
+    한국어 발화가 영어로 전사되는 "언어잠금" 실패(예: `누가 주인공일까` → `Who is the one`)는
+    WER에서는 다른 오류와 섞여 희석되고, 삽입(insertion) 기반 지표로는 잡히지 않는다 —
+    이것은 **치환(substitution)**이기 때문이다. 그래서 Levenshtein 정렬의 ``sub`` 연산만 골라
+    정답/가설 단어의 스크립트(한글/라틴, 유니코드 판정 — 모델 불필요·결정적)를 비교한다.
+
+    지표 정의::
+
+        LMR_ko     = |{sub: ref=KO ∧ hyp=EN}| / |{ref word: KO}|   (주지표)
+        LMR_en     = |{sub: ref=EN ∧ hyp=KO}| / |{ref word: EN}|   (부작용 감시)
+        LMR_wer_pp = (ko→en + en→ko) / |ref words|                 (WER 귀속 %p)
+
+    분모를 방향별로 분리하는 이유: 전체 정답 단어로 나누면 KO가 27%뿐인 bong1 같은 데이터에서
+    신호가 3.6배 희석된다. ``lmr_wer_pp``만은 WER과 분모를 공유해 "이 실패가 WER 몇 %p를
+    차지하는가"를 덧셈 가능한 양으로 준다.
+
+    **이 지표는 하한(lower bound)이다.** 정렬이 치환 대신 ``del``+``ins`` 쌍으로 갈라진
+    피해(예: 뒤집힌 구간의 길이가 크게 달라진 경우)는 잡히지 않는다. "정확한 총량"이 아니라
+    "적어도 이만큼"으로 해석해야 한다. 그 갈라진 피해의 크기는 ``*_del``·``ins_*`` 카운트와
+    ``max_ins_run``/``ins_runs_ge3``(반복 환각 근사)로 별도 관찰한다.
+
+    Args:
+        reference: 정답 텍스트. **비언어 태그((웃음) 등)는 호출부(scripts/eval.py 파서)에서
+            이미 제거된 상태를 전제**한다 — 여기서 다시 제거하지 않는다(이중 적용 금지).
+        hypothesis: 전사(가설) 텍스트.
+
+    Returns:
+        Dict — 주요 키:
+          - ``lmr_ko`` / ``lmr_en``: float 또는 **None**(해당 스크립트 정답 단어가 0개일 때.
+            0.0이 아니다 — 0.0은 "측정했는데 다 틀림"으로 오독된다).
+          - ``lmr_wer_pp``: float (정답 단어 0개면 0.0).
+          - ``ko_ref_words`` / ``en_ref_words`` / ``ref_words``: 분모들.
+          - ``ko_ok`` / ``ko_to_ko`` / ``ko_to_en`` / ``ko_del``: KO 정답 단어의 행방 4분할.
+            불변식 ``ko_ok + ko_to_ko + ko_to_en + ko_del == ko_ref_words``가 성립한다
+            (따라서 ``ko_to_ko``는 "치환됐지만 EN으로 뒤집히지는 않은 것" — 가설이 KO인 경우뿐
+            아니라 MIX/NEU인 경우까지 포함하는 잔여 버킷이다). EN도 동일 구조.
+          - ``ins_ko`` / ``ins_en`` / ``ins_neu``: 삽입된 가설 단어의 스크립트별 개수
+            (MIX는 ``ins_neu``에 합산).
+          - ``max_ins_run`` / ``ins_runs_ge3``: 연속 삽입 런의 최대 길이 / 길이≥3 런 개수.
+    """
+    ref_words = normalize_text(reference).split()
+    hyp_words = normalize_text(hypothesis).split()
+
+    ref_scripts = [_word_script(w) for w in ref_words]
+    hyp_scripts = [_word_script(w) for w in hyp_words]
+
+    ko_ref_words = sum(1 for s in ref_scripts if s == "KO")
+    en_ref_words = sum(1 for s in ref_scripts if s == "EN")
+
+    counts = {
+        "ko_ok": 0, "ko_to_ko": 0, "ko_to_en": 0, "ko_del": 0,
+        "en_ok": 0, "en_to_en": 0, "en_to_ko": 0, "en_del": 0,
+        "ins_ko": 0, "ins_en": 0, "ins_neu": 0,
+    }
+    max_ins_run = 0
+    ins_runs_ge3 = 0
+    cur_ins_run = 0
+
+    for op, ri, hj in _align_ops(ref_words, hyp_words):
+        if op == "ins":
+            cur_ins_run += 1
+            hs = hyp_scripts[hj]
+            if hs == "KO":
+                counts["ins_ko"] += 1
+            elif hs == "EN":
+                counts["ins_en"] += 1
+            else:  # MIX/NEU
+                counts["ins_neu"] += 1
+            continue
+
+        # ins 런 종료 지점에서 런 통계 마감.
+        if cur_ins_run:
+            max_ins_run = max(max_ins_run, cur_ins_run)
+            if cur_ins_run >= 3:
+                ins_runs_ge3 += 1
+            cur_ins_run = 0
+
+        rs = ref_scripts[ri] if ri is not None else None
+        if rs not in ("KO", "EN"):
+            continue  # MIX/NEU 정답 단어는 방향 판정 대상이 아니다.
+        prefix = "ko" if rs == "KO" else "en"
+        opposite = "EN" if rs == "KO" else "KO"
+
+        if op == "match":
+            counts[f"{prefix}_ok"] += 1
+        elif op == "del":
+            counts[f"{prefix}_del"] += 1
+        else:  # sub
+            if hyp_scripts[hj] == opposite:
+                counts[f"{prefix}_to_{opposite.lower()}"] += 1
+            else:
+                counts[f"{prefix}_to_{prefix}"] += 1
+
+    if cur_ins_run:  # 마지막 연산이 ins로 끝난 경우.
+        max_ins_run = max(max_ins_run, cur_ins_run)
+        if cur_ins_run >= 3:
+            ins_runs_ge3 += 1
+
+    n_ref = len(ref_words)
+    flips = counts["ko_to_en"] + counts["en_to_ko"]
+    return {
+        "lmr_ko": counts["ko_to_en"] / ko_ref_words if ko_ref_words else None,
+        "lmr_en": counts["en_to_ko"] / en_ref_words if en_ref_words else None,
+        "lmr_wer_pp": flips / n_ref if n_ref else 0.0,
+        "ko_ref_words": ko_ref_words,
+        "en_ref_words": en_ref_words,
+        "ref_words": n_ref,
+        **counts,
+        "max_ins_run": max_ins_run,
+        "ins_runs_ge3": ins_runs_ge3,
+    }
+
+
+def _dominant_script(scripts: List[str]) -> Optional[str]:
+    """KO/EN 단어 개수를 세어 지배 스크립트를 판정한다(동수·둘 다 0이면 None)."""
+    ko = sum(1 for s in scripts if s == "KO")
+    en = sum(1 for s in scripts if s == "EN")
+    if ko == en:
+        return None
+    return "KO" if ko > en else "EN"
+
+
+def compute_language_flip_events(ref_sentences: List, hypothesis: str) -> List[Dict]:
+    """정답 문장 단위로 "지배 스크립트가 통째로 뒤집힌" 이벤트를 뽑는다.
+
+    각 정답 문장의 단어 span을 Levenshtein 정렬의 ref→hyp 투영으로 사영해 대응 가설 구간을
+    얻고, 양쪽의 지배 스크립트(KO/EN 다수결)가 서로 반대이면 이벤트로 기록한다.
+
+    **정성 리포트 전용 지표다 — 채택/기각 게이트로 쓰면 안 된다.** bong1의 경우 KO 지배 문장이
+    22문장 중 7개뿐이라 이벤트 수의 해상도가 낮고(회차 median 1.5건) 1건 차이가 그대로 큰
+    비율 변동으로 보이기 때문이다. 정량 판정은 ``compute_language_mismatch``의 LMR을 쓴다.
+
+    Args:
+        ref_sentences: 정답 문장 리스트. 각 원소는 ``str`` 또는
+            ``{"text": str, "speaker": str}`` dict(화자 정보를 함께 싣고 싶을 때).
+        hypothesis: 전사(가설) 텍스트 전체.
+
+    Returns:
+        ``[{"ref_script", "hyp_script", "ref_words", "ref_text"(, "speaker")}, ...]``.
+        ``ref_words``는 해당 정답 문장의 단어 수(int)다.
+    """
+    items = []
+    for s in ref_sentences:
+        if isinstance(s, dict):
+            items.append((s.get("text") or "", s.get("speaker")))
+        else:
+            items.append((s, None))
+    kept = [(t, spk) for t, spk in items if normalize_text(t).split()]
+    if not kept:
+        return []
+
+    ref_words, bounds = _flatten_sentences([t for t, _ in kept])
+    starts = [0] + list(bounds)
+    ends = list(bounds) + [len(ref_words)]
+
+    hyp_words = normalize_text(hypothesis).split()
+
+    # ref 위치 i(0..n) → hyp 위치 j(0..m) 투영 (_align_words의 방향 반대판).
+    ref_to_hyp = [0] * (len(ref_words) + 1)
+    ci = cj = 0
+    for op, _ri, _hj in _align_ops(ref_words, hyp_words):
+        if op in ("match", "sub"):
+            ci += 1
+            cj += 1
+        elif op == "del":
+            ci += 1
+        else:  # ins
+            cj += 1
+        ref_to_hyp[ci] = cj
+
+    events: List[Dict] = []
+    for (text, speaker), a, b in zip(kept, starts, ends):
+        ref_script = _dominant_script([_word_script(w) for w in ref_words[a:b]])
+        if ref_script is None:
+            continue
+        hj0, hj1 = ref_to_hyp[a], ref_to_hyp[b]
+        hyp_script = _dominant_script([_word_script(w) for w in hyp_words[hj0:hj1]])
+        if hyp_script is None or hyp_script == ref_script:
+            continue
+        event = {
+            "ref_script": ref_script,
+            "hyp_script": hyp_script,
+            "ref_words": b - a,
+            "ref_text": text,
+        }
+        if speaker is not None:
+            event["speaker"] = speaker
+        events.append(event)
+    return events
 
 
 def _flatten_sentences(sentences: List[str]):

@@ -63,6 +63,49 @@ def _normalize_text(text: str) -> str:
     return text
 
 
+# 스크립트(문자 체계) 판정 패턴. whisperlivekit/metrics.py의 _word_script와 동일한 규칙을
+# 로컬 재구현한다(이 스크립트는 whisperlivekit을 import하지 않는 것이 설계 원칙 — 모듈 독스트링).
+_HANGUL_PATTERN = re.compile(r"[가-힣]")
+_LATIN_PATTERN = re.compile(r"[A-Za-z]")
+
+
+def _word_script(word: str) -> str:
+    """단어 하나의 문자 체계: "KO" | "EN" | "MIX" | "NEU"."""
+    has_ko = bool(_HANGUL_PATTERN.search(word))
+    has_en = bool(_LATIN_PATTERN.search(word))
+    if has_ko and has_en:
+        return "MIX"
+    if has_ko:
+        return "KO"
+    if has_en:
+        return "EN"
+    return "NEU"
+
+
+def _dominant_script(toks: List[Tok]) -> Optional[str]:
+    """토큰 묶음의 지배 스크립트(KO/EN 다수결). 동수이거나 둘 다 없으면 None."""
+    scripts = [_word_script(t.key) for t in toks]
+    ko = scripts.count("KO")
+    en = scripts.count("EN")
+    if ko == en:
+        return None
+    return "KO" if ko > en else "EN"
+
+
+def is_script_mismatch(span: DiffSpan) -> bool:
+    """치환(sub) span의 정답/전사 지배 스크립트가 서로 반대인지 — "언어잠금" 실패 시각화용.
+
+    한국어 발화가 영어로 뒤집혀 전사되는 실패(예: `누가 주인공일까` → `Who is the one`)는
+    삽입이 아니라 **치환**이라 일반 sub 하이라이트에 묻힌다. 이 판정으로 별도 색을 입혀
+    whisperlivekit.metrics.compute_language_mismatch가 세는 것과 같은 실패를 눈으로 찾게 한다.
+    """
+    if span.kind != "sub":
+        return False
+    ref_script = _dominant_script(span.ref_toks)
+    hyp_script = _dominant_script(span.hyp_toks)
+    return ref_script is not None and hyp_script is not None and ref_script != hyp_script
+
+
 def tokenize(text: str) -> List[Tok]:
     """공백 분리 후 각 조각의 표시(display)/정규화 키(key) 쌍을 만든다.
 
@@ -234,6 +277,10 @@ def _fmt_pct(value: Optional[float]) -> str:
     return f"{value * 100:.1f}%" if value is not None else "N/A"
 
 
+def _fmt_pp(value: Optional[float]) -> str:
+    return f"{value * 100:.1f}%p" if value is not None else "N/A"
+
+
 def _slugify(name: str) -> str:
     """파일명을 HTML id/앵커로 안전하게 쓸 수 있는 슬러그로 변환한다(영숫자·_·- 외엔 _로 치환)."""
     return re.sub(r"[^a-zA-Z0-9_-]+", "_", name)
@@ -308,8 +355,9 @@ def render_diff(diff_spans: List[DiffSpan], line_spans: List[LineSpan], case_b_h
             ref_text = " ".join(t.display for t in span.ref_toks)
             hyp_text = " ".join(t.display for t in span.hyp_toks)
             caseb_cls = " caseb" if span.hyp_start in case_b_hyp_starts else ""
+            langflip_cls = " langflip" if is_script_mismatch(span) else ""
             parts.append(
-                f'<span class="sub{caseb_cls}">'
+                f'<span class="sub{caseb_cls}{langflip_cls}">'
                 f'<span class="sub-ref">{_esc(ref_text)}</span>'
                 f'<span class="sub-hyp">{_esc(hyp_text)}</span>'
                 f"</span> "
@@ -360,7 +408,9 @@ def render_run_section(file_result: dict, run_index: int) -> str:
         f'<div class="run-metrics">R{run_index} [{_esc(file_result.get("path") or "")}] '
         f'WER {_fmt_pct(file_result.get("wer"))} | '
         f'화자F1 {_fmt_pct(file_result.get("seg_f1"))} | '
-        f'문장F1 {_fmt_pct(file_result.get("sentence_f1"))} | {ref_format_label}'
+        f'문장F1 {_fmt_pct(file_result.get("sentence_f1"))} | '
+        f'언어불일치(KO→EN) {_fmt_pct(file_result.get("lmr_ko"))} '
+        f'(WER {_fmt_pp(file_result.get("lmr_wer_pp"))}) | {ref_format_label}'
         f"{caseb_note}</div>"
         f'<div class="diff">{diff_html}</div>'
         "</div>"
@@ -379,17 +429,18 @@ def render_file_section(group: FileGroup) -> str:
     if group.summary:
         agg = group.summary
 
-        def _agg_str(key: str) -> str:
+        def _agg_str(key: str, fmt=_fmt_pct) -> str:
             d = agg.get(key) or {}
             med, mn, mx = d.get("median"), d.get("min"), d.get("max")
             if med is None:
                 return "N/A"
-            return f"median {_fmt_pct(med)} [min {_fmt_pct(mn)} / max {_fmt_pct(mx)}]"
+            return f"median {fmt(med)} [min {fmt(mn)} / max {fmt(mx)}]"
 
         summary_extra = (
             '<div class="file-summary">'
             f"{_esc(str(agg.get('repeat', '')))}회 반복 — "
             f"WER {_agg_str('wer')} | 화자F1 {_agg_str('seg_f1')} | 문장F1 {_agg_str('sentence_f1')}"
+            f" | 언어불일치(KO→EN) {_agg_str('lmr_ko')} | WER귀속 {_agg_str('lmr_wer_pp', _fmt_pp)}"
             "</div>"
         )
 
@@ -411,22 +462,28 @@ def render_summary_table(groups: List[FileGroup]) -> str:
             wer = (g.summary.get("wer") or {}).get("median")
             seg_f1 = (g.summary.get("seg_f1") or {}).get("median")
             sentence_f1 = (g.summary.get("sentence_f1") or {}).get("median")
+            lmr_ko = (g.summary.get("lmr_ko") or {}).get("median")
+            lmr_wer_pp = (g.summary.get("lmr_wer_pp") or {}).get("median")
         elif g.runs:
             wer = g.runs[0].get("wer")
             seg_f1 = g.runs[0].get("seg_f1")
             sentence_f1 = g.runs[0].get("sentence_f1")
+            lmr_ko = g.runs[0].get("lmr_ko")
+            lmr_wer_pp = g.runs[0].get("lmr_wer_pp")
         else:
-            wer = seg_f1 = sentence_f1 = None
+            wer = seg_f1 = sentence_f1 = lmr_ko = lmr_wer_pp = None
 
         rows.append(
             f'<tr><td><a href="#{anchor_id}">{_esc(g.display_name)}</a></td>'
             f"<td>{_fmt_pct(wer)}</td><td>{_fmt_pct(seg_f1)}</td><td>{_fmt_pct(sentence_f1)}</td>"
+            f"<td>{_fmt_pct(lmr_ko)}</td><td>{_fmt_pp(lmr_wer_pp)}</td>"
             f"<td>{len(g.runs)}</td></tr>"
         )
 
     return (
         '<table class="summary-table">'
-        "<thead><tr><th>파일</th><th>WER</th><th>화자분리 F1</th><th>문장분리 F1</th><th>회차</th></tr></thead>"
+        "<thead><tr><th>파일</th><th>WER</th><th>화자분리 F1</th><th>문장분리 F1</th>"
+        "<th>언어불일치(KO→EN)</th><th>WER 귀속</th><th>회차</th></tr></thead>"
         f"<tbody>{''.join(rows)}</tbody>"
         "</table>"
     )
@@ -456,6 +513,14 @@ def render_legend() -> str:
             "치명적 오류로 간주한다 — 원인을 반드시 수정해야 하는 대상(hard-fail).",
         ),
         (
+            '<span class="sub langflip"><span class="sub-ref">누가 주인공일까</span>'
+            '<span class="sub-hyp">Who is the one</span></span>',
+            "언어 불일치",
+            "치환된 구간의 문자 체계가 정답과 반대로 뒤집힘(한국어 발화가 영어로, 또는 그 반대). "
+            "언어잠금 실패 — 지표 LMR(언어 불일치율)이 세는 것과 같은 실패다. "
+            "LMR은 하한이라 정렬이 삭제+삽입으로 갈라진 경우는 여기 표시되지 않을 수 있다.",
+        ),
+        (
             '<span class="trigger trigger--silence">⟨silence⟩</span>',
             "확정 트리거",
             "문장이 확정된 원인: silence=침묵, punctuation=구두점, "
@@ -478,14 +543,14 @@ _CSS = """
   --bg: #ffffff; --fg: #1a1a1a; --muted: #666666; --border: #dddddd;
   --card-bg: #f7f7f7; --eq: #1a1a1a; --del: #c0392b; --ins-bg: #d6e9ff; --ins-fg: #1a5fb4;
   --sub-bg: #fff3cd; --sub-fg: #7a5c00; --caseb: #c0392b; --chip-bg: #eeeeee; --chip-fg: #444444;
-  --link: #1a5fb4;
+  --link: #1a5fb4; --langflip-bg: #f3d9ff; --langflip-fg: #6a1b9a; --langflip-border: #8e24aa;
 }
 @media (prefers-color-scheme: dark) {
   :root {
     --bg: #17181a; --fg: #e8e8e8; --muted: #9a9a9a; --border: #3a3a3a;
     --card-bg: #212225; --eq: #e8e8e8; --del: #ff8a80; --ins-bg: #133a5c; --ins-fg: #82b1ff;
     --sub-bg: #4a3f1a; --sub-fg: #ffd54f; --caseb: #ff5252; --chip-bg: #2a2b2e; --chip-fg: #cfcfcf;
-    --link: #82b1ff;
+    --link: #82b1ff; --langflip-bg: #3a1f4d; --langflip-fg: #e1bee7; --langflip-border: #ce93d8;
   }
 }
 * { box-sizing: border-box; }
@@ -525,6 +590,10 @@ details.file-section summary { cursor: pointer; font-weight: 600; padding: 0.6re
 .diff .sub, .legend .sub { background: var(--sub-bg); color: var(--sub-fg); border-radius: 3px; padding: 0 2px; }
 .diff .sub .sub-ref, .legend .sub .sub-ref { text-decoration: line-through; opacity: 0.75; margin-right: 0.3em; }
 .diff .sub.caseb, .legend .sub.caseb { border: 2px solid var(--caseb); font-weight: 700; }
+.diff .sub.langflip, .legend .sub.langflip {
+  background: var(--langflip-bg); color: var(--langflip-fg);
+  border-bottom: 2px solid var(--langflip-border);
+}
 .diff .trigger, .legend .trigger {
   display: inline-block; background: var(--chip-bg); color: var(--chip-fg); border-radius: 999px;
   font-size: 0.75rem; padding: 0.05rem 0.5rem; margin: 0 0.2rem; vertical-align: middle;

@@ -1,5 +1,11 @@
 """whisperlivekit.metrics.compute_segmentation 유닛 테스트."""
-from whisperlivekit.metrics import compute_segmentation, compute_speaker_sentence_segmentation
+from whisperlivekit.metrics import (
+    _align_ops,
+    _align_words,
+    compute_segmentation,
+    compute_speaker_sentence_segmentation,
+    compute_wer,
+)
 
 
 def test_perfect_segmentation():
@@ -52,6 +58,77 @@ def test_korean_english_mixed():
     hyp = ["안녕 하세요", "thank you minister", "감사 합니다"]
     r = compute_segmentation(ref, hyp)
     assert r["f1"] == 1.0
+
+
+# ── _align_words / _align_ops 무동작 리팩터링 회귀 가드 ─────────────────────
+#
+# _align_words의 DP+backtrace 본문은 _align_ops로 이동했고 _align_words는 그 결과에서
+# hyp_to_ref만 재구성한다. 정렬 결과가 조금이라도 달라지면 compute_segmentation·
+# compute_speaker_sentence_segmentation의 기존 F1 수치가 통째로 바뀌므로, 아래 테스트가
+# "완전히 동일한 동작"을 못박는다. 특히 backtrace 동점 우선순위(diagonal > del > ins)는
+# 고정 규약이다.
+
+_ALIGN_CASES = [
+    (["a", "b", "c"], ["a", "b", "c"]),
+    (["a", "b", "c"], ["a", "x", "c"]),      # 치환
+    (["a", "b", "c"], ["a", "c"]),           # 삭제
+    (["a", "c"], ["a", "b", "c"]),           # 삽입
+    (["a", "b", "c"], []),                   # 전부 삭제
+    ([], ["a", "b"]),                        # 전부 삽입
+    ([], []),
+    (["안녕", "하세요"], ["hello", "there", "friend"]),
+    (["the", "cat", "sat", "on", "the", "mat"], ["the", "cat", "sat", "in", "a", "mat", "now"]),
+]
+
+
+def test_align_words_hardcoded_expectations():
+    """리팩터링 전 구현이 내던 값 그대로(하드코딩 기대치)여야 한다."""
+    assert _align_words(["a", "b", "c"], ["a", "b", "c"]) == [0, 1, 2, 3]
+    assert _align_words(["a", "b", "c"], ["a", "x", "c"]) == [0, 1, 2, 3]
+    assert _align_words(["a", "b", "c"], ["a", "c"]) == [0, 2, 3]   # b 삭제 → 경계가 밀림
+    assert _align_words(["a", "c"], ["a", "b", "c"]) == [0, 1, 1, 2]  # b 삽입 → 정답 위치 정체
+    assert _align_words(["a", "b", "c"], []) == [3]
+    assert _align_words([], ["a", "b"]) == [0, 0, 0]
+    assert _align_words([], []) == [0]
+
+
+def test_align_ops_reconstructs_same_hyp_to_ref():
+    """_align_ops 결과에서 재구성한 hyp_to_ref가 _align_words 반환값과 동일해야 한다."""
+    for ref_words, hyp_words in _ALIGN_CASES:
+        rebuilt = [0] * (len(hyp_words) + 1)
+        ci = cj = 0
+        for op, _ri, _hj in _align_ops(ref_words, hyp_words):
+            if op in ("match", "sub"):
+                ci += 1
+                cj += 1
+            elif op == "del":
+                ci += 1
+            else:
+                cj += 1
+            rebuilt[cj] = ci
+        assert rebuilt == _align_words(ref_words, hyp_words), (ref_words, hyp_words)
+
+
+def test_align_ops_indices_point_at_the_right_words():
+    """(op, ref_idx, hyp_idx) 인덱스가 실제 단어를 가리키는지 — del/ins의 None 규약 포함."""
+    ops = _align_ops(["a", "b", "c"], ["a", "c"])
+    assert ops == [("match", 0, 0), ("del", 1, None), ("match", 2, 1)]
+
+    ops2 = _align_ops(["a", "c"], ["a", "b", "c"])
+    assert [o for o, _, _ in ops2] == ["match", "ins", "match"]
+    assert ops2[1] == ("ins", None, 1)
+
+
+def test_align_ops_counts_match_compute_wer():
+    """sub/ins/del 개수가 compute_wer의 전방 DP 집계와 일치해야 한다(동일 동점 우선순위)."""
+    for ref_words, hyp_words in _ALIGN_CASES:
+        if not ref_words:
+            continue  # compute_wer는 정답 0단어를 조기 반환 특례로 처리한다
+        ops = [o for o, _, _ in _align_ops(ref_words, hyp_words)]
+        w = compute_wer(" ".join(ref_words), " ".join(hyp_words))
+        assert ops.count("sub") == w["substitutions"], (ref_words, hyp_words)
+        assert ops.count("ins") == w["insertions"], (ref_words, hyp_words)
+        assert ops.count("del") == w["deletions"], (ref_words, hyp_words)
 
 
 # ── compute_speaker_sentence_segmentation ──────────────────────────────────
