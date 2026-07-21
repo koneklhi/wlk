@@ -53,7 +53,25 @@ LANG_DETECT_GENERAL_SECS = 2.0
 # 실단어가 하나도 없는 억제는 버퍼 폐기(단어 유실) 위험을 감수할 만한 garbage가 아니다.
 _PUNCT_ONLY_CHARS = frozenset({'.', '?', '!', '。', '！', '？', ',', ';', ':'})
 
+# ── SOT 위치 사후분포 계측 (계측 전용 — 디코딩 행동 변경 0) ─────────────────────
+# infer()의 첫 forward는 new_segment일 때 전체 토큰 시퀀스를 넣으므로 logits shape이
+# [beam, T, V]다. 위치 sot_pos(= <|sot|> 토큰 위치)의 logits는 "다음 토큰 = 언어 토큰"
+# 분포이고, 이는 lang_id(encoder_feature)가 별도 forward(x=[[sot]])로 계산하는 값과
+# 수학적으로 동일하다. 즉 **추가 forward 0회**로 언어 사후분포를 읽을 수 있다.
+# 이 계측은 값을 읽어 로깅만 한다 — 분기·반환값·텐서를 일절 바꾸지 않는다.
+# False면 계측 자체가 돌지 않는다(짝지음 A/B 롤백 스위치).
+SOT_LANG_PROBE_ENABLED = True
+# 세션 요약(LangDriftStats) 집계용 문턱 — 카운팅 전용이며 어떤 동작에도 관여하지 않는다.
+SOT_PROBE_MISMATCH_P = 0.9      # 잠긴 언어의 반대쪽 재정규화 확률이 이 이상 → mismatch 후보
+SOT_PROBE_RESID_HIGH = 0.5      # 비정규화 언어질량 잔차가 이 이상 → off-manifold 후보
+SOT_PROBE_TRANSLATE_HIGH = 0.1  # task 위치 <|translate|> 확률이 이 이상 → 이상탐지 후보
+
 logger = logging.getLogger(__name__)
+
+
+def _fmt_prob(v) -> str:
+    """key=value 로그용 확률 포맷 — None은 nan으로 찍어 파서가 항상 같은 필드를 본다."""
+    return "nan" if v is None else f"{v:.6f}"
 
 
 class AlignAttBase(ABC):
@@ -410,10 +428,130 @@ class AlignAttBase(ABC):
             logger.debug("[ShortSilenceLangCheck] 감지 실패: %s", e)
             return None
 
+    # === SOT 위치 사후분포 계측 (계측 전용 — 행동 변경 없음) ===
+
+    def _read_sot_posteriors(self, logits) -> Optional[dict]:
+        """첫 forward logits에서 SOT/task 위치 사후분포를 읽는다 — 기본은 미지원(None).
+
+        base 기본 구현이 None인 이유: MLX 경로가 첫 forward에서 전 위치 logits를
+        반환하는지 미확인이라 안전 폴백이 필요하다. PyTorch(AlignAtt)만 오버라이드한다.
+        구현체는 반드시 **logits를 in-place로 건드리지 않아야** 한다(호출 직후
+        infer()가 같은 텐서를 logits[:, -1, :]로 재사용한다).
+        """
+        return None
+
+    def _sot_probe_stats(self) -> dict:
+        """세션 누적 계측 카운터 — 인스턴스(=세션) 단위로 lazy 생성한다."""
+        stats = getattr(self, "_sot_lang_probe_stats", None)
+        if stats is None:
+            stats = {
+                "probes": 0,
+                "locked_ko": 0,
+                "locked_en": 0,
+                "locked_none": 0,
+                "mismatch_candidates": 0,
+                "high_resid": 0,
+                "high_translate": 0,
+                "max_resid": 0.0,
+                "max_p_translate": 0.0,
+            }
+            self._sot_lang_probe_stats = stats
+        return stats
+
+    def _log_sot_lang_probe(self, logits) -> None:
+        """[SotLangProbe] DEBUG 로그 1줄 + 세션 카운터 누적. 로깅 외 부작용 없음."""
+        if not SOT_LANG_PROBE_ENABLED:
+            return
+        try:
+            self._sot_lang_probe_impl(logits)
+        except Exception as e:  # 계측 실패가 디코딩을 절대 막지 않게 한다
+            logger.debug("[SotLangProbe] 산출 실패(무시): %s", e)
+
+    def _sot_lang_probe_impl(self, logits) -> None:
+        info = self._read_sot_posteriors(logits)
+        if info is None:
+            return
+
+        stats = self._sot_probe_stats()
+        stats["probes"] += 1
+        locked = self.state.detected_language
+        if locked == "ko":
+            stats["locked_ko"] += 1
+        elif locked == "en":
+            stats["locked_en"] += 1
+        else:
+            stats["locked_none"] += 1
+
+        p_ko = info.get("p_ko")
+        p_en = info.get("p_en")
+        resid = info.get("resid")
+        p_translate = info.get("p_translate")
+        # mismatch 후보 = 잠긴 언어의 "반대쪽" 재정규화 확률이 문턱 이상 (적용은 하지 않는다)
+        if locked == "en" and p_ko is not None and p_ko >= SOT_PROBE_MISMATCH_P:
+            stats["mismatch_candidates"] += 1
+        elif locked == "ko" and p_en is not None and p_en >= SOT_PROBE_MISMATCH_P:
+            stats["mismatch_candidates"] += 1
+        if resid is not None:
+            stats["max_resid"] = max(stats["max_resid"], resid)
+            if resid >= SOT_PROBE_RESID_HIGH:
+                stats["high_resid"] += 1
+        if p_translate is not None:
+            stats["max_p_translate"] = max(stats["max_p_translate"], p_translate)
+            if p_translate >= SOT_PROBE_TRANSLATE_HIGH:
+                stats["high_translate"] += 1
+
+        if not logger.isEnabledFor(logging.DEBUG):
+            return
+        # t_abs는 토큰 절대 타임스탬프와 동일 좌표계 (global + cumulative + 현재 버퍼 길이).
+        t_abs = (self.state.global_time_offset
+                 + self.state.cumulative_time_offset
+                 + self.segments_len())
+        lang_locked = getattr(self.cfg, "language", "auto") != "auto"
+        logger.debug(
+            "[SotLangProbe] t_abs=%.2f batch=%d locked=%s seglen=%.2f "
+            "p_ko=%s p_en=%s p_abs_ko=%s p_abs_en=%s resid=%s H_lang=%s "
+            "p_translate=%s p_transcribe=%s p_nospeech=%s lang_locked=%s",
+            t_abs, stats["probes"], locked, self.segments_len(),
+            _fmt_prob(p_ko), _fmt_prob(p_en),
+            _fmt_prob(info.get("p_abs_ko")), _fmt_prob(info.get("p_abs_en")),
+            _fmt_prob(resid), _fmt_prob(info.get("H_lang")),
+            _fmt_prob(p_translate), _fmt_prob(info.get("p_transcribe")),
+            _fmt_prob(info.get("p_nospeech")), lang_locked,
+        )
+
+    def _log_lang_drift_stats(self) -> None:
+        """[LangDriftStats] WARNING 세션 요약 — 발동/관측 카운트를 남긴다.
+
+        probes=0도 명시적으로 1회 찍는다(0-firing 회차 = 노이즈 대조군 식별용).
+        카운터가 직전 요약 이후 변하지 않았으면 중복 출력을 생략한다 — 값은 누적이라
+        직전 라인이 이미 최종 합계를 담고 있다(is_last는 침묵마다 호출돼 잦다).
+        """
+        if not SOT_LANG_PROBE_ENABLED:
+            return
+        try:
+            stats = self._sot_probe_stats()
+            last = getattr(self, "_sot_lang_probe_last_summary", None)
+            if last is not None and last == stats["probes"]:
+                return
+            self._sot_lang_probe_last_summary = stats["probes"]
+            logger.warning(
+                "[LangDriftStats] probes=%d locked_ko=%d locked_en=%d locked_none=%d "
+                "mismatch_candidates=%d high_resid=%d high_translate=%d "
+                "max_resid=%.4f max_p_translate=%.4f lang_locked=%s",
+                stats["probes"], stats["locked_ko"], stats["locked_en"], stats["locked_none"],
+                stats["mismatch_candidates"], stats["high_resid"], stats["high_translate"],
+                stats["max_resid"], stats["max_p_translate"],
+                getattr(getattr(self, "cfg", None), "language", "auto") != "auto",
+            )
+        except Exception as e:  # 계측 실패가 디코딩을 절대 막지 않게 한다
+            logger.debug("[LangDriftStats] 요약 실패(무시): %s", e)
+
     # === Template infer() ===
 
     def infer(self, is_last=False):
         """Main inference — template method calling abstract hooks for tensor ops."""
+        if is_last:
+            self._log_lang_drift_stats()
         new_segment = True
 
         if len(self.state.segments) == 0:
@@ -463,6 +601,12 @@ class AlignAttBase(ABC):
             accumulated_cross_attns.append(cross_attns)
             if len(accumulated_cross_attns) > 16:
                 accumulated_cross_attns = accumulated_cross_attns[-16:]
+
+            # 계측 전용: 첫 forward(new_segment)의 [beam, T, V] logits에서 SOT/task 위치
+            # 사후분포를 읽어 로깅만 한다. 텐서를 수정하지 않고(구현체가 clone 후 계산)
+            # 분기·반환값·상태에도 관여하지 않는다 — 아래 no_speech 판정은 그대로다.
+            if new_segment:
+                self._log_sot_lang_probe(logits)
 
             if new_segment and self._check_no_speech(logits):
                 break
