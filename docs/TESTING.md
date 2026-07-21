@@ -100,6 +100,8 @@ whisperlivekit-server
 - **파일 목록** (측정 기본 설정: 화자분할 ON — 이 옵션 전체가 이제 `parse_args.py` 기본값이라 추가 인자 없이 `whisperlivekit-server`만 기동해도 동일 설정임). **언어모드** 태그(CLAUDE.md §3.2)는 측정 시 넘길 `--lan` 값을 가리킨다:
   - `bong1.mp3` / `bong1.txt` — 봉준호 기생충 인터뷰. **영어 2명 + 한국어 2명**, 화자 교대·긴 발화 혼재. 다화자·온점분리 역량의 핵심 테스트 대상. **언어모드: auto**.
     **테스트(채택/기각) + 개선 최우선 대상**(다화자·긴 발화). 채택 확정 시 `--repeat 3` 루틴.
+    `bong1.txt`는 2026-07-21부로 웃음·박수·환호·잡음·더듬 등 **비언어적 표시**를 포함한다(청취 재검수 결과 반영) —
+    형식·WER 제외 처리는 [TRANSCRIPTION_REQUIREMENTS.md](TRANSCRIPTION_REQUIREMENTS.md) §2 참조.
   - `ytn2.mp3` / `ytn2.txt` — SCM 회의 통역. 영어 발화자 발화 → 한국인 통역, **한 문장씩 화자 교대**(순차통역). EN↔KO 짧은 텀 교차. **언어모드: auto**.
     **테스트(채택/기각) + 개선 최우선 대상**(짧은 텀 코드스위칭). 채택 확정 시 `--repeat 3` 루틴.
   - `sbs1.mp3` / `sbs1.txt` — 뉴스 리포트. **대부분 한국어 → 중간 영어 인용 → 다시 한국어 종료**(사실상 단일 앵커, 언어 전환 경계). **언어모드: auto**(영어 인용 구간이 있어 ko 고정 시 오전사 위험 — auto 유지). **테스트(채택/기각)**.
@@ -111,6 +113,7 @@ whisperlivekit-server
     **테스트(채택/기각)**. 채택 확정 시 `--repeat 3` 루틴.
   - `kinno.mp3` / `kinno.txt` — ITS 2021 K-혁신기업 행사, **2화자 순차통역**(한국어 MC + 통역사), 한↔영 교차. **언어모드: auto**.
     **held-out 정성 sanity** — 정답 텍스트의 단어·철자가 부정확할 수 있어 **WER/F1 채택 게이팅에서 제외**. 전반적 화자·문장 분리 + 대규모 누락/환각 유무만 정성 확인.
+    **알려진 개선 불가 구간**: `[spk2]`(통역사) 영어 도입부("Good morning, ladies and gentlemen. Welcome to the Dialogue with K-Innovative Companies at ITS 2021.")는 화자 본인의 콩글리시 발음이 원인이라 발음대로 한국어로 오전사되는 것이 정상 — 개선 대상 아님(상세: [TRANSCRIPTION_REQUIREMENTS.md](TRANSCRIPTION_REQUIREMENTS.md) kinno 절).
 - **정답 스크립트**: 위 모든 파일에 `<name>.txt`가 존재(canonical, `[spkN]` 헤더+화자·문장 전처리 완료). 2026-07-18 이전엔 `_speak,sentence_sperate.txt` 접미사 파일로 별도 관리됐으나 폐지·통합됨.
 - 용도: STT 전사 정확도(WER) + 화자분리 F1 + 문장분리 F1 정량 분석(우선순위 화자분리 F1 > WER > 문장분리 F1)
 
