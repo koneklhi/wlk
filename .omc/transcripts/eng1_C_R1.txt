@@ -1,14 +1,15 @@
 파일: test_data\eng1.mp3
 경로: C | 회차: R1 | 정답형식: 신형식
-WER: 3.8% | 화자분리F1: 0.0% | 문장분리F1: 66.7%
+WER: 5.7% | 화자분리F1: 0.0% | 문장분리F1: 66.7%
+언어불일치(KO→EN): N/A (WER 0.0%p)
 
 [전사]
-Thank you, Chair. Taoiseach, I must start by thanking you for your continued efforts and commitment to preserve the peace process and to prevent the formation of barriers within the island of Ireland on foot of the UK's decision to withdraw from the Union. However, I do not share your ideology in other ways, so I must also follow that with a plea to you as Taoiseach of Ireland and as a member of the European Political Force, whose worldview and power has most considerably shaped both the emergence of the financial and economic crisis a decade ago and the measures taken
+Thank you, Chair. Fishek, I must start by thanking you for your continued efforts and commitment to preserve the peace process and to prevent the formation of barriers within the island of Ireland on foot of the UK's decision to withdraw from the Union. However, I do not share your ideology in other ways, so I must also follow that with a plea to you as Taoiseach of Ireland and as a member of the European Political Force, whose worldview and power has most considerably shaped both the emergence of the financial and economic crisis a decade ago and the measures
 
 [문장별 확정 트리거]
 1. Thank you, Chair.  ⟨punctuation⟩
-2. Taoiseach, I must start by thanking you for your continued efforts and commitment to preserve the peace process and to prevent the formation of barriers within the island of Ireland on foot of the UK's decision to withdraw from the Union.  ⟨punctuation⟩
-3. However, I do not share your ideology in other ways, so I must also follow that with a plea to you as Taoiseach of Ireland and as a member of the European Political Force, whose worldview and power has most considerably shaped both the emergence of the financial and economic crisis a decade ago and the measures taken  ⟨-⟩
+2. Fishek, I must start by thanking you for your continued efforts and commitment to preserve the peace process and to prevent the formation of barriers within the island of Ireland on foot of the UK's decision to withdraw from the Union.  ⟨punctuation⟩
+3. However, I do not share your ideology in other ways, so I must also follow that with a plea to you as Taoiseach of Ireland and as a member of the European Political Force, whose worldview and power has most considerably shaped both the emergence of the financial and economic crisis a decade ago and the measures  ⟨-⟩
 
 [정답]
 Thank you, Chair, and Taoiseach, I must start by thanking you for your continued efforts and commitment to preserve the peace process and to prevent the formation of barriers within the island of Ireland on foot of the UK's decision to withdraw from the Union. However I do not share your ideology in other ways, so I must also follow that with a plea to you, as Taoiseach of Ireland and as a member of the European political force whose world view and power has most considerably shaped both the emergence of the financial and economic crisis a decade ago and the measures taken in

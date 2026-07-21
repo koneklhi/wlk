@@ -1,0 +1,28 @@
+# 로그: .omc/server_logs/server_kor1_C_R1_20260721_220607.log
+# 프로브 366개 · 방출 267개 · LangSwitch 0회 · Detected 0회 · ShortSilence 0회
+# t_abs 범위: 1.02 ~ 122.00s
+# locked 분포: ko=366 en=0 none=0
+# 최종 [LangDriftStats]: probes=365 locked_ko=365 locked_en=0 locked_none=0 mismatch_candidates=5 high_resid=330 high_translate=0 max_resid=0.9322 max_p_translate=0.0000 lang_locked=True
+
+==============================================================================
+## 3. mismatch 후보 전수 (p_opp >= 0.97) — 정당/오탐 분류용
+==============================================================================
+총 3건 (계측 코드 카운터와 대조할 것)
+
+연속 배치를 묶으면 3개 버스트:
+
+버스트 1: batch 1-1 t=1.02-1.02s locked=ko n=1 p_opp med=0.9961 max=0.9961
+    직전 방출: —
+    버스트 내: —
+    직후 방출: '자막 제공' | '및 자막' | '제공 배달'
+
+버스트 2: batch 20-20 t=6.60-6.60s locked=ko n=1 p_opp med=0.9859 max=0.9859
+    직전 방출: '및 자막' | '제공 배달' | '의민족'
+    버스트 내: —
+    직후 방출: '발' | '표하겠습니다' | '.'
+
+버스트 3: batch 26-26 t=10.82-10.82s locked=ko n=1 p_opp med=0.9921 max=0.9921
+    직전 방출: '발' | '표하겠습니다' | '.'
+    버스트 내: —
+    직후 방출: '스선을 보시' | '는' | '바와 같습니다'
+

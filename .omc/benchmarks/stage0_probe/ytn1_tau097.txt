@@ -1,0 +1,23 @@
+# 로그: .omc/server_logs/server_ytn1_C_R1_20260721_221729.log
+# 프로브 267개 · 방출 169개 · LangSwitch 10회 · Detected 1회 · ShortSilence 0회
+# t_abs 범위: 1.15 ~ 85.43s
+# locked 분포: ko=118 en=146 none=3
+# 최종 [LangDriftStats]: probes=266 locked_ko=117 locked_en=146 locked_none=3 mismatch_candidates=32 high_resid=207 high_translate=0 max_resid=0.9345 max_p_translate=0.0000 lang_locked=False
+
+==============================================================================
+## 3. mismatch 후보 전수 (p_opp >= 0.97) — 정당/오탐 분류용
+==============================================================================
+총 25건 (계측 코드 카운터와 대조할 것)
+
+연속 배치를 묶으면 2개 버스트:
+
+버스트 1: batch 9-12 t=4.18-5.14s locked=en n=4 p_opp med=0.9923 max=0.9983
+    직전 방출: 'Yeah' | ',' | 'I'
+    버스트 내: "'m not sure how"
+    직후 방출: 'many years' | "I'm happy to" | 'be here'
+
+버스트 2: batch 17-39 t=6.34-12.91s locked=en n=21 p_opp med=0.9988 max=0.9997
+    직전 방출: ',' | 'I' | "'m not sure how"
+    버스트 내: 'many years' | "I'm happy to" | 'be here'
+    직후 방출: 'to be able to visit the United States' | 'I' | 'want to first'
+
