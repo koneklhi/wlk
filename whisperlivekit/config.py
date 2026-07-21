@@ -31,6 +31,10 @@ class WhisperLiveKitConfig:
     pcm_input: bool = False
     disable_punctuation_split: bool = False
     transcript_save_dir: str = "transcripts"
+    # WebSocket 출력 프로토콜 기본값. "full" = 매 메시지 전체 스냅샷(구 동작), "delta" = snapshot 1회 + 이후 증분(diff).
+    # 기본값이 full인 이유: 델타 미대응 클라이언트(배포 React)가 코드 수정 없이 그대로 동작해야 하므로
+    # 델타는 opt-in(?mode=delta)이다. 쿼리파라미터 ?mode=delta|full 이 이 기본값을 오버라이드한다.
+    ws_protocol: str = "full"
     frontend_dir: str = "frontend/static"
     frontend_base: str = "auto"
     diarization_backend: str = "sortformer"
