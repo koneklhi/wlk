@@ -4420,3 +4420,190 @@ ruff 신규오류 0(main 저장소 동일 스코프 대비 pre-existing 26건과
 언어전환 경계의 철회 실패모드를 파괴적→복원가능으로 구조 변경(Exp-171/172/173/174 철회 관련 결론은
 tombstone 메커니즘으로 **대체**되며 모순 아님, 선례대로 **E5 유지(epoch 미bump)** — 디코더·VAD·언어고정
 불변, 정렬 계층 국소 변경).
+
+---
+
+## Exp-193 — frame_threshold를 KO→EN 경계 꼬리유실 제어 레버로 규명 + is_last flush 코드수정 dead-end [E5, `exp/boundary-tail-flush`(미머지)]
+
+### 배경 — 배포 실사용 제보(Exp-192 반입본 이후)
+Exp-192(`b001e38`) 반입 후 배포 PC(RTX 5090) 실사용 제보: 코드스위칭 KO→EN 경계에서 **한국어 문장 마지막
+단어가 단어 중간까지 잘려 유실**("갱신하겠습니다"→"갱신하.", "되었습니다"→"되."). 잘린 꼬리가 다음 줄로도
+안 가고 소멸(Case B와 다름). 개발 PC(3080)+개발 데이터에선 드물 수 있음 → 사용자 지시: ① dev에서 코드스위칭
+`--repeat 3` 충분히 측정해 재현 확인, ② 재현되면 수정, ③ 미재현이면 GPU 성능차/데이터차 고려해 배포 PC 파라미터·
+디버깅 제안. (측정 착수 전 공유 `.venv` 반쪽손상 발견·무중단 복구 — 별건.)
+
+### 근본원인 (코드 조사로 확정 — 병렬 4서브시스템 읽기전용 조사)
+- 매 infer는 버퍼 끝 `frame_threshold`(기본 25≈0.5s) 구간을 디코딩하지 않고 남긴다(align_att_base.py:501-508).
+  아직 구언어(KO) 토큰으로 커밋 안 된 꼬리가 이 미디코딩/held 구간에 있을 수 있다.
+- 언어전환 감지 시 `_apply_detected_language`(align_att_base.py:229-277)가 `_trim_segments_to_recent` +
+  `create_tokenizer(EN)` + `init_tokens()`/`init_context()`로 디코더 리셋 → 미커밋 KO 꼬리는 다음 infer에서
+  EN 토크나이저로 재디코딩돼 garbage→`ScriptMismatchFilter`(backend.py:794) 드롭 = **순유실**. 온점은
+  `_append_terminal_punctuation`(audio_processor.py) 합성이지 모델 디코딩 아님.
+- Exp-192 재조정 계층은 **이미 커밋된 토큰만** tombstone/복원 → 미커밋 꼬리는 시야 밖(구조적 사각지대).
+- **왜 5090에서 잦은가**: `get_all_from_queue`(audio_processor.py:70-71)가 큐 축적분을 concat해 배치를 만드는데,
+  빠른 GPU는 infer 사이 큐 축적이 적어 배치가 `vac_chunk_size` 하한(≈0.2s)에 수렴 → KO 어절 꼬리와 EN 서두가
+  별개 배치로 쪼개져 꼬리가 버퍼끝 미디코딩 구간에 걸릴 확률↑. 느린 3080은 배치가 커서 어절이 통째 디코딩됨.
+  = 동일 원천유실 버그, 심각도가 GPU 속도(배치크기)에 비례.
+
+### 측정 (경로 C, `--lan auto`, diar-ON, turbo, beams=2, CRT=3.0, `--trace-tokens`)
+**① baseline ft=25, `--repeat 3`** (master `b001e38`, `eval_repro_boundary.json`):
+| 파일 | WER median [min/max] | 화자F1 | 문장F1 |
+|---|---|---|---|
+| bong1 | 25.7% [23.3/31.4] | 76.5% | 25.0% |
+| ytn2 | 15.8% [14.8/17.2] | 77.8% | — |
+| sbs1 | 8.9% [8.3/10.1] | 100% | 88.9% |
+| ytn1(held-out) | 11.7% [9.2/25.8] | 84.2% | 57.1% |
+평균 WER 16.8%·화자F1 83.7%. → **mid-word "갱신하." 미재현이나, 동일 메커니즘의 완화형(문장꼬리 종결동사 유실)
+재현**: ytn2 "…합의점에." (종결동사 "이르렀습니다" 유실) **3/3 일관**, ytn1 "미국은." 파편 1회.
+
+**② ft=35, `--repeat 3`** (`eval_ampl_ft35.json`) — GPU 작은배치 레짐 모사(미디코딩 tail 구간 확대) 증폭 시도:
+| 파일 | WER median | 화자F1 | 문장F1 |
+|---|---|---|---|
+| bong1 | 26.6% | **62.9%(↓)** | 30.0% |
+| ytn2 | **11.8%** | 90.0% | — |
+| sbs1 | 11.3% | 100% | 88.9% |
+| ytn1 | 15.3% | 77.8% | 57.1% |
+평균 WER 16.1%·화자F1 81.3%. **예상과 반대 — 증폭이 아니라 완화**: ytn2 "합의점에 이르었습니다" **3/3 복원**,
+ytn1 "미국은." 파편 소멸. 두 run의 유일 차이가 `--frame-threshold`이고 이 경계가 3/3 뒤집혔으므로 인과 확증.
+**→ frame_threshold = KO 꼬리유실을 직접 제어하는 레버(↑=꼬리 복원, AlignAtt가 경계영역을 더 오래 물어 꼬리가
+전환 트리거 前에 커밋됨)**. 단 전역 상향이라 **모든 커밋 지연 → 다화자 화자전환 분리 저하**(bong1 화자F1 median
+76.5→62.9, 3회 전부 하락). Case B 신규 0.
+
+**③ is_last flush 코드수정** (`exp/boundary-tail-flush@b001e38 분기`, 스크리닝 `--repeat 1`, `eval_tailflush_scr.json`):
+언어전환 트림/스왑 **직전**에 구언어 토크나이저로 `infer(is_last=True)`(frame_threshold=4, 버퍼 끝까지) 강제 flush
+→ `state.pending_langswitch_flush`로 process_iter 전파(현재 배치에 이어붙임) → `ASRToken.retract_protected`로
+철회 보호 + infer 재진입 가드(`_infer_active`) + 롤백 플래그 `LANG_SWITCH_TAIL_FLUSH_ENABLED`. TDD 신규
+`test_langswitch_tail_flush.py` 14케이스(red 9→green), 전체 **554 passed / 1 skip**, ruff clean.
+스크리닝: bong1 23.9%/화자72.2, ytn2 14.8%/100, sbs1 6.5%/100, ytn1 10.4%/88.9 — 회귀 없음. **그러나 서버로그상
+flush 발동 = ytn2 0/9회·bong1 0·sbs1 0·ytn1 1회뿐** → **실질 미작동**. 원인: 이 데이터의 KO↔EN 전환은
+`[NewSpeaker]` 34회·`eager` 37회 등 **화자전환(diarization) 주도**인데, new_speaker는 `detected_language=None`
+리셋+버퍼 refresh를 먼저 하므로 flush의 `detected_language is None` 가드에 스킵됨(설계상 신화자 garbage 방지).
+유일한 ytn1 1회 flush는 `prev_lang=en 꼬리 "에는"`(EN전환인데 KO garbage 디코딩)→픽업 반대스크립트 드롭 = 무효.
+**근본원인 재규명: 전환 대부분이 화자전환 주도 + boundary 검출 지연으로 KO꼬리·EN서두가 버퍼에서 얽혀 있어
+"경계에서 flush"는 이미 늦어 garbage가 된다.** (ytn2 "합의점에 이르었습니다" 완결은 flush=0이므로 fix 효과 아닌
+단일run 분산.) ft=35가 더 잘 동작한 이유 = 정상 디코드가 경계 前에 꼬리를 커밋하기 때문.
+
+### 분석 (전사 내용 정성 대조)
+**bong1** (다화자): ft=25→ft=35에서 한국어 컨텐츠는 유사하나 **화자전환 분리 저하**(화자F1 76.5→62.9) — 큰
+frame_threshold가 화자경계 커밋을 지연시킨 결과. 웃음/필러 환각(기존 실패모드)은 두 조건 유사, frame_threshold와 무관.
+**ytn2** (코드스위칭 핵심): **코드스위칭 실패=꼬리유실** — ft=25 `"합의점에."` 3/3(종결동사 유실) vs ft=35
+`"합의점에 이르었습니다"` 3/3 복원. flush 스크리닝도 완결됐으나 flush 0회라 분산.
+**sbs1** (KO 낭독 위주): 주요 실패 없음. 경계 적어 frame_threshold 영향 미미, 안정.
+**ytn1** (held-out): ft=25 `"미국은."` 파편(문장 첫 어절만 확정) vs ft=35 소멸(완결 문장). flush의 `"Hand-mi."`는
+EN 디코더가 "한미"를 로마자로 환각한 것(align_att 로그 17693)이지 flush 무관.
+**이번 변경 영향**: frame_threshold↑는 ytn2/ytn1의 KO 꼬리유실(코드스위칭 실패)을 완화하되 bong1 다화자 화자분리를
+희생. is_last flush는 전환 경로(new_speaker 주도) 미스매치로 무영향. Case B 신규 0(ft↑는 오히려 Case B 위험 감소).
+
+### 채택 (조건) 판정
+- **frame_threshold=35 전역**: ①화자분리 F1 worst-case = bong1 76.5→62.9 **회귀(1순위 지표 위반)** → 전역 기본값
+  채택 불가. ②WER max/median = 회귀 없음(오히려 ytn2 개선). ③Case B 0. → **전역 채택 불가, 단 원인·수정방향 확정**.
+- **is_last flush**: 실질 미작동(발동 ~0) → **dead-end, 기각**(브랜치 `exp/boundary-tail-flush` 미머지 보존).
+
+### 결론 — frame_threshold를 배포 PC 레버로 (사용자 승인)
+전역 기본값 변경 대신, 배포 서버 기동에 `--frame-threshold 35`(필요시 스윕 40~50) opt-in. 배포 PC(5090)에서
+심각형 감소 확인 + content에 맞춰 **꼬리복원 ↔ 다화자 화자F1** 트레이드오프 튜닝. 무코드변경·무재배포. 정본 명령:
+`C:\Python312\python.exe -m whisperlivekit.basic_server --frame-threshold 35 …`. **frame_threshold는 §3.8 backend
+레벨 파라미터라 데이터특화 하드코딩 아님**(일반 레버).
+
+### 다음/후속
+- **사용자 신규 요청(완료 → Exp-194)**: frame_threshold '외' 대안 설계공간 탐색 — (A)조건부/국소 frame_threshold·
+  토크나이저 스왑 유예, (B)경계시각 슬라이스 표적 재디코딩(얽힘 회피), (C)문법-조건부 확정 유예(Exp-190 게이트
+  확장), (D)화자전환 지연보정 재귀속(Exp-168/171/174 좌표계 재사용) 병렬조사 → **D1(=B1, new_speaker 경계
+  슬라이스) 1순위 도출·프로토타입 착수 → 스크리닝 기각(Exp-194 참조)**.
+- 배포 PC frame_threshold 실측 확인 후 최적값·트레이드오프 회신 대기.
+- Exp-192 확정 r3/held-out 미실시분과 별개 트랙.
+
+### epoch
+E5 유지(epoch 미bump) — frame_threshold는 파라미터 값(구조 변경 아님), is_last flush는 미머지 기각. JSON:
+`.omc/benchmarks/eval_repro_boundary.json`(baseline ft25 N=3)·`eval_ampl_ft35.json`(ft35 N=3)·
+`worktrees/boundary-tail-flush/.omc/benchmarks/eval_tailflush_scr.json`(flush 스크리닝 N=1).
+
+---
+
+## Exp-194 — frame_threshold 외 대안 설계공간 탐색 → D1(화자전환 경계 슬라이스 재디코딩) 프로토타입·스크리닝 기각 [E5, `exp/boundary-tail-flush`(미머지·미커밋)]
+
+### 배경 — 사용자 요청(Exp-193 후속)
+Exp-193에서 frame_threshold를 배포 레버로 확정한 직후, 사용자가 "frame_threshold 외에도 다른 해결 방안이
+있는지 검토해봐" 요청. 다화자 화자F1 비용(bong1 76.5→62.9) 없이 KO 꼬리를 복원할 코드 대안을 병렬 탐색.
+
+### 대안 설계공간 탐색 (읽기전용 4클러스터 병렬조사 + 랭킹, 코드변경 없음)
+클러스터 A(조건부/국소 frame_threshold·토크나이저 스왑 유예) / B(경계시각 슬라이스 표적 재디코딩) / C(문법-조건부
+확정 유예, Exp-190 게이트 확장) / D(화자전환 지연보정 재귀속, Exp-168/171/174 좌표계 재사용)를 코드 근거로 평가·
+랭킹. **결론**: 근본원인(꼬리 미커밋+EN 재디코딩 드롭)을 실제로 뚫으면서 전역 다화자 비용이 0인 계열은 **D1≡B1
+(new_speaker의 refresh_segment 직전 pre-boundary KO-슬라이스 재디코딩)** 뿐 — 실패한 Exp-193 is_last flush의
+두 실패원인(①삽입점이 화자전환 아닌 언어전환 감지 경로라 미발동 ②버퍼 전체 tail 디코딩이라 EN서두까지 오디코드)을
+정확히 교정하는 접근으로 판정. C계열(확정 유예 단독)은 "꼬리가 애초에 KO 토큰으로 도착 안 함"이 코드로 확정돼
+**원리적으로 무효**(refresh_segment가 꼬리 오디오 자체를 폐기·EN 재디코딩은 드롭). A1(조건부 ft)은 화자전환
+활성 신호(eager)가 정확히 꼬리 보존이 필요한 지점과 겹쳐 신호정렬 충돌. D2(비재디코딩 재귀속)는 순유실엔 무효.
+필수 가드 3종을 조건으로 D1 프로토타입 승인(사용자).
+
+### 구현 — D1 (`exp/boundary-tail-flush` 워크트리 재작업, Exp-193 flush 인프라 일부 재사용)
+- **삽입점 이동**: `_apply_detected_language`의 `_flush_prev_language_tail` 호출·`process_iter`의
+  `pending_langswitch_flush` 픽업 블록 **제거**(원거동 복원) → **`backend.py new_speaker()`의
+  `refresh_segment`(경계 트림) 직전**으로 이동(버퍼 온전·토크나이저/detected_language/speaker 모두 아직
+  구언어·구화자인 시점).
+- **슬라이스**: `align_att_base.py` 신규 `decode_tail_slice(boundary_abs)` — 버퍼를 `[0, change_speaker.start]`
+  로 tail-truncate(EN 서두 오디오 제외, 원 텐서 불변 뷰)한 뒤 현재(구언어) 토크나이저로 `infer(is_last=True)`
+  1회. 재방출 방지는 slice_lower 명시 없이 **디코더 커밋 프리픽스 연속성**(state.tokens 이후분만 방출)으로 구조적
+  실현 + `retract_protected`(Exp-193 재사용) 철회보호 + dedup_batch 백스톱.
+- **save/restore**: 슬라이스 직후 `refresh_segment`가 `init_tokens`/`init_context`로 디코더 상태(tokens/context/
+  kv_cache/last_attend_frame/pending_incomplete_tokens)를 어차피 리셋 → 명시 복원 대상은 `state.segments`(원
+  버퍼)+`quality_suppress_streak` 둘뿐(검증됨, B2 격리 디코드 에스컬레이션 불필요로 판정).
+- **Case B 가드**: `_snap_tail_to_word_boundary` — 슬라이스 상한(경계)에 0.20s 이내로 맞닿은 마지막 어절은 hold
+  (어절중간 절단 위험).
+- **전파**: `audio_processor.py`의 `ChangeSpeaker` 분기가 `new_speaker()` 반환(꼬리 토큰)을 캡처해 공유 emit
+  블록(all_tokens/new_tokens/번역 큐)으로 라우팅(선행은 반환값을 버리고 `continue`).
+- 롤백 플래그 `NEW_SPEAKER_TAIL_SLICE_ENABLED`, 고정(ko/en) 세션은 회귀위험 최소화로 미발동(auto 전용).
+
+### TDD
+신규 `tests/test_boundary_tail_slice.py`(17케이스: 슬라이스 커밋·EN서두 미포함·Case B hold·재방출 없음·버퍼
+restore·플래그OFF레거시·화자귀속), 선행 `test_langswitch_tail_flush.py` 제거·`test_lang_switch_wiring.py` 원복.
+전체 **557 passed / 1 skipped**, ruff clean(변경 파일 전부).
+
+### 측정 (경로 C, `--lan auto`, diar-ON, turbo, beams=2, CRT=3.0, `--trace-tokens`, **스크리닝 `--repeat 1`**)
+| 파일 | baseline(Exp-193 ft25) WER | D1 스크리닝 WER | 화자F1(baseline→D1) |
+|---|---|---|---|
+| bong1 | 25.7% | **30.8%**(악화) | 76.5→66.7(악화) |
+| ytn2 | 15.8% | 13.8%(개선, 단 아래 참조) | 77.8→80.0 |
+| sbs1 | 8.9% | **23.8%**(약 2.7배 악화) | 100→66.7(악화) |
+| ytn1 | 11.7% | **21.5%**(악화) | 84.2→66.7(악화) |
+
+`[TailSlice]` 실제 발동 확인(선행 flush의 ytn2 0/9와 대조): bong1 12회(hold 2)·ytn2 8회(hold 1)·sbs1 2회·ytn1
+8회(hold 2) — 삽입점 이동(new_speaker=지배 경로)이 발동 자체는 성공시킴.
+
+### 분석 (전사 내용 정성 대조)
+**ytn2**(핵심 타깃): **목표 미달성** — "합의점에." 유실이 일어나는 정확한 화자전환(`spk=1→0 det_before=ko
+eager=None`) 지점에서 **TailSlice 로그가 전무**(발동도 hold도 "없음" 로그도 없음). 코드에 무로그 조기리턴 경로가
+3곳(`detected_language is None`/`segments 없음`/`slice_secs<audio_min_len`) 있어 어느 조건에 걸렸는지 특정
+불가 — **진단 계측 갭**. ytn2 WER 자체는 개선(13.8%)됐으나 다른 지점 발동의 부수효과로 보이며 핵심 타깃과 무관.
+**bong1**: `"So my son, who's So my son, who's holding up..."` — **어절 반복(중복 방출)** 신규 발생. D1이
+"디코더 프리픽스 연속성으로 구조적 방지"라 주장한 바로 그 문제가 재현된 것으로 의심(정확한 TailSlice 인과는
+로그 컨텍스트 부족으로 미확정).
+**sbs1**: `"영구적인 지상 플랫폼이라고 정의했습니다."` — baseline엔 있던 앞부분("특히 한국을... 미국의 힘을
+고정하는")이 **신규 유실**. `"사태리아 기자가 보도합니다."` — baseline에 없던 **신규 환각**(정답 무관 텍스트).
+**ytn1**: `"Han-kong."`, `"- 감사합니다."` — 신규 파편/환각.
+**이번 변경 영향**: 목표(ytn2 핵심 꼬리) 미복원 + 3/4 파일 WER·화자F1 악화 + bong1/sbs1/ytn1에 신규 중복·유실·
+환각 패턴. 스크리닝 1회라 일부 변동은 노이즈 가능성이나, **목표 라인 자체가 미복원된 것은 노이즈가 아니라 로직
+결함**(무로그 스킵 경로)이며, 부작용 패턴의 광범위성(4파일 중 3파일)도 우연으로 보기엔 일관적.
+
+### 채택 (조건) 판정
+스크리닝 단계에서 이미 ①표적 미달성 ②화자분리 F1 worst-case 다수 회귀(1순위 지표 위반, D1의 존재이유였던
+"전역비용 0" 가정이 실측에서 성립 안 함) ③신규 중복/환각 발생 — **`--repeat 3` 확정측정 진행 없이 스크리닝
+단계에서 기각**. 정확한 인과(왜 그 경계에서 스킵됐는지, 왜 중복/환각이 생겼는지)는 로그 계측 부족으로 미규명.
+
+### 결론 — D1 기각, frame_threshold 배포 레버로 최종 확정 (사용자 결정)
+코드 레벨 시도가 두 번(Exp-193 is_last flush, 본 Exp D1) 모두 실패 판정. 이미 검증되고 사용자 승인된 안전한
+대안(Exp-193 frame_threshold 배포 opt-in)이 있는 상태에서, 추가 진단 계측 없이 3차 코드 시도로 넘어가는 대신
+**여기서 코드 레벨 탐색을 종료**(사용자 승인) — `--frame-threshold 35`(스윕 40~50) 배포 PC opt-in이 최종 권고.
+**D1 재시도 금지**(추가 진단 계측 없이는) — 재시도 시 최소 `[TailSlice] 스킵(사유)` 로그를 3개 조기리턴 경로
+전부에 추가해 "합의점에" 경계에서 왜 스킵됐는지부터 규명해야 함.
+
+### 다음/후속
+- 배포 PC frame_threshold 실측 확인 후 최적값·트레이드오프 회신 대기(Exp-193과 동일 트랙).
+- 워크트리 `worktrees/boundary-tail-flush`(브랜치 `exp/boundary-tail-flush`)에 D1 변경 **미커밋 상태로 보존**
+  (사용자 명시 요청 시에만 커밋 — 세션 전역 규칙). `.omc/transcripts/*.txt`는 측정 부산물이라 커밋 대상 아님.
+- Exp-192 확정 r3/held-out 미실시분과 별개 트랙.
+
+### epoch
+E5 유지(epoch 미bump) — D1은 미커밋·기각. JSON:
+`worktrees/boundary-tail-flush/.omc/benchmarks/eval_tailslice_scr.json`(D1 스크리닝 N=1).

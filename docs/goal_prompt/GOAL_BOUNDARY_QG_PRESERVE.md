@@ -14,6 +14,17 @@
 > - ★ **사용자 명시 제약: 이 개선은 이전 성능을 저하시켜서는 안 된다.** 짝지음 A/B 순효과에서
 >   화자분리 F1·WER worst-case가 회귀하면 파라미터 보수화 또는 기각 권고로 전환한다(§4).
 
+> 📌 **2026-07-19 갱신 노트 (실행 세션은 반드시 읽을 것)**: 이 문서는 master `6df6e2f`(2026-07-13) 기준으로
+> 작성됐고 그 후 master가 크게 전진했다(Exp-179~189 머지 + Exp-190 채택권고 대기). 따라서 —
+> ① §0의 master 해시·baseline 표·"Exp-177" 번호는 stale — **세션 시작 시 최신 master에서 분기하고 Exp 번호는
+> [EXPERIMENTS.md](../../EXPERIMENTS.md)에서 재확인**한다(판정은 어차피 짝지음 A/B 순효과라 baseline 표 stale은 무해).
+> ② §1 근본원인 규명·§2 설계는 여전히 유효하나, 대상 코드(`_on_quality_suppressed`·`new_speaker` 부근)가
+> Exp-187/188/189/190으로 이동·변경됐을 수 있으니 라인 번호를 재확인한다.
+> ③ §0 출발 증거 로그(2026-07-13)는 참고만 — Stage 0 분류는 가능하면 이 세션에서 새로 뜨는 `--trace-tokens`
+> 측정으로 보강한다. ④ 배포 실사용 제보(2026-07-19, "연속 발화 중 단어 누락")의 형제 루프
+> [GOAL_UTF8_HELD_EMIT_LOSS.md](GOAL_UTF8_HELD_EMIT_LOSS.md)·[GOAL_BOUNDARY_TAIL_DUP.md](GOAL_BOUNDARY_TAIL_DUP.md)와
+> 스코프 격리 유지 — 실행 순서 권장은 [README.md](README.md) 참조.
+
 ---
 
 ## 0. 현재 상태 / 준비 (2026-07-13)
