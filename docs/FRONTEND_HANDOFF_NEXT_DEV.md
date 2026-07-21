@@ -79,6 +79,32 @@ React 빌드 결과물(dist)을 직접 서빙한다.
 - **마운트 시 WS 자동 연결**을 제거했다. 연결 = 서버 세션 생성(FFmpeg + 파이프라인 기동)이라
   아무도 녹음하지 않는 페이지 로드마다 고아 세션이 생겼다.
 
+### 실장치 검증에서 추가로 드러난 것 (2026-07-21)
+
+개발 PC에서 서버를 띄우고 시작을 눌렀는데 전사가 한 줄도 나오지 않는다는 보고가 있었다.
+**전사 파이프라인은 정상이었다** — 실제 브라우저 + 실장치 마이크(VBCable CABLE Output)로
+`ytn2`(109초 한↔영 코드스위칭)를 넣으니 12줄이 정상 전사됐고 콘솔 에러도 없었다
+(WS `?language=auto&mode=delta` 1개 연결, delta 631프레임 수신).
+
+원인은 **실패가 침묵으로 끝나는 구조**였다. 두 가지를 고쳤다.
+
+1. **오류가 화면에 안 보였다.** `failSession()` 이 저장하는 `lastError` 를 렌더하는 코드가
+   어디에도 없어, 마이크 권한 거부·연결 실패가 드로어 상태점 색만 바꾸고 끝났다. 사용자에게는
+   "시작을 눌러도 아무 일도 안 일어남" 으로 보인다. 이제 toast 로 내보내고, `getUserMedia` 의
+   DOMException 을 원인별 한국어 안내로 바꾼다(권한 거부 → 주소창 자물쇠, 장치 없음 →
+   Windows 소리 설정, 점유 → 다른 프로그램 확인).
+2. **소리가 안 들어오는 것도 안 보였다.** 녹음 중인데 8초가 지나도록 표시할 전사가 한 줄도
+   없으면 상태 라벨을 '입력 음성 없음' 으로 바꾼다.
+   ⚠️ 서버의 `status: "no_audio_detected"` 는 이 판정에 **쓸 수 없다** — 무음이 이어지면 서버가
+   침묵 세그먼트(`speaker:-2, text:""`)를 만들어 `lines` 가 비지 않으므로, 그 status 는 세션 첫
+   스냅샷(seq=1)에만 잠깐 나오고 이후로는 계속 `active_transcription` 이다(실측 확인).
+
+**검증 방식의 교훈**: 기존 E2E 는 Chromium 가짜 마이크(`--use-file-for-fake-audio-capture`)로만
+돌아 실장치 `getUserMedia` 경로(권한 프롬프트·사이트별로 저장된 마이크 선택·앱별 출력 장치)를
+한 번도 밟지 않았다. 그래서 사용자 환경에서만 나는 실패를 못 잡았다. 또한 headless Chromium 은
+실장치가 없어 권한 허용/거부와 무관하게 항상 `NotSupportedError` 를 내므로 `NotAllowedError`
+분기는 브라우저로 재현할 수 없다 — 단위 테스트(`useAudioRecorder.test.ts`)로 덮었다.
+
 ## 아직 남은 것
 
 - **백엔드 임시 우회 2개는 아직 제거하지 않았다.** 배포 PC가 여전히 구 dist로 돌고 있어,
@@ -93,9 +119,12 @@ React 빌드 결과물(dist)을 직접 서빙한다.
 cd frontend\app
 pnpm install
 pnpm typecheck   # 0 errors
-pnpm test        # 단위 25건 (델타 재구성·행 병합)
+pnpm test        # 단위 30건 (델타 재구성·행 병합·마이크 오류 매핑)
 pnpm build       # -> frontend\static\
 ```
+
+> `pnpm lint` 는 이 저장소로 반입되기 전부터 있던 5건(`react-refresh/only-export-components` 4건 +
+> `admin.tsx` 의 `set-state-in-effect` 1건)이 남아 있어 exit 1 로 끝난다. 신규 변경분은 0건이다.
 
 서버를 띄우고 `http://localhost:8900/` 접속(자동으로 `/wlkies/`로 리다이렉트).
 확인 항목: WS URL에 `mode=delta&language=`가 붙는지 / 시작→일시중단→**재개 시 자막이 이어지는지** /
