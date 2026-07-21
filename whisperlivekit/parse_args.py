@@ -232,12 +232,13 @@ def create_parser():
     parser.add_argument(
         "--ws-protocol",
         type=str,
-        default="delta",
+        default="full",
         choices=["delta", "full"],
         dest="ws_protocol",
-        help="/asr WebSocket 출력 프로토콜 기본값. 'delta'(기본) = 첫 메시지 snapshot 1회 + 이후 증분(diff)만 전송,"
-        " 'full' = 매 메시지 전체 상태 스냅샷(구 동작). 클라이언트가 ?mode=delta|full 쿼리파라미터로 오버라이드 가능"
-        " (배포 React가 아직 델타 미대응이면 ?mode=full로 pin).",
+        help="/asr WebSocket 출력 프로토콜 기본값. 'full'(기본) = 매 메시지 전체 상태 스냅샷(구 동작),"
+        " 'delta' = 첫 메시지 snapshot 1회 + 이후 증분(diff)만 전송. 클라이언트가 ?mode=delta|full 쿼리파라미터로"
+        " 오버라이드 가능. 델타 미대응 클라이언트가 무수정으로 동작하도록 기본값은 full이며, 델타 대응 클라이언트가"
+        " ?mode=delta로 opt-in한다.",
     )
     parser.add_argument(
         "--pcm-input",

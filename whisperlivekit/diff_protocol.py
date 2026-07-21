@@ -2,12 +2,16 @@
 
 Instead of sending the full FrontData state on every update, the DiffTracker
 computes incremental diffs — only sending new/changed lines and volatile fields.
-This is the **default** output protocol (``--ws-protocol delta``); clients that
-cannot accumulate state can opt out with ``?mode=full``.
+
+This is an **opt-in** protocol: the server default is ``full`` (every message is
+a complete snapshot) so that clients which cannot accumulate state keep working
+unmodified. A client that implements the reconstruction algorithm below opts in
+with ``?mode=delta``; a deployment may flip the server default with
+``--ws-protocol delta`` once every client supports it.
 
 Protocol
 --------
-``ws://host:port/asr`` (default, or explicit ``?mode=delta``)
+``ws://host:port/asr?mode=delta``
 
 First message from server:
     ``{"type": "snapshot", "seq": 1, ...full state...}``

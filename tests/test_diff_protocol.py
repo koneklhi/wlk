@@ -6,7 +6,8 @@
      되돌리면 매 스텝 서버의 현재 lines와 정확히 일치한다.
      특히 **최근 줄이 소급 수정되는 케이스**(reconcile/침묵게이트 재개방)를 포함한다 —
      new_lines를 append로 잘못 구현하면 이 테스트가 실패해야 한다.
-  B. `_resolve_ws_protocol` — 기본 delta, ?mode=full opt-out, diff 별칭, 잘못된 값 폴백.
+  B. `_resolve_ws_protocol` — 기본 full(델타 미대응 클라이언트 무수정 호환), ?mode=delta opt-in,
+     diff 별칭, 잘못된 값 폴백.
 """
 
 from typing import Any, Dict, List
@@ -253,24 +254,26 @@ def basic_server():
 @pytest.mark.parametrize(
     "requested,default,expected",
     [
-        (None, "delta", "delta"),        # 기본 = delta
-        (None, "full", "full"),          # --ws-protocol full 로 서버 기본 전환
-        ("full", "delta", "full"),       # ?mode=full opt-out
-        ("delta", "full", "delta"),      # 쿼리파라미터가 CLI 기본을 오버라이드
-        ("diff", "delta", "delta"),      # 구 별칭
-        ("DELTA", "delta", "delta"),     # 대소문자 무시
-        ("garbage", "delta", "delta"),   # 잘못된 값 → 기본값 폴백
-        ("garbage", "full", "full"),
+        (None, "full", "full"),          # 기본 = full (델타 미대응 클라이언트 무수정 호환)
+        (None, "delta", "delta"),        # --ws-protocol delta 로 서버 기본 전환
+        ("delta", "full", "delta"),      # ?mode=delta opt-in
+        ("full", "delta", "full"),       # 쿼리파라미터가 CLI 기본을 오버라이드
+        ("diff", "full", "delta"),       # 구 별칭
+        ("DELTA", "full", "delta"),      # 대소문자 무시
+        ("garbage", "full", "full"),     # 잘못된 값 → 기본값 폴백
+        ("garbage", "delta", "delta"),
     ],
 )
 def test_resolve_ws_protocol(basic_server, requested, default, expected):
     assert basic_server._resolve_ws_protocol(requested, default) == expected
 
 
-def test_server_default_config_is_delta(basic_server):
-    """서버 모듈이 인자 없이 기동되면 기본 프로토콜은 delta."""
-    assert basic_server.config.ws_protocol == "delta"
-    assert basic_server._resolve_ws_protocol(None, basic_server.config.ws_protocol) == "delta"
+def test_server_default_config_is_full(basic_server):
+    """서버 모듈이 인자 없이 기동되면 기본 프로토콜은 full — 델타 미대응 클라이언트가 무수정으로 동작해야 한다."""
+    assert basic_server.config.ws_protocol == "full"
+    assert basic_server._resolve_ws_protocol(None, basic_server.config.ws_protocol) == "full"
+    # 델타는 클라이언트가 명시적으로 opt-in할 때만 적용된다.
+    assert basic_server._resolve_ws_protocol("delta", basic_server.config.ws_protocol) == "delta"
 
 
 class _FakeWS:
@@ -333,16 +336,16 @@ def test_test_client_reconstruct_state_replaces_tail():
         assert state["lines"] == expected
 
 
-def test_cli_default_is_delta():
+def test_cli_default_is_full():
     from whisperlivekit.parse_args import create_parser
 
     args = create_parser().parse_args([])
-    assert args.ws_protocol == "delta"
-    assert create_parser().parse_args(["--ws-protocol", "full"]).ws_protocol == "full"
+    assert args.ws_protocol == "full"
+    assert create_parser().parse_args(["--ws-protocol", "delta"]).ws_protocol == "delta"
 
 
 def test_config_carries_ws_protocol():
     from whisperlivekit.config import WhisperLiveKitConfig
 
-    assert WhisperLiveKitConfig().ws_protocol == "delta"
-    assert WhisperLiveKitConfig(ws_protocol="full").ws_protocol == "full"
+    assert WhisperLiveKitConfig().ws_protocol == "full"
+    assert WhisperLiveKitConfig(ws_protocol="delta").ws_protocol == "delta"

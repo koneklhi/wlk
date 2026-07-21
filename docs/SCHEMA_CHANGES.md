@@ -12,15 +12,15 @@ React UI 연결 시 이 문서를 기준으로 수정 범위를 결정한다.
 | 항목 | 기존 (whisperlive) | 신규 (whisperlivekit) |
 |------|-------------------|----------------------|
 | 프로토콜 | SSE (`GET /api/recordings`, `text/event-stream`) | WebSocket (`ws://host:port/asr`) |
-| 전송 모델 | 이벤트 단위 — 세그먼트 하나가 바뀔 때 해당 세그먼트만 전송 | **델타(기본)** — 연결 직후 `snapshot` 1회 + 이후 `diff`(바뀐 꼬리만). **클라이언트는 상태를 누적해야 한다**(§1.1). 델타 미대응 클라이언트는 `?mode=full`로 구 동작(매 사이클 전체 `lines[]` 스냅샷)을 유지할 수 있다 |
+| 전송 모델 | 이벤트 단위 — 세그먼트 하나가 바뀔 때 해당 세그먼트만 전송 | **기본 = full**(매 사이클 전체 `lines[]` 스냅샷) — 누적 불필요. **`?mode=delta` opt-in** 시 연결 직후 `snapshot` 1회 + 이후 `diff`(바뀐 꼬리만)이며 **클라이언트가 상태를 누적해야 한다**(§1.1) |
 | 연결 개시/종료 | `GET /api/recordings/start`, `/stop` REST 호출 | WebSocket 연결 개시(= 녹음 시작), 빈 프레임 `ArrayBuffer(0)` 전송(= 녹음 종료) |
 | 번역 | 별도 `POST /api/translate` SSE | `lines[]` 내 각 세그먼트의 `translation` 필드에 인라인 포함 |
 
-### 1.1 델타 전송 (기본 프로토콜) — ⚠️ 계약 변경
+### 1.1 델타 전송 (`?mode=delta` opt-in)
 
-> **변경 이력**: 이전에는 매 메시지가 전체 상태 스냅샷이었고 "매 메시지를 transcript 통째 교체로 처리"가 권장이었다.
-> 세션이 길어질수록 WebSocket 페이로드와 전체 재렌더 비용이 무한히 커져 전사가 버벅이므로, **기본 전송을 델타로 전환**했다.
-> 기존 전량 전송은 `?mode=full` opt-out으로 남는다(배포 React가 델타 대응 전이면 여기에 pin).
+> **왜 있나**: full 모드는 매 메시지가 전체 상태 스냅샷이라 세션이 길어질수록 WebSocket 페이로드와 전체 재렌더
+> 비용이 누적 줄 수에 비례해 커진다. 델타는 매 메시지 1~2줄만 실어 이 증가를 없앤다(실측 4.7배 절감).
+> **기본값은 `full`이므로 델타 미대응 클라이언트는 무수정으로 그대로 동작한다** — 델타는 명시적 opt-in이다.
 
 - 첫 메시지: `{"type":"snapshot","seq":1, ...전체 상태(§2와 동일 필드)...}`
 - 이후 메시지: `{"type":"diff","seq":N,"n_lines":M,"status":...,"buffer_*":...,"remaining_time_*":...,`
@@ -48,7 +48,7 @@ function applyMessage(lines, msg) {
 - 렌더는 **증분**으로: `common` 이전 줄은 DOM을 건드리지 않고, 꼬리만 교체한다(내장 UI `reconcileTranscriptDom` 참조).
 - 재동기 방법은 **재연결뿐**이다(새 연결 = 새 `snapshot`). `n_lines` 불일치를 감지하면 재연결한다.
 - 줄 dedup·React key는 여전히 **`id` 단독**(§2 "라인 dedup·렌더 규칙"). 복합키 금지.
-- 서버 기본값은 `--ws-protocol {delta,full}`(기본 `delta`)로 바꿀 수 있고, 쿼리파라미터 `?mode=delta|full`이
+- 서버 기본값은 `--ws-protocol {delta,full}`(기본 `full`)로 바꿀 수 있고, 쿼리파라미터 `?mode=delta|full`이
   이를 오버라이드한다(`?mode=diff`는 `delta`의 하위호환 별칭). 실제 적용값은 `config` 메시지의 `protocol` 필드로 통지된다(§3).
 
 ---
@@ -97,8 +97,8 @@ function applyMessage(lines, msg) {
 2. **확정 세그먼트가 다시 미확정(진행중)으로 재개방된다** — `finalized`가 `true`→`false`로 돌아오고
    같은 `id`로 계속 자란다(예: 스퓨리어스 온점으로 조기 확정 → 온점 철회 후 문장 계속).
 
-**델타 프로토콜(기본)에서는 이 재조정이 곧 `new_lines` 꼬리 재전송으로 나타난다** — §1.1의 꼬리 교체를 그대로
-수행하면 ①②가 자동으로 맞춰진다(재조정된 줄이 같은 `id`로 갱신 내용을 실어 다시 온다). `?mode=full` opt-out에서는
+**델타 프로토콜(`?mode=delta`)에서는 이 재조정이 곧 `new_lines` 꼬리 재전송으로 나타난다** — §1.1의 꼬리 교체를
+그대로 수행하면 ①②가 자동으로 맞춰진다(재조정된 줄이 같은 `id`로 갱신 내용을 실어 다시 온다). full 모드(기본)에서는
 매 스냅샷 `lines[]`를 통째로 다시 그리면 동일한 결과가 된다.
 
 **클라이언트가 별도 누적 Map을 둔다면 — 키는 반드시 `id`:**

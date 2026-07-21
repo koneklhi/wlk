@@ -105,18 +105,18 @@ def _index_html_response():
 _ALLOWED_SESSION_LANGUAGES = {"auto", "ko", "en"}
 
 # /asr WebSocket 출력 프로토콜.
-#   delta — 첫 메시지 {"type":"snapshot"} 1회 + 이후 {"type":"diff"} 증분(기본값, --ws-protocol delta)
-#   full  — 매 메시지 전체 상태 스냅샷(구 동작; 델타 미대응 클라이언트용 opt-out, ?mode=full)
-# "diff"는 delta의 하위호환 별칭(기존 opt-in 클라이언트가 ?mode=diff로 붙던 경로).
+#   full  — 매 메시지 전체 상태 스냅샷(기본값, --ws-protocol full). 델타 미대응 클라이언트가 무수정으로 동작한다.
+#   delta — 첫 메시지 {"type":"snapshot"} 1회 + 이후 {"type":"diff"} 증분(opt-in, ?mode=delta)
+# "diff"는 delta의 하위호환 별칭.
 _PROTOCOL_ALIASES = {"delta": "delta", "diff": "delta", "full": "full"}
 
 
-def _resolve_ws_protocol(requested: Optional[str], default: str = "delta") -> str:
+def _resolve_ws_protocol(requested: Optional[str], default: str = "full") -> str:
     """쿼리파라미터 mode 값을 실제 프로토콜("delta"|"full")로 정규화한다.
 
     None(미지정)이면 서버 기본값(--ws-protocol)을 쓰고, 허용되지 않은 값은 경고 후 기본값으로 폴백한다.
     """
-    fallback = _PROTOCOL_ALIASES.get((default or "").strip().lower(), "delta")
+    fallback = _PROTOCOL_ALIASES.get((default or "").strip().lower(), "full")
     if requested is None:
         return fallback
     resolved = _PROTOCOL_ALIASES.get(requested.strip().lower())
@@ -226,7 +226,7 @@ async def websocket_endpoint(websocket: WebSocket):
             session_language = None
     protocol = _resolve_ws_protocol(
         websocket.query_params.get("mode", None),
-        getattr(config, "ws_protocol", "delta"),
+        getattr(config, "ws_protocol", "full"),
     )
 
     audio_processor = AudioProcessor(

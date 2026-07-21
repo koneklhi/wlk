@@ -12,7 +12,7 @@
 | 축 | 기존 whisperlive | 신규 whisperlivekit |
 |---|---|---|
 | 전송 프로토콜 | SSE (`GET`, `text/event-stream`) + REST start/stop | **WebSocket** `ws://host:port/asr` |
-| 전송 모델 | 이벤트 단위(세그먼트 1개 델타) | **델타**(기본) — `snapshot` 1회 + 이후 `diff`(바뀐 꼬리만). **클라이언트 누적 필수**(§4.2). 누적 구현 전이면 `?mode=full`로 구 동작(매 ~50ms `lines[]` 전량) pin 가능 |
+| 전송 모델 | 이벤트 단위(세그먼트 1개 델타) | **기본 = full**(매 ~50ms `lines[]` 전량 스냅샷) — 누적 불필요, 무수정 동작. **`?mode=delta` opt-in** 시 `snapshot` 1회 + 이후 `diff`(바뀐 꼬리만)로 전환되며 **클라이언트 누적 필수**(§4.2) |
 | 녹음 시작/종료 | `POST /api/recordings/start`·`/stop` | WS 연결=시작, **빈 프레임 `ArrayBuffer(0)`**=종료 |
 | 번역 | 별도 `POST /api/translate` SSE | `lines[].translation` **인라인**(동작) + `buffer_translation`(진행중 번역, 동작·§7) |
 | 화자분할 | 없음 | **신규** `lines[].speaker`(int) + `buffer_diarization` |
@@ -131,8 +131,8 @@ rows.map((line, i) => (
     > 참고: 내장 테스트 UI(설정 패널)에 소스 언어 드롭다운(auto/ko/en)이 추가돼 있어 `ko`/`en` 선택 시 WS URL에
     > `?language=`를 붙이고 auto면 생략한다(`buildWebSocketUrl()`). **배포 React의 언어 선택 UI는 프론트 담당 별도 소관** —
     > 필요 시 이 방식(드롭다운→쿼리파라미터)을 참고만 하면 된다.
-  - `?mode=delta|full` — 출력 프로토콜(§4.2). **생략 시 서버 기본값 `delta`**(= `snapshot` 1회 + 이후 `diff`).
-    누적 재구성을 아직 구현하지 않았다면 `?mode=full`로 pin해 구 전량 전송 스키마를 그대로 받을 수 있다
+  - `?mode=delta|full` — 출력 프로토콜(§4.2). **생략 시 서버 기본값 `full`**(= 매 메시지 전량 스냅샷, 누적 불필요).
+    누적 재구성을 구현했다면 `?mode=delta`로 opt-in해 증분 전송을 받는다
     (마이그레이션용 임시 경로 — 세션이 길어질수록 페이로드·재렌더 비용이 선형 증가). `?mode=diff`는 `delta`의
     하위호환 별칭. 서버 기본값 자체는 CLI `--ws-protocol {delta,full}`로 바꾼다.
 
@@ -175,8 +175,8 @@ React가 직접 구현**해야 한다(`onclose`/`onerror`에서 code 확인 후 
 |---|---|---|---|
 | `config` | 연결 직후 1회 | `{"type":"config","useAudioWorklet":bool,"protocol":"delta"\|"full","mode":(protocol과 동일·구 별칭),"language":"auto"\|"ko"\|"en"}` | 오디오 송신 방식 + **적용 프로토콜** + **세션 적용 언어** 통지 |
 | `ready_to_stop` | 처리 완료 | `{"type":"ready_to_stop"}` | 종료 신호 |
-| `snapshot`/`diff` | delta 모드(기본) | §4.2 | 상태 메시지(델타) |
-| (`type` 없음) | `?mode=full`일 때만 | §4.2 | 상태 스냅샷(구 전량 전송) |
+| `snapshot`/`diff` | `?mode=delta`일 때만 | §4.2 | 상태 메시지(델타) |
+| (`type` 없음) | full 모드(기본) | §4.2 | 상태 스냅샷(전량 전송) |
 
 > **`config.protocol`(신설)**: 이 세션에 실제 적용된 출력 프로토콜. `mode`는 같은 값을 싣는 구 클라이언트 호환
 > 별칭이다(과거엔 항상 `"full"`이었다). 클라이언트는 `protocol ?? mode ?? "full"`로 읽는다.
@@ -185,14 +185,16 @@ React가 직접 구현**해야 한다(`onclose`/`onerror`에서 code 확인 후 
 > 그 값, 미지정이면 서버 전역 `--lan`(기본 `auto`). 세션 언어가 의도대로 걸렸는지 확인용(필드 없는 구버전 서버 대비
 > 방어적으로 읽을 것). 내장 UI는 이 값을 콘솔 로그로만 확인한다.
 
-### 4.2 상태 메시지 — 델타(기본) / full(opt-out)
+### 4.2 상태 메시지 — full(기본) / 델타(`?mode=delta` opt-in)
 매 사이클(~50ms) 중 **직전과 다를 때만** 전송된다.
 
-#### ⚠️ 계약 변경 — 전송이 "전량 스냅샷"에서 "snapshot 1회 + 이후 delta"로 바뀌었다
+#### 기본은 기존 그대로 — 델타는 선택이다
 
-> 이전 인계본은 "매 메시지가 전체 상태 스냅샷이므로 통째 교체 렌더만 하면 된다"였다. 세션이 길어질수록
-> WebSocket 페이로드와 전체 재렌더 비용이 무한히 커져 전사가 버벅이므로 **기본 전송을 델타로 전환**했다.
-> **React는 이제 상태를 누적해야 한다.** 누적 구현 전이라면 `?mode=full`로 pin(§3.1).
+> **아무것도 안 하면 full 모드**로 동작한다: 매 메시지가 전체 상태 스냅샷이라 통째 교체 렌더만 하면 된다
+> (기존 인계본 내용 그대로). 단 세션이 길어질수록 페이로드와 전체 재렌더 비용이 누적 줄 수에 비례해 커진다
+> (실측: 109초 시점 이미 메시지당 ~5.5KB).
+> **`?mode=delta`로 opt-in하면** 매 메시지가 1~2줄로 평평해져 이 증가가 사라진다(총 전송량 4.7배 절감).
+> 대신 **React가 상태를 누적**해야 한다 — 아래 재구성 알고리즘이 전부다.
 
 - 첫 메시지 `{"type":"snapshot","seq":1, ...아래 전체 상태...}`
 - 이후 `{"type":"diff","seq":N,"n_lines":M,"status":…,"buffer_*":…,"remaining_time_*":…,`
@@ -228,8 +230,8 @@ function applyMessage(lines, msg) {
   렌더하면 앞부분이 자동 재사용된다(내장 UI는 `reconcileTranscriptDom`이 같은 일을 한다 — HTML이 같은 줄의
   DOM 노드는 아예 손대지 않는다).
 - **재동기 수단은 재연결뿐**(새 연결 = 새 `snapshot`). 서버에 재전송 요청 채널은 없다.
-- **`?mode=full` opt-out**: `type` 필드 없이 매 메시지가 아래 전체 상태를 담고 `lines[]`를 전량 재전송한다 —
-  받은 그대로 전체 교체 렌더만 하면 된다. 마이그레이션용 임시 경로.
+- **full 모드(기본)**: `type` 필드 없이 매 메시지가 아래 전체 상태를 담고 `lines[]`를 전량 재전송한다 —
+  받은 그대로 전체 교체 렌더만 하면 된다(누적 불필요).
 
 #### 전체 상태 페이로드 (델타의 `snapshot`, full의 매 메시지)
 
@@ -294,7 +296,7 @@ function applyMessage(lines, msg) {
 `finalized`가 `true`→`false`로 재개방될 수 있다(같은 `id` 유지).
 
 - **델타에서는 이 재조정이 `new_lines` 꼬리 재전송으로 온다**(§4.2): 꼬리 교체를 그대로 수행하면 ①②가 자동 해소된다
-  (재조정된 줄이 같은 `id`로 갱신 내용을 실어 다시 오기 때문). `?mode=full`이면 매 스냅샷 통째 교체 렌더로 동일 효과.
+  (재조정된 줄이 같은 `id`로 갱신 내용을 실어 다시 오기 때문). full 모드(기본)면 매 스냅샷 통째 교체 렌더로 동일 효과.
 - **누적/키는 `id` 단독** (§4.2 경고): `start|end|speaker` 복합키는 `end` 성장분이 새 항목으로 쌓여 **growing-prefix 중복**을 만든다.
   `id`로 upsert + 진행중(`finalized:false`) 줄을 같은 `id`의 확정판보다 우선 렌더.
 - **`buffer_*`는 마지막 진행중 줄에만** 이어붙인다 — 확정된 줄에 붙이면 진행중 텍스트가 확정 블록과 중복돼 보인다
@@ -448,11 +450,11 @@ WS `/asr`와 별개로, 사용자가 UI의 **저장 버튼을 눌렀을 때**만
 `{"status":"ok","backend":"whisper","ready":true}`. (`backend`는 서버 `--backend`에 따른 동적값, 기본 `whisper`.) React가 WS 연결 전 서버 기동 여부를
 폴링하는 용도로 쓸 수 있음(선택).
 
-### 9.3 전량 전송 opt-out `?mode=full`
-증분(델타)이 **기본**이다(§4.2 — 내장 UI도 델타로 동작한다). 누적 재구성을 아직 구현하지 못한 상태에서
-연동을 먼저 붙여야 한다면 `/asr?mode=full`로 연결해 구 전량 전송 스키마(`type` 없는 전체 스냅샷)를 그대로
-받을 수 있다. 세션이 길어질수록 페이로드·재렌더 비용이 선형 증가하므로 **마이그레이션용 임시 경로**다.
-서버 기본값 자체는 CLI `--ws-protocol {delta,full}`로 바꾼다.
+### 9.3 증분 전송 opt-in `?mode=delta`
+전량 전송(full)이 **기본**이므로 기존 연동은 손대지 않아도 그대로 동작한다. 장시간 세션의 페이로드·재렌더
+증가를 없애려면 `/asr?mode=delta`로 연결하고 §4.2의 누적 재구성을 구현한다(내장 UI가 참조 구현이며 실제로
+`?mode=delta`로 접속한다). 전환·롤백이 URL 파라미터 하나이므로 언제든 되돌릴 수 있다.
+서버 기본값 자체는 CLI `--ws-protocol {delta,full}`로 바꾼다 — 모든 클라이언트가 델타를 지원하면 `delta`로 올린다.
 
 ### 9.4 기존 ↔ 신규 필드 매핑 (마이그레이션 참고용)
 | 기존(whisperlive SSE) | 신규(whisperlivekit WS) | 비고 |

@@ -162,9 +162,9 @@ async def transcribe_audio(
         speed: Playback speed multiplier (1.0 = real-time, 0 = as fast as possible).
         timeout: Max seconds to wait for the server after audio finishes.
         on_response: Optional callback invoked with each response dict as it arrives.
-        mode: Output protocol pinned via ``?mode=`` — "full" (default here, full
-            snapshots) or "delta"/"diff" for incremental updates. Note the *server*
-            default is "delta"; this client pins the value explicitly either way.
+        mode: Output protocol pinned via ``?mode=`` — "full" (default here and on
+            the server, full snapshots) or "delta"/"diff" for incremental updates.
+            This client pins the value explicitly regardless of the server default.
 
     Returns:
         TranscriptionResult with collected responses and convenience accessors.
@@ -180,8 +180,8 @@ async def transcribe_audio(
 
     chunk_bytes = int(chunk_duration * SAMPLE_RATE * BYTES_PER_SAMPLE)
 
-    # Always pin the output protocol explicitly — the server default is now "delta",
-    # so omitting the parameter would silently switch this client to delta messages.
+    # Always pin the output protocol explicitly, regardless of the server's default,
+    # so this client's behavior doesn't silently change if the server default changes.
     sep = "&" if "?" in url else "?"
     connect_url = url if "mode=" in url else f"{url}{sep}mode={mode}"
 

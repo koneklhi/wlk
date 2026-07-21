@@ -269,9 +269,12 @@ function updateSaveButtonState() {
   saveTranscriptButton.disabled = buildTranscriptPayload().length === 0;
 }
 
-// 최종 WebSocket URL 조립: 언어 select 값을 쿼리파라미터로 병합한다.
+// 최종 WebSocket URL 조립: 언어 select 값과 출력 프로토콜을 쿼리파라미터로 병합한다.
 // - websocketUrl 전역(입력필드 표시값)은 오염시키지 않고 지역 최종 URL만 만든다.
 // - auto = language 파라미터 생략(delete), ko/en = language=<값> 설정(드롭다운이 이김).
+// - mode=delta를 명시적으로 붙인다. 서버 기본값은 full(델타 미대응 클라이언트 무수정 호환)이므로,
+//   델타를 구현한 이 UI가 opt-in해야 증분 전송을 받는다. 단 사용자가 입력필드에 mode를 직접
+//   적었다면 그 값을 존중한다(?mode=full 로 구 동작 비교·디버깅 가능).
 // - 사용자가 websocketInput으로 이미 쿼리스트링을 넣었을 수 있어 URL+URLSearchParams로 파싱·병합.
 function buildWebSocketUrl() {
   const langValue = languageSelect ? (languageSelect.value || "auto") : "auto";
@@ -284,6 +287,9 @@ function buildWebSocketUrl() {
       // auto: 규약상 파라미터를 완전히 제거(빈 값이 아니라 delete).
       url.searchParams.delete("language");
     }
+    if (!url.searchParams.has("mode")) {
+      url.searchParams.set("mode", "delta");
+    }
     return url.toString();
   } catch (e) {
     // 비정상/상대 URL 대비 문자열 폴백(정상 ws://·wss:// 에선 도달하지 않음).
@@ -291,6 +297,9 @@ function buildWebSocketUrl() {
     let base = websocketUrl;
     if ((langValue === "ko" || langValue === "en") && !/[?&]language=/.test(base)) {
       base += (base.includes("?") ? "&" : "?") + "language=" + langValue;
+    }
+    if (!/[?&]mode=/.test(base)) {
+      base += (base.includes("?") ? "&" : "?") + "mode=delta";
     }
     return base;
   }
