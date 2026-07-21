@@ -88,20 +88,30 @@ class TranscriptionResult:
 def reconstruct_state(msg: dict, lines: List[dict]) -> dict:
     """Reconstruct full state from a diff or snapshot message.
 
-    Mutates ``lines`` in-place (prune front, append new) and returns
-    a full-state dict compatible with TranscriptionResult.
+    Mutates ``lines`` in-place and returns a full-state dict compatible with
+    TranscriptionResult.
+
+    ``new_lines`` is the whole tail after the common prefix — NOT an append-only
+    tail — because the backend retroactively rewrites recently emitted lines.
+    So the tail is *replaced*, not appended (see whisperlivekit/diff_protocol.py).
     """
     if msg.get("type") == "snapshot":
         lines.clear()
         lines.extend(msg.get("lines", []))
         return msg
 
-    # Apply diff
+    # Apply diff: prune front → compute common prefix → replace tail
     n_pruned = msg.get("lines_pruned", 0)
     if n_pruned > 0:
         del lines[:n_pruned]
     new_lines = msg.get("new_lines", [])
-    lines.extend(new_lines)
+    common = max(0, msg.get("n_lines", 0) - len(new_lines))
+    lines[common:] = new_lines
+    if len(lines) != msg.get("n_lines", len(lines)):
+        logger.warning(
+            "Diff desync: reconstructed %d lines but server reports n_lines=%d (seq=%s)",
+            len(lines), msg.get("n_lines"), msg.get("seq"),
+        )
 
     return {
         "status": msg.get("status", ""),
@@ -152,7 +162,9 @@ async def transcribe_audio(
         speed: Playback speed multiplier (1.0 = real-time, 0 = as fast as possible).
         timeout: Max seconds to wait for the server after audio finishes.
         on_response: Optional callback invoked with each response dict as it arrives.
-        mode: Output mode — "full" (default) or "diff" for incremental updates.
+        mode: Output protocol pinned via ``?mode=`` — "full" (default here, full
+            snapshots) or "delta"/"diff" for incremental updates. Note the *server*
+            default is "delta"; this client pins the value explicitly either way.
 
     Returns:
         TranscriptionResult with collected responses and convenience accessors.
@@ -168,11 +180,10 @@ async def transcribe_audio(
 
     chunk_bytes = int(chunk_duration * SAMPLE_RATE * BYTES_PER_SAMPLE)
 
-    # Append mode query parameter if using diff mode
-    connect_url = url
-    if mode == "diff":
-        sep = "&" if "?" in url else "?"
-        connect_url = f"{url}{sep}mode=diff"
+    # Always pin the output protocol explicitly — the server default is now "delta",
+    # so omitting the parameter would silently switch this client to delta messages.
+    sep = "&" if "?" in url else "?"
+    connect_url = url if "mode=" in url else f"{url}{sep}mode={mode}"
 
     async with websockets.connect(connect_url) as ws:
         # Server sends config on connect
@@ -227,8 +238,10 @@ async def transcribe_audio(
                         logger.info("Server signaled ready_to_stop")
                         done_event.set()
                         return
-                    # In diff mode, reconstruct full state for uniform API
-                    if mode == "diff" and data.get("type") in ("snapshot", "diff"):
+                    # Delta protocol: reconstruct full state for a uniform API
+                    # (keyed on the message type, not the requested mode — the server
+                    #  may apply a different default than we asked for).
+                    if data.get("type") in ("snapshot", "diff"):
                         data = reconstruct_state(data, diff_lines)
                     result.responses.append(data)
                     if on_response:

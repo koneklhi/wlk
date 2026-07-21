@@ -104,6 +104,27 @@ def _index_html_response():
 # 세션 언어 오버라이드 허용값(§3.2 한/영 두 언어 + auto). 그 외 값은 무시하고 서버 기본값 사용.
 _ALLOWED_SESSION_LANGUAGES = {"auto", "ko", "en"}
 
+# /asr WebSocket 출력 프로토콜.
+#   delta — 첫 메시지 {"type":"snapshot"} 1회 + 이후 {"type":"diff"} 증분(기본값, --ws-protocol delta)
+#   full  — 매 메시지 전체 상태 스냅샷(구 동작; 델타 미대응 클라이언트용 opt-out, ?mode=full)
+# "diff"는 delta의 하위호환 별칭(기존 opt-in 클라이언트가 ?mode=diff로 붙던 경로).
+_PROTOCOL_ALIASES = {"delta": "delta", "diff": "delta", "full": "full"}
+
+
+def _resolve_ws_protocol(requested: Optional[str], default: str = "delta") -> str:
+    """쿼리파라미터 mode 값을 실제 프로토콜("delta"|"full")로 정규화한다.
+
+    None(미지정)이면 서버 기본값(--ws-protocol)을 쓰고, 허용되지 않은 값은 경고 후 기본값으로 폴백한다.
+    """
+    fallback = _PROTOCOL_ALIASES.get((default or "").strip().lower(), "delta")
+    if requested is None:
+        return fallback
+    resolved = _PROTOCOL_ALIASES.get(requested.strip().lower())
+    if resolved is None:
+        logger.warning("[WSProtocol] 허용되지 않은 mode=%r — 서버 기본값(%s) 사용", requested, fallback)
+        return fallback
+    return resolved
+
 
 class CorrectionUpdate(BaseModel):
     wrong_word: str
@@ -203,7 +224,10 @@ async def websocket_endpoint(websocket: WebSocket):
                 session_language,
             )
             session_language = None
-    mode = websocket.query_params.get("mode", "full")
+    protocol = _resolve_ws_protocol(
+        websocket.query_params.get("mode", None),
+        getattr(config, "ws_protocol", "delta"),
+    )
 
     audio_processor = AudioProcessor(
         transcription_engine=transcription_engine,
@@ -215,16 +239,18 @@ async def websocket_endpoint(websocket: WebSocket):
         f" language={session_language}" if session_language else "",
     )
     diff_tracker = None
-    if mode == "diff":
+    if protocol == "delta":
         from whisperlivekit.diff_protocol import DiffTracker
         diff_tracker = DiffTracker()
-        logger.info("Client requested diff mode")
+    logger.info("WebSocket output protocol: %s", protocol)
 
     try:
         await websocket.send_json({
             "type": "config",
             "useAudioWorklet": bool(config.pcm_input),
-            "mode": mode,
+            # protocol = 실제 적용된 출력 프로토콜("delta"|"full"). mode는 구 클라이언트 호환 별칭(동일 값).
+            "protocol": protocol,
+            "mode": protocol,
             "language": session_language if session_language is not None else getattr(config, "lan", "auto"),
         })
     except Exception as e:

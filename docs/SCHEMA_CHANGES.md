@@ -12,9 +12,44 @@ React UI 연결 시 이 문서를 기준으로 수정 범위를 결정한다.
 | 항목 | 기존 (whisperlive) | 신규 (whisperlivekit) |
 |------|-------------------|----------------------|
 | 프로토콜 | SSE (`GET /api/recordings`, `text/event-stream`) | WebSocket (`ws://host:port/asr`) |
-| 전송 모델 | 이벤트 단위 — 세그먼트 하나가 바뀔 때 해당 세그먼트만 전송 | 전체 상태 스냅샷 — 매 사이클(~50ms) 전체 `lines[]` 전송. React는 매 메시지를 전체 transcript의 완전 교체로 처리해야 함 |
+| 전송 모델 | 이벤트 단위 — 세그먼트 하나가 바뀔 때 해당 세그먼트만 전송 | **델타(기본)** — 연결 직후 `snapshot` 1회 + 이후 `diff`(바뀐 꼬리만). **클라이언트는 상태를 누적해야 한다**(§1.1). 델타 미대응 클라이언트는 `?mode=full`로 구 동작(매 사이클 전체 `lines[]` 스냅샷)을 유지할 수 있다 |
 | 연결 개시/종료 | `GET /api/recordings/start`, `/stop` REST 호출 | WebSocket 연결 개시(= 녹음 시작), 빈 프레임 `ArrayBuffer(0)` 전송(= 녹음 종료) |
 | 번역 | 별도 `POST /api/translate` SSE | `lines[]` 내 각 세그먼트의 `translation` 필드에 인라인 포함 |
+
+### 1.1 델타 전송 (기본 프로토콜) — ⚠️ 계약 변경
+
+> **변경 이력**: 이전에는 매 메시지가 전체 상태 스냅샷이었고 "매 메시지를 transcript 통째 교체로 처리"가 권장이었다.
+> 세션이 길어질수록 WebSocket 페이로드와 전체 재렌더 비용이 무한히 커져 전사가 버벅이므로, **기본 전송을 델타로 전환**했다.
+> 기존 전량 전송은 `?mode=full` opt-out으로 남는다(배포 React가 델타 대응 전이면 여기에 pin).
+
+- 첫 메시지: `{"type":"snapshot","seq":1, ...전체 상태(§2와 동일 필드)...}`
+- 이후 메시지: `{"type":"diff","seq":N,"n_lines":M,"status":...,"buffer_*":...,"remaining_time_*":...,`
+  `(선택)"lines_pruned":K,(선택)"new_lines":[<Segment>,...],(선택)"error":...}`
+
+**`new_lines`는 append 대상이 아니다.** `new_lines`는 직전에 보낸 상태와의 **공통 prefix 이후 꼬리 전체**다.
+백엔드는 최근 줄을 **소급 수정**할 수 있고(경계 재조정·침묵 게이트 재개방, 대략 8초 이내), 그러면 이미 보낸 줄이
+갱신된 내용으로 `new_lines`에 다시 실린다. append 하면 같은 줄이 중복된다 — **꼬리 교체**가 정답이다.
+
+```js
+// 클라이언트 재구성 (내장 UI live_transcription.js: reconstructLines 참조 구현)
+function applyMessage(lines, msg) {
+  if (msg.type === "snapshot") return msg.lines.slice();          // 전체 교체
+  if (msg.lines_pruned) lines.splice(0, msg.lines_pruned);        // ① 앞부분 prune
+  const newLines = msg.new_lines || [];
+  const common = msg.n_lines - newLines.length;                   // ② 공통 prefix 길이
+  lines = lines.slice(0, common).concat(newLines);                // ③ 꼬리 교체(append 아님)
+  if (lines.length !== msg.n_lines) console.warn("desync — 재연결 필요"); // ⑤ 검증
+  return lines;
+}
+// ④ status / buffer_transcription / buffer_diarization / buffer_translation /
+//    remaining_time_transcription / remaining_time_diarization / error 는 매 메시지 값으로 그대로 교체.
+```
+
+- 렌더는 **증분**으로: `common` 이전 줄은 DOM을 건드리지 않고, 꼬리만 교체한다(내장 UI `reconcileTranscriptDom` 참조).
+- 재동기 방법은 **재연결뿐**이다(새 연결 = 새 `snapshot`). `n_lines` 불일치를 감지하면 재연결한다.
+- 줄 dedup·React key는 여전히 **`id` 단독**(§2 "라인 dedup·렌더 규칙"). 복합키 금지.
+- 서버 기본값은 `--ws-protocol {delta,full}`(기본 `delta`)로 바꿀 수 있고, 쿼리파라미터 `?mode=delta|full`이
+  이를 오버라이드한다(`?mode=diff`는 `delta`의 하위호환 별칭). 실제 적용값은 `config` 메시지의 `protocol` 필드로 통지된다(§3).
 
 ---
 
@@ -22,7 +57,8 @@ React UI 연결 시 이 문서를 기준으로 수정 범위를 결정한다.
 
 기존 SSE 이벤트 페이로드: `data: {"content": str, "language": str, "status": str}`
 
-신규 WebSocket 메시지 전체 구조:
+신규 WebSocket **상태 페이로드** 구조(델타 모드의 `snapshot`, full 모드의 매 메시지가 이 모양이다.
+`diff` 메시지는 여기서 `lines` 대신 `n_lines`+`new_lines`만 싣는다 — §1.1):
 ```json
 {
   "status": "active_transcription" | "no_audio_detected" | "error",
@@ -61,10 +97,11 @@ React UI 연결 시 이 문서를 기준으로 수정 범위를 결정한다.
 2. **확정 세그먼트가 다시 미확정(진행중)으로 재개방된다** — `finalized`가 `true`→`false`로 돌아오고
    같은 `id`로 계속 자란다(예: 스퓨리어스 온점으로 조기 확정 → 온점 철회 후 문장 계속).
 
-**권장 = 전체 교체 렌더**: `lines[]`는 세션 전체 히스토리를 무제한 유지·전량 재전송(§1 표·§6)하므로, 매 스냅샷
-`lines[]`를 통째로 다시 그리기만 하면 ①②가 자동으로 맞춰진다 — 확정 줄을 직접 누적할 필요가 없다.
+**델타 프로토콜(기본)에서는 이 재조정이 곧 `new_lines` 꼬리 재전송으로 나타난다** — §1.1의 꼬리 교체를 그대로
+수행하면 ①②가 자동으로 맞춰진다(재조정된 줄이 같은 `id`로 갱신 내용을 실어 다시 온다). `?mode=full` opt-out에서는
+매 스냅샷 `lines[]`를 통째로 다시 그리면 동일한 결과가 된다.
 
-**클라이언트 누적을 굳이 한다면(선택) — 키는 반드시 `id`:**
+**클라이언트가 별도 누적 Map을 둔다면 — 키는 반드시 `id`:**
 - ❌ **`start`+`end`+`speaker` 복합키 금지** — `end`가 자라면 매번 "새 항목"으로 취급돼 같은 문장의 절단판들이
   화면에 누적(growing-prefix 중복 표시)된다. *(과거 이 문서·API_SPEC이 복합키를 권장했으나 이 버그의 직접 원인이라 폐기)*
 - ❌ **`start` 단독 키도 부적합** — `start`/`end`는 1초 해상도 벽시계 문자열이라 같은 초에 시작한 서로 다른
@@ -73,8 +110,8 @@ React UI 연결 시 이 문서를 기준으로 수정 범위를 결정한다.
   (같은 `id`의 이전 확정판보다 `finalized:false` 줄을 우선 렌더 → 재개방 시 stale 확정판 가림).
   `status:"no_audio_detected"`(빈 `lines[]`)에서 누적을 비우지 말 것.
 
-> 내장 테스트 UI(`whisperlivekit/web/live_transcription.js`)가 `id` 누적 방식의 참조 구현이다. 배포 React는 전체 교체
-> 렌더만 해도 충분하며, React key는 `id`를 쓰면 `end` 성장 시 불필요한 remount를 막는다.
+> 내장 테스트 UI(`whisperlivekit/web/live_transcription.js`)가 델타 재구성(`reconstructLines`) + `id` 누적 +
+> 증분 렌더(`reconcileTranscriptDom`)의 참조 구현이다. React key는 `id`를 쓰면 `end` 성장 시 불필요한 remount를 막는다.
 
 ### 비확정 텍스트 처리
 기존: 동일 세그먼트를 `status:"process"`로 반복 전송 → React가 갱신 판단
@@ -91,10 +128,12 @@ React는 `buffer_transcription`을 마지막 줄에 `"진행중"` 스타일로 �
 
 서버가 연결 직후 1회 전송:
 ```json
-{"type": "config", "useAudioWorklet": bool, "mode": "full", "language": "auto"}
+{"type": "config", "useAudioWorklet": bool, "protocol": "delta", "mode": "delta", "language": "auto"}
 ```
 - `useAudioWorklet: true` → PCM s16le AudioWorklet으로 오디오 송신
 - `useAudioWorklet: false` → WebM MediaRecorder로 송신
+- `protocol`(str) — **신설**: 이 세션에 실제 적용된 출력 프로토콜(`"delta"`|`"full"`, §1.1). `mode`는 같은 값을 싣는
+  구 클라이언트 호환 별칭이다. 클라이언트는 `protocol ?? mode`를 읽어 누적 여부를 결정하면 된다.
 - `language`(str) — **신설(2026-07-17, 응답 config 메시지에 필드 추가. 요청 스키마가 아니라 서버→클라이언트
   응답 필드. 하위호환 — 기존 필드 불변, 추가만)**: 그 세션에 실제 적용된 소스 언어(`auto`/`ko`/`en`). 세션이
   `?language=` 쿼리파라미터로 언어를 지정했으면 그 값, 미지정이면 서버 전역 `--lan`(`config.lan`, 기본 `auto`).

@@ -230,6 +230,16 @@ def create_parser():
         help="종료 시 전사 .txt를 저장할 서버 로컬 폴더 (기본값: ./transcripts). 없으면 자동 생성.",
     )
     parser.add_argument(
+        "--ws-protocol",
+        type=str,
+        default="delta",
+        choices=["delta", "full"],
+        dest="ws_protocol",
+        help="/asr WebSocket 출력 프로토콜 기본값. 'delta'(기본) = 첫 메시지 snapshot 1회 + 이후 증분(diff)만 전송,"
+        " 'full' = 매 메시지 전체 상태 스냅샷(구 동작). 클라이언트가 ?mode=delta|full 쿼리파라미터로 오버라이드 가능"
+        " (배포 React가 아직 델타 미대응이면 ?mode=full로 pin).",
+    )
+    parser.add_argument(
         "--pcm-input",
         action="store_true",
         default=False,

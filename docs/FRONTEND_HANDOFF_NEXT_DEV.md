@@ -10,6 +10,14 @@ React 빌드 결과물(dist)을 직접 서빙한다. 이전 개발자가 만든 
 - 전사 WebSocket은 `/asr`. **연결 하나가 세션 하나다.** 빈 프레임(0바이트)을 보내면 그 세션은 끝나고
   `ready_to_stop`이 오며, 같은 연결로는 다시 전사할 수 없다. 다시 녹음하려면 새로 연결해야 한다.
 - `/asr?language=ko|en|auto`로 세션 언어를 고정할 수 있다.
+- **전사 메시지가 델타로 바뀌었다(중요).** 예전엔 매 메시지가 전사 전체(`lines[]`)라 통째로 다시 그리면 됐는데,
+  이제 첫 메시지만 `{"type":"snapshot"}` 전체이고 이후는 `{"type":"diff"}`로 **바뀐 뒷부분만** 온다. 프론트가
+  누적해야 한다 — `diff`를 받으면 ① `lines_pruned`만큼 앞에서 지우고 ② `common = n_lines - new_lines.length`를
+  구해 ③ `lines.slice(0, common).concat(new_lines)`로 **뒷부분을 갈아끼운다**(뒤에 붙이면 안 된다 — 백엔드가
+  최근 줄을 나중에 고쳐 다시 보내기 때문에 중복된다) ④ `buffer_*`·`status`는 매번 그대로 교체 ⑤ 줄 수가
+  `n_lines`와 다르면 재연결. 계약 상세는 `docs/API_SPEC.md` §2.4.2.
+  당장 대응이 어려우면 `/asr?mode=full`로 연결하면 예전 방식(전체 전송) 그대로 받는다 — 다만 세션이 길어질수록
+  느려지므로 임시책이다. 서버가 연결 직후 보내는 `config` 메시지의 `protocol` 필드로 현재 모드를 확인할 수 있다.
 - REST: `/health`, 단어대치 `/api/corrections`(GET·POST, 삭제는 `DELETE /api/corrections/{단어}`),
   번역사전 `/api/prompts` · `/api/prompts/add-item` · `/api/prompts/delete-item`.
 - 오디오는 MediaRecorder WebM Blob을 그대로 WS로 보낸다.

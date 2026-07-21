@@ -31,6 +31,9 @@ class WhisperLiveKitConfig:
     pcm_input: bool = False
     disable_punctuation_split: bool = False
     transcript_save_dir: str = "transcripts"
+    # WebSocket 출력 프로토콜 기본값. "delta" = snapshot 1회 + 이후 증분(diff), "full" = 매 메시지 전체 스냅샷.
+    # 쿼리파라미터 ?mode=delta|full 이 이 기본값을 오버라이드한다.
+    ws_protocol: str = "delta"
     frontend_dir: str = "frontend/static"
     frontend_base: str = "auto"
     diarization_backend: str = "sortformer"

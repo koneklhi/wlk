@@ -25,9 +25,17 @@ let waitingForStop = false;
 let lastReceivedData = null;
 let lastSignature = null;
 // 확정(finalized)된 줄 누적 기록. key=line.id(안정 세그먼트 식별자=세션상대 시작초, 문자열화), value=원본 line 객체.
-// 서버는 lines[]를 세션 전체 무제한 유지·재전송하므로(과거 5분 슬라이딩 윈도우 → 무제한, master 606ecac),
-// 이 누적은 이제 필수가 아니라 중복 안전장치다(전체 교체 렌더만으로도 화면 유지됨).
+// 서버는 lines[]를 세션 전체 무제한 유지하고(과거 5분 슬라이딩 윈도우 → 무제한, master 606ecac),
+// 클라이언트는 델타를 누적해 serverLines 미러로 그 전체를 들고 있으므로,
+// 이 누적은 필수가 아니라 중복 안전장치다(pause/resume 격리·저장 payload 조립에도 쓰인다).
 let finalizedHistory = new Map();
+// 서버-권위 lines[] 미러. 델타 프로토콜(기본)에서 snapshot/diff를 적용해 재구성한 결과이며,
+// full 모드(?mode=full)에서는 사용하지 않는다(메시지가 이미 전체 스냅샷).
+let serverLines = [];
+let serverProtocol = null;     // "delta" | "full" — config 메시지가 알려주는 실제 적용 프로토콜
+// 증분 렌더 상태: 화면에 그려진 줄과 1:1. [{html, nodes:[Node,...]}]
+// html이 그대로면 그 줄의 DOM은 건드리지 않는다(앞부분 재렌더 비용 제거의 핵심).
+let renderedLines = [];
 let isPaused = false;          // teardown 됐지만 기록 유지, "시작"으로 재개 대기 중
 let committedLines = [];       // 이전 pause 사이클들의 확정 줄을 순서대로 "얼린" append-only 배열. id 충돌에서 격리하는 핵심 장치.
 let stopIntent = null;         // 'pause' | 'fullstop' | null — 현재 진행 중인 teardown/EOS가 끝나면 무엇을 할지
@@ -291,6 +299,8 @@ function buildWebSocketUrl() {
 function setupWebSocket() {
   return new Promise((resolve, reject) => {
     const finalWebSocketUrl = buildWebSocketUrl();
+    // 새 연결에는 서버가 새 DiffTracker를 붙여 snapshot(seq=1)부터 다시 보내므로 서버 미러를 비운다.
+    serverLines = [];
     console.log("Connecting to WebSocket:", finalWebSocketUrl);
     try {
       websocket = new WebSocket(finalWebSocketUrl);
@@ -348,18 +358,15 @@ function setupWebSocket() {
         statusText.textContent = serverUseAudioWorklet
           ? "Connected. Using AudioWorklet (PCM)."
           : "Connected. Using MediaRecorder (WebM).";
+        // 실제 적용된 WebSocket 출력 프로토콜(기본 delta = snapshot 1회 + 이후 diff).
+        // 구 서버는 protocol 없이 mode만 보내므로 폴백, 둘 다 없으면 full로 간주(하위호환).
+        serverProtocol = data.protocol || data.mode || "full";
+        console.log(`Server WebSocket protocol: ${serverProtocol}`);
         // 백엔드가 config에 language 필드를 실으면 실제 적용된 소스 언어를 로그로 확인(하위호환: 없으면 무시).
         if (data.language !== undefined) {
           console.log(`Server applied source language: ${data.language}`);
         }
         if (configReadyResolve) configReadyResolve();
-        return;
-      }
-
-      // Ignore diff/snapshot messages — the default frontend uses full-state mode.
-      // These are only sent when a client explicitly opts in via ?mode=diff.
-      if (data.type === "diff" || data.type === "snapshot") {
-        console.warn("Received diff-protocol message but frontend is in full mode; ignoring.", data.type);
         return;
       }
 
@@ -405,7 +412,13 @@ function setupWebSocket() {
         return;
       }
 
-      lastReceivedData = data;
+      // 델타 프로토콜(기본): snapshot 1회 + 이후 diff. 서버-권위 미러(serverLines)에 적용해
+      // full 스냅샷과 동일한 모양의 상태 객체로 정규화한 뒤, 아래 렌더 경로를 그대로 태운다.
+      // full 모드(?mode=full)의 기존 스키마(type 없음) 메시지는 그대로 통과한다(하위호환).
+      const state =
+        data.type === "snapshot" || data.type === "diff" ? applyServerDelta(data) : data;
+
+      lastReceivedData = state;
 
       const {
         lines = [],
@@ -415,7 +428,7 @@ function setupWebSocket() {
         remaining_time_transcription = 0,
         remaining_time_diarization = 0,
         status = "active_transcription",
-      } = data;
+      } = state;
 
       renderLinesWithBuffer(
         lines,
@@ -431,6 +444,86 @@ function setupWebSocket() {
   });
 }
 
+// ── 델타 프로토콜 재구성 (순수 로직) ────────────────────────────────────────
+// 서버는 매 메시지 전체 lines[]를 보내지 않고 snapshot 1회 + 이후 diff만 보낸다(기본 프로토콜).
+// diff의 new_lines는 "append 대상"이 아니라 **공통 prefix 이후의 꼬리 전체**다 — 백엔드가
+// 최근 줄을 소급 수정(reconcile/침묵게이트 재개방, ~8초 내)하면 그 줄부터 다시 실린다.
+// 따라서 append가 아니라 **꼬리 교체**로 재구성해야 중복이 생기지 않는다.
+//   prune → common = n_lines - new_lines.length → lines.slice(0, common).concat(new_lines) → n_lines 검증
+// >>> DELTA_RECONSTRUCTION_BEGIN (아래 함수는 DOM/전역에 의존하지 않는 순수 함수 — 단위 검증 대상)
+function reconstructLines(prevLines, msg) {
+  if (msg.type === "snapshot") {
+    return { lines: Array.isArray(msg.lines) ? msg.lines.slice() : [], desync: false };
+  }
+  let lines = prevLines.slice();
+  if (msg.lines_pruned) {
+    lines.splice(0, msg.lines_pruned);
+  }
+  const newLines = msg.new_lines || [];
+  const common = Math.max(0, (msg.n_lines || 0) - newLines.length);
+  lines = lines.slice(0, common).concat(newLines);
+  return { lines, desync: lines.length !== (msg.n_lines || 0) };
+}
+// <<< DELTA_RECONSTRUCTION_END
+
+// snapshot/diff 메시지를 serverLines에 적용하고, full 스냅샷과 동일한 모양의 상태 객체로 정규화한다.
+function applyServerDelta(msg) {
+  const { lines, desync } = reconstructLines(serverLines, msg);
+  serverLines = lines;
+  if (desync) {
+    console.warn(
+      `[delta] 동기화 불일치: 재구성 ${lines.length}줄 != 서버 n_lines ${msg.n_lines} (seq=${msg.seq}). 재연결이 필요합니다.`
+    );
+    statusText.textContent = "전사 스트림 동기화 오류 — 재연결이 필요할 수 있습니다.";
+  }
+  return {
+    status: msg.status,
+    error: msg.error,
+    lines: serverLines,
+    buffer_transcription: msg.buffer_transcription || "",
+    buffer_diarization: msg.buffer_diarization || "",
+    buffer_translation: msg.buffer_translation || "",
+    remaining_time_transcription: msg.remaining_time_transcription || 0,
+    remaining_time_diarization: msg.remaining_time_diarization || 0,
+  };
+}
+
+// ── 증분 렌더 ────────────────────────────────────────────────────────────────
+// 화면을 통째로(innerHTML) 갈아끼우지 않고, 줄 단위 HTML이 바뀐 지점부터만 DOM을 교체한다.
+// 줄 하나가 만드는 노드는 1개가 아닐 수 있으므로(<p>…<div class=textcontent>…</div></p>는
+// HTML 파서가 <p>/<div>/<p>로 쪼갠다) 줄마다 노드 "묶음"을 들고 다닌다.
+function clearTranscriptDom() {
+  linesTranscriptDiv.innerHTML = "";
+  renderedLines = [];
+  lastSignature = "";
+}
+
+function reconcileTranscriptDom(htmls) {
+  // 앞에서부터 HTML이 동일한 구간은 건너뛴다 — 이 구간의 DOM 노드는 전혀 건드리지 않는다.
+  let common = 0;
+  while (common < htmls.length && common < renderedLines.length && renderedLines[common].html === htmls[common]) {
+    common++;
+  }
+  // 공통 구간 이후(=바뀐 꼬리)만 제거하고 다시 만든다.
+  for (let i = renderedLines.length - 1; i >= common; i--) {
+    for (const node of renderedLines[i].nodes) {
+      if (node.parentNode) node.parentNode.removeChild(node);
+    }
+  }
+  renderedLines.length = common;
+  if (common === htmls.length) return;
+
+  const fragment = document.createDocumentFragment();
+  for (let i = common; i < htmls.length; i++) {
+    const tpl = document.createElement("template");
+    tpl.innerHTML = htmls[i];
+    const nodes = Array.from(tpl.content.childNodes);
+    renderedLines.push({ html: htmls[i], nodes });
+    for (const node of nodes) fragment.appendChild(node);
+  }
+  linesTranscriptDiv.appendChild(fragment);
+}
+
 function renderLinesWithBuffer(
   lines,
   buffer_diarization,
@@ -442,8 +535,12 @@ function renderLinesWithBuffer(
   current_status = "active_transcription"
 ) {
   if (current_status === "no_audio_detected") {
-    linesTranscriptDiv.innerHTML =
-      "<p style='text-align: center; color: var(--muted); margin-top: 20px;'><em>No audio detected...</em></p>";
+    // 안내 문구로 통째 교체. 증분 렌더 상태를 비워, 이후 정상 스냅샷이 오면 전부 다시 그리게 한다
+    // (lastSignature도 무효화 — 안 그러면 직전과 같은 lines가 오면 조기 return되어 안내 문구가 남는다).
+    clearTranscriptDom();
+    reconcileTranscriptDom([
+      "<p style='text-align: center; color: var(--muted); margin-top: 20px;'><em>No audio detected...</em></p>",
+    ]);
     return;
   }
 
@@ -502,7 +599,9 @@ function renderLinesWithBuffer(
     ? [{ speaker: 1, text: "" }]
     : mergedLines;
 
-  const linesHtml = effectiveLines
+  // 줄 하나의 마크업 생성 로직(클래스·표시 규칙)은 그대로 유지한다 — 결과 HTML 문자열 배열을 만들고,
+  // 이 배열을 직전 렌더와 비교해 바뀐 꼬리만 DOM에 반영한다(reconcileTranscriptDom).
+  const lineHtmls = effectiveLines
     .map((item, idx) => {
       let timeInfo = "";
       if (item.start !== undefined && item.end !== undefined) {
@@ -585,10 +684,9 @@ function renderLinesWithBuffer(
       return currentLineText.trim().length > 0 || speakerLabel.length > 0
         ? `<p>${speakerLabel}<br/><div class='textcontent' data-trigger='${item.finalize_trigger || ""}'>${currentLineText}</div></p>`
         : `<p>${speakerLabel}<br/></p>`;
-    })
-    .join("");
+    });
 
-  linesTranscriptDiv.innerHTML = linesHtml;
+  reconcileTranscriptDom(lineHtmls);
   const transcriptContainer = document.querySelector('.transcript-container');
   if (transcriptContainer) {
     transcriptContainer.scrollTo({ top: transcriptContainer.scrollHeight, behavior: "smooth" });
@@ -656,7 +754,7 @@ async function startRecording(resume = false) {
   } else {
     // fresh 시작: 완전 초기화
     committedLines = [];
-    linesTranscriptDiv.innerHTML = "";
+    clearTranscriptDom();
     lastReceivedData = null;
   }
   finalizedHistory.clear();
@@ -892,9 +990,9 @@ async function fullStop() {
 
   finalizedHistory.clear();
   committedLines = [];
-  linesTranscriptDiv.innerHTML = "";
+  serverLines = [];
+  clearTranscriptDom();
   lastReceivedData = null;
-  lastSignature = "";
   isPaused = false;
   isRecording = false;
   waitingForStop = false;

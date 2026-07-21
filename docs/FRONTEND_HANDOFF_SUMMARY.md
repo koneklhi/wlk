@@ -12,7 +12,7 @@
 | 축 | 기존 whisperlive | 신규 whisperlivekit |
 |---|---|---|
 | 전송 프로토콜 | SSE (`GET`, `text/event-stream`) + REST start/stop | **WebSocket** `ws://host:port/asr` |
-| 전송 모델 | 이벤트 단위(세그먼트 1개 델타) | **전체 상태 스냅샷**(매 ~50ms `lines[]` 전체) — 매 메시지를 transcript 통째 교체로 처리 |
+| 전송 모델 | 이벤트 단위(세그먼트 1개 델타) | **델타**(기본) — `snapshot` 1회 + 이후 `diff`(바뀐 꼬리만). **클라이언트 누적 필수**(§4.2). 누적 구현 전이면 `?mode=full`로 구 동작(매 ~50ms `lines[]` 전량) pin 가능 |
 | 녹음 시작/종료 | `POST /api/recordings/start`·`/stop` | WS 연결=시작, **빈 프레임 `ArrayBuffer(0)`**=종료 |
 | 번역 | 별도 `POST /api/translate` SSE | `lines[].translation` **인라인**(동작) + `buffer_translation`(진행중 번역, 동작·§7) |
 | 화자분할 | 없음 | **신규** `lines[].speaker`(int) + `buffer_diarization` |
@@ -20,7 +20,7 @@
 | 확정 표시 | `status: "process"/"complete"` | `finalized: bool`(별칭 `completed`) |
 
 React가 반드시 새로 구현할 것: ① WS 연결·종료 시퀀스 ② config 메시지 처리 후 오디오 송신
-③ 매 메시지 전체교체 렌더 ④ 화자(speaker) 배지/색 ⑤ 오디오 캡처(**기본 WebM MediaRecorder**,
+③ **델타 수신 누적 + `id` key 증분 렌더**(§4.2) ④ 화자(speaker) 배지/색 ⑤ 오디오 캡처(**기본 WebM MediaRecorder**,
 또는 `--pcm-input` 시 PCM AudioWorklet).
 
 ---
@@ -43,7 +43,7 @@ React가 반드시 새로 구현할 것: ① WS 연결·종료 시퀀스 ② con
 |---|---|---|---|
 | 전송 계층 | SSE(전사 `/api/recordings`) + 별도 SSE(번역 `/api/translate`) + REST(start/stop/status) | 단일 WebSocket `/asr`(수신·제어·오디오 통합) | `EventSource` 2개·`fetch(start/stop)` 제거 → **`WebSocket` 하나로 통합** |
 | 오디오 캡처 | **서버가 PyAudio로 로컬 마이크 캡처**(브라우저 미전송) | 브라우저 `getUserMedia`로 캡처해 WS로 전송 | **신규 개발.** 주 경로 = **WebM(`MediaRecorder`)**, 이게 기본·배포. PCM(AudioWorklet+16kHz 리샘플)은 `--pcm-input` 옵트인 시만(§6) |
-| 메시지 모델 | 커서 기반 **문장 1개 델타** | 매 ~50ms **전체 상태 스냅샷**(`lines[]` 전체) | 이벤트 append → **전체교체 렌더**(확정 줄 프론트 누적은 필수 아님 — 선택적 렌더 최적화, §4.2) |
+| 메시지 모델 | 커서 기반 **문장 1개 델타** | **`snapshot` 1회 + 이후 `diff`**(바뀐 꼬리만, 기본) | 이벤트 append → **서버-권위 `lines[]` 미러를 누적 재구성**(prune → 꼬리 교체 → `n_lines` 검증) 후 `id` key로 증분 렌더(§4.2) |
 | 필드명 | `content` / `language` / `status:"process"·"complete"` | `text` / `detected_language`(별칭 `lang`) / `finalized`(bool) | 파싱 필드명·타입 교체(§9.4 매핑표) |
 | 확정/미확정 표시 | 문장 단위 `status` 회색↔진하게 | 의미가 다름 → **§2.2 참조** | `lines[]`=진하게 / `buffer_*`=연하게 **2단계**. `finalized`는 색 아닌 리렌더 최적화(안정 key)용(§2.2) |
 | 번역 | 문장마다 **별도 `POST /api/translate` SSE**(토큰 스트리밍) | `lines[].translation` **인라인**(확정 후 통째로) + `buffer_translation`(진행중 번역) | `/api/translate` 호출·SSE 제거 → `lines[].translation` 읽기. **스트리밍 타이핑 UX는 사라짐.** `buffer_translation`도 동작(§7) |
@@ -84,7 +84,7 @@ rows.map((line, i) => (
 ```
 
 - **`finalized`는 여전히 필요하다 — 색이 아니라 "어떤 줄을 다시 안 그릴지" 판단에.** `finalized === true`인
-  줄은 리렌더 최적화(안정 key)에 활용할 수 있고, `false`인 줄만 매 스냅샷 새로 그리면 된다. 스타일링에서만
+  줄은 리렌더 최적화(안정 key)에 활용할 수 있고, `false`인 줄만 매 메시지 새로 그리면 된다. 스타일링에서만
   안 쓸 뿐이다.
 - **트레이드오프**: wl처럼 "문장 전체가 회색이었다가 확정 시 진해지는" 단계는 없다. 단어는 검증돼
   `lines[]`에 들어오는 즉시 진하게 굳는다(드물게 언어전환 경계에서 이미 진한 단어가 철회될 수
@@ -131,21 +131,24 @@ rows.map((line, i) => (
     > 참고: 내장 테스트 UI(설정 패널)에 소스 언어 드롭다운(auto/ko/en)이 추가돼 있어 `ko`/`en` 선택 시 WS URL에
     > `?language=`를 붙이고 auto면 생략한다(`buildWebSocketUrl()`). **배포 React의 언어 선택 UI는 프론트 담당 별도 소관** —
     > 필요 시 이 방식(드롭다운→쿼리파라미터)을 참고만 하면 된다.
-  - `?mode=diff` — 증분(diff) 프로토콜 옵트인(§9.3). 생략 시 `mode=full`(기본·권장).
+  - `?mode=delta|full` — 출력 프로토콜(§4.2). **생략 시 서버 기본값 `delta`**(= `snapshot` 1회 + 이후 `diff`).
+    누적 재구성을 아직 구현하지 않았다면 `?mode=full`로 pin해 구 전량 전송 스키마를 그대로 받을 수 있다
+    (마이그레이션용 임시 경로 — 세션이 길어질수록 페이로드·재렌더 비용이 선형 증가). `?mode=diff`는 `delta`의
+    하위호환 별칭. 서버 기본값 자체는 CLI `--ws-protocol {delta,full}`로 바꾼다.
 
 ### 3.2 시퀀스 (React 구현 순서)
 ```
 1) new WebSocket(".../asr")                       // 연결 = 녹음 시작
 2) onmessage: {"type":"config", useAudioWorklet}  // 1회 수신 → 오디오 송신 방식 결정 후 녹음 시작
 3) 오디오 청크를 바이너리(ArrayBuffer)로 계속 send
-4) onmessage: 상태 스냅샷(status/lines/buffer...) // 수신할 때마다 transcript 전체 교체 렌더
+4) onmessage: {"type":"snapshot"} 1회 → {"type":"diff"} 반복  // 누적 재구성 후 증분 렌더(§4.2)
 5) websocket.send(new ArrayBuffer(0))             // 사용자가 멈춤 = 녹음 종료
 6) onmessage: {"type":"ready_to_stop"}            // 서버 처리 완료 → 최종 렌더 후 websocket.close()
 ```
 
 - **연결 직후 서버가 config 메시지를 1회 전송**:
   ```json
-  {"type": "config", "useAudioWorklet": true, "mode": "full", "language": "auto"}
+  {"type": "config", "useAudioWorklet": true, "protocol": "delta", "mode": "delta", "language": "auto"}
   ```
   클라이언트는 이 config를 받은 **뒤에** 녹음을 시작해야 한다(송신 방식이 여기서 정해짐). `language`는 그 세션에
   실제 적용된 소스 언어(§4.1).
@@ -165,21 +168,70 @@ React가 직접 구현**해야 한다(`onclose`/`onerror`에서 code 확인 후 
 
 ## 4. 메시지 스키마 (서버 → 클라이언트)
 
-서버가 보내는 JSON은 **`type` 필드 유무**로 종류를 구분한다.
+서버가 보내는 JSON은 **`type` 필드**로 종류를 구분한다.
 
-### 4.1 제어 메시지 (`type` 있음)
+### 4.1 제어 메시지
 | type | 시점 | 페이로드 | 의미 |
 |---|---|---|---|
-| `config` | 연결 직후 1회 | `{"type":"config","useAudioWorklet":bool,"mode":"full"\|"diff","language":"auto"\|"ko"\|"en"}` | 오디오 송신 방식 + **세션 적용 언어** 통지 |
+| `config` | 연결 직후 1회 | `{"type":"config","useAudioWorklet":bool,"protocol":"delta"\|"full","mode":(protocol과 동일·구 별칭),"language":"auto"\|"ko"\|"en"}` | 오디오 송신 방식 + **적용 프로토콜** + **세션 적용 언어** 통지 |
 | `ready_to_stop` | 처리 완료 | `{"type":"ready_to_stop"}` | 종료 신호 |
-| `snapshot`/`diff` | `?mode=diff`일 때만 | §9.3 | 증분 프로토콜(full 모드엔 안 옴) |
+| `snapshot`/`diff` | delta 모드(기본) | §4.2 | 상태 메시지(델타) |
+| (`type` 없음) | `?mode=full`일 때만 | §4.2 | 상태 스냅샷(구 전량 전송) |
 
+> **`config.protocol`(신설)**: 이 세션에 실제 적용된 출력 프로토콜. `mode`는 같은 값을 싣는 구 클라이언트 호환
+> 별칭이다(과거엔 항상 `"full"`이었다). 클라이언트는 `protocol ?? mode ?? "full"`로 읽는다.
+>
 > **`config.language`(2026-07-17 신설, additive·하위호환)**: 그 세션에 실제 적용된 소스 언어. `?language=`로 지정했으면
 > 그 값, 미지정이면 서버 전역 `--lan`(기본 `auto`). 세션 언어가 의도대로 걸렸는지 확인용(필드 없는 구버전 서버 대비
 > 방어적으로 읽을 것). 내장 UI는 이 값을 콘솔 로그로만 확인한다.
 
-### 4.2 상태 스냅샷 메시지 (`type` 없음 — full 모드 기본)
+### 4.2 상태 메시지 — 델타(기본) / full(opt-out)
 매 사이클(~50ms) 중 **직전과 다를 때만** 전송된다.
+
+#### ⚠️ 계약 변경 — 전송이 "전량 스냅샷"에서 "snapshot 1회 + 이후 delta"로 바뀌었다
+
+> 이전 인계본은 "매 메시지가 전체 상태 스냅샷이므로 통째 교체 렌더만 하면 된다"였다. 세션이 길어질수록
+> WebSocket 페이로드와 전체 재렌더 비용이 무한히 커져 전사가 버벅이므로 **기본 전송을 델타로 전환**했다.
+> **React는 이제 상태를 누적해야 한다.** 누적 구현 전이라면 `?mode=full`로 pin(§3.1).
+
+- 첫 메시지 `{"type":"snapshot","seq":1, ...아래 전체 상태...}`
+- 이후 `{"type":"diff","seq":N,"n_lines":M,"status":…,"buffer_*":…,"remaining_time_*":…,`
+  `(선택)"lines_pruned":K,(선택)"new_lines":[Segment,…],(선택)"error":…}`
+
+| diff 전용 필드 | 타입 | 항상? | 의미 |
+|---|---|---|---|
+| `seq` | number | O | 1부터 증가하는 메시지 순번(연결 단위) |
+| `n_lines` | number | O | 이 메시지 적용 **후** 가져야 할 총 줄 수 — 검증 기준 |
+| `lines_pruned` | number | ✕ | 앞에서 잘려나간 줄 수. 있으면 **먼저** 앞에서 그만큼 제거 |
+| `new_lines` | Segment[] | ✕ | **공통 prefix 이후의 꼬리 전체**(append 대상 아님 — 아래 ⚠️) |
+
+**⚠️ `new_lines`는 append가 아니라 꼬리 교체다.** 백엔드는 최근 줄을 **소급 수정**한다(경계 재조정·침묵 게이트
+재개방, 대략 8초 이내 — §4.4의 ①②가 이 현상이다). 그러면 이미 보낸 줄이 갱신된 내용으로 `new_lines`에 다시
+실린다. append 하면 같은 줄의 옛 판과 새 판이 함께 쌓여 **중복 표시**된다.
+
+```js
+// 서버-권위 lines[] 미러 재구성 (참조 구현: live_transcription.js `reconstructLines`)
+function applyMessage(lines, msg) {
+  if (msg.type === "snapshot") return msg.lines.slice();            // 전체 교체
+  if (msg.lines_pruned) lines.splice(0, msg.lines_pruned);          // ① 앞부분 prune
+  const newLines = msg.new_lines || [];
+  const common = msg.n_lines - newLines.length;                     // ② 공통 prefix 길이
+  lines = lines.slice(0, common).concat(newLines);                  // ③ 꼬리 교체(append 아님)
+  if (lines.length !== msg.n_lines) reconnect();                    // ⑤ 검증 실패 → 재동기
+  return lines;
+}
+// ④ status·buffer_transcription·buffer_diarization·buffer_translation·
+//    remaining_time_transcription·remaining_time_diarization·error 는 매 메시지 값으로 그대로 교체.
+```
+
+- **렌더도 증분으로**: `common` 이전 줄은 건드리지 않고 꼬리만 교체한다. React는 `key={line.id}`로 리스트를
+  렌더하면 앞부분이 자동 재사용된다(내장 UI는 `reconcileTranscriptDom`이 같은 일을 한다 — HTML이 같은 줄의
+  DOM 노드는 아예 손대지 않는다).
+- **재동기 수단은 재연결뿐**(새 연결 = 새 `snapshot`). 서버에 재전송 요청 채널은 없다.
+- **`?mode=full` opt-out**: `type` 필드 없이 매 메시지가 아래 전체 상태를 담고 `lines[]`를 전량 재전송한다 —
+  받은 그대로 전체 교체 렌더만 하면 된다. 마이그레이션용 임시 경로.
+
+#### 전체 상태 페이로드 (델타의 `snapshot`, full의 매 메시지)
 
 ```jsonc
 {
@@ -205,15 +257,15 @@ React가 직접 구현**해야 한다(`onclose`/`onerror`에서 code 확인 후 
 | `remaining_time_diarization` | float(초) | O | 화자분할 처리 지연(diar off면 0) |
 | `error` | str | status=="error"만 | 오류 메시지(FFmpeg 등) |
 
-> ⚠️ **서버는 세션 전체 확정 히스토리를 무제한 유지하며 매 스냅샷마다 그대로 재전송한다.** React는
-> `lines[]`를 받은 그대로 전체교체 렌더만 해도 히스토리가 유지된다 — 별도 Map 누적은 더 이상 필수가
-> 아니다(단, 장시간 세션에서 리스트가 계속 길어지므로 렌더 성능이 걱정되면 선택적으로 가상 스크롤을
-> 고려할 수 있다).
-> ⚠️ **누적/식별 키가 필요하면 `id`(안정 세그먼트 식별자, number) 단독을 쓸 것.** `start`/`end`는 1초 해상도
+> ⚠️ **서버는 세션 전체 확정 히스토리를 무제한 유지하지만, 그 전체를 매번 보내지는 않는다(델타).** React는
+> 위 재구성 알고리즘으로 서버-권위 `lines[]` 미러를 **반드시 누적 유지**해야 한다. 장시간 세션에서 리스트가
+> 계속 길어지므로 렌더 성능이 걱정되면 가상 스크롤을 추가로 고려할 수 있다(델타 전송 + `id` key 증분 렌더만으로도
+> 앞부분 재렌더 비용은 사라진다).
+> ⚠️ **누적/식별 키는 `id`(안정 세그먼트 식별자, number) 단독을 쓸 것.** `start`/`end`는 1초 해상도
 > 벽시계 문자열이라 같은 초에 여러 세그먼트가 시작될 수 있어(빠른 화자전환·코드스위칭) 키로 부적합하다.
 > **`start`+`end`+`speaker` 복합키는 금지** — 백엔드가 같은 문장의 `end`를 사후에 늘려 재전송(문법게이트 재조립)하므로
 > `end`가 낀 키는 매 성장마다 새 항목이 돼 같은 문장의 절단판이 누적된다(**growing-prefix 중복 표시**, 상세 §4.4).
-> 전체교체 렌더만 하면 이 문제 자체가 없다(누적 안 하니까). 누적할 때만 `id`로.
+> 델타 재구성은 위치 기반(꼬리 교체)이라 그 자체로는 중복이 없지만, 그 위에 얹는 React key·Map은 반드시 `id` 단독.
 > ⚠️ **status별 렌더**: `no_audio_detected`를 받으면 내장 UI는 **화면 자막만 가리고 누적 state는
 > 유지**한다(다음 `active_transcription`에서 복원). React가 이 status에서 자기 누적까지 비우면
 > 침묵 구간마다 자막이 영구 소실된다. `error` status엔 내장 UI가 별도 배너가 없으니 필요하면
@@ -241,8 +293,9 @@ React가 직접 구현**해야 한다(`onclose`/`onerror`에서 code 확인 후 
 백엔드는 문장 확정을 뒤 맥락에 따라 사후 조정하므로, 같은 세그먼트가 ① `end`가 자란 채 다시 오거나 ②
 `finalized`가 `true`→`false`로 재개방될 수 있다(같은 `id` 유지).
 
-- **가장 단순·안전 = 전체교체 렌더** (§4.2): 매 스냅샷 `lines[]`를 통째로 다시 그리면 ①②가 자동 해소된다.
-- **누적한다면 키는 `id` 단독** (§4.2 경고): `start|end|speaker` 복합키는 `end` 성장분이 새 항목으로 쌓여 **growing-prefix 중복**을 만든다.
+- **델타에서는 이 재조정이 `new_lines` 꼬리 재전송으로 온다**(§4.2): 꼬리 교체를 그대로 수행하면 ①②가 자동 해소된다
+  (재조정된 줄이 같은 `id`로 갱신 내용을 실어 다시 오기 때문). `?mode=full`이면 매 스냅샷 통째 교체 렌더로 동일 효과.
+- **누적/키는 `id` 단독** (§4.2 경고): `start|end|speaker` 복합키는 `end` 성장분이 새 항목으로 쌓여 **growing-prefix 중복**을 만든다.
   `id`로 upsert + 진행중(`finalized:false`) 줄을 같은 `id`의 확정판보다 우선 렌더.
 - **`buffer_*`는 마지막 진행중 줄에만** 이어붙인다 — 확정된 줄에 붙이면 진행중 텍스트가 확정 블록과 중복돼 보인다
   (위 §2.2 코드의 `i === rows.length - 1`은 진행중 줄이 있을 때 그게 마지막이라는 전제; 진행중 줄이 없으면 buffer도 비어야 정상).
@@ -395,10 +448,11 @@ WS `/asr`와 별개로, 사용자가 UI의 **저장 버튼을 눌렀을 때**만
 `{"status":"ok","backend":"whisper","ready":true}`. (`backend`는 서버 `--backend`에 따른 동적값, 기본 `whisper`.) React가 WS 연결 전 서버 기동 여부를
 폴링하는 용도로 쓸 수 있음(선택).
 
-### 9.3 (선택) 증분 프로토콜 `?mode=diff`
-`/asr?mode=diff`로 연결하면 full 스냅샷 대신 증분(`{"type":"diff", "new_lines":[...], ...}`)을
-받는다. 내장 UI는 이를 사용하지 않으므로 React도 **full 모드로 시작 권장**. 대역폭 최적화가
-꼭 필요할 때만 고려.
+### 9.3 전량 전송 opt-out `?mode=full`
+증분(델타)이 **기본**이다(§4.2 — 내장 UI도 델타로 동작한다). 누적 재구성을 아직 구현하지 못한 상태에서
+연동을 먼저 붙여야 한다면 `/asr?mode=full`로 연결해 구 전량 전송 스키마(`type` 없는 전체 스냅샷)를 그대로
+받을 수 있다. 세션이 길어질수록 페이로드·재렌더 비용이 선형 증가하므로 **마이그레이션용 임시 경로**다.
+서버 기본값 자체는 CLI `--ws-protocol {delta,full}`로 바꾼다.
 
 ### 9.4 기존 ↔ 신규 필드 매핑 (마이그레이션 참고용)
 | 기존(whisperlive SSE) | 신규(whisperlivekit WS) | 비고 |
@@ -408,7 +462,7 @@ WS `/asr`와 별개로, 사용자가 UI의 **저장 버튼을 눌렀을 때**만
 | `status:"process"/"complete"` | `lines[].finalized`(별칭 `completed`) | bool로 변경 |
 | `start`(float) | `lines[].start`(str) | **타입 변경** — PC 실제 벽시계 시각(`"HH:MM:SS"`) |
 | `end`(float) | `lines[].end`(str) | **타입 변경** — 위와 동일 |
-| (이벤트 단위 1개) | `lines[]`(전체 배열) | 매 메시지 전체교체 |
+| (이벤트 단위 1개) | `snapshot.lines[]` + `diff.new_lines[]` | 델타 — 누적 미러에 **꼬리 교체**로 적용(§4.2) |
 | — | `lines[].speaker` | **신규(화자분할)** |
 | 별도 `POST /api/translate` | `lines[].translation` + `buffer_translation` | 인라인화(둘 다 동작, §7) |
 | — | `buffer_transcription` | 진행중 미확정 텍스트 |
@@ -419,16 +473,20 @@ WS `/asr`와 별개로, 사용자가 UI의 **저장 버튼을 눌렀을 때**만
 
 - [ ] `EventSource`/`POST start|stop` 제거 → `new WebSocket(".../asr")`.
 - [ ] 첫 `{"type":"config"}` 처리 → `useAudioWorklet` 분기 후 녹음 시작.
-- [ ] 매 스냅샷 메시지에서 transcript **전체 교체** 렌더(append/patch 아님). `lines[]` +
-      `buffer_transcription`(마지막 줄 미확정) 합성.
-- [ ] **확정(`finalized`) 줄 처리**: 서버가 세션 전체를 무제한 유지하므로 프론트 누적이 필수는
-      아니다(선택: 렌더 최적화용 안정 key 용도로는 여전히 유용, §4.2 참조).
+- [ ] **델타 수신 구현(필수, §4.2)**: `snapshot`이면 전체 교체, `diff`면 ① `lines_pruned` 앞 제거 →
+      ② `common = n_lines - new_lines.length` → ③ `lines.slice(0, common).concat(new_lines)` **꼬리 교체
+      (append 금지)** → ④ `buffer_*`/`remaining_time_*`/`status` 교체 → ⑤ `lines.length === n_lines` 검증
+      (불일치 시 재연결). 누적 구현 전이면 `?mode=full`로 pin(§9.3).
+- [ ] **증분 렌더**: `key={line.id}`로 리스트를 렌더해 공통 prefix가 재사용되게 한다(전체 교체 렌더 금지 —
+      세션이 길어지면 매 메시지 전체 재렌더가 메인스레드를 잡아먹는다). `lines[]` +
+      `buffer_transcription`(마지막 줄 미확정) 합성은 그대로.
 - [ ] 저장 버튼 클릭 시 `POST /api/save-transcript` 호출(§8) — 자동 저장 아님.
 - [ ] 오디오 캡처 구현: **WebM(MediaRecorder) 기본**, 또는 PCM(AudioWorklet+Worker, 서버
       `--pcm-input` 시). 재사용 가능한 내장 코드는 §6.4 참고.
 - [ ] 필드 타입 변경: `start`/`end`는 `"HH:MM:SS"` 문자열(PC 실제 벽시계 시각, 센티초 없음),
       `finalized`(=completed) bool, 언어는 `detected_language`(=lang). **history Map 키(누적 시)는
       `id` 단독**(§4.2·§4.4) — `start` 단독·`start`+`end`+`speaker` 복합키 **금지**(growing-prefix 중복).
+- [ ] 첫 `config`의 `protocol`(=`mode`) 값으로 서버가 델타인지 full인지 확인(`protocol ?? mode ?? "full"`).
 - [ ] 확정/미확정 스타일(2단계): `lines[]` 텍스트는 전부 진하게, `buffer_*`만 연하게.
       `finalized`는 색이 아니라 **히스토리 누적에만** 사용(§2.2 참조).
 - [ ] 화자 UI: `speaker` 배지/색 직접 구현, `-2`=침묵, `0`=diar 진행중, `buffer_diarization` 표시.
