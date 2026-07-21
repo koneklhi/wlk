@@ -455,6 +455,25 @@ C:\Python312\python.exe -m whisperlivekit.basic_server
 - **통과 기준**: 문장이 **확정되는 순간** `lines[].translation`에 번역문이 채워져 표시된다.
 - 화자분할 ON 상태에선 화자가 바뀌어야 직전 문장이 확정·번역된다(§5.4 한계). 한 화자만 길게 말하면 번역이 늦으니, 검증은 **두 사람이 번갈아** 또는 짧게 끊어 발화.
 
+### 4.5 배포 상황별 파라미터 튜닝(`--scenario`, Phase A)
+
+현장 음성 상황(화자 수·언어 전환 텀·겹침 여부)에 따라 문장 확정·화자 귀속·언어 재감지 관련 파라미터를
+서버 재시작 없이 코드 수정 없이 조정할 수 있다 — `--scenario {mono,dialogue,sequential,codeswitch,multi}`
+플래그로 상황별 프리셋을 한 번에 적용한다(예: 다화자 겹침이 많은 현장이면 `multi`).
+
+```powershell
+# 다화자·텀 없이 겹치는 상황(bong1류)
+C:\Python312\python.exe -m whisperlivekit.basic_server --scenario multi
+
+# 프리셋 + 특정 값만 개별 override(개별 플래그가 프리셋보다 항상 우선)
+C:\Python312\python.exe -m whisperlivekit.basic_server --scenario multi --frame-threshold 40
+```
+
+`--scenario` 미지정 + 개별 플래그도 미지정이면 기존 마스터와 100% 동일하게 동작한다(무회귀). 프리셋
+값은 **미검증 방향값 출발점**이라 배포 현장에서 실제 음성으로 들어보며 미세조정하는 것을 전제로 한다 —
+knob별 방향(↑/↓ 효과)·상황별 매트릭스·프리셋 수치 전체는 [OPERATOR_TUNING_GUIDE.md](OPERATOR_TUNING_GUIDE.md)
+참조.
+
 ---
 
 ## 5. 번역(gpt-oss-20b) 배포 설정 — Q3

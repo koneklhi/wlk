@@ -180,6 +180,10 @@ class TranscriptionEngine:
                     "logprob_threshold": config.logprob_threshold,
                     "compression_ratio_threshold": config.compression_ratio_threshold,
                     "lang_restrict_koen": config.lang_restrict_koen,
+                    "short_lang_reset_secs": config.short_lang_reset_secs,
+                    "script_anchor_n_words": config.script_anchor_n_words,
+                    "new_speaker_max_keep_secs": config.new_speaker_max_keep_secs,
+                    "lang_detect_general_secs": config.lang_detect_general_secs,
                 }
 
                 self.tokenizer = None
