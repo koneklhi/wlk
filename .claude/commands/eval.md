@@ -21,6 +21,14 @@
 단 VBCable 미설정·무음 캡처 등 *하니스 버그*는 즉시 중단·수정.
 **목표 필수 기능 예외**: §3.1·§3.2 불변 제약 달성에 필요한 기반 기능이 게이트 탈락 시 자율 기각 금지 — 결과·대안 보고 후 사용자 질의.
 
+**측정 대상 UI 방침**: 경로 C 자동화는 배포 UI(React, `frontend/app/`)를 기본 타깃으로 전환하는 것이 목표다
+(내장 UI 사용 중단 방침 — CLAUDE.md §3.3/§3.7). 단 `scripts/vbcable_test.py`의 Playwright 스크래핑은 아직
+내장 UI 전용 DOM(`#startButton` 등)에 하드코딩돼 있어, 로컬에 배포 UI dist(`frontend/static/index.html`)가
+있으면 그 타임아웃으로 측정이 실패한다. **과도기 조치**로 아래 모든 예시에 `--server-frontend-dir
+.omc/eval_empty_frontend`(이미 존재하는 빈 디렉터리)를 넣어 서버가 내장 UI로 폴백하도록 강제한다 — 배포 UI
+자동화가 구현되면 이 옵션은 제거한다. 후속 구현 계획 =
+[docs/backlog/BACKLOG_EVAL_DEPLOY_UI_MIGRATION.md](../../docs/backlog/BACKLOG_EVAL_DEPLOY_UI_MIGRATION.md).
+
 ## 기본 사용법
 
 ```powershell
@@ -33,6 +41,7 @@ $ts = Get-Date -Format "yyyyMMdd_HHmm"
   --lan auto `
   --diarization --sortformer-model whisperlivekit/model/sortformer-4spk-v2.nemo `
   --compression-ratio-threshold 3.0 `
+  --server-frontend-dir .omc/eval_empty_frontend `
   --output ".omc/benchmarks/eval_$ts.json"
 # ↑ --repeat 생략 = 기본값 1회. 수치는 '방향 신호'로만 해석한다.
 
@@ -44,6 +53,7 @@ $ts = Get-Date -Format "yyyyMMdd_HHmm"
   --lan ko `
   --diarization --sortformer-model whisperlivekit/model/sortformer-4spk-v2.nemo `
   --compression-ratio-threshold 3.0 `
+  --server-frontend-dir .omc/eval_empty_frontend `
   --output ".omc/benchmarks/eval_$ts.json"
 
 # ② 채택 확정용 (master 머지 직전에만 — N≥3회 반복, median+분산 판단). auto 테스트 예시, ko는 --lan ko + kor1~3로 동일하게 반복
@@ -54,6 +64,7 @@ $ts = Get-Date -Format "yyyyMMdd_HHmm"
   --lan auto `
   --diarization --sortformer-model whisperlivekit/model/sortformer-4spk-v2.nemo `
   --compression-ratio-threshold 3.0 --repeat 3 `
+  --server-frontend-dir .omc/eval_empty_frontend `
   --output ".omc/benchmarks/eval_$ts.json"
 
 # held-out 일반화 검증 — 채택 후보에 한해 ytn1(auto) + eng1(en), 언어모드가 다르므로 run 분리(단회, diar-ON)
@@ -64,6 +75,7 @@ $ts = Get-Date -Format "yyyyMMdd_HHmm"
   --lan auto `
   --diarization --sortformer-model whisperlivekit/model/sortformer-4spk-v2.nemo `
   --compression-ratio-threshold 3.0 `
+  --server-frontend-dir .omc/eval_empty_frontend `
   --output ".omc/benchmarks/eval_$ts.json"
 
 $ts = Get-Date -Format "yyyyMMdd_HHmm"
@@ -73,6 +85,7 @@ $ts = Get-Date -Format "yyyyMMdd_HHmm"
   --lan en `
   --diarization --sortformer-model whisperlivekit/model/sortformer-4spk-v2.nemo `
   --compression-ratio-threshold 3.0 `
+  --server-frontend-dir .omc/eval_empty_frontend `
   --output ".omc/benchmarks/eval_$ts.json"
 # ↑ held-out은 단회 검증(채택 확정이라도 --repeat 3 불필요)
 ```

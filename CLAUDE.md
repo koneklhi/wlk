@@ -41,7 +41,7 @@
 
 ### 3.3 문장 단위 출력 — 백엔드 책임 범위
 - **백엔드(우리 작업)가 하는 일**: ① 한 문장이 끝났는지 판단(확정/비확정 상태 결정) ② 결과를 React UI에 메시지로 전달.
-- **배포 환경 React**는 프론트 개발자 담당(이 저장소에 React 코드 없음). **단, 개발/테스트 단계에선 내장 UI에 가벼운 프론트 기능을 직접 넣어 검증해도 된다.**
+- **배포 환경 React UI**(`frontend/app/`, 브랜치 `feat/deploy-ui`로 반입·통합검증 완료 — 2026-07-21)가 이제 이 저장소에 포함되어 있다. **개발/테스트 단계 검증(경로 B/C 포함)도 배포 UI를 기본으로 사용한다 — 내장 UI(`whisperlivekit/web/`)는 더 이상 검증에 쓰지 않는다.** 단 경로 C 자동화(`scripts/vbcable_test.py`)의 브라우저 스크래핑은 아직 내장 UI 전용 DOM에 하드코딩돼 있어 과도기 상태다(구현 계획 = [docs/backlog/BACKLOG_EVAL_DEPLOY_UI_MIGRATION.md](docs/backlog/BACKLOG_EVAL_DEPLOY_UI_MIGRATION.md)).
 - 메시지 스키마는 [docs/SCHEMA_CHANGES.md](docs/SCHEMA_CHANGES.md)로 **확정·구현됨**. 문장 확정 알고리즘·경계 신호 조합도 구현·문서화됨 — 정본 = [docs/SENTENCE_FINALIZATION_LOGIC.md](docs/SENTENCE_FINALIZATION_LOGIC.md)(설계 결정 이력 = [docs/OPEN_QUESTIONS.md](docs/OPEN_QUESTIONS.md) §1).
 - 문장 확정 품질은 `/eval`의 **화자분리 F1 + 문장분리 F1 2지표**로 정량 평가한다. 정답 = `test_data/<name>.txt` 단일 파일(**canonical**; 화자분리+문장분리 전처리 완료 — 2026-07-18부로 `_speak,sentence_sperate.txt` 접미사 규약 폐지, `<name>.txt`로 통합): `[spkN]` 전환 = **화자전환 경계**(화자분리 F1·1순위), 화자 블록 내 줄바꿈 = **문장 경계**(문장분리 F1·3순위). STT 확정 줄 경계와 단어 정렬로 비교한다. **요구사항·우선순위·측정·구현 계획 정본 = [docs/TRANSCRIPTION_REQUIREMENTS.md](docs/TRANSCRIPTION_REQUIREMENTS.md)**.
   **성능 판정 기준은 경로 C(VBCable 루프백)만** 사용한다. 경로 A(PCM 파일 주입)는 브라우저 오디오 파이프라인을 우회해 실사용과 무관한 수치를 내므로 폐기.
@@ -61,6 +61,7 @@
 ### 3.7 React UI 재사용 정책
 - **React UI는 그대로 재사용을 우선**한다. 추가 기능은 가능한 한 백엔드에서 구현하되, 메시지 스키마 최적화 등으로
   React 측 변경이 필요하면 [docs/OPEN_QUESTIONS.md](docs/OPEN_QUESTIONS.md)에서 의논해 결정한다.
+- 경로 C 자동화도 이 배포 UI를 기본 타깃으로 전환하는 것이 목표다(내장 UI 사용 중단 방침, §3.3). 구현 현황·후속 작업은 [docs/backlog/BACKLOG_EVAL_DEPLOY_UI_MIGRATION.md](docs/backlog/BACKLOG_EVAL_DEPLOY_UI_MIGRATION.md) 참조.
 
 ### 3.8 STT 개선 방향 제약 (Phase 4+)
 - **ytn2·bong1 공동 최우선**: 한↔영 전환 간격이 짧은 환경(ytn2) 및 다화자·긴 발화 환경(bong1 — 영어 2명+한국어 2명, 봉준호 기생충 인터뷰)이 현재 핵심 개선 대상. **음성 데이터 개선 1순위 = ytn2·bong1**. 목표는 각각 '짧은 텀 코드스위칭 역량'과 '다화자 화자전환 역량'의 **일반화 향상**이며, **데이터 특화 하드코딩(특정 단어·구절 암기) 금지** — 개선은 일반화돼야 한다.
@@ -122,6 +123,7 @@
 | WhisperLiveKit 본체 대규모 변경 | `docs/MASTER_CHANGES.md` — `/update-master-changes` 슬래시 커맨드 실행 |
 | 배포 UI(React) 계약 레이어 변경 (`frontend/app/src/types/stt.ts`·`utils/deltaProtocol.ts`·`utils/wsUrl.ts`·`constants/index.ts`·`api/**`) | `docs/API_SPEC.md`, `docs/DELTA_PROTOCOL_SPEC.md`, `docs/FRONTEND_HANDOFF_SUMMARY.md` — 서버 계약과 어긋나면 조용히 깨진다(과거 `?language=kor` 무시·복합키 중복·델타 메시지 폐기가 전부 이 부류) |
 | `frontend/app/vite.config.ts` 의 `base` 또는 `build.outDir` | `docs/DEPLOYMENT_OFFLINE.md`, `docs/TESTING.md`, `docs/FRONTEND_HANDOFF_NEXT_DEV.md` — 백엔드 `--frontend-dir`/`--frontend-base` 와 짝이다 |
+| 경로 C 자동화 대상 UI(내장→배포) 전환 관련 코드(`scripts/vbcable_test.py` DOM 스크래핑, `frontend/app` 테스트 훅 등) | `docs/TESTING.md`, `.claude/commands/eval.md`, `docs/DEPLOYMENT_OFFLINE.md` §4.1/§4.4, `docs/FILE_INDEX.md`, `docs/OPEN_QUESTIONS.md`, `docs/backlog/BACKLOG_EVAL_DEPLOY_UI_MIGRATION.md` |
 
 > 확인 방법: 변경한 플래그·포트·경로 값을 `grep`으로 docs 전체에 검색해 stale 참조가 남아있으면 제거.
 

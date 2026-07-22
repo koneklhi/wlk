@@ -3,7 +3,7 @@
 > **대상 독자**: 폐쇄망 배포 PC(RTX 5090, 오프라인) 운영자 및 협업 PC(RTX 3060, 폐쇄망) 운영자 — 두 PC
 > 모두 **동일한 방식**(venv 없이 전용 Python `C:\Python312`에 직접 설치)으로 환경을 세팅한다.
 > **목적**: 개발 PC(RTX 3080, 온라인)에서 라이브러리·모델을 준비해 USB로 옮기고, 폐쇄망에서
-> **master(가장 좋은 버전)** 실시간 STT를 켜서 내장 UI 전사 → React 프론트 연결 → 번역까지 검증하는 전 과정.
+> **master(가장 좋은 버전)** 실시간 STT를 켜서 배포 UI 전사 → 정적 서빙 배선 확인 → 번역까지 검증하는 전 과정.
 > 폐쇄망에선 Claude 자동화가 불가하므로 **모든 명령을 복붙 가능**하게 정리했다.
 > **설치 방식(2026-07-16 확정)**: 회사 DLP(문서보안)가 사용자 프로필 폴더 안 `.venv`/`site-packages`의
 > 메타파일을 암호화해 Python 실행을 깨뜨리는 문제를 피하기 위해, **venv를 쓰지 않고** 감시 폴더 밖
@@ -368,6 +368,11 @@ C:\Python312\python.exe scripts/closed_test.py my_audio.wav --no-diarization
   `--compression-ratio-threshold 3.0`, `--periodic-lang-check` None(비활성, Exp-160). (인자로 덮어쓸 수 있음)
 - 결과는 `transcripts/<stem>_<타임스탬프>.txt`에 저장. 정답이 있으면 상단에 WER/F1 median/min/max/stdev 헤더 + 회차별 전사가, 없으면 회차별 전사만 들어간다.
 - **전제**: VBCable 드라이버 + playwright(chromium) + comtypes + ffmpeg 설치(§1·§3). VBCable 설정 실패 시 즉시 중단되고 안내가 출력된다.
+- **UI 방침 주의**: 이 자동측정은 배포 UI를 기본 타깃으로 전환하는 것이 목표지만(CLAUDE.md §3.3/§3.7), 아직
+  `scripts/vbcable_test.py`의 Playwright 스크래핑이 내장 UI 전용 DOM에 하드코딩돼 있다. **§4.4 2단계로
+  React dist(`frontend/static/`)를 이미 배치한 배포 PC에서 이 자동측정을 돌리면 `#startButton` 타임아웃으로
+  조용히 실패할 수 있다** — 과도기 동안은 `--server-frontend-dir <빈 디렉터리>`로 내장 UI를 강제해야 정상
+  측정된다(§7-6 트러블슈팅, [docs/backlog/BACKLOG_EVAL_DEPLOY_UI_MIGRATION.md](backlog/BACKLOG_EVAL_DEPLOY_UI_MIGRATION.md)).
 - 콘솔 출력 예:
   ```
   [closed_test] ▶ sbs1.mp3  (정답 있음 → WER/F1)
@@ -388,7 +393,9 @@ master 설정이 기본값이라 인자가 없다(저장소 루트에서 실행)
 ```powershell
 C:\Python312\python.exe -m whisperlivekit.basic_server
 ```
-→ 브라우저에서 **http://localhost:8900/** 접속 → 내장 웹 UI에서 마이크로 발화, 실시간 전사·화자 확인.
+→ 브라우저에서 **http://localhost:8900/** 접속 → **배포 UI**(React dist가 `frontend/static/`에 있으면
+자동 서빙, base 있으면 리다이렉트 — 없으면 내장 UI로 폴백하지만 더 이상 검증에 쓰지 않는다, §4.4 참조)에서
+마이크로 발화, 실시간 전사·화자 확인.
 
 ### 4.3 경로 A — 파일 직접 송신 (빠른 스모크, 참고)
 
@@ -405,21 +412,29 @@ C:\Python312\python.exe -m whisperlivekit.test_client test_data/sbs1.mp3 --live
 
 기능을 한 번에 다 켜지 말고 **전사 → 프론트 연결 → 번역** 순으로 하나씩 늘려가며 확인한다.
 **1·2단계는 playwright/VBCable이 필요 없다**(마이크 직접). 경로 C 자동측정(§4.1)에만 그 둘이 필요하다.
+단 2단계까지 마쳐 React dist가 이미 `frontend/static/`에 있는 상태로 §4.1 자동측정을 돌리면,
+`scripts/vbcable_test.py`가 아직 내장 UI 전용이라 `#startButton` 타임아웃으로 실패할 수 있다(§4.1 "UI
+방침 주의" 참조).
 
-#### 1단계 — whisperlivekit 내장 UI로 전사 확인 (번역 OFF)
-master 설정으로 서버를 띄우고, 추가 설치 없이 브라우저만으로 전사·화자분할이 도는지 본다. **번역은 기본
-ON이므로(§5) 이 단계에서는 `--no-llm-translation`으로 명시적으로 꺼야 한다** — 안 끄면 아직 켜지 않은
-llama.cpp 번역 서버로 연결을 시도한다(실패해도 전사 자체는 안 깨지지만 불필요한 경고 로그가 남는다, §5.7).
+#### 1단계 — 배포 UI로 전사 확인 (번역 OFF)
+master 설정으로 서버를 띄우고, 전사·화자분할이 도는지 본다. React dist가 `frontend/static/`에 아직
+없다면 아래 2단계의 "정적 서빙 배선" 설명대로 먼저 배치한다(없어도 내장 UI로 폴백해 이 단계 자체는
+진행 가능하나, 더 이상 검증용으로 권장하지 않는다). **번역은 기본 ON이므로(§5) 이 단계에서는
+`--no-llm-translation`으로 명시적으로 꺼야 한다** — 안 끄면 아직 켜지 않은 llama.cpp 번역 서버로 연결을
+시도한다(실패해도 전사 자체는 안 깨지지만 불필요한 경고 로그가 남는다, §5.7).
 ```powershell
 C:\Python312\python.exe -m whisperlivekit.basic_server --no-llm-translation
 ```
-→ 브라우저 **http://localhost:8900/** 접속(내장 UI) → 마이크 권한 허용 후 한·영 섞어 발화.
+→ 브라우저 **http://localhost:8900/** 접속 → **배포 UI**(dist 있으면 자동 서빙/리다이렉트) → 마이크 권한
+허용 후 한·영 섞어 발화.
 - **통과 기준**: 발화가 끊김·환각 없이 실시간 전사되고, 화자가 바뀌면 화자 배지(1·2·3…)가 분리된다.
 - 음성 파일로 보려면 VBCable 재생장치를 통해 틀거나(경로 C), 빠른 방법은 마이크 앞에서 직접 발화.
-- 저장 버튼을 누르면 내장 UI가 그 시점까지의 누적 전사를 서버 로컬 폴더(`--transcript-save-dir`, 기본값 `./transcripts`)에 `.txt`로 저장한다(녹음 종료 시 자동 저장되지 않음).
+- **배포 UI엔 현재 저장 버튼이 없다**(2026-07-22 제거, [FRONTEND_HANDOFF_SUMMARY.md](FRONTEND_HANDOFF_SUMMARY.md) §8). 과거 내장 UI는 저장 버튼 클릭 시 그 시점까지의 누적 전사를 서버 로컬 폴더(`--transcript-save-dir`, 기본값 `./transcripts`)에 `.txt`로 저장했다 — API 계약(`POST /api/save-transcript`) 자체는 유지된다.
 
-#### 2단계 — whisperlive React 프론트 UI 연결
-같은 서버(`/asr`)에 기존 whisperlive React UI를 붙인다. 기존 whisperlive와 **달라진 점**만 맞추면 된다 — 상세·코드 위치는 [FRONTEND_HANDOFF_SUMMARY.md](FRONTEND_HANDOFF_SUMMARY.md):
+#### 2단계 — 배포 UI 정적 서빙 배선 (1단계에서 이미 사용한 방법의 상세)
+1단계에서 접속한 배포 UI가 어떻게 서빙되는지의 배선 설명이다 — 연결 자체는 1단계에서 이미 끝났으니, dist를
+아직 안 두었다면 여기부터 먼저 확인한다. 기존 whisperlive와 **달라진 점**만 맞추면 된다는 원리는 그대로
+유효 — 상세·코드 위치는 [FRONTEND_HANDOFF_SUMMARY.md](FRONTEND_HANDOFF_SUMMARY.md):
 
 > **정적 서빙 배선 구현 완료**: React 빌드 산출물(dist)을 배포 PC의 `frontend/static/`(즉 `frontend/static/index.html` +
 > `frontend/static/assets/...`)에 배치하고 서버를 재기동하면, `GET /`가 내장 데모 UI 대신 그 dist를 자동 서빙한다
@@ -437,7 +452,8 @@ C:\Python312\python.exe -m whisperlivekit.basic_server --no-llm-translation
 | 화자 | `lines[].speaker` int(−2=침묵, 0=diar 로딩중, 1·2·3…=화자) |
 | 오디오 송신 | 서버 `config` 메시지의 `useAudioWorklet` 분기 — PCM AudioWorklet(16kHz s16le) 또는 WebM MediaRecorder |
 
-- **통과 기준**: React 화면에 1단계와 동일한 전사·화자가 표시된다.
+- **통과 기준**: dist를 새로 배치했다면 1단계와 동일한 전사·화자가 표시되는지 재확인한다(이미 1단계를
+  배포 UI로 진행했다면 이 단계는 자동으로 충족된 것).
 
 #### 3단계 — OSS 20b 실행 후 번역 확인
 번역기를 마지막에 켠다(1·2단계로 전사가 검증된 뒤). 번역은 **기본 ON**(§5)이라 llama.cpp 서버만 띄우면
@@ -451,7 +467,7 @@ curl http://localhost:2010/v1/models # 실제 모델 id 확인 → gpt-oss-20b�
 #     (1)에서 확인한 id가 gpt-oss-20b와 다르면: --translation-model <실측 id> 만 추가
 C:\Python312\python.exe -m whisperlivekit.basic_server
 ```
-→ React(또는 내장 UI)에서 한↔영 한 문장씩 발화.
+→ 배포 UI(React)에서 한↔영 한 문장씩 발화.
 - **통과 기준**: 문장이 **확정되는 순간** `lines[].translation`에 번역문이 채워져 표시된다.
 - 화자분할 ON 상태에선 화자가 바뀌어야 직전 문장이 확정·번역된다(§5.4 한계). 한 화자만 길게 말하면 번역이 늦으니, 검증은 **두 사람이 번갈아** 또는 짧게 끊어 발화.
 
@@ -651,12 +667,12 @@ C:\Python312\python.exe -m whisperlivekit.basic_server `
 
 ## 7. 배포 점검 순서 (권장)
 
-> **빠른 기능 검증은 §4.4의 3단계**(전사 → React 프론트 → 번역)를 따른다. 아래는 **설치 무결성 + 정량 측정 + 단어 교정**까지 포함한 전체 점검 체크리스트로, §4.4를 감싸는 상위 순서다.
+> **빠른 기능 검증은 §4.4의 단계들**(배포 UI 전사 → 정적 서빙 배선 확인 → 번역)을 따른다. 아래는 **설치 무결성 + 정량 측정 + 단어 교정**까지 포함한 전체 점검 체크리스트로, §4.4를 감싸는 상위 순서다.
 
 1. **설치 확인**: `C:\Python312\python.exe -c "import whisperlivekit, torch; print(torch.cuda.is_available())"` → `True`.
 2. **경로 A 스모크**(§4.3): 파일 송신으로 전사가 나오는지 — 코드/모델 로드 정상 확인.
-3. **내장 UI 전사**(§4.4 1단계): 브라우저 마이크로 한·영 발화 → 전사·화자 배지 정성 확인.
-4. **React 프론트 연결**(§4.4 2단계): React UI를 `/asr`에 붙여 동일 전사 표시 확인.
+3. **배포 UI 전사**(§4.4 1단계): 브라우저 마이크로 한·영 발화 → 전사·화자 배지 정성 확인.
+4. **정적 서빙 배선 재확인**(§4.4 2단계): dist가 `frontend/static/`에 정상 배치돼 3번과 동일한 전사가 표시되는지 확인(연결 자체는 3번에서 이미 끝났다).
 5. **번역**(§4.4 3단계 / §5): `start_oss.bat` 후 번역 + 화자분할 동시 ON 기동 → 한↔영 1문장 스모크(동시 사용 가능, §5.4).
 6. **경로 C 정량**(§4.1): `C:\Python312\python.exe scripts/closed_test.py test_data/sbs1.mp3` → WER/F1이 [EXPERIMENTS.md](../EXPERIMENTS.md) "현재 베이스라인"(turbo, diar-ON, Exp-161 기준: sbs1 ≈ WER 14.9%/F1 16.7% — F1은 diar-ON 문장경계 과분할로 낮게 나오는 게 정상, WER이 1차 지표) 근처인지. (playwright/VBCable 필요) — ⚠️ [MASTER_CHANGES §2](MASTER_CHANGES.md)의 수치(sbs1 19.6%/76.2%)는 Exp-105(2026-06-22, diar-OFF·base 기질) 기준으로 **stale** — 참조하지 말 것.
 7. **단어 교정**(§6.2): `admin_replacement.json`/`hallucination.json`을 배포본으로 채운 뒤 해당 단어가 교정되는지 확인.
@@ -678,6 +694,7 @@ C:\Python312\python.exe -m whisperlivekit.basic_server `
 | **번역이 의도치 않게 켜짐/시도됨(2026-07-16~)** | 전사만 보려 했는데 llama.cpp 연결 시도 로그가 남거나, dev PC에서 없는 서버(`localhost:2010`)로 연결 실패 경고가 뜸 | `--llm-translation`이 **기본 ON**으로 바뀜(과거엔 기본 OFF). 전사만 보려면 `--no-llm-translation`, dev Ollama로 쓰려면 §5.6 재정의 플래그 필요(§5.3·§5.7) |
 | VBCable 불안정 | 경로 C 무음/100% WER/분산 폭증 | 케이블 상태(코드 아님) — 재부팅/Audiosrv 재시작, `vbcable_test.py --verify` |
 | playwright 미설치 | 경로 C 실패 | chromium 바이너리 복사 + `PLAYWRIGHT_BROWSERS_PATH` |
+| React dist가 `frontend/static`에 있음(§4.4 2단계 완료 후) | 경로 C 자동측정(`closed_test.py`/`eval.py`)이 `#startButton` 타임아웃 실패 | `scripts/vbcable_test.py`가 아직 내장 UI 전용이라 배포 UI로 리다이렉트되면 못 찾는다 — `--server-frontend-dir <빈 디렉터리>`로 내장 UI 과도기 폴백(§4.1). 후속 조치는 [docs/backlog/BACKLOG_EVAL_DEPLOY_UI_MIGRATION.md](backlog/BACKLOG_EVAL_DEPLOY_UI_MIGRATION.md) 참조 |
 | RTX 5090 커널 | torch가 sm_120 미지원 | cu128 + torch 2.7+ 버전 확인 |
 | 포트 충돌 | 수동 서버=8900, eval/closed_test=8901(기본). 배포 PC 기존 점유와 충돌하면 | `--port`로 변경, 또는 `parse_args.py`/`eval.py SERVER_PORT` 기본값 수정. 동시 기동 시 GPU 2배 점유 주의 |
 | 문서 플래그 오타 | `--avg-logprob-threshold`는 없음 | 실제 플래그는 `--logprob-threshold`([parse_args.py:321](../whisperlivekit/parse_args.py#L321)) |

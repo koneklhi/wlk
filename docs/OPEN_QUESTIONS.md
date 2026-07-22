@@ -23,3 +23,13 @@
 ## 4. 폐쇄망 모델 디렉터리 레이아웃·배포 패키징 — 해소
 
 - 정본 = [DEPLOYMENT_OFFLINE.md](DEPLOYMENT_OFFLINE.md)(폐쇄망 반입·모델 경로·wheelhouse 패키징 절차).
+
+## 5. 경로 C 자동화 대상 UI(내장→배포) 전환 — 정책 확정, 구현 대기
+
+- **정책 확정(2026-07-22)**: 내장 UI(`whisperlivekit/web/`) 사용을 중단하고, 배포 UI(React, `frontend/app/`)를
+  경로 B/C를 포함한 모든 테스트·검증 경로의 기본 UI로 삼는다(CLAUDE.md §3.3/§3.7).
+- **구현 공백**: `scripts/vbcable_test.py`의 Playwright 자동화가 아직 내장 UI 전용 DOM(`#startButton` 등)에
+  하드코딩돼 있고, 배포 React UI엔 대응하는 안정적 자동화 훅(`data-testid` 등)이 전혀 없다. §3.7 규약에 따라
+  **React 쪽에 자동화용 속성을 추가할지 여부는 여기서 먼저 논의해 결정한다** — 예: `data-testid="start-button"`,
+  `data-trigger` DOM 노출 등. 아직 미결정.
+- **후속 작업 상세 계획** = [docs/backlog/BACKLOG_EVAL_DEPLOY_UI_MIGRATION.md](backlog/BACKLOG_EVAL_DEPLOY_UI_MIGRATION.md).

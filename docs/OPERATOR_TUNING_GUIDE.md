@@ -154,7 +154,7 @@ C:\Python312\python.exe -m whisperlivekit.basic_server --scenario multi
 
 ## 6. 향후 (Phase B — 이번 범위 밖)
 
-Phase A는 터미널 startup 제어만 다룬다. 향후 검토 대상(미착수): 내장 UI에 상황 프리셋 셀렉터를 추가해
+Phase A는 터미널 startup 제어만 다룬다. 향후 검토 대상(미착수): 배포 UI에 상황 프리셋 셀렉터를 추가해
 운영자가 서버 재기동 없이 화면에서 상황을 고를 수 있게 하는 것, `/asr` 연결에 `?scenario=` 같은 세션별
 쿼리 오버라이드를 추가하는 것(단 SimulStreaming 엔진 싱글턴이 baked param을 갖는 구조라 완전한 세션별
 런타임 전환은 엔진 재구성 또는 재시작이 필요할 수 있다는 제약이 있다), 그리고 이미 구현돼 있는

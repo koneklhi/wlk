@@ -31,16 +31,17 @@
 ### 경로 B — 마이크 직접 녹음 (정성적)
 
 - 서버를 `--pcm-input` 플래그 없이 기동 → 브라우저가 `MediaRecorder` 방식으로 마이크 음성을 실시간 캡처
-- 브라우저에서 `http://localhost:8900/` 접속 → 내장 웹 UI
-  ([whisperlivekit/web/live_transcription.html](../whisperlivekit/web/live_transcription.html))에서 마이크 직접 녹음
-  (`--frontend-dir`가 가리키는 디렉터리에 `index.html`이 있으면 — 기본값 `frontend/static` — 내장 UI 대신 React
-  dist가 서빙된다. dist가 Vite `base`(예 `/wlkies`)로 빌드됐으면 백엔드가 base를 자동 추출해 그 하위로 서빙하고
-  `GET /`는 base로 리다이렉트한다 — `--frontend-base`(기본값 `auto`)로 오버라이드. 개발 PC엔 보통 dist가 없으므로
-  이 절 그대로 내장 UI가 뜬다.)
+- 브라우저에서 `http://localhost:8900/` 접속 → **배포 UI**(React, [frontend/app/](../frontend/app/))에서 마이크
+  직접 녹음. dist가 `frontend/static/`(`--frontend-dir` 기본값)에 없으면 `frontend/app`에서 `pnpm build`로
+  먼저 만든다(`vite.config.ts`의 `outDir: '../static'` 배선으로 빌드만 하면 그 경로에 자동으로 떨어짐). dist가
+  Vite `base`(예 `/wlkies`)로 빌드됐으면 백엔드가 base를 자동 추출해 그 하위로 서빙하고 `GET /`는 base로
+  리다이렉트한다(`--frontend-base`, 기본값 `auto`). **내장 UI**
+  ([whisperlivekit/web/live_transcription.html](../whisperlivekit/web/live_transcription.html))는 더 이상
+  검증에 사용하지 않는다 — dist가 없을 때만 뜨는 레거시 폴백이며, 경로 C 자동화의 과도기 우회 경로로만 남아있다.
 - 마이크에 직접 말하면서 전사 결과를 실시간 확인 (정성적 평가)
 - 서버 기동: `whisperlivekit-server` (모든 인자가 parse_args.py 기본값 — `--lan auto` + simulstreaming. `--periodic-lang-check` 기본 None(비활성 — turbo 기질 Exp-160 채택, PLC=4.0이 ytn2에서 스퓨리어스 전환→환각 유발 확인); 탐색 시 다른 값 명시. 상세는 [OPEN_QUESTIONS.md](OPEN_QUESTIONS.md) 참조)
 - 목적: 실제 마이크 입력에 대한 정성적 평가 (경로 C 정량 평가와 병행)
-- 저장 버튼 클릭 시 내장 UI가 그 시점까지의 누적 전사를 `--transcript-save-dir`(기본값 `./transcripts`) 폴더에 `.txt`로 저장한다 (`POST /api/save-transcript`, 녹음 중에도 클릭 가능, 녹음 종료 시 자동 저장 아님).
+- **배포 UI엔 현재 저장 버튼이 없다**(2026-07-22 제거 — [FRONTEND_HANDOFF_SUMMARY.md](FRONTEND_HANDOFF_SUMMARY.md) §8). 과거 내장 UI는 저장 버튼 클릭 시 그 시점까지의 누적 전사를 `--transcript-save-dir`(기본값 `./transcripts`) 폴더에 `.txt`로 저장했다(`POST /api/save-transcript`) — API 계약 자체는 유지되므로 배포 UI에 저장 기능이 다시 붙으면 그대로 재사용 가능하다.
 - **소스 언어 드롭다운 수동 검증(세션 언어 고정, 2026-07-17~)**: 우상단 설정(⚙) 패널의 "Source Language" 드롭다운(`auto`/`ko`/`en`)으로 그 세션의 소스 언어를 지정한다. 녹음 시작 **전에** 선택한다(녹음/처리 중엔 select 비활성 — 언어는 연결 시점에만 적용). 검증 포인트:
   - `ko`/`en` 선택 시 브라우저 개발자도구 Network에서 WS `/asr` 요청 URL에 `?language=ko`(또는 `en`)가 붙는지, `auto` 선택 시 `language` 파라미터가 생략되는지 확인.
   - 연결 직후 콘솔의 `Server applied source language: <값>` 로그(= `config` 메시지 `language` 필드)가 선택값과 일치하는지 확인.
@@ -54,7 +55,12 @@
 - 헬퍼: [scripts/vbcable_test.py](../scripts/vbcable_test.py)
 - `scripts/eval.py`는 기본으로 경로 C를 실행해 **WER + 화자분리 F1 + 문장분리 F1**을 산출한다(우선순위 = 화자분리 F1 > WER > 문장분리 F1; 정답 = `<name>.txt` canonical, `[spkN]` 헤더 신형식). *2지표 분리·신형식 파서 구현 완료 — 신형식 정답이 있으면 `seg_f1`=화자분리 F1·`sentence_f1`=문장분리 F1을 산출하고, 없거나 파싱 실패 시 구 regime(빈 줄 경계, `sentence_f1=None`)으로 폴백한다: [TRANSCRIPTION_REQUIREMENTS.md](TRANSCRIPTION_REQUIREMENTS.md) §5.*
   브라우저 `#linesTranscript`의 `.textcontent`(확정 문장)만 추출하므로 타임스탬프 행이 섞이지 않는다.
-- 만약 개발 PC에 로컬로 빌드된 `frontend/static` dist가 있어 eval.py의 Playwright 레거시 UI 테스트가 `#startButton` 타임아웃으로 실패하면, `--server-frontend-dir <빈 디렉터리>`로 서버의 `--frontend-dir`를 오버라이드해 레거시 UI로 강제 폴백시킨다.
+- **방침: 경로 C 자동화도 배포 UI를 기본 타깃으로 전환한다(내장 UI 사용 중단, CLAUDE.md §3.3/§3.7)**. 단
+  `scripts/vbcable_test.py`의 Playwright 스크래핑은 아직 **내장 UI 전용 DOM**(`#startButton` 등)에
+  하드코딩돼 있어, 로컬에 배포 UI dist(`frontend/static/index.html`)가 있으면 그 타임아웃으로 측정이
+  실패한다 — 후속 구현 전까지는 **과도기 조치**로 `--server-frontend-dir <빈 디렉터리>`(예
+  `.omc/eval_empty_frontend`)를 eval.py에 넘겨 내장 UI로 강제 폴백시켜야 측정이 돈다. 구현 계획은
+  [docs/backlog/BACKLOG_EVAL_DEPLOY_UI_MIGRATION.md](backlog/BACKLOG_EVAL_DEPLOY_UI_MIGRATION.md) 참조.
 - **산출물 위치**: 벤치마크 JSON `--output`(관례 `.omc/benchmarks/`) · 전사 `.omc/transcripts/{파일}_{경로}_R{회차}.txt` · **서버 로그** `.omc/server_logs/server_<stem>_<path>_R<rep>_<ts>.log`(회차별 항상 저장 — Exp-153; `[QualityGate]`/`[LangSwitch]`(후자는 `--trace-tokens` 시) 등 필터·전환 계측용). 언어 드리프트 진단용으로 **`[SotLangProbe]`**(SOT 위치 언어/태스크 사후분포 — DEBUG, `--trace-tokens` 시 캡처)와 **`[LangDriftStats]`**(세션 요약 — WARNING)도 같은 로그에 남는다. **둘 다 관측 전용**이라 디코딩 동작을 바꾸지 않는다(추가 forward 0회) — 끄려면 `whisperlivekit/simul_whisper/align_att_base.py`의 모듈 상수 `SOT_LANG_PROBE_ENABLED = False`.
 - **문장별 확정 트리거**: 전사 txt에 `[문장별 확정 트리거]` 섹션(각 문장 뒤 `⟨silence/punctuation/language_switch/speaker_change/-⟩`)이, JSON `files[].hyp_lines`(`[{"text","trigger"}, …]`)가 additive로 추가된다(WER/F1 계산은 불변). 문장 분리 로직 정성 분석용 — 경로 C는 UI DOM `data-trigger` 속성, 경로 A는 `lines[].finalize_trigger`에서 수집.
 - **언어 불일치율(LMR) 컬럼**: 콘솔 요약(`언어불일치: X.X% (Y.Y%p)`)·전사 txt 헤더·HTML 리포트(`언어불일치(KO→EN) X.X% (WER Y.Y%p)`)에 컬럼이, JSON `files[]`에 `lmr_ko`/`lmr_en`/`lmr_wer_pp` + 원카운트 `lang_mismatch` + `lang_flip_events`가 additive로 추가된다(WER/F1 계산은 불변). 정답 한국어 단어가 영어로 **치환** 전사된 비율 = 언어잠금 실패 진단용이며 **채택 게이트가 아니다**(정의·해석 = [TRANSCRIPTION_REQUIREMENTS.md](TRANSCRIPTION_REQUIREMENTS.md) §3·§4, 읽는 법 = [.claude/commands/eval.md](../.claude/commands/eval.md) 결과 해석 기준). 필드가 없는 옛 JSON은 `N/A`로 폴백하며, 해당 스크립트 정답 단어가 0개인 경우(eng1의 `lmr_ko`, kor1~3의 `lmr_en`)도 `0.0`이 아니라 `N/A`(측정 불가)다.
@@ -122,18 +128,21 @@ whisperlivekit-server
 
 - **터미널**: `test_client.py --live` 또는 `--json` 출력으로 `lines[]`(확정) + `buffer_transcription`(비확정)
   흐름까지 확인 가능. 백엔드 로그/print 병행. (경로 A 파일 기반 테스트용)
+- **배포 UI**(React, [frontend/app/](../frontend/app/) → 빌드 산출물 `frontend/static/`에서 서빙): 서버 기동 후
+  브라우저에서 접속하면 마이크 캡처·실시간 전사·번역까지 한 화면에서 확인 가능. **경로 B 마이크 직접 녹음 +
+  번역 파이프라인 최종 검증까지 공통으로 쓰는 기본 UI.**
 - **WhisperLiveKit 내장 웹 UI**
-  ([whisperlivekit/web/live_transcription.html](../whisperlivekit/web/live_transcription.html) + `live_transcription.js`,
-  `live_transcription.css`, 서버 실행 시 `GET /`에서 자동 서빙됨): 서버 기동 후 브라우저에서 접속하면 마이크 캡처 및
-  실시간 전사 결과를 UI상에서 시각적으로 확인 가능. (경로 B 마이크 직접 녹음 테스트용)
-- **기존 React 웹 UI**: 번역(llama) 파이프라인까지 묶어 최종 검증할 때 연결.
+  ([whisperlivekit/web/live_transcription.html](../whisperlivekit/web/live_transcription.html)): 더 이상
+  검증에 사용하지 않는다 — 배포 UI dist가 없을 때만 뜨는 레거시 폴백이며, 경로 C 자동화(`vbcable_test.py`)가
+  아직 이 UI의 DOM에 의존하는 과도기 동안만 코드로 남아있다.
 
 ### 권장 검증 순서
 
 1. `test_client.py`로 mp3/wav 송신 (경로 A) → 터미널에서 번역 제외, 실시간 STT 전사 동작 확인 (개발 스모크)
-2. 서버 기동 후 브라우저 + 마이크 직접 녹음 (경로 B) → 내장 웹 UI에서 실시간 전사 결과 시각 확인 (정성 평가)
+2. 서버 기동 후 브라우저 + 마이크 직접 녹음 (경로 B) → **배포 UI**에서 실시간 전사 결과 시각 확인 (정성 평가;
+   dist 없으면 `frontend/app`에서 `pnpm build`로 먼저 만든다)
 3. `test_client.py --live` 터미널 출력으로 확정/비확정 플래그 + 언어 전환 동작 확인
-4. 기존 React 웹 UI 연결 후 번역 + 최종 UI 표출까지 확인
+4. 번역(llama) 파이프라인까지 켜서 같은 배포 UI로 최종 표출 확인
 
 ---
 
