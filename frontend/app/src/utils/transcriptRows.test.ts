@@ -5,7 +5,7 @@
  * id 가 충돌해도 서로를 지우면 안 된다.
  */
 import { describe, expect, it } from 'vitest';
-import { buildRows, freezeLines, toSavePayload, type RowInput } from './transcriptRows';
+import { buildRows, freezeLines, type RowInput } from './transcriptRows';
 import { lineKey } from './deltaProtocol';
 import type { Segment, VolatileState } from '@/types/stt';
 
@@ -162,22 +162,6 @@ describe('buildRows — 특수 화자 값 (기존 UI 형태 유지)', () => {
       input({ serverLines: [seg(2, '처리중', { speaker: 0, finalized: false })] }),
     );
     expect(rows.map((r) => r.text)).toEqual(['처리중']);
-  });
-});
-
-describe('toSavePayload', () => {
-  it('빈 줄을 제외하고, buffer 꼬리는 본문에 합친다', () => {
-    const rows = buildRows(
-      input({
-        finalizedHistory: historyOf(seg(0, '저장될 줄'), seg(1, null, { speaker: -2 })),
-        serverLines: [seg(2, '진행중', { finalized: false })],
-        volatile: { ...VOLATILE, buffer_transcription: ' 꼬리' },
-      }),
-    );
-    expect(toSavePayload(rows)).toEqual([
-      { speaker: 1, text: '저장될 줄', translation: null },
-      { speaker: 1, text: '진행중 꼬리', translation: null },
-    ]);
   });
 });
 

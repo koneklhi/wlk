@@ -43,13 +43,20 @@ function SttMainInner() {
   // 목록 끝 sentinel — 행마다 ref 를 갈아끼우지 않고 여기 한 곳만 스크롤 타겟으로 쓴다.
   const endRef = useRef<HTMLDivElement | null>(null);
   const scrollBoxRef = useRef<HTMLDivElement | null>(null);
+  // 사용자가 위로 올려 읽는 중인지. '콘텐츠 증가'가 아니라 '사용자의 스크롤 행위'로만 갱신한다.
+  const stickToBottomRef = useRef(true);
 
-  useEffect(() => {
+  // 스크롤 이벤트(사용자 조작)에서만 바닥 고정 여부를 판정한다.
+  const handleScroll = () => {
     const box = scrollBoxRef.current;
     if (!box) return;
-    // 사용자가 위로 올려 다시 읽는 중이면 끌어내리지 않는다.
-    const nearBottom = box.scrollHeight - box.scrollTop - box.clientHeight < AUTOSCROLL_THRESHOLD_PX;
-    if (nearBottom) endRef.current?.scrollIntoView({ behavior: 'smooth' });
+    stickToBottomRef.current =
+      box.scrollHeight - box.scrollTop - box.clientHeight < AUTOSCROLL_THRESHOLD_PX;
+  };
+
+  useEffect(() => {
+    // 바닥에 붙어 있던 경우에만 새 전사/번역을 따라간다. 즉시 스크롤로 smooth 피드백 루프 차단.
+    if (stickToBottomRef.current) endRef.current?.scrollIntoView({ block: 'end' });
   }, [rows]);
 
   // 세션 오류를 화면에 내보낸다. 이게 없으면 마이크 권한 거부·연결 실패가 전부
@@ -123,6 +130,7 @@ function SttMainInner() {
         ) : (
           <div
             ref={scrollBoxRef}
+            onScroll={handleScroll}
             className="w-full h-full overflow-y-auto pt-8 pb-12 px-16 custom-scrollbar"
             style={isOpenSidebar ? { paddingRight: '512px' } : undefined}
           >

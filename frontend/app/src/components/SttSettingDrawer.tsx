@@ -4,7 +4,7 @@
  * UI 형태는 기존 배포 UI 그대로 유지한다. 바뀐 것은 두 가지뿐:
  *   ① 버튼 활성/비활성을 세션 phase 에서 파생 — 예전에는 자체 boolean 을 봐서 종료 후 먹통이 됐다.
  *   ② 언어 select 가 즉시 재연결하지 않고 값만 저장 — 세션 중 언어 변경은 새 연결이 필요하다.
- * 그리고 기존 행 스타일 그대로 '전사 저장'·'시각 표시' 두 행을 추가했다.
+ * 그리고 기존 행 스타일 그대로 '시각 표시' 행을 추가했다.
  */
 import {
   AlertDialog,
@@ -21,17 +21,14 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { WaveformVisualizer } from '@/components/WaveformVisualizer';
 import { APP_VERSION, BASE_PATH } from '@/constants';
-import { saveTranscript } from '@/api/transcript';
 import { useTranscriptRows } from '@/hooks/useTranscriptRows';
 import useSettingSidebarStore from '@/stores/stt-sidebar-store';
 import { useSttStore } from '@/stores/stt.store';
 import { useThemeStore } from '@/stores/theme.store';
 import { LANGUAGE_OPTIONS, type SourceLanguage } from '@/types/stt';
-import { toSavePayload } from '@/utils/transcriptRows';
 import { AnimatePresence, motion } from 'framer-motion';
 import { X } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
-import { toast } from 'react-toastify';
 
 /**
  * 녹음 중인데 이 시간이 지나도록 표시할 전사가 한 줄도 없으면 "입력 음성 없음" 으로 알린다.
@@ -72,7 +69,6 @@ export const SttSettingDrawer = ({
   const setLanguage = useSttStore((s) => s.setLanguage);
 
   const rows = useTranscriptRows();
-  const [saving, setSaving] = useState(false);
 
   // 소리가 안 들어오는 상태를 상태 라벨로 드러낸다. 예전에는 마이크가 엉뚱한 장치로
   // 잡혀도 화면이 '인식 중' 그대로여서 사용자가 원인을 알 길이 없었다.
@@ -98,7 +94,6 @@ export const SttSettingDrawer = ({
   const canPauseOrResume = phase === 'recording' || isPaused || isStopping;
   const canStop = phase === 'recording' || isPaused || isStopping;
   const canChangeLanguage = phase === 'idle' || phase === 'error';
-  const hasTranscript = rows.length > 0;
 
   const {
     backgroundColor,
@@ -128,23 +123,6 @@ export const SttSettingDrawer = ({
   const handleResetTheme = useCallback(() => {
     useThemeStore.getState().reset();
   }, []);
-
-  const handleSave = useCallback(async () => {
-    const lines = toSavePayload(rows);
-    if (lines.length === 0) {
-      toast.warn('저장할 전사 내용이 없습니다.');
-      return;
-    }
-    setSaving(true);
-    try {
-      const res = await saveTranscript({ lines });
-      toast.success(`전사 ${res.line_count}줄을 저장했습니다.`);
-    } catch (e) {
-      toast.error(`저장 실패: ${e instanceof Error ? e.message : '알 수 없는 오류'}`);
-    } finally {
-      setSaving(false);
-    }
-  }, [rows]);
 
   return (
     <>
@@ -217,7 +195,7 @@ export const SttSettingDrawer = ({
                       </AlertDialogTrigger>
                       <AlertDialogContent>
                         <AlertDialogHeader>
-                          <AlertDialogTitle>녹음 종료</AlertDialogTitle>
+                          <AlertDialogTitle>음성인식종료</AlertDialogTitle>
                           <AlertDialogDescription>
                             종료를 진행할 경우 번역 기록이 초기화됩니다.
                           </AlertDialogDescription>
@@ -252,18 +230,6 @@ export const SttSettingDrawer = ({
                       </option>
                     ))}
                   </select>
-                </div>
-
-                {/* ── 전사 저장 ── */}
-                <div className="flex justify-between items-center">
-                  <p className="font-semibold text-base">전사 저장</p>
-                  <Button
-                    variant="outline"
-                    onClick={() => void handleSave()}
-                    disabled={saving || !hasTranscript}
-                  >
-                    {saving ? '저장 중...' : '저장'}
-                  </Button>
                 </div>
 
                 {/* ── 시각 표시 ── */}

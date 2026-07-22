@@ -144,14 +144,3 @@ export interface HealthResponse {
   backend: string | null;
   ready: boolean;
 }
-
-/** POST /api/save-transcript 요청 본문. */
-export interface SaveTranscriptRequest {
-  lines: Array<{ speaker: number; text: string; translation?: string | null }>;
-}
-
-export interface SaveTranscriptResponse {
-  status: 'success';
-  path: string;
-  line_count: number;
-}
