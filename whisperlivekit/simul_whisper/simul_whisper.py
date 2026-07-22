@@ -203,6 +203,27 @@ class AlignAtt(AlignAttBase):
             return False
         return fire_at_boundary(chunked_encoder_feature, self.state.CIFLinear)
 
+    def _lang_candidate_token_ids(self) -> List[int]:
+        """언어 감지 후보 토큰 id 목록 — cfg.lang_restrict_koen 반영.
+
+        lang_id()의 마스크 구성과 SOT 프로브(_read_sot_posteriors)의 재정규화가
+        **동일 규칙**을 쓰도록 한 곳에서 만든다(중복 구현 방지).
+
+        배포 환경 불변식: lang_restrict_koen이면 감지 후보를 {ko, en}로 제한.
+        매 디코드 스텝 마스킹(Exp-136, 기각)과 달리 감지 단계만 제한하므로
+        코드스위칭·영어 전사 모두 보존된다.
+        """
+        if getattr(self.cfg, 'lang_restrict_koen', False):
+            allowed = {"ko", "en"}
+            return [
+                tok for tok, code in zip(
+                    self.tokenizer.all_language_tokens,
+                    self.tokenizer.all_language_codes,
+                )
+                if code in allowed
+            ]
+        return list(self.tokenizer.all_language_tokens)
+
     @torch.no_grad()
     def lang_id(self, encoder_features):
         n_audio = encoder_features.shape[0]
@@ -210,21 +231,7 @@ class AlignAtt(AlignAttBase):
         logits = self.model.logits(x, encoder_features)[:, 0]
 
         mask = torch.ones(logits.shape[-1], dtype=torch.bool)
-        if getattr(self.cfg, 'lang_restrict_koen', False):
-            # 배포 환경 불변식: 감지 후보를 {ko, en}로 제한.
-            # 매 디코드 스텝 마스킹(Exp-136, 기각)과 달리 감지 단계만 제한하므로
-            # 코드스위칭·영어 전사 모두 보존된다.
-            allowed = {"ko", "en"}
-            allowed_token_ids = [
-                tok for tok, code in zip(
-                    self.tokenizer.all_language_tokens,
-                    self.tokenizer.all_language_codes,
-                )
-                if code in allowed
-            ]
-            mask[allowed_token_ids] = False
-        else:
-            mask[list(self.tokenizer.all_language_tokens)] = False
+        mask[self._lang_candidate_token_ids()] = False
         logits[:, mask] = -np.inf
         language_tokens = logits.argmax(dim=-1)
         language_token_probs = logits.softmax(dim=-1).cpu()
@@ -343,6 +350,105 @@ class AlignAtt(AlignAttBase):
                 logger.info("no speech, stop")
                 return True
         return False
+
+    def _read_sot_posteriors(self, logits):
+        """첫 forward logits에서 SOT/task 위치 사후분포를 읽는다 — **계측 전용**.
+
+        추가 forward 0회: infer()의 첫 forward는 new_segment일 때 전체 토큰 시퀀스를
+        넣으므로 logits shape이 [beam, T, V]다. 위치 sot_pos(= <|sot|>)의 logits는
+        "다음 토큰 = 언어 토큰" 분포이고, 이는 lang_id(encoder_feature)가 x=[[sot]]로
+        새 forward를 돌려 얻는 값과 수학적으로 동일하다(언어 토큰은 위치 1 이후라
+        causal mask 때문에 위치 0의 예측을 오염시키지 않는다).
+
+        신호 4종:
+          S1 p_ko/p_en        — lang_id와 동일 규칙(lang_restrict_koen)으로 재정규화한 확률.
+                                기존 [SessionStartLangProbe]/[ShortSilenceLangCheck] 로그와
+                                직접 비교 가능한 기준선.
+          S2 p_abs_*/resid/H  — **비정규화** 절대 언어질량. 기존 값은 전부 재정규화라
+                                "en 0.99"가 절대확신인지, 양쪽 질량이 미미한데 비율만
+                                en쪽인지 구분할 수 없었다. 음차 구간이 "어느 쪽도 아닌
+                                표상"이면 resid↑·H_lang↑로 나타난다.
+          S3 p_translate/p_transcribe — task 위치(sot_pos+1) 사후분포. <|translate|>는
+                                suppress_tokens로 **생성만** 막혀 있고 확률은 그대로 읽힌다.
+                                주의: <|en|><|translate|>는 whisper 학습에도 거의 없는
+                                조합이라 이 값은 "번역 의도 검출기"가 아니다 —
+                                **off-manifold 이상탐지기**로만 취급할 것(검증 대상 가설).
+          S4 p_nospeech       — 이미 계산돼 문턱 비교만 하고 버려지는 값(_check_no_speech).
+
+        불변식: logits를 in-place로 절대 수정하지 않는다. 호출 직후 infer()가 같은
+        텐서를 logits[:, -1, :]로 재사용하므로 슬라이스를 clone한 뒤에만 계산한다.
+        beam이 여러 개면 beam 0 기준(_check_no_speech가 no_speech_probs[0]을 쓰는 관례).
+        """
+        tok = self.tokenizer
+        if logits is None or getattr(logits, "ndim", 0) != 3:
+            return None
+
+        # sot 위치는 context 토큰 길이만큼 뒤로 밀린다(_current_tokens가 앞에 붙임).
+        # NOTE(백로그): state.sot_index 자체는 context 길이를 반영하지 않는다 —
+        # --max-context-tokens>0 / --static-init-prompt 사용 시 _check_no_speech가
+        # <|startofprev|> 위치를 읽는 잠재 버그. 운영 기본값(context 항상 빔)에선
+        # 잠복이며 여기서 고치지 않는다(행동 변경 금지). 신규 코드만 방어적으로 보정.
+        ctx_len = 0
+        ctx = getattr(self.state, "context", None)
+        if ctx is not None and not ctx.is_empty():
+            ctx_len = len(ctx.as_token_ids())
+        sot_pos = ctx_len + int(self.state.sot_index)
+        if sot_pos < 0 or sot_pos + 1 >= logits.shape[1]:
+            return None
+
+        all_ids = list(tok.all_language_tokens)
+        all_codes = list(tok.all_language_codes)
+        id_by_code = dict(zip(all_codes, all_ids))
+        ko_id, en_id = id_by_code.get("ko"), id_by_code.get("en")
+        if ko_id is None or en_id is None or not all_ids:
+            return None
+        cand_ids = self._lang_candidate_token_ids()
+        if not cand_ids:
+            return None
+
+        # clone 필수 — 아래 어떤 연산도 원본 logits를 건드리면 안 된다.
+        sot_logits = logits[0, sot_pos, :].detach().float().clone()
+        task_logits = logits[0, sot_pos + 1, :].detach().float().clone()
+        probs_sot = sot_logits.softmax(dim=-1)
+        probs_task = task_logits.softmax(dim=-1)
+        dev = probs_sot.device
+        eps = 1e-12
+
+        # S2: 전체 어휘 softmax에서의 절대 언어질량 + 언어 토큰 집합 엔트로피(nats)
+        p_abs_ko = probs_sot[ko_id]
+        p_abs_en = probs_sot[en_id]
+        resid = 1.0 - p_abs_ko - p_abs_en
+        lang_idx = torch.as_tensor(all_ids, dtype=torch.long, device=dev)
+        p_lang = probs_sot[lang_idx]
+        p_lang = p_lang / p_lang.sum().clamp_min(eps)
+        h_lang = -(p_lang * torch.log(p_lang.clamp_min(eps))).sum()
+
+        # S1: lang_id와 동일한 후보집합에 대한 재정규화 확률
+        cand_idx = torch.as_tensor(cand_ids, dtype=torch.long, device=dev)
+        cand_mass = probs_sot[cand_idx].sum().clamp_min(eps)
+        p_ko = p_abs_ko / cand_mass
+        p_en = p_abs_en / cand_mass
+
+        # S3 / S4
+        p_translate = probs_task[tok.translate]
+        p_transcribe = probs_task[tok.transcribe]
+        ns_id = getattr(tok, "no_speech", None)
+        p_nospeech = (probs_sot[ns_id] if ns_id is not None
+                      else torch.tensor(float("nan"), device=dev))
+
+        # GPU→CPU 동기화를 1회로 묶는다(.item() 다발은 매 배치 sync를 유발).
+        vals = torch.stack([
+            p_ko, p_en, p_abs_ko, p_abs_en, resid, h_lang,
+            p_translate, p_transcribe, p_nospeech,
+        ]).tolist()
+        return {
+            "p_ko": vals[0], "p_en": vals[1],
+            "p_abs_ko": vals[2], "p_abs_en": vals[3],
+            "resid": vals[4], "H_lang": vals[5],
+            "p_translate": vals[6], "p_transcribe": vals[7],
+            "p_nospeech": None if ns_id is None else vals[8],
+            "sot_pos": sot_pos, "ctx_len": ctx_len,
+        }
 
     def _suppress_blank_tokens(self, logits):
         logits[:, self.tokenizer.encode(" ") + [self.tokenizer.eot]] = -np.inf

@@ -1,0 +1,13 @@
+# 로그: .omc/server_logs/server_sbs1_C_R1_20260721_221509.log
+# 프로브 250개 · 방출 200개 · LangSwitch 3회 · Detected 1회 · ShortSilence 0회
+# t_abs 범위: 2.23 ~ 97.37s
+# locked 분포: ko=213 en=37 none=0
+# 최종 [LangDriftStats]: probes=249 locked_ko=212 locked_en=37 locked_none=0 mismatch_candidates=1 high_resid=148 high_translate=0 max_resid=0.6527 max_p_translate=0.0000 lang_locked=False
+
+==============================================================================
+## 3. mismatch 후보 전수 (p_opp >= 0.97) — 정당/오탐 분류용
+==============================================================================
+총 0건 (계측 코드 카운터와 대조할 것)
+
+연속 배치를 묶으면 0개 버스트:
+

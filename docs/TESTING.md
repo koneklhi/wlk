@@ -52,10 +52,18 @@
 - 마이크 입력 경로(경로 B)를 유지하면서 동일 음성으로 반복 측정 가능 → 재현성 있는 정량 평가.
   실제 오디오 파이프라인을 거치므로 Phase 2 채택/기각의 **1차 정량 신호**다.
 - 헬퍼: [scripts/vbcable_test.py](../scripts/vbcable_test.py)
-- `scripts/eval.py`는 기본으로 경로 C를 실행해 **WER + 화자분리 F1 + 문장분리 F1**을 산출한다(우선순위 = 화자분리 F1 > WER > 문장분리 F1; 정답 = 신형식 `_speak,sentence_sperate.txt` canonical). *2지표 분리·신형식 파서 구현 완료 — 신형식 정답이 있으면 `seg_f1`=화자분리 F1·`sentence_f1`=문장분리 F1을 산출하고, 없거나 파싱 실패 시 구 regime(빈 줄 경계, `sentence_f1=None`)으로 폴백한다: [TRANSCRIPTION_REQUIREMENTS.md](TRANSCRIPTION_REQUIREMENTS.md) §5.*
+- `scripts/eval.py`는 기본으로 경로 C를 실행해 **WER + 화자분리 F1 + 문장분리 F1**을 산출한다(우선순위 = 화자분리 F1 > WER > 문장분리 F1; 정답 = `<name>.txt` canonical, `[spkN]` 헤더 신형식). *2지표 분리·신형식 파서 구현 완료 — 신형식 정답이 있으면 `seg_f1`=화자분리 F1·`sentence_f1`=문장분리 F1을 산출하고, 없거나 파싱 실패 시 구 regime(빈 줄 경계, `sentence_f1=None`)으로 폴백한다: [TRANSCRIPTION_REQUIREMENTS.md](TRANSCRIPTION_REQUIREMENTS.md) §5.*
   브라우저 `#linesTranscript`의 `.textcontent`(확정 문장)만 추출하므로 타임스탬프 행이 섞이지 않는다.
-- **산출물 위치**: 벤치마크 JSON `--output`(관례 `.omc/benchmarks/`) · 전사 `.omc/transcripts/{파일}_{경로}_R{회차}.txt` · **서버 로그** `.omc/server_logs/server_<stem>_<path>_R<rep>_<ts>.log`(회차별 항상 저장 — Exp-153; `[QualityGate]`/`[LangSwitch]`(후자는 `--trace-tokens` 시) 등 필터·전환 계측용).
+- **산출물 위치**: 벤치마크 JSON `--output`(관례 `.omc/benchmarks/`) · 전사 `.omc/transcripts/{파일}_{경로}_R{회차}.txt` · **서버 로그** `.omc/server_logs/server_<stem>_<path>_R<rep>_<ts>.log`(회차별 항상 저장 — Exp-153; `[QualityGate]`/`[LangSwitch]`(후자는 `--trace-tokens` 시) 등 필터·전환 계측용). 언어 드리프트 진단용으로 **`[SotLangProbe]`**(SOT 위치 언어/태스크 사후분포 — DEBUG, `--trace-tokens` 시 캡처)와 **`[LangDriftStats]`**(세션 요약 — WARNING)도 같은 로그에 남는다. **둘 다 관측 전용**이라 디코딩 동작을 바꾸지 않는다(추가 forward 0회) — 끄려면 `whisperlivekit/simul_whisper/align_att_base.py`의 모듈 상수 `SOT_LANG_PROBE_ENABLED = False`.
 - **문장별 확정 트리거**: 전사 txt에 `[문장별 확정 트리거]` 섹션(각 문장 뒤 `⟨silence/punctuation/language_switch/speaker_change/-⟩`)이, JSON `files[].hyp_lines`(`[{"text","trigger"}, …]`)가 additive로 추가된다(WER/F1 계산은 불변). 문장 분리 로직 정성 분석용 — 경로 C는 UI DOM `data-trigger` 속성, 경로 A는 `lines[].finalize_trigger`에서 수집.
+- **언어 불일치율(LMR) 컬럼**: 콘솔 요약(`언어불일치: X.X% (Y.Y%p)`)·전사 txt 헤더·HTML 리포트(`언어불일치(KO→EN) X.X% (WER Y.Y%p)`)에 컬럼이, JSON `files[]`에 `lmr_ko`/`lmr_en`/`lmr_wer_pp` + 원카운트 `lang_mismatch` + `lang_flip_events`가 additive로 추가된다(WER/F1 계산은 불변). 정답 한국어 단어가 영어로 **치환** 전사된 비율 = 언어잠금 실패 진단용이며 **채택 게이트가 아니다**(정의·해석 = [TRANSCRIPTION_REQUIREMENTS.md](TRANSCRIPTION_REQUIREMENTS.md) §3·§4, 읽는 법 = [.claude/commands/eval.md](../.claude/commands/eval.md) 결과 해석 기준). 필드가 없는 옛 JSON은 `N/A`로 폴백하며, 해당 스크립트 정답 단어가 0개인 경우(eng1의 `lmr_ko`, kor1~3의 `lmr_en`)도 `0.0`이 아니라 `N/A`(측정 불가)다.
+- **LMR 소급 계산**: 이미 측정된 벤치 JSON은 서버 기동·오디오 재생 없이 다시 채점할 수 있다(JSON의 `reference`/`transcription`만으로 결정적 재계산).
+  ```powershell
+  .venv\Scripts\python.exe scripts/backfill_lang_mismatch.py .omc/benchmarks/eval_<ts>.json `
+    --ref-file test_data/bong1.txt `
+    --output .omc/benchmarks/eval_<ts>_lmr.json
+  ```
+  `--ref-file`(선택)을 주면 문장 단위 뒤집힘 이벤트까지 계산하고, 벤치 JSON의 `reference`와 정답 판본이 다르면 assert로 즉시 중단한다(워크트리별 정답 판본 차이로 인한 조용한 오정렬 방지). `--output`(선택)은 항상 **새 파일**에 쓴다 — 기존 측정 산출물을 in-place로 수정하지 않는다. 생략하면 콘솔 표만 출력.
 
 **수동 서버 기동 명령:**
 ```

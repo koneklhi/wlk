@@ -1,0 +1,18 @@
+# 로그: .omc/server_logs/server_kor3_C_R1_20260721_221057.log
+# 프로브 322개 · 방출 251개 · LangSwitch 0회 · Detected 0회 · ShortSilence 0회
+# t_abs 범위: 3.25 ~ 129.71s
+# locked 분포: ko=322 en=0 none=0
+# 최종 [LangDriftStats]: probes=321 locked_ko=321 locked_en=0 locked_none=0 mismatch_candidates=2 high_resid=175 high_translate=0 max_resid=0.9794 max_p_translate=0.0000 lang_locked=True
+
+==============================================================================
+## 3. mismatch 후보 전수 (p_opp >= 0.97) — 정당/오탐 분류용
+==============================================================================
+총 1건 (계측 코드 카운터와 대조할 것)
+
+연속 배치를 묶으면 1개 버스트:
+
+버스트 1: batch 30-30 t=12.95-12.95s locked=ko n=1 p_opp med=0.9969 max=0.9969
+    직전 방출: '전시' | '키' | '겠습니다'
+    버스트 내: —
+    직후 방출: '원' | '거리' | '타격'
+
