@@ -87,6 +87,13 @@
   - **bong1 max 회귀 정성분석**: 최악회차(35.2%) 전사를 정답과 전수 대조 — `This man Dismap Thank you. Thank you.`·`Okay, cool Thank you.`·`하하하하하` 등 **전형적인 bong1 웃음구간 필러/환각**(기존에 이미 광범위 문서화된 별개 미해결 이슈, STATE "Layer 3b 비음성 게이팅") 패턴이며, 화자전환 경계 관련 신규 왜곡·중복은 **발견되지 않음**. 이 fix가 새로 유발한 결함이 아니라고 판단되나(diarization과 무관한 영역), 로그만으로 인과관계 100% 배제는 불가.
 - **최종 판정**: **조건부 채택권고** — 브랜치 커밋 완료(`80f4bbd`). 목표 결함(kor1 flip-flop) 해소 확증 + ytn2·sbs1 명확 개선. bong1만 max 게이트 초과했으나 원인이 별개 기존 이슈로 보여 CLAUDE.md §4 우선순위 엄격 적용 시 미통과라도 **자율 기각하지 않고 사용자 확인으로 에스컬레이션**(Exp-176/199/200과 동일 선례). `/log-experiment` 기록 완료(Exp-204).
 
+### It-6. T1+T5 결합 검증 [ko 스크리닝 완료 — 이상적 결합 확인, auto 무회귀 측정 중]
+
+- **목적**: T1(`9c17e0f`)·T5(`80f4bbd`)가 서로 다른 브랜치에서 독립 개발돼 함께 측정된 적이 없어(아침 확인 요청 항목), 워크트리 `worktrees/hallu-t1t5-combined-check`(브랜치 `exp/hallu-t1t5-combined-check`)에 두 커밋을 `git cherry-pick`으로 합쳐 검증.
+- **결과**: cherry-pick 충돌 0건, 전체 752 passed·1 skipped·ruff clean.
+- **ko 스크리닝(kor1~3, N=1) — 이상적인 결합 효과 확인**: kor1 NewSpeaker **3회**(T5 단독 시 4회와 비슷한 수준 — 노이즈 대부분 제거) 중 **3/3 전부 "경계 재디코딩 스킵"(T1 로직) 발동** — Refresh는 무관한 정상 침묵-refresh 3회뿐. 즉 T5가 노이즈성 이벤트 자체를 원천에서 줄이고, T1이 남은 진짜 이벤트의 재디코딩 비용까지 제거해 **두 fix가 정확히 설계대로 상호보완**함을 실측 확인. WER kor1 11.7%/kor2 17.9%/kor3 35.8% — 무관 밴드 내.
+- **다음**: auto 무회귀(bong1/ytn2/sbs1) 측정 진행 중.
+
 ### T4 — bong1 필러 타임스탬프 정체 시그니처 판정 [완료 — 확장 불가로 종결]
 
 - **판정**: T2 계측(`[SilenceHalluProbe]`)을 bong1(웃음구간 포함)에 적용했으나 **would_hold 0건**(§It-2 측정 2) — T5 확정측정(§It-5 측정 3)에서 bong1의 "Thank you"류 필러가 다시 뚜렷하게 관측됐음에도, 그 필러 방출 시점들이 T2의 후보 시그니처(attention_reached_end ∧ frame_advance≈0)와 **매칭되지 않는다**. 즉 T2 게이트를 웃음 필러까지 확장하는 방안은 **성립하지 않음** — 별개 메커니즘으로 판단.
