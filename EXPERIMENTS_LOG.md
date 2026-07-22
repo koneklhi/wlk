@@ -5347,3 +5347,22 @@ CLAUDE.md §4 "채택 확정 = repeat 3" 게이트는 **생략**(사용자가 �
 - bong1 웃음구간 Layer 3b 비음성 게이팅은 이 fix와 별개로 여전히 미해결(STATE 기록 유지).
 
 **JSON**: `.omc/benchmarks/eval_20260723_0041_hallu_t5_ko_screen.json`(ko 스크리닝) · `eval_20260723_0055_hallu_t5_auto_noregress.json`(auto N=1) · `eval_20260723_0111_hallu_t5_auto_confirm_N3.json`(auto 확정 N=3). 서버 트레이스 `.omc/server_logs/server_{kor1,kor2,kor3,bong1,ytn2,sbs1}_C_R*_20260723_0*.log`.
+
+---
+
+## Exp-205 — T1+T5 결합 검증 (cherry-pick 상호작용 확인, 스크리닝 전용) (2026-07-23) [E6 후보, `exp/hallu-t1t5-combined-check`(커밋 `3ac30b8` = `9c17e0f`+`80f4bbd` cherry-pick) — 환각루프, 코드 신규작성 없음]
+
+**언어모드**: ko(kor1~3, N=1) + auto(bong1·ytn2·sbs1, N=1). **목적은 회귀 확정이 아니라 T1·T5 상호작용 확인**(두 fix가 별도 브랜치에서 독립 개발돼 함께 측정된 적이 없었음).
+
+**방법**: 워크트리 `worktrees/hallu-t1t5-combined-check`, `master`에서 분기 후 `git cherry-pick 9c17e0f 80f4bbd` — **충돌 0건**. 전체 752 passed·1 skipped(무관)·ruff clean.
+
+### 결과
+
+**ko 스크리닝 — 이상적 상호보완 확인**: kor1 NewSpeaker **3회**(T5 단독 4회와 비슷한 노이즈 억제 수준) 중 **3/3 전부 T1의 "경계 재디코딩 스킵"(lang_locked) 발동** — Refresh는 무관한 정상 침묵-refresh 3회뿐. WER kor1 11.7%/kor2 17.9%/kor3 35.8%(무관 밴드). **설계대로 두 fix가 정확히 상호보완**(T5=노이즈 이벤트 자체 감소, T1=남은 진짜 이벤트의 재디코딩 비용 제거).
+
+**auto 무회귀(N=1)**: bong1 23.5%(seg_f1 0.55)·ytn2 24.1%(seg_f1 0.73)·sbs1 12.5%(seg_f1 0.80) — **Exp-161 게이트(30.5/34.5/16.1) 전부 이내**, T5 단독 확정측정(Exp-204)의 bong1 max 우려도 이번 회차엔 재현 안 됨(단 N=1). auto 모드에서는 `cfg.language=="auto"`라 T1의 `lang_locked` 분기가 애초에 비활성(grep으로 잡힌 "경계 재디코딩 스킵" 로그는 전부 기존 Exp-196 auto 동일언어 스킵 — T1과 무관, 예상대로 T1이 auto 경로에 관여하지 않음을 재확인).
+
+### 결론
+**계측완료(채택/기각 비대상, 신규 코드 없음) — 결합 시 상호작용 문제 없음 확인.** 두 fix는 서로 다른 계층(T5=diar 이벤트 dispatch 소스, T1=new_speaker 재디코딩 분기)에서 독립적으로 작동하며 간섭하지 않는다. auto 경로는 예상대로 T1이 관여하지 않아(lang_locked 전용) T5만 효과를 내고, ko 경로는 둘 다 효과를 내 최상의 결합 결과를 보임. **정식 채택 확정(--repeat 3)은 T1·T5 개별 머지가 승인된 이후 별도로 필요**(이번 검증은 스크리닝 1회, 상호작용 부재 확인이 목적).
+
+**JSON**: `.omc/benchmarks/eval_20260723_0130_hallu_t1t5_ko_screen.json` · `eval_20260723_0142_hallu_t1t5_auto_noregress.json`.
