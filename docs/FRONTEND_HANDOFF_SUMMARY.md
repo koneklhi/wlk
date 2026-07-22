@@ -405,6 +405,10 @@ function applyMessage(lines, msg) {
 
 ## 8. 전사 저장 API (`/api/save-transcript`)
 
+> **현재 React 배포 UI에서는 저장 버튼이 제거됐다**(2026-07-22). 백엔드 엔드포인트(`POST /api/save-transcript`)와
+> `--transcript-save-dir`는 그대로 유지되므로 아래 계약은 유효하며, 향후 저장 UI를 다시 붙이면 그대로
+> 재사용할 수 있다. 다만 현행 배포 UI는 이 엔드포인트를 호출하지 않는다(내장 UI의 저장 버튼과는 별개).
+
 WS `/asr`와 별개로, 사용자가 UI의 **저장 버튼을 눌렀을 때**만 누적 전사를 서버 로컬 파일로
 저장하는 REST 엔드포인트다(브라우저 다운로드가 아니라 서버 프로세스가 디스크에 씀).
 **녹음 종료(`ready_to_stop`) 시 자동 호출하지 않는다** — 버튼을 누르지 않으면 저장되지 않는다.
@@ -482,7 +486,7 @@ WS `/asr`와 별개로, 사용자가 UI의 **저장 버튼을 눌렀을 때**만
 - [ ] **증분 렌더**: `key={line.id}`로 리스트를 렌더해 공통 prefix가 재사용되게 한다(전체 교체 렌더 금지 —
       세션이 길어지면 매 메시지 전체 재렌더가 메인스레드를 잡아먹는다). `lines[]` +
       `buffer_transcription`(마지막 줄 미확정) 합성은 그대로.
-- [ ] 저장 버튼 클릭 시 `POST /api/save-transcript` 호출(§8) — 자동 저장 아님.
+- [x] ~~저장 버튼 클릭 시 `POST /api/save-transcript` 호출~~ — **현행 배포 UI에서 저장 버튼 제거됨(§8, 2026-07-22)**. 백엔드 엔드포인트는 유지되나 UI는 호출하지 않음.
 - [ ] 오디오 캡처 구현: **WebM(MediaRecorder) 기본**, 또는 PCM(AudioWorklet+Worker, 서버
       `--pcm-input` 시). 재사용 가능한 내장 코드는 §6.4 참고.
 - [ ] 필드 타입 변경: `start`/`end`는 `"HH:MM:SS"` 문자열(PC 실제 벽시계 시각, 센티초 없음),
