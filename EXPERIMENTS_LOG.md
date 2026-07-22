@@ -5301,3 +5301,49 @@ CLAUDE.md §4 "채택 확정 = repeat 3" 게이트는 **생략**(사용자가 �
 - 시간 남으면 ytn2/bong1을 반복 측정해 "John Gyeong"류 사례 재현율 확인(sbs1 "사태라"처럼 5회 중 3회 수준인지).
 
 **JSON**: `.omc/benchmarks/eval_20260723_00XX_hallu_t3_auto_probe.json`. 서버 트레이스 `.omc/server_logs/server_{sbs1,ytn2,bong1}_C_R1_20260723_00*.log`.
+
+---
+
+## Exp-204 — ChangeSpeaker dispatch 노이즈 필터 (kor1 flip-flop 근본원인 수정) (2026-07-23) [E6 후보, `exp/hallu-t5-changespeaker-dispatch-filter`(커밋 `80f4bbd`, **미머지** — 환각루프 T5, §3 예비항목에서 승격]
+
+**언어모드**: ko(kor1~3, `--lan ko`, N=1 스크리닝) + auto(bong1·ytn2·sbs1, `--lan auto`, N=1 스크리닝 + `--repeat 3` 확정).
+
+**배경**: T1 확정측정(Exp-201) 로그를 재분석하다 발견 — kor1 flip-flop 버스트가 단일 순간에 NewSpeaker 8회 연속 발생(중간 정상 디코딩 처리 없이 로그가 바로 이어짐). Exp-188(`MIN_SPEAKER_ATTRIBUTION_SECS`, 텍스트 화자라벨링 계층)이 이 버스트를 걸러줄 것으로 기대했으나, 버스트 구간에 `[SpeakerAttribution]` 로그가 **0건** — 그 완화책이 이 dispatch 경로엔 애초에 적용 대상이 아님을 실측 확인. `audio_processor.py _update_diarization_state()`가 Sortformer 원시 세그먼트의 화자변화를 감지할 때마다 **세그먼트 길이 검사 없이** `ChangeSpeaker`를 dispatch하는 것이 근본원인(설계 사각지대).
+
+### 수정 내용
+- `whisperlivekit/audio_processor.py` — 모듈 상수 `CHANGE_SPEAKER_DISPATCH_FILTER_ENABLED`(롤백 플래그)·`MIN_CHANGE_SPEAKER_DISPATCH_SECS=0.5`(기존 `MIN_SPEAKER_ATTRIBUTION_SECS`와 동일값) 신설.
+- `_update_diarization_state()` — 세그먼트 길이가 문턱 미만이면 dispatch뿐 아니라 `_last_diar_speaker` 상태 갱신도 스킵(짧은 flip이 상태를 오염시켜 이후 진짜 화자 복귀가 스퓨리어스 전환으로 재판정되는 것도 함께 방지).
+- **TDD**: 신규 유닛 8개(문턱 미만·이상·경계값·세션최초·상태오염방지·롤백 A/B 대조·공유state 무변경) 전부 GREEN. 전체 750 passed·1 skipped(무관)·ruff clean.
+- **⚠️ 유사 전례**: ChangeSpeaker 디바운스가 Exp-106(E1, base 기질)에서 ytn2 회귀 전력 — 시간기반 디바운스가 아닌 순수 최소길이 필터라 메커니즘이 다르고 base 기질 결론이라 epoch 게이트상 방향신호일 뿐이지만, ytn2를 특히 주의해 재검증함.
+
+### 테스트 세트 결과
+
+**ko 스크리닝(N=1) — 표적 지표**: kor1 NewSpeaker **22~30회(Exp-201 로그) → 4회**(대폭 감소). Refresh=5(이 브랜치는 T1 fix 미포함이라 남은 이벤트는 여전히 refresh 유발 — 예상대로). WER kor1 13.5%/kor2 13.8%/kor3 32.5%(무관 밴드 내).
+
+**auto 확정측정(`--repeat 3`, N=3, median/max) vs Exp-161 게이트(bong1≤30.5%/ytn2≤34.5%/sbs1≤16.1%)**:
+
+| 파일 | WER (R1/R2/R3) | median | max | 게이트 | seg_f1 |
+|------|-----------------|--------|-----|--------|--------|
+| bong1 | 27.1/33.7/35.2 | 33.7% | **35.2%(게이트 초과 +4.7pp)** | 30.5% | 0.50/0.53/0.65 |
+| ytn2 | 21.2/17.2/18.7 | 18.7% | 21.2%(이내, 대폭개선) | 34.5% | 0.60/0.70/0.86 |
+| sbs1 | 10.7/11.3/8.9 | 10.7% | 11.3%(이내, 대폭개선) | 16.1% | 0.40/0.80/0.80 |
+
+### 분석 (전사 내용 정성 대조)
+
+- **ytn2·sbs1**: 게이트 대폭 이내로 개선. **Exp-106이 우려한 ytn2 디바운스류 회귀는 이번엔 재현 안 됨** — 오히려 median이 baseline(28.1%) 대비 큰 폭 개선(18.7%). 순수 최소길이 필터가 시간기반 디바운스와 다른 메커니즘임이 실측으로도 뒷받침됨.
+- **bong1 max 35.2% 회귀 원인 분석**: 최악회차 전사를 정답과 전수 대조 — `This man Dismap Thank you. Thank you.`·`Okay, cool Thank you.`·`하하하하하` 등 **전형적인 bong1 웃음구간 필러/환각 패턴**(기존에 이미 광범위하게 문서화된 별개 미해결 이슈, STATE "Layer 3b 비음성 게이팅" 참조)이며, 화자전환 경계에서의 왜곡·중복 등 **diarization/ChangeSpeaker 관련 신규 아티팩트는 발견되지 않음**. 즉 이 회귀는 bong1의 기존·독립적 웃음 환각 변동성(원래도 회차마다 크게 요동)이 이번 3회 중 한 번 강하게 나타난 것으로 보이며, 이 fix가 새로 유발한 결함이 아니라고 판단됨(단 인과 100% 배제는 로그만으로 불가능).
+
+### 채택 (조건) 판정
+- **① 화자분리 F1 worst-case**: bong1 0.50~0.65(기존과 비슷한 밴드), ytn2·sbs1은 개선. 뚜렷한 worst-case 신규 붕괴 없음.
+- **② WER max 미회귀**: ytn2·sbs1 대폭 개선. **bong1만 게이트 초과(+4.7pp)** — §3.8 최우선 파일이라 엄격 적용 시 미통과. 단 위 정성분석상 원인이 이 fix와 무관한 별개 기존 이슈(웃음 환각)로 보임.
+- **③ Case B·중복 hard-gate**: 전수 대조에서 Case B 0건. 화자전환 관련 신규 중복 0건(발견된 중복/필러는 전부 기존 bong1 웃음 패턴).
+
+### 결론
+**조건부 채택권고 — 브랜치 커밋 완료(`80f4bbd`), 머지는 사용자 판단 대기.** 표적 지표(kor1 flip-flop 22~30회→4회)와 ytn2·sbs1 개선은 명확하나, bong1 max가 게이트를 초과했다(+4.7pp). 정성분석 결과 그 원인이 이 fix가 건드리지 않는 **별개의 기존 미해결 이슈**(웃음구간 필러 환각, Layer 3b 비음성 게이팅 — STATE에 오래전부터 기록된 채 미해결)로 보이나, 로그만으로 인과관계를 100% 배제할 수는 없다. CLAUDE.md §4 채택 우선순위상 "①max 미회귀"를 엄격 적용하면 미통과이지만, §3.8 최우선 파일(bong1)의 max 회귀 원인이 이 코드 경로 밖에 있어 보이는 애매한 경우라 **자율 기각하지 않고 사용자 확인으로 에스컬레이션**(Exp-176/199/200과 동일한 선례).
+
+### 다음 가설
+- bong1만 별도로 N을 늘려(예: 5회) 이 fix의 실제 bong1 영향을 웃음환각 변동성과 분리 가능한지 확인.
+- 채택 시 T1(`exp/hallu-t1-lang-locked-skip`)과 함께 머지하면 lang_locked 세션에서 이중 효과(경계 재디코딩 스킵 + 스팸 이벤트 자체 감소) 기대 — 별도 브랜치라 함께 측정한 적은 없음.
+- bong1 웃음구간 Layer 3b 비음성 게이팅은 이 fix와 별개로 여전히 미해결(STATE 기록 유지).
+
+**JSON**: `.omc/benchmarks/eval_20260723_0041_hallu_t5_ko_screen.json`(ko 스크리닝) · `eval_20260723_0055_hallu_t5_auto_noregress.json`(auto N=1) · `eval_20260723_0111_hallu_t5_auto_confirm_N3.json`(auto 확정 N=3). 서버 트레이스 `.omc/server_logs/server_{kor1,kor2,kor3,bong1,ytn2,sbs1}_C_R*_20260723_0*.log`.
