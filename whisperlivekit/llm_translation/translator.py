@@ -97,7 +97,7 @@ class TranslatorBase:
     def build_prompt(self, content: str, system_blocks: list) -> str:
         """system_blocks 리스트를 받아서 최종 프롬프트 문자열 생성"""
         full_system_content = "\n\n".join(system_blocks)
-        analysis_instruction = f"We need to translate the following sentence into formal."
+        analysis_instruction = "We need to translate the following sentence into formal."
 
         return f"""<|start|>system<|message|>
         {full_system_content}<|end|>
