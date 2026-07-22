@@ -43,10 +43,15 @@ export function useSttSession() {
     [prepare, startEncoder, stopEncoder, teardown],
   );
 
-  /** 시작 버튼. paused 였으면 이어서(누적 전사 유지), idle 이었으면 새로 시작. */
+  /**
+   * 시작 버튼. paused/stopping 이었으면 이어서(누적 전사 유지), idle 이었으면 새로 시작.
+   *
+   * 'stopping'(직전 세션 flush 대기)에서도 재개를 허용한다 — 새 소켓이라 이전 flush 와 무관하고,
+   * 기다리게 하면 서버가 느린 만큼 버튼이 잠긴다.
+   */
   const startOrResume = useCallback(() => {
-    const resume = useSttStore.getState().phase === 'paused';
-    return start({ resume });
+    const phaseNow = useSttStore.getState().phase;
+    return start({ resume: phaseNow === 'paused' || phaseNow === 'stopping' });
   }, [start]);
 
   /**

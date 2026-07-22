@@ -21,6 +21,7 @@ import {
   reconstructLines,
   sameSegment,
 } from '@/utils/deltaProtocol';
+import { freezeLines } from '@/utils/transcriptRows';
 import { buildWsUrl } from '@/utils/wsUrl';
 import { getHealth } from '@/api/health';
 import type {
@@ -146,6 +147,10 @@ export const useSttStore = create<SttStore>()((set, get) => ({
 
   // ── 세션 시작 (유일한 소켓 생성 지점) ──────────────────────────────────────
   beginSession: ({ resume }) => {
+    // flush(ready_to_stop) 를 기다리지 않고 재개하는 경로가 있으므로(사용자가 바로 눌렀거나
+    // 서버 flush 가 느린 경우), 여기서 한 번 더 동결한다. 이미 흡수됐으면 같은 키를 덮어써
+    // 결과가 같다 — 빠뜨리면 그 회차의 마지막 발화만 조용히 사라진다.
+    if (resume) absorbTail(set, get);
     const s = get();
 
     // 기존 소켓은 무조건 정리한다. "이미 OPEN 이면 return" 은 절대 하지 않는다 —
@@ -355,12 +360,15 @@ export const useSttStore = create<SttStore>()((set, get) => ({
         if (get().stopIntent !== 'pause') return; // fullstop 후 늦게 온 것은 무시
         flushTimer = clearTimer(flushTimer);
         absorbTail(set, get);
-        set({ isFinalizing: true });
         try {
           get().ws?.close();
         } catch {
           /* noop */
         }
+        // paused 전환을 close 이벤트에 맡기지 않는다. flush 는 끝났고(서버가 그렇게 말했다)
+        // 소켓 close 는 서버 사정으로 늦거나 아예 안 올 수 있는데, 그동안 phase 는 'stopping'
+        // 이라 재개/종료 버튼이 잠긴 채였다 — "재개가 한참 뒤에야 눌린다"의 정체다.
+        set({ phase: 'paused', stopIntent: null, isFinalizing: true });
         return;
       }
 
@@ -493,20 +501,25 @@ function applyState(set: SetFn, get: GetFn, lines: Segment[], v: VolatileState, 
 }
 
 /**
- * 세션을 동결하기 전에 미확정 줄을 확정 이력으로 흡수한다.
+ * 세션을 동결하기 전에 화면 내용을 전부 확정 이력으로 흡수한다.
  *
- * committedLines 는 finalizedHistory 에서만 채워지므로, 이 처리가 없으면 일시중단 시점에
- * 아직 finalized=false 인 마지막 문장이 통째로 사라진다. EOS flush 가 보통 전부 확정해 주지만
- * '보통'은 '항상'이 아니고, 마지막 문장이 날아가는 건 바로 눈에 띈다.
+ * committedLines 는 finalizedHistory 에서만 채워지므로, 이 처리가 없으면 일시중단 시점의
+ * 미확정 내용이 재개 순간 사라진다. 흡수 대상은 미확정 **줄**만이 아니라 `volatile` 의
+ * buffer 꼬리까지다 — freezeLines() 가 buildRows() 와 같은 내용을 만들어 준다.
+ * (buffer 를 빼먹으면: 첫 문장 확정 전에 일시중단 시 화면이 통째로 비고, 확정 줄이 있어도
+ *  마지막 꼬리가 매번 날아간다. 둘 다 실측으로 확인된 증상이다.)
+ *
+ * buffer 만 있어 캐리어 줄이 만들어진 경우 id 가 null 이라 lineKey 가 겹칠 수 있으므로,
+ * 그 줄만 순번을 섞어 고유 키를 준다.
  */
 function absorbTail(set: SetFn, get: GetFn): void {
   const s = get();
-  if (s.serverLines.length === 0) return;
+  const frozen = freezeLines(s.serverLines, s.volatile);
+  if (frozen.length === 0) return;
 
   const history = new Map(s.finalizedHistory);
-  for (const ln of s.serverLines) {
-    if (!isRenderable(ln)) continue;
-    history.set(lineKey(ln), { ...ln, finalized: true });
-  }
+  frozen.forEach((ln, i) => {
+    history.set(ln.id === null ? `carrier:${i}` : lineKey(ln), ln);
+  });
   set({ finalizedHistory: history });
 }

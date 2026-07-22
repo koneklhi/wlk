@@ -108,6 +108,46 @@ export function buildRows(inp: RowInput): TranscriptRow[] {
 }
 
 /**
+ * 세션 동결 — 일시중단/재연결 직전의 화면 내용을 확정 줄 목록으로 만든다.
+ *
+ * `buildRows` 가 화면에 그리는 것과 **같은 내용**이 나와야 한다. 그래서 serverLines 뿐 아니라
+ * `volatile` 의 buffer 꼬리까지 흡수한다 — 이게 없으면 확정 전 발화가 재개 순간 사라진다.
+ * 실제로 그랬다: 첫 문장이 확정되기 전에 일시중단하면 화면이 통째로 비었고(캐리어 행만
+ * 있었으므로), 확정 줄이 있어도 마지막 buffer 꼬리는 매번 날아갔다.
+ */
+export function freezeLines(
+  serverLines: readonly Segment[],
+  v: VolatileState,
+): Segment[] {
+  const frozen: Segment[] = serverLines
+    .filter(isVisible)
+    .map((seg) => ({ ...seg, finalized: true }));
+
+  const tail = joinText(v.buffer_diarization ?? '', v.buffer_transcription);
+  const tailTranslation = (v.buffer_translation ?? '').trim();
+  if (!tail && !tailTranslation) return frozen;
+
+  const last = frozen[frozen.length - 1];
+  if (last) {
+    last.text = joinText(last.text ?? '', tail);
+    last.translation = joinText(last.translation ?? '', tailTranslation) || undefined;
+    return frozen;
+  }
+  // 확정 줄이 하나도 없다 = 화면엔 캐리어 행 + buffer 뿐이었다. 그 내용을 담을 줄을 만든다.
+  // id 는 buildRows 의 캐리어와 같은 규약(null)을 쓴다 — committedLines 는 순번으로 키를 만든다.
+  frozen.push({
+    id: null,
+    speaker: 1,
+    text: tail,
+    translation: tailTranslation || undefined,
+    start: '',
+    end: '',
+    finalized: true,
+  });
+  return frozen;
+}
+
+/**
  * 본문 + buffer 꼬리 결합. 서버 buffer 는 선행 공백을 포함해 오는 경우가 많으므로
  * 양쪽을 trim 한 뒤 공백 하나로 잇는다.
  */
