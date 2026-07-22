@@ -5179,3 +5179,53 @@ CLAUDE.md §4 "채택 확정 = repeat 3" 게이트는 **생략**(사용자가 �
 - bong1 꼬리 절단이 재현되면 → "반토막 오디오 20s 창 트림 전 재디코딩 실패" 폴백 경로 별도 조사(계획 §잔존 명시). 범위 밖: kor1 "전자기"→"전작이"(무로그 앰비귀티, 반토막 아님), BUG A(침묵후 유실, 별개 패밀리 — `docs/research/2026-07-22_kor-silence-wordloss-diagnostic.md`).
 
 **JSON**: `.omc/benchmarks/eval_utf8_{ON,OFF}_{ko,auto}_20260722_1718.json`(4개) · 서버 트레이스 `.omc/server_logs/server_*_C_R1_20260722_17*.log`(12개, ON=이른 ts/OFF=늦은 ts).
+
+---
+
+## Exp-201 — lang_locked 세션 new_speaker 경계 재디코딩 무조건 스킵 (2026-07-22) [E6 후보, `exp/hallu-t1-lang-locked-skip`(커밋 `9c17e0f`, **미머지** — 환각루프 T1)]
+
+**언어모드**: ko(kor1~3, `--lan ko`) 확정측정(`--repeat 3`) + auto(bong1·ytn2·sbs1, `--lan auto --repeat 1`) 무회귀 스크리닝.
+
+**배경**: 2026-07-22 환각루프 goal 세션의 사전 로그 분석(kor1~3·sbs1 각 5회 `--trace-tokens`)이 확정한 계열① — `backend.py new_speaker()`에서 `lang_locked`(ko/en 고정) 세션은 화자전환 시 eager 언어재감지를 아예 안 돌려(`eager=None`, 쿨다운 캐시 `_last_eager_lang_result`도 lang_locked 분기에선 설정되지 않아 영원히 비어 있음) "동일 언어 확정 시 경계 재디코딩 스킵"(Exp-196, E6) 조건의 `lang_evidence`가 항상 `None` → 조건이 구조적으로 절대 발동 못 함. 세션 언어는 화자전환으로 바뀔 수 없으므로 이 스킵은 고정 세션에서 항상 자명하게 참이어야 하는데 정반대로 매 화자전환마다 무조건 `refresh_segment`(경계 재디코딩)를 태워 중복 방출을 유발했다(kor1 R3=NewSpeaker 32회·Refresh 34회·WER 32.2%, R4=NewSpeaker 60회·Refresh 63회·WER 35.1% — goal 프롬프트 §2 계열① 원인 코드 확정 인용).
+
+### 수정 내용
+- `whisperlivekit/simul_whisper/backend.py:449~` — `new_speaker()` 최상단에서 `lang_locked`이면 eager 감지·`boundary_offset`·쿨다운 로직을 전혀 거치지 않고 곧장 "동일 언어 확정" 스킵 경로로 조기 return(화자 귀속 `self.model.speaker` 갱신만, `refresh_segment` 미호출). 기존 `if lang_locked: eager=None else: ...` 분기는 이제 도달 불가능한 죽은 코드였으므로 제거하고 `else` 본문을 그대로 dedent — auto 경로(비-lang_locked)의 로직·동작은 **글자 그대로 동일**(디덴트만, 재배치 아님).
+- `tests/test_session_language_lock.py` — 회귀 테스트 2개 신설: `test_new_speaker_locked_skips_boundary_refresh`(lang_locked → `refresh_segment.assert_not_called()`, 화자 귀속은 갱신됨), `test_new_speaker_auto_still_calls_refresh_segment_when_lang_differs`(대조군 — auto 세션은 여전히 `refresh_segment.assert_called_once()`, 회귀 없음 확인).
+
+**TDD**: RED 확인(수정 전 신규 테스트 1개 fail — `refresh_segment` 실제로 1회 호출되어 버그 재현) → GREEN(수정 후 신규 2개 포함 15개 전부 pass). 전체 스위트 `tests/` **744 passed·1 skipped**(무관), ruff 신규 위반 0.
+
+### 테스트 세트 결과
+
+**ko 확정측정(`--repeat 3`, N=3, median/max)**:
+
+| 파일 | WER (R1/R2/R3) | median | max | NewSpeaker (R1/R2/R3) | Refresh (R1/R2/R3) |
+|------|-----------------|--------|-----|------------------------|----------------------|
+| kor1 | 14.0/11.7/11.1 | 11.7% | 14.0% | 0/30/22 | 3/3/4 |
+| kor2 | 26.2/13.1/17.9 | 17.9% | 26.2% | 0/0/0 | 3/4/3 |
+| kor3 | 29.8/33.8/30.5 | 30.5% | 33.8% | 0/0/0 | 4/4/4 |
+
+**auto 무회귀 스크리닝(N=1)**: bong1 30.1%(게이트 ≤30.5%) · ytn2 14.3%(게이트 ≤34.5%) · sbs1 13.7%(게이트 ≤16.1%) — Exp-161 확정 게이트 전부 이내.
+
+**표적 지표 (설계 메커니즘 확증)**: kor1 R2(NewSpeaker 30회)·R3(22회)에서 **Refresh가 3~4회로 0-firing 회차(R1)와 동일 수준 유지** — 수정 전이라면 발동 횟수만큼(30·22회) 폭증했을 경로다. WER도 firing 회차(11.1~11.7%)가 0-firing 회차(14.0%)보다 오히려 낮음 — goal 프롬프트가 인용한 pre-fix 사례(NewSpeaker 32~60회 → Refresh 34~63회 → WER 32~35%)와 정반대 패턴으로, 목표 결함(중복방출) 해소를 직접 확인.
+
+### 분석 (전사 내용 정성 대조)
+
+**kor1** (ko, R1/R2/R3 hyp_lines 전수 대조): NewSpeaker 발동 회차(R2/R3)에서 텍스트 **중복·왜곡 0건** — 같은 발화 내용이 R1(0-firing)과 동일한 순서로 이어지며, 화자전환 지점마다 문장이 더 잘게 나뉠 뿐(예: R1 "…발전 중에 있고, 특히…AI, 드론, 로봇 등 유무인 복합 전투체계를…" 한 줄 vs R2 같은 구간이 "…AI, 드론, 로봇 등."/"유무인 복합 전투 체계를…" 2줄로 분리) 단어 유실·Case B(단어 중간 분절) 0건. **화자분리 F1**: R1=1.0 vs R2/R3=0.0 — 그러나 이는 이 fix가 유발한 게 아니라 **Sortformer가 단일화자 낭독(kor1)에서 flip-flop 오탐**(goal §2 계열① 진단과 동일 현상)해 `trigger=speaker_change` 줄바꿈이 정답에 없는 지점에 삽입된 것. 화자 귀속(`token.speaker`) 갱신 로직은 스킵 경로·재디코딩 경로 양쪽에서 **동일하게** 수행되므로(줄 끝 `self.model.speaker = change_speaker.speaker`), 이 fix 유무와 무관하게 발생했을 현상 — 별개 이슈(§3 T5 예비 "kor1 flip-flop 버스트 상류 완화"로 승계).
+
+**kor2·kor3** (ko, 전 회차 NewSpeaker 0회): 0-firing — 짝지음 원칙상 노이즈 대조군, 이 fix의 효과를 검증하지 못함(다음 세션에서 화자전환 재현 시도 여지).
+
+**이번 변경 영향**: kor1의 NewSpeaker 폭주 회차에서 목표한 Refresh 폭주·중복방출이 완전히 해소됨(설계대로 작동). 부수적으로 관측된 kor1 화자분리 F1 붕괴는 Sortformer 화자귀속 오탐(별개 근본원인)이며 이 fix가 신규로 유발한 것이 아님을 코드 경로 대조로 확인.
+
+### 채택 (조건) 판정
+- **① 화자분리 F1 worst-case**: kor1 R2/R3 0.0 — 표면상 우려되나 위 분석대로 fix와 무관(Sortformer flip-flop, 양쪽 코드 경로 동일 동작). ko 모드는 아직 F1 확정 baseline 미수립(STATE 명시)이라 "회귀" 비교 자체가 성립 안 함 — 별개 이슈로 분리 기록.
+- **② WER max 미회귀**: auto 3파일 전부 Exp-161 게이트 이내. ko는 baseline 없어 게이트 비교 불가하나 firing 회차가 오히려 개선 방향.
+- **③ Case B·중복 hard-gate**: 전수 대조 결과 0건. **통과**(fix가 refresh_segment 호출 자체를 건너뛰므로 재디코딩발 중복이 구조적으로 발생 불가).
+
+### 결론
+**브랜치 커밋 완료(`9c17e0f`) → 채택권고·머지 대기.** 목표 결함(lang_locked 세션 화자전환 시 무조건 재디코딩→중복방출)의 재현·수정·해소를 유닛테스트(RED→GREEN)와 실측(NewSpeaker 22~30회 발동에도 Refresh 3~4회 유지, 중복 0건) 양쪽으로 확증. auto 무회귀 확인. kor1 화자분리 F1 붕괴는 별개 원인(Sortformer flip-flop)으로 규명되어 이 fix의 채택을 막을 근거가 아니라고 판단하나, **머지 여부는 사용자 확인 사항**(이번 루프는 master 머지 금지 원칙).
+
+### 다음 가설
+- kor2/kor3도 NewSpeaker 발동 회차를 잡으면 동일 패턴(Refresh 무회귀·중복 0) 재확인 여지.
+- kor1 Sortformer flip-flop 자체 완화는 별도 과제(§3 T5 예비, `MIN_SPEAKER_ATTRIBUTION_SECS` 재분석) — 이번 T1 fix와 독립적으로 진행.
+
+**JSON**: `.omc/benchmarks/eval_20260722_2305_hallu_t1_ko_screen.json`(스크리닝 N=1) · `eval_20260722_2316_hallu_t1_auto_noregress.json`(auto 무회귀) · `eval_20260722_2329_hallu_t1_ko_confirm_N3.json`(확정 N=3). 서버 트레이스 `.omc/server_logs/server_kor{1,2,3}_C_R{1,2,3}_20260722_23*.log`.
