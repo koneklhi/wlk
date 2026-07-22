@@ -226,5 +226,86 @@ async def test_translate_interim_stores_when_line_id_matches():
 
     assert manager._interim_result == "현재 줄 번역"
     assert manager._interim_in_flight is False
-    # 미확정 경로이므로 use_rag=False 로 호출돼야 한다.
-    translator.translate_sentence.assert_called_once_with("block source", "en", use_rag=False)
+    # 미확정 경로이므로 use_rag=False + 에코 재시도 없음(retry_on_echo=False) 으로 호출돼야 한다.
+    translator.translate_sentence.assert_called_once_with("block source", "en", use_rag=False, retry_on_echo=False)
+
+
+# ─── 확정 경로 실패 시도 상한 (_attempts / _note_failure) ─────────────────────
+
+@pytest.mark.anyio
+async def test_empty_result_once_counts_attempt_without_caching():
+    """빈 결과(에코 2연속 폐기 등) 1회 → 캐시에 안 남고 attempts=1, in_flight 해제."""
+    translator = make_translator_mock(return_value="")
+    manager = TranslationManager(translator)
+    key = (1.0, "감사합니다")
+    manager._in_flight.add(key)
+
+    await manager._translate_and_cache(key, "감사합니다", "en")
+
+    assert key not in manager._cache, "1회 실패는 아직 캐시에 정착되면 안 된다"
+    assert manager._attempts[key] == 1
+    assert key not in manager._in_flight
+
+
+@pytest.mark.anyio
+async def test_empty_result_twice_settles_empty_translation_in_cache():
+    """빈 결과 2회(_MAX_FINAL_ATTEMPTS) → 캐시에 ""로 정착 + attempts 정리,
+    이후 apply_translations는 캐시 히트로 처리(재스케줄 없음, translation="")."""
+    import unittest.mock as mock_module
+
+    translator = make_translator_mock(return_value="")
+    manager = TranslationManager(translator)
+    seg = make_text_seg("감사합니다", start=1.0, end=2.0, finalized=True)
+    key = manager._cache_key(seg)
+
+    for _ in range(2):
+        manager._in_flight.add(key)
+        await manager._translate_and_cache(key, seg.text, "en")
+
+    assert manager._cache[key] == "", "상한 도달 시 빈 번역으로 정착돼야 한다"
+    assert key not in manager._attempts, "정착 후 attempts는 정리돼야 한다"
+
+    # 정착 후에는 캐시 히트 — 새 번역 task가 생기지 않고 translation="" 적용
+    with mock_module.patch("asyncio.ensure_future") as mock_ensure:
+        manager.apply_translations([seg])
+
+    mock_ensure.assert_not_called()
+    assert seg.translation == ""
+
+
+@pytest.mark.anyio
+async def test_exception_path_also_counts_attempts():
+    """예외 경로도 시도 횟수를 센다 — 반복 예외는 상한 도달 시 ""로 정착(과거 무한 재스케줄)."""
+    translator = make_translator_mock()
+    translator.translate_sentence = AsyncMock(side_effect=RuntimeError("번역 서버 오류"))
+    manager = TranslationManager(translator)
+    key = (0.5, "오류 케이스")
+
+    manager._in_flight.add(key)
+    await manager._translate_and_cache(key, "오류 케이스", "ko")
+    assert manager._attempts[key] == 1
+    assert key not in manager._cache
+
+    manager._in_flight.add(key)
+    await manager._translate_and_cache(key, "오류 케이스", "ko")
+    assert manager._cache[key] == ""
+    assert key not in manager._attempts
+
+
+@pytest.mark.anyio
+async def test_success_after_failure_caches_result_and_clears_attempts():
+    """1회 실패 후 성공 → 정상 결과가 캐시되고 attempts가 정리된다."""
+    translator = make_translator_mock(return_value="")
+    manager = TranslationManager(translator)
+    key = (1.0, "다시 성공")
+
+    manager._in_flight.add(key)
+    await manager._translate_and_cache(key, "다시 성공", "ko")
+    assert manager._attempts[key] == 1
+
+    translator.translate_sentence = AsyncMock(return_value="Success again")
+    manager._in_flight.add(key)
+    await manager._translate_and_cache(key, "다시 성공", "ko")
+
+    assert manager._cache[key] == "Success again"
+    assert key not in manager._attempts

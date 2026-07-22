@@ -551,13 +551,14 @@ def test_build_system_blocks_defaults_to_no_rag(tmp_path):
 
 
 class _RecordingTranslator:
-    """translate_sentence 호출 시 use_rag 값을 기록하는 스텁."""
+    """translate_sentence 호출 시 use_rag/retry_on_echo 값을 기록하는 스텁."""
 
     def __init__(self):
         self.calls = []
 
-    async def translate_sentence(self, content, src_lang, use_rag=False):
-        self.calls.append({"content": content, "src_lang": src_lang, "use_rag": use_rag})
+    async def translate_sentence(self, content, src_lang, use_rag=False, retry_on_echo=True):
+        self.calls.append({"content": content, "src_lang": src_lang, "use_rag": use_rag,
+                           "retry_on_echo": retry_on_echo})
         return f"translated:{content}"
 
 
@@ -571,18 +572,20 @@ def test_manager_confirmed_path_uses_rag():
     key = (1.0, "확정된 문장입니다")
     asyncio.run(manager._translate_and_cache(key, "확정된 문장입니다", "ko"))
 
-    assert translator.calls == [{"content": "확정된 문장입니다", "src_lang": "ko", "use_rag": True}]
+    assert translator.calls == [{"content": "확정된 문장입니다", "src_lang": "ko",
+                                 "use_rag": True, "retry_on_echo": True}]
     assert manager._cache[key] == "translated:확정된 문장입니다"
 
 
 def test_manager_interim_path_does_not_use_rag():
-    """미확정 버퍼 번역(_translate_interim_and_store)은 use_rag=False로 호출한다."""
+    """미확정 버퍼 번역(_translate_interim_and_store)은 use_rag=False + retry_on_echo=False로 호출한다."""
     from whisperlivekit.llm_translation.manager import TranslationManager
 
     translator = _RecordingTranslator()
     manager = TranslationManager(translator)
 
-    asyncio.run(manager._translate_interim_and_store("아직 확정 안 된", "ko"))
+    asyncio.run(manager._translate_interim_and_store("아직 확정 안 된", "ko", line_id=None))
 
-    assert translator.calls == [{"content": "아직 확정 안 된", "src_lang": "ko", "use_rag": False}]
+    assert translator.calls == [{"content": "아직 확정 안 된", "src_lang": "ko",
+                                 "use_rag": False, "retry_on_echo": False}]
     assert manager._interim_result == "translated:아직 확정 안 된"
