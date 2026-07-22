@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import re
 
 import httpx
 
@@ -14,6 +15,29 @@ def _search_rag_examples(content: str) -> str:
     return rag_manager.search_similar(content)
 
 logger = logging.getLogger(__name__)
+
+
+_HANGUL_RE = re.compile(r"[가-힣]")
+_LATIN_RE = re.compile(r"[A-Za-z]")
+
+_MAX_RESULT_CHARS = 500  # 개행 없는 한 줄 출력의 절대 상한. 실시간 자막 한 문장이 이보다 길면
+                         # runaway로 보고 절단한다(빈 문자열 폐기가 아니라 절단 — 폐기하면
+                         # 확정 경로에서 캐시에 안 남아 temperature=0 가비지가 매 tick 재번역되는
+                         # 무한 재시도가 된다).
+
+
+def _infer_script_lang(text: str) -> str | None:
+    """텍스트의 문자 구성(한글/영문 비율)으로 실제 언어를 추정. 판단 불가하면 None을 반환."""
+    hangul = len(_HANGUL_RE.findall(text))
+    latin = len(_LATIN_RE.findall(text))
+    total = hangul + latin
+    if total < 6:  # 표본 부족(고유명사·약어 등) — 판단 보류, detected_language 신뢰
+        return None
+    if hangul / total >= 0.85:
+        return "ko"
+    if latin / total >= 0.85:
+        return "en"
+    return None
 
 
 class TranslatorBase:
@@ -126,6 +150,41 @@ class TranslatorBase:
             exc,
         )
 
+    def resolve_src_lang(self, content: str, detected_language: str) -> str:
+        """STT detected_language 오검출로 인한 번역 방향 반전(동일 언어 통과)을 방지.
+
+        content의 실제 문자 구성이 detected_language와 크게 어긋나면(=detected_language가
+        틀렸을 가능성 높음) 문자 구성 쪽을 신뢰해 방향을 보정한다. 배포 실측에서 한국어
+        발화가 detected_language='en'으로 오검출되어 "한국어가 번역 없이 그대로 통과"되는
+        현상이 관찰됨.
+        """
+        inferred = _infer_script_lang(content)
+        if inferred and inferred != detected_language:
+            logger.warning(
+                "[Translation] detected_language=%s 이지만 문자구성 추정=%s — 번역 방향을 %s 기준으로 보정 (content=%r)",
+                detected_language, inferred, inferred, content[:50],
+            )
+            return inferred
+        return detected_language
+
+    def _sanitize_result(self, text: str) -> str:
+        """LLM 출력 폭주(환각) 가드. 정상 출력은 개행 없는 한 문장이다.
+
+        핵심 방어는 개행 제거다(관찰 증상 '6~7줄 폭주' = 개행 다수). 개행이 섞이면 다중 문장
+        환각 신호로 보고 첫 번째 비어있지 않은 줄만 취한다. 길이는 개행 없는 한 줄 runaway를 위한
+        절대 상한으로만 절단한다 — **빈 문자열로 폐기하지 않는다**. 폐기하면 확정 경로에서 캐시에
+        안 남아(_translate_and_cache의 `if result:`) 같은 입력이 매 tick 재번역·재폐기되는 무한
+        재시도가 된다(temperature=0이라 결과가 늘 같음). 잘라서라도 non-empty로 돌려주면 캐시에
+        정착해 재시도가 끝난다.
+        """
+        if "\n" in text:
+            lines = [ln.strip() for ln in text.split("\n") if ln.strip()]
+            text = lines[0] if lines else ""
+        if len(text) > _MAX_RESULT_CHARS:
+            logger.warning("[Translation] 초장문 출력 절단 (result=%d자 > %d)", len(text), _MAX_RESULT_CHARS)
+            text = text[:_MAX_RESULT_CHARS].rstrip()
+        return text
+
     async def translate_sentence(self, content: str, src_lang: str, use_rag: bool = False) -> str:
         raise NotImplementedError
 
@@ -134,6 +193,7 @@ class LlamaTranslator(TranslatorBase):
     """prod 환경용 — llama.cpp/vLLM completions API"""
 
     async def translate_sentence(self, content: str, src_lang: str, use_rag: bool = False) -> str:
+        src_lang = self.resolve_src_lang(content, src_lang)
         from_lang = self.convert_lang_formal(src_lang)
         to_lang = self.convert_lang_formal(self.get_to_lang(src_lang))
         system_blocks = await self.build_system_blocks(from_lang, to_lang, content, use_rag=use_rag)
@@ -163,6 +223,7 @@ class LlamaTranslator(TranslatorBase):
             if "<" in text:
                 text = text[: text.find("<")]
             text = text.strip().strip('"').strip("'")
+            text = self._sanitize_result(text)
             return text
         except Exception as e:
             self._log_failure("llama", e)
@@ -173,6 +234,7 @@ class OllamaTranslator(TranslatorBase):
     """dev 환경용 — Ollama chat completions API (harmony 태그 미지원)"""
 
     async def translate_sentence(self, content: str, src_lang: str, use_rag: bool = False) -> str:
+        src_lang = self.resolve_src_lang(content, src_lang)
         from_lang = self.convert_lang_formal(src_lang)
         to_lang = self.convert_lang_formal(self.get_to_lang(src_lang))
         system_blocks = await self.build_system_blocks(from_lang, to_lang, content, use_rag=use_rag)
@@ -195,7 +257,9 @@ class OllamaTranslator(TranslatorBase):
             )
             response.raise_for_status()
             data = response.json()
-            return data["choices"][0]["message"]["content"].strip()
+            text = data["choices"][0]["message"]["content"].strip()
+            text = self._sanitize_result(text)
+            return text
         except Exception as e:
             self._log_failure("ollama", e)
             return ""
