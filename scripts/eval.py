@@ -664,6 +664,15 @@ def main() -> None:
         "실험용 스윕 오버라이드 — 서버 측 상한 2.0s 초과 불가(서버가 assert로 거부).",
     )
     parser.add_argument(
+        "--server-frontend-dir",
+        type=str,
+        default=None,
+        dest="server_frontend_dir",
+        help="서버에 전달할 --frontend-dir 오버라이드. 로컬에 frontend/static React dist가 있으면 GET /가 그쪽으로 "
+        "리다이렉트돼 eval.py의 Playwright 레거시 UI(#startButton) 테스트가 깨진다 — 빈 디렉터리(예: .omc/eval_empty_frontend)를 "
+        "지정해 레거시 내장 UI로 강제 폴백시킬 때 사용.",
+    )
+    parser.add_argument(
         "--expect-code-root",
         type=Path,
         default=None,
@@ -740,6 +749,8 @@ def main() -> None:
         )
     if args.silence_hard_secs is not None:
         extra_server_args.extend(["--silence-hard-secs", str(args.silence_hard_secs)])
+    if args.server_frontend_dir is not None:
+        extra_server_args.extend(["--frontend-dir", args.server_frontend_dir])
 
     for f in args.files:
         if not f.exists():
