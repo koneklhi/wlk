@@ -694,17 +694,22 @@ class AlignAttBase(ABC):
 
         기존 `[LangDriftStats]` 포맷은 건드리지 않는다(analyze_sot_lang_probe.py 파서
         호환 유지 — 별도 로그 태그로 낸다). would_fire=0 회차도 명시적으로 1회 찍는다
-        (0-firing = 노이즈 대조군 식별용, `_log_lang_drift_stats`와 동일 관례).
+        (0-firing = 노이즈 대조군 식별용, `_log_lang_drift_stats`와 동일 관례). 중복 억제는
+        `_log_lang_drift_stats`의 `probes`(총 호출수)처럼 **총 호출 수**(would_fire + 게이트별
+        차단 합)가 직전과 동일할 때만 건너뛴다 — would_fire만 비교하면 would_fire=0인 채
+        blocked_by만 계속 누적되는(가장 흔한) 세션에서 최종 누적치가 로그에 전혀 반영되지
+        않는다(실측 발견: bong1/ytn2/sbs1/ytn1 4파일 전부 회차 1개로 멈춰 이후 누적분 유실).
         """
         if not STAGE1_SHADOW_ENABLED:
             return
         try:
             st = self._stage1_shadow_state()
-            last = getattr(self, "_stage1_shadow_last_summary", None)
-            if last is not None and last == st["would_fire"]:
-                return
-            self._stage1_shadow_last_summary = st["would_fire"]
             b = st["blocked_by"]
+            total_calls = st["would_fire"] + sum(b.values())
+            last = getattr(self, "_stage1_shadow_last_summary", None)
+            if last is not None and last == total_calls:
+                return
+            self._stage1_shadow_last_summary = total_calls
             logger.warning(
                 "[Stage1ShadowStats] would_fire=%d blocked_g1=%d blocked_g2=%d blocked_g3=%d "
                 "blocked_g4=%d blocked_g5=%d blocked_g6=%d blocked_g7=%d",

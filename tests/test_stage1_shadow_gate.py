@@ -350,6 +350,24 @@ def test_shadow_stats_log_does_not_disturb_lang_drift_stats_format(caplog):
     assert "[LangDriftStats] probes=0" in caplog.text
 
 
+# ── 세션 요약 로그 — would_fire 불변인 채 blocked_by만 누적돼도 갱신 로그가 찍힌다 ──
+# (실측 회귀 테스트: bong1/ytn2/sbs1/ytn1 4파일 전부 would_fire=0으로 세션 내내 고정되자
+#  최초 1회 스냅샷 이후 누적된 blocked_by가 로그에 전혀 반영되지 않는 버그가 실제로 발견됐다.)
+
+def test_shadow_stats_logs_again_when_only_blocked_by_changes(caplog):
+    model = _make_model(language="auto", detected_language="en", seglen=0.24)
+    with caplog.at_level(logging.WARNING, logger=LOGGER_NAME):
+        model._stage1_shadow_gate("en", 0.99, 0.01)  # G3 차단 1건째(seglen 미달)
+        model._log_stage1_shadow_stats()
+        model._stage1_shadow_gate("en", 0.99, 0.01)  # G3 차단 2건째 — would_fire는 여전히 0
+        model._log_stage1_shadow_stats()
+
+    lines = [r.getMessage() for r in caplog.records if "[Stage1ShadowStats]" in r.getMessage()]
+    assert len(lines) == 2  # 총 호출수가 늘었으므로 두 번째도 반드시 다시 찍혀야 한다
+    assert "would_fire=0 blocked_g1=0 blocked_g2=0 blocked_g3=1" in lines[0]
+    assert "would_fire=0 blocked_g1=0 blocked_g2=0 blocked_g3=2" in lines[1]
+
+
 # ── 실제 트리거 지점 배선 — _sot_lang_probe_impl이 stage1 게이트를 호출한다 ──
 
 def test_sot_lang_probe_impl_wires_into_stage1_gate(monkeypatch):
