@@ -21,9 +21,6 @@ export const Api = {
   PROMPTS: '/api/prompts',
   PROMPTS_ADD: '/api/prompts/add-item',
   PROMPTS_DELETE: '/api/prompts/delete-item',
-
-  /** 전사 저장. 서버 로컬(`--transcript-save-dir`, 기본 ./transcripts)에 .txt 로 떨어진다. */
-  SAVE_TRANSCRIPT: '/api/save-transcript',
 } as const;
 
 /** 라우팅 prefix. vite.config.ts 의 `base` 와 반드시 일치해야 한다. */

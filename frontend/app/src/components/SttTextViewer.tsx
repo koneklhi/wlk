@@ -8,6 +8,7 @@
 import { useSttTextStyle } from '@/components/SttThemeProvider';
 import { SttTranslateLoader } from '@/components/SttTranslateLoader';
 import type { TranscriptRow } from '@/utils/transcriptRows';
+import { useState } from 'react';
 
 interface SttTextViewerProps {
   row: TranscriptRow;
@@ -20,7 +21,13 @@ export const SttTextViewer = ({ row, showTimestamp }: SttTextViewerProps) => {
   const transStyle = useSttTextStyle('translation');
   const sysStyle = useSttTextStyle('system');
 
-  const translation = row.translation ?? row.bufferTranslation;
+  // 확정 순간 세그먼트 translation 미도착 + buffer 리셋으로 잠깐 비는 구간에도 직전 번역을 유지한다.
+  // render 중 ref 접근은 react-hooks/refs 로 금지되므로, '이전 렌더 값 저장' state 를
+  // render 중 조건부로 갱신하는 React 표준 패턴을 쓴다(가드된 setState — 무한루프 없음).
+  const [lastTranslation, setLastTranslation] = useState<string | undefined>(undefined);
+  const incoming = row.translation ?? row.bufferTranslation;
+  if (incoming && incoming.length > 0 && incoming !== lastTranslation) setLastTranslation(incoming);
+  const translation = incoming && incoming.length > 0 ? incoming : lastTranslation;
   const hasTranslation = Boolean(translation && translation.length > 0);
   const isProcessing = !row.finalized;
 

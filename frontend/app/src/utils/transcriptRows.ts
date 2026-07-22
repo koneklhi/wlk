@@ -158,15 +158,3 @@ function joinText(base: string, tail?: string): string {
   if (!b) return a;
   return `${a} ${b}`;
 }
-
-/** 저장용 평탄화 (POST /api/save-transcript 의 lines[] 형식). */
-export function toSavePayload(rows: readonly TranscriptRow[]) {
-  return rows
-    .filter((r) => r.text.trim() || r.bufferText?.trim())
-    .map((r) => ({
-      speaker: r.speaker,
-      // buffer 는 보통 선행 공백을 포함해 온다 — 그냥 이어붙이면 이중 공백이 생긴다.
-      text: joinText(r.text, r.bufferText),
-      translation: r.translation ?? null,
-    }));
-}
