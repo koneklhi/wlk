@@ -55,6 +55,12 @@ function SttMainInner() {
   };
 
   useEffect(() => {
+    // 세션 종료 등으로 전사가 비면 '따라가기' 의도를 초기화 — 다음 세션 첫 줄부터 다시 바닥을 따라간다.
+    // (사용자가 이전 세션에서 위로 올려 stickToBottomRef 가 false 로 남는 것을 방지.)
+    if (rows.length === 0) {
+      stickToBottomRef.current = true;
+      return;
+    }
     // 바닥에 붙어 있던 경우에만 새 전사/번역을 따라간다. 즉시 스크롤로 smooth 피드백 루프 차단.
     if (stickToBottomRef.current) endRef.current?.scrollIntoView({ block: 'end' });
   }, [rows]);
