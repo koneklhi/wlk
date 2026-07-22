@@ -96,6 +96,16 @@ class TranslationRagManager:
             self._embedder = self._load_embedder(SentenceTransformer)
             self._client = QdrantClient(path=self.qdrant_path)
             self._enabled = True
+
+            try:
+                existing = [c.name for c in self._client.get_collections().collections]
+                logger.warning(
+                    "[RagProbe] startup: qdrant collections found=%r (expected collection_name=%r)",
+                    existing,
+                    self.collection_name,
+                )
+            except Exception as e:
+                logger.warning("[RagProbe] startup: get_collections() probe failed (%s: %s)", type(e).__name__, e)
         except Exception as e:
             logger.warning(
                 "Translation RAG disabled: failed to load embedder/client (%s: %s)", type(e).__name__, e
