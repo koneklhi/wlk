@@ -25,19 +25,26 @@ _MAX_RESULT_CHARS = 500  # 개행 없는 한 줄 출력의 절대 상한. 실시
                          # 확정 경로에서 캐시에 안 남아 temperature=0 가비지가 매 tick 재번역되는
                          # 무한 재시도가 된다).
 
+_SCRIPT_DOMINANCE = 0.6  # 우세 스크립트 비율이 이 미만이면 진짜 한·영 혼합(code-switching)으로 보고
+                         # 번역 방향 판정을 보류(§3.2 존중). 이상이면 약어가 섞여도 우세 언어로 판정.
+
 
 def _infer_script_lang(text: str) -> str | None:
-    """텍스트의 문자 구성(한글/영문 비율)으로 실제 언어를 추정. 판단 불가하면 None을 반환."""
+    """텍스트의 문자 구성으로 실제 언어를 추정. 판단 불가하면 None.
+    한국어 발화에 흔한 영어 약어(GPS·ROK 등)가 섞여도 한글이 우세하면 ko로 판정하도록
+    다수결(우세 60%)을 쓴다 — 과거 85% 임계는 약어 한둘에 None이 돼 detected_language
+    오검출로 인한 동일언어 통과를 못 잡았다(개발 PC 재현 확인)."""
     hangul = len(_HANGUL_RE.findall(text))
     latin = len(_LATIN_RE.findall(text))
     total = hangul + latin
-    if total < 6:  # 표본 부족(고유명사·약어 등) — 판단 보류, detected_language 신뢰
+    if total < 6:  # 표본 부족 — 판정 보류
         return None
-    if hangul / total >= 0.85:
-        return "ko"
-    if latin / total >= 0.85:
-        return "en"
-    return None
+    if hangul == latin:
+        return None
+    dominant, count = ("ko", hangul) if hangul > latin else ("en", latin)
+    if count / total < _SCRIPT_DOMINANCE:
+        return None  # 근소차 = 진짜 혼합문 → STT 판단 존중
+    return dominant
 
 
 class TranslatorBase:

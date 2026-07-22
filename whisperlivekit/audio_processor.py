@@ -595,7 +595,7 @@ class AudioProcessor:
                     if interim_line is not None:
                         src_lang = interim_line.detected_language or "ko"
                         buffer_translation_text = self.llm_translation_manager.apply_interim_translation(
-                            interim_line.text, src_lang
+                            interim_line.text, src_lang, line_id=interim_line.start
                         )
                     else:
                         buffer_translation_text = self.llm_translation_manager.apply_interim_translation("", "ko")

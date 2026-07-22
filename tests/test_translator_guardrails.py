@@ -27,7 +27,7 @@ def _translator() -> LlamaTranslator:
     return LlamaTranslator("dummy", "http://x")
 
 
-# ─── _infer_script_lang ──────────────────────────────────────────────────────
+# ─── _infer_script_lang (다수결 우세 60%) ─────────────────────────────────────
 
 def test_infer_script_lang_pure_korean():
     """순수 한국어 문장 → 'ko'."""
@@ -39,14 +39,27 @@ def test_infer_script_lang_pure_english():
     assert _infer_script_lang("The meeting starts at three this afternoon") == "en"
 
 
+def test_infer_script_lang_korean_with_abbreviation_returns_ko():
+    """한글 우세인데 영어 약어(GPS)가 섞인 문장 → 'ko' (이번 수정의 핵심 회귀 방어).
+
+    한글 10자 + 영문 3자 → 한글 우세 0.77 ≥ 0.6. 과거 85% 임계는 여기서 None을 내
+    detected_language='en' 오검출로 인한 동일언어 통과를 못 잡았다(개발 PC 재현 확인).
+    """
+    assert _infer_script_lang("GPS 시스템을 확인했습니다") == "ko"
+
+
 def test_infer_script_lang_short_abbreviation_returns_none():
     """짧은 약어("GPS") → 표본 부족(total < 6)으로 None (판단 보류)."""
     assert _infer_script_lang("GPS") is None
 
 
-def test_infer_script_lang_mixed_returns_none():
-    """혼합 문장(어느 쪽도 85% 미만) → None."""
-    # 한글 5자 + 영문 5자 → 각 50%, 어느 쪽도 0.85 미만
+def test_infer_script_lang_near_tie_mixed_returns_none():
+    """한·영 근소차 혼합문(우세 < 60%) → None — 진짜 code-switching으로 보고 STT 판단 존중."""
+    # 완전 동수(한글 6 = 영문 6)
+    assert _infer_script_lang("I think 우리가 맞아요") is None
+    # 우세 스크립트가 있으나 60% 미만 (한글 7 / 영문 5 = 0.583 < 0.6)
+    assert _infer_script_lang("우리가 확인했다 check") is None
+    # 기존 동수 케이스(한글 5 = 영문 5)
     assert _infer_script_lang("안녕하세요 hello") is None
 
 
@@ -65,6 +78,16 @@ def test_resolve_src_lang_corrects_misdetected_en_to_ko():
     t = _translator()
     result = t.resolve_src_lang("오늘 회의는 오후 세시에 시작합니다", "en")
     assert result == "ko"
+
+
+def test_resolve_src_lang_corrects_misdetected_en_to_ko_with_abbreviation():
+    """영어 약어가 섞인 한국어 발화(det='en' 오검출) → 'ko' 보정 (동일언어 통과 방어의 핵심).
+
+    개발 PC 재현: STT가 "GPS 시스템을 확인했습니다"를 en으로 오검출 → 방향 반전 →
+    번역 결과가 한국어 그대로 통과. 다수결(우세 60%)로 한글 우세를 잡아 방향을 ko로 보정한다.
+    """
+    t = _translator()
+    assert t.resolve_src_lang("GPS 시스템을 확인했습니다", "en") == "ko"
 
 
 def test_resolve_src_lang_keeps_matching_language():
