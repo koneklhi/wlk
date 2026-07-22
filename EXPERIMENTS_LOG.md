@@ -5229,3 +5229,39 @@ CLAUDE.md §4 "채택 확정 = repeat 3" 게이트는 **생략**(사용자가 �
 - kor1 Sortformer flip-flop 자체 완화는 별도 과제(§3 T5 예비, `MIN_SPEAKER_ATTRIBUTION_SECS` 재분석) — 이번 T1 fix와 독립적으로 진행.
 
 **JSON**: `.omc/benchmarks/eval_20260722_2305_hallu_t1_ko_screen.json`(스크리닝 N=1) · `eval_20260722_2316_hallu_t1_auto_noregress.json`(auto 무회귀) · `eval_20260722_2329_hallu_t1_ko_confirm_N3.json`(확정 N=3). 서버 트레이스 `.omc/server_logs/server_kor{1,2,3}_C_R{1,2,3}_20260722_23*.log`.
+
+---
+
+## Exp-202 — 침묵 클로징 환각 섀도우 계측(`[SilenceHalluProbe]`) 실측 — would_hold 오탐 3/3, 게이트 배선 보류 (2026-07-22/23) [E6, `exp/hallu-t2-silence-hallu-probe`(커밋 `0348f1d`, **미머지·계측전용** — 환각루프 T2]
+
+**언어모드**: ko(kor1~3, `--lan ko`, N=1) + auto(bong1·ytn2·sbs1, `--lan auto`, N=1), 전부 `--trace-tokens`. 코드 변경 없음(계측 전용, `SILENCE_HALLU_PROBE_ENABLED` 로깅만 — Exp-201과 별개로 커밋된 계측 브랜치에서 측정).
+
+**배경**: goal 프롬프트 T2 — VAD 침묵 개시(`Silence.is_starting`) → `start_silence()` → `process_iter(is_last=True)`로 진입하는 강제 flush는 `quality_gate`를 항상 건너뛴다. 이 지점에서 "attention reaches the end" ∧ 직전 호출 대비 attended frame 전진폭이 거의 0/역행 ∧ 텍스트 커밋 → "감사합니다"류 클로징 환각 후보로 가정하고 `would_hold`를 로깅(§2a, 실제 억제 없음).
+
+### 측정 결과
+
+| 파일 | 모드 | is_last_calls | committed_on_is_last | would_hold |
+|------|------|---------------|------------------------|------------|
+| kor1 | ko | 26 | 21 | 0 |
+| kor2 | ko | 35 | 29 | 0 |
+| kor3 | ko | 40 | 32 | **2** |
+| bong1 | auto | 21 | 18 | 0 |
+| ytn2 | auto | 12 | 6 | **1** |
+| sbs1 | auto | 12 | 8 | 0 |
+
+### 분석 (would_hold 발동 3건 전수 라벨링, §2c)
+
+- **kor3 `위한`@t=3.10s, `위해`@t=15.20s**: 둘 다 **오탐**. 정답 대조 결과 두 단어 모두 정상 문맥의 흔한 한국어 연결어(~을 위한, ~하기 위해)로 정답에도 동일하게 존재 — 새 음성 없이 이어 생성된 필러가 아니라 **짧은 정상 단어가 짧다는 이유만으로 frame_advance≈0을 만든 것**.
+- **ytn2 `control`@t=7.22s**: **오탐**. TokenTrace 대조 결과 디코더가 "…transfer of operational control"까지 디코드하다 그다음(", "/"and") 진행분이 버퍼 말단(`attention reaches the end: 361/362`)에 걸려 `control`만 우선 커밋하고 나머지는 보류(hold)한 **정상 스트리밍 부분방출** — `control,`·`control and` 두 continuation을 시도한 디코드 흔적이 로그에 그대로 남아 있어(라인 10893-10906) 새 텍스트를 지어낸 게 아님이 명확.
+- **bong1(웃음 구간 포함) would_hold 0건**: T4(필러 타임스탬프 정체 시그니처) 부수판정 — 이번 회차엔 신호 없음(발동 자체가 없어 판단 보류, 재현성 낮음 가능성).
+
+**would_hold 오탐률**: 3/3(100%) — §2c 규칙("오탐 1건 이상 → 게이트 배선 금지")에 따라 **배선 금지**. 근본 원인: `start_silence()`가 `is_starting`(아주 짧은 호흡 pause만 감지해도 발동)에서 호출되어 문장 최종경계뿐 아니라 **모든 미세 pause마다** is_last=True 강제 flush가 발생 — 그 시점엔 그 pause가 "긴 침묵"인지 미정이라, 프레임 전진폭만으로는 "짧은 정상 단어의 자연스러운 부분방출"과 "새 음성 없는 이어짓기 환각"을 구분 못 함.
+
+### 결론
+**계측완료(채택/기각 비대상) — 게이트 배선 금지.** 후보 시그니처(attention_reached_end ∧ frame_advance≈0)는 특이도가 낮아 정상 스트리밍 부분방출을 다량 오탐한다. 원 목표(§2 계열②, kor3 "감사합니다"/sbs1 "다음은" 폭주)의 실제 발동 사례는 이번 측정에서 재현되지 않음(N=1 스크리닝 한계일 수 있음).
+
+### 다음 가설
+- 조건 좁히기 후보(2a 재계측 시): ① `is_starting` 대신 `end_silence()`의 `long_silence`(실제 긴 침묵 확정, `MIN_DURATION_REAL_SILENCE` 이상) 시점과 연동 — 미세 호흡 pause를 원천 제외. ② 커밋 run의 절대 길이(음절 수)가 극히 짧으면(1~2음절/단어) 애초에 후보에서 제외하는 정규화. ③ hold 중인 continuation이 있었는지(TokenTrace상 다음 continuation 시도 흔적) 함께 확인 — 있으면 정상 부분방출, 없으면 환각 후보로 격상.
+- kor3/kor1~3 각 5회 원본 로그(§2 배경)에 실제 있었던 "감사합니다"/"다음은" 폭주 사례의 시그니처를 이 계측으로 역추적 재현 시도 여지(N=1이 아니라 그 특정 회차를 재현하도록 시드/반복 필요).
+
+**JSON**: `.omc/benchmarks/eval_20260722_2358_hallu_t2_ko_probe.json`(ko) · `eval_20260723_00XX_hallu_t2_auto_probe.json`(auto). 서버 트레이스 `.omc/server_logs/server_{kor1,kor2,kor3,bong1,ytn2,sbs1}_C_R1_2026*.log`.
