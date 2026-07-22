@@ -91,10 +91,13 @@
   - **② 채택 확정 측정 = `--repeat 3`** — 스크리닝에서 유망한 후보를 **master에 채택(머지)하기 직전**에만 동일 파일·설정으로 N≥3회 측정해 **median + 분산(min/max/stdev)을 함께** 본다. 이 단계에서만 **fail-fast(첫 회차 나쁘면 중단) 금지** — 분산 자체가 데이터이므로 N회를 전부 측정(단, VBCable 미설정·포트 충돌·무음 캡처 등 *하니스 버그*는 즉시 멈추고 고친다).
   - **채택 우선순위(② 단계): 1순위 = 최악 케이스(max) 미회귀, 2순위 = median 개선.** 최악 케이스가 catastrophic하게 터지는 설정은 median이 좋아도 실사용에서 무너지므로 기각. 최악 케이스 발생 시 median 개선보다 원인 파악·해결을 먼저.
   - **지표 우선순위 — 화자분리 F1 > WER > 문장분리 F1**: **① 화자분리 F1**(정답 `[spk]` 화자전환 경계가 전사 줄분리로 실현되는지)이 **최우선** 개선·채택 지표, **② WER**(전사 정확도), **③ 문장분리 F1**(동일 화자 온점 문장 분리, nice-to-have). 채택 게이트 순서 = 화자분리 F1 worst-case 미회귀 → WER max 미회귀 → WER median 개선 → 문장분리 F1. **문장분리 F1 하락 단독은 기각 근거 아님**(Case A: 동일 화자 인접 문장이 붙여 전사돼도 허용). 단 **Case B(한 단어/문장이 단어 중간에서 쪼개짐, 예 "올렸"⏎"습니다")는 F1·WER 무관 hard-fail — flag·원인 수정**. 요구사항·측정·구현 정본 = [docs/TRANSCRIPTION_REQUIREMENTS.md](docs/TRANSCRIPTION_REQUIREMENTS.md). (신 regime v2 — 2지표 metric 코드 구현 완료.)
+    - **진단 지표(채택 게이트 아님) = 언어 불일치율(LMR)**: 정답 KO 단어가 영어로 **치환** 전사된 비율(`lmr_ko`)과 그 WER 귀속량(`lmr_wer_pp`)이 eval 출력에 함께 나온다. 위 **게이트 순서는 그대로 두고**, LMR은 WER 변화의 **원인 귀속**(언어잠금 실패)에만 쓴다 — LMR 단독 악화·개선은 기각/채택 근거가 아니며, LMR은 하한(lower bound)이라 "정확한 총량"으로 서술하지 않는다. 정의·해석·소급 계산(`scripts/backfill_lang_mismatch.py`) = [docs/TRANSCRIPTION_REQUIREMENTS.md](docs/TRANSCRIPTION_REQUIREMENTS.md) §3·§4·§5.
   - **측정 기본 설정 = 화자분할 ON**(Sortformer; `--diarization --sortformer-model whisperlivekit/model/sortformer-4spk-v2.nemo --compression-ratio-threshold 3.0`; 테스트·held-out 분리는 §3.8). **정답 = `test_data/<name>.txt` 단일 파일 canonical**(`[spkN]` 헤더+화자·문장 전처리 완료; 2026-07-18부로 `_speak,sentence_sperate.txt` 접미사 규약 폐지·`<name>.txt`로 통합, `eval.py`도 동기화됨). held-out 정량(ytn1+eng1)은 채택 후보에 한해 **단회** 검증, held-out 정성 sanity(kinno)는 **게이팅 제외**(누락/환각·거친 화자/문장 분리만).
   - **언어모드별 측정(§3.2)**: 현재 서버 기본은 `--lan auto`(암묵). auto 테스트(bong1/ytn2/sbs1)·held-out(ytn1)은 `--lan auto`, ko 테스트(kor1~3)는 `--lan ko`, en held-out(eng1)은 `--lan en`으로 서버를 기동해 측정한다. `--lan`은 실행당 전역 1값이므로 모드가 섞인 파일 목록을 한 run에 넣지 않는다 — 언어모드별로 eval.py를 별도 실행. 실험 기록(`/log-experiment`)에 측정 언어모드를 명시한다. ko/en 세션의 완전한 거동(코드스위칭 재감지 비활성화 포함)은 `feat/session-lang-lock` 브랜치 머지 이후 확립됨 — 그 전까지는 전역 `--lan ko/en`이 초기 언어만 고정할 뿐 일부 재감지 경로가 남아있을 수 있다.
   - **안정화 단계 전환**: 테스트 3종 WER이 catastrophic worst-case 없이 일정 밴드로 수렴해 스크리닝 1회만으로 후보 우열을 가리기 어려워지면, **평소 측정 기본을 `--repeat 3`(상시 안정화 테스트)으로 되돌린다**. 이 전환은 **major 방향 전환**이므로 사용자에게 보고·확인 후 적용한다.
   - **정성 평가 통합**: eval.py 완료 후 `.omc/transcripts/` 전사 파일을 읽어 **목표 달성 여부·신규 이슈 발생 여부**를 정성 판정한다. 정량 수치만으로 채택/기각하지 않고 정성 분석을 반드시 함께 고려한다. WER이 악화돼도 목표 구간이 개선됐다면 자율 기각하지 않고 사용자 확인으로 에스컬레이션한다. **필수 확인**: ① 화자전환 경계마다 줄분리 실현(1순위), ② Case B(단어 중간 분절) 발생 시 hard-fail flag, ③ 대규모 누락/환각·한영 외 언어 환각. Case A(동일 화자 문장 미분리)는 허용. 판정 기준 상세는 `.claude/commands/eval.md §정성 평가 절차` 및 [docs/TRANSCRIPTION_REQUIREMENTS.md](docs/TRANSCRIPTION_REQUIREMENTS.md) §4 참조.
+  - **원본 발화 확인 규칙 (화자 비유창성 ≠ 전사 결함)**: 전사에서 중복·반복·조각·말끊김을 발견하면 **결함으로 단정하기 전에 원본 음성이 실제로 그렇게 발화됐을 가능성을 먼저 의심**한다. 실제 화자가 더듬거나(`상당한.. 상당한 진전이`), 말끝을 흐리다 구절을 다시 시작하거나(`한국군 사성자... 한국군 사령관으로`), 같은 단어를 강조 반복하는 경우 **그 전사는 오히려 정확한 것**이며 개선 대상이 아니다. Claude는 음성을 들을 수 없으므로, 의심되면 **추측하지 말고 사용자에게 해당 구간 시각·문구를 특정해 청취 확인을 요청**한다(예: "ytn2 15.9~16.7초 `한국군 사성자 한국군` 구간이 실제 발화인지 확인 부탁드립니다"). 확인 전까지 그 구간을 근거로 코드를 고치지 않는다.
+    - **로그상 판별 보조 신호**: 재디코딩 아티팩트는 두 방출의 **절대 타임스탬프가 겹치고**(dstart 0.0~0.06s) 직전에 `Refreshing segment`가 있다. 실제 화자 반복은 **시각이 겹치지 않고 인접**(0.3s 이상 간격)하며 리프레시가 없다. 이 신호로 1차 선별하되, 최종 판정은 사용자 청취로 확정한다.
 
 ### 코드 변경 시 연동 갱신 문서
 
@@ -112,9 +115,13 @@
 | `test_data/` 파일 추가 또는 정답 `<name>.txt` 추가/변경(`[spkN]` 헤더+화자·문장 전처리 완료) | `docs/TESTING.md` 파일 목록, `CLAUDE.md` §4 측정 기본 설정(테스트셋 변경 시), `docs/TRANSCRIPTION_REQUIREMENTS.md` §2(정답 형식) |
 | 세션 언어모드 정책 변경 또는 파일별 언어모드(auto/ko/en) 태그 변경 | `CLAUDE.md` §3.2·§3.8·§4, `docs/TESTING.md`, `docs/TRANSCRIPTION_REQUIREMENTS.md`, `EXPERIMENTS.md`, `.claude/commands/eval.md`·`log-experiment.md`·`phase2-improve.md`, `docs/SCHEMA_CHANGES.md` |
 | 측정 지표(WER·화자분리 F1·문장분리 F1) 정의·정답 파서·2지표 산출 (`scripts/eval.py`·`whisperlivekit/metrics.py`) | `docs/TRANSCRIPTION_REQUIREMENTS.md`(§2 형식·§3 측정·§4 분석·§5 구현), `.claude/commands/eval.md` 결과 해석 기준, `docs/TESTING.md` 경로 C |
+| **진단 지표** 추가·변경 (언어 불일치율 LMR 등 — `whisperlivekit/metrics.py`, `scripts/backfill_lang_mismatch.py`, eval 출력 컬럼) | 위 지표 행과 동일 4개 문서 + `CLAUDE.md` §4 "지표 우선순위" 하위 항목. **진단 지표는 채택 게이트 순서에 넣지 않는다** — 게이트 승격은 사용자 확인 사항 |
+| 관측 전용 계측 로깅 추가 (`[SotLangProbe]`·`[LangDriftStats]` 등 디코딩 동작 무변경 probe) | `docs/TESTING.md` 경로 C 서버 로그 항목(로그 태그·롤백 스위치 상수명). 문장 확정 경계 로직을 바꾸면 그때만 `docs/SENTENCE_FINALIZATION_LOGIC.md` |
 | 실패 모드를 바꾸는 **구조적** 코드 변경의 master 머지 (언어고정·비음성억제·디코더/VAD 파이프라인 등) | `EXPERIMENTS.md`(STATE) "코드 세대(Epoch)" 절 — epoch 마커 +1, 이전 세대 파라미터 결론에 `[E?·재검증]` 부여 |
 | 신규 실험(Exp-N) 기록 | `EXPERIMENTS_LOG.md`(전체 서술) + `EXPERIMENTS.md` 빠른참조 1행(Epoch 열) — `/log-experiment` |
 | WhisperLiveKit 본체 대규모 변경 | `docs/MASTER_CHANGES.md` — `/update-master-changes` 슬래시 커맨드 실행 |
+| 배포 UI(React) 계약 레이어 변경 (`frontend/app/src/types/stt.ts`·`utils/deltaProtocol.ts`·`utils/wsUrl.ts`·`constants/index.ts`·`api/**`) | `docs/API_SPEC.md`, `docs/DELTA_PROTOCOL_SPEC.md`, `docs/FRONTEND_HANDOFF_SUMMARY.md` — 서버 계약과 어긋나면 조용히 깨진다(과거 `?language=kor` 무시·복합키 중복·델타 메시지 폐기가 전부 이 부류) |
+| `frontend/app/vite.config.ts` 의 `base` 또는 `build.outDir` | `docs/DEPLOYMENT_OFFLINE.md`, `docs/TESTING.md`, `docs/FRONTEND_HANDOFF_NEXT_DEV.md` — 백엔드 `--frontend-dir`/`--frontend-base` 와 짝이다 |
 
 > 확인 방법: 변경한 플래그·포트·경로 값을 `grep`으로 docs 전체에 검색해 stale 참조가 남아있으면 제거.
 

@@ -52,10 +52,19 @@
 - 마이크 입력 경로(경로 B)를 유지하면서 동일 음성으로 반복 측정 가능 → 재현성 있는 정량 평가.
   실제 오디오 파이프라인을 거치므로 Phase 2 채택/기각의 **1차 정량 신호**다.
 - 헬퍼: [scripts/vbcable_test.py](../scripts/vbcable_test.py)
-- `scripts/eval.py`는 기본으로 경로 C를 실행해 **WER + 화자분리 F1 + 문장분리 F1**을 산출한다(우선순위 = 화자분리 F1 > WER > 문장분리 F1; 정답 = 신형식 `_speak,sentence_sperate.txt` canonical). *2지표 분리·신형식 파서 구현 완료 — 신형식 정답이 있으면 `seg_f1`=화자분리 F1·`sentence_f1`=문장분리 F1을 산출하고, 없거나 파싱 실패 시 구 regime(빈 줄 경계, `sentence_f1=None`)으로 폴백한다: [TRANSCRIPTION_REQUIREMENTS.md](TRANSCRIPTION_REQUIREMENTS.md) §5.*
+- `scripts/eval.py`는 기본으로 경로 C를 실행해 **WER + 화자분리 F1 + 문장분리 F1**을 산출한다(우선순위 = 화자분리 F1 > WER > 문장분리 F1; 정답 = `<name>.txt` canonical, `[spkN]` 헤더 신형식). *2지표 분리·신형식 파서 구현 완료 — 신형식 정답이 있으면 `seg_f1`=화자분리 F1·`sentence_f1`=문장분리 F1을 산출하고, 없거나 파싱 실패 시 구 regime(빈 줄 경계, `sentence_f1=None`)으로 폴백한다: [TRANSCRIPTION_REQUIREMENTS.md](TRANSCRIPTION_REQUIREMENTS.md) §5.*
   브라우저 `#linesTranscript`의 `.textcontent`(확정 문장)만 추출하므로 타임스탬프 행이 섞이지 않는다.
-- **산출물 위치**: 벤치마크 JSON `--output`(관례 `.omc/benchmarks/`) · 전사 `.omc/transcripts/{파일}_{경로}_R{회차}.txt` · **서버 로그** `.omc/server_logs/server_<stem>_<path>_R<rep>_<ts>.log`(회차별 항상 저장 — Exp-153; `[QualityGate]`/`[LangSwitch]`(후자는 `--trace-tokens` 시) 등 필터·전환 계측용).
+- 만약 개발 PC에 로컬로 빌드된 `frontend/static` dist가 있어 eval.py의 Playwright 레거시 UI 테스트가 `#startButton` 타임아웃으로 실패하면, `--server-frontend-dir <빈 디렉터리>`로 서버의 `--frontend-dir`를 오버라이드해 레거시 UI로 강제 폴백시킨다.
+- **산출물 위치**: 벤치마크 JSON `--output`(관례 `.omc/benchmarks/`) · 전사 `.omc/transcripts/{파일}_{경로}_R{회차}.txt` · **서버 로그** `.omc/server_logs/server_<stem>_<path>_R<rep>_<ts>.log`(회차별 항상 저장 — Exp-153; `[QualityGate]`/`[LangSwitch]`(후자는 `--trace-tokens` 시) 등 필터·전환 계측용). 언어 드리프트 진단용으로 **`[SotLangProbe]`**(SOT 위치 언어/태스크 사후분포 — DEBUG, `--trace-tokens` 시 캡처)와 **`[LangDriftStats]`**(세션 요약 — WARNING)도 같은 로그에 남는다. **둘 다 관측 전용**이라 디코딩 동작을 바꾸지 않는다(추가 forward 0회) — 끄려면 `whisperlivekit/simul_whisper/align_att_base.py`의 모듈 상수 `SOT_LANG_PROBE_ENABLED = False`.
 - **문장별 확정 트리거**: 전사 txt에 `[문장별 확정 트리거]` 섹션(각 문장 뒤 `⟨silence/punctuation/language_switch/speaker_change/-⟩`)이, JSON `files[].hyp_lines`(`[{"text","trigger"}, …]`)가 additive로 추가된다(WER/F1 계산은 불변). 문장 분리 로직 정성 분석용 — 경로 C는 UI DOM `data-trigger` 속성, 경로 A는 `lines[].finalize_trigger`에서 수집.
+- **언어 불일치율(LMR) 컬럼**: 콘솔 요약(`언어불일치: X.X% (Y.Y%p)`)·전사 txt 헤더·HTML 리포트(`언어불일치(KO→EN) X.X% (WER Y.Y%p)`)에 컬럼이, JSON `files[]`에 `lmr_ko`/`lmr_en`/`lmr_wer_pp` + 원카운트 `lang_mismatch` + `lang_flip_events`가 additive로 추가된다(WER/F1 계산은 불변). 정답 한국어 단어가 영어로 **치환** 전사된 비율 = 언어잠금 실패 진단용이며 **채택 게이트가 아니다**(정의·해석 = [TRANSCRIPTION_REQUIREMENTS.md](TRANSCRIPTION_REQUIREMENTS.md) §3·§4, 읽는 법 = [.claude/commands/eval.md](../.claude/commands/eval.md) 결과 해석 기준). 필드가 없는 옛 JSON은 `N/A`로 폴백하며, 해당 스크립트 정답 단어가 0개인 경우(eng1의 `lmr_ko`, kor1~3의 `lmr_en`)도 `0.0`이 아니라 `N/A`(측정 불가)다.
+- **LMR 소급 계산**: 이미 측정된 벤치 JSON은 서버 기동·오디오 재생 없이 다시 채점할 수 있다(JSON의 `reference`/`transcription`만으로 결정적 재계산).
+  ```powershell
+  .venv\Scripts\python.exe scripts/backfill_lang_mismatch.py .omc/benchmarks/eval_<ts>.json `
+    --ref-file test_data/bong1.txt `
+    --output .omc/benchmarks/eval_<ts>_lmr.json
+  ```
+  `--ref-file`(선택)을 주면 문장 단위 뒤집힘 이벤트까지 계산하고, 벤치 JSON의 `reference`와 정답 판본이 다르면 assert로 즉시 중단한다(워크트리별 정답 판본 차이로 인한 조용한 오정렬 방지). `--output`(선택)은 항상 **새 파일**에 쓴다 — 기존 측정 산출물을 in-place로 수정하지 않는다. 생략하면 콘솔 표만 출력.
 
 **수동 서버 기동 명령:**
 ```
@@ -64,6 +73,11 @@ whisperlivekit-server
 모든 인자가 `parse_args.py` 기본값(포트 8900, `--lan auto`, 화자분할 ON, `--compression-ratio-threshold 3.0`, `--logprob-threshold -2.0` 등)이라
 인자 없이 기동해도 eval.py/closed_test.py 자동 기동 설정과 동일하다.
 단, eval/closed_test는 서버를 **8901**로 자동 기동한다(수동 서버 8900과 포트 충돌 없이 병행 가능).
+
+> **배포 상황별 파라미터 튜닝(`--scenario`, Phase A)**: `--scenario {mono,dialogue,sequential,codeswitch,multi}`로
+> 문장 확정/화자 귀속/언어 재감지 관련 9개 파라미터 + `--frame-threshold`/`--silence-hard-secs`를 상황별
+> 프리셋으로 한 번에 적용할 수 있다(개별 플래그가 프리셋보다 우선). 미지정 시 기존 마스터와 100% 동일하게
+> 동작(무회귀). 상세는 [OPERATOR_TUNING_GUIDE.md](OPERATOR_TUNING_GUIDE.md) 참조.
 
 > **세션 언어모드(CLAUDE.md §3.2)**: `--lan auto`가 코드스위칭(auto) 세션의 기본값. 한국어/영어 단일 세션을
 > 측정하려면 `--lan ko` / `--lan en`으로 기동한다(eval.py 사용 시 `--lan` 인자로 전달 — 아래 파일 목록의
@@ -87,6 +101,8 @@ whisperlivekit-server
 - **파일 목록** (측정 기본 설정: 화자분할 ON — 이 옵션 전체가 이제 `parse_args.py` 기본값이라 추가 인자 없이 `whisperlivekit-server`만 기동해도 동일 설정임). **언어모드** 태그(CLAUDE.md §3.2)는 측정 시 넘길 `--lan` 값을 가리킨다:
   - `bong1.mp3` / `bong1.txt` — 봉준호 기생충 인터뷰. **영어 2명 + 한국어 2명**, 화자 교대·긴 발화 혼재. 다화자·온점분리 역량의 핵심 테스트 대상. **언어모드: auto**.
     **테스트(채택/기각) + 개선 최우선 대상**(다화자·긴 발화). 채택 확정 시 `--repeat 3` 루틴.
+    `bong1.txt`는 2026-07-21부로 웃음·박수·환호·잡음·더듬 등 **비언어적 표시**를 포함한다(청취 재검수 결과 반영) —
+    형식·WER 제외 처리는 [TRANSCRIPTION_REQUIREMENTS.md](TRANSCRIPTION_REQUIREMENTS.md) §2 참조.
   - `ytn2.mp3` / `ytn2.txt` — SCM 회의 통역. 영어 발화자 발화 → 한국인 통역, **한 문장씩 화자 교대**(순차통역). EN↔KO 짧은 텀 교차. **언어모드: auto**.
     **테스트(채택/기각) + 개선 최우선 대상**(짧은 텀 코드스위칭). 채택 확정 시 `--repeat 3` 루틴.
   - `sbs1.mp3` / `sbs1.txt` — 뉴스 리포트. **대부분 한국어 → 중간 영어 인용 → 다시 한국어 종료**(사실상 단일 앵커, 언어 전환 경계). **언어모드: auto**(영어 인용 구간이 있어 ko 고정 시 오전사 위험 — auto 유지). **테스트(채택/기각)**.
@@ -98,6 +114,7 @@ whisperlivekit-server
     **테스트(채택/기각)**. 채택 확정 시 `--repeat 3` 루틴.
   - `kinno.mp3` / `kinno.txt` — ITS 2021 K-혁신기업 행사, **2화자 순차통역**(한국어 MC + 통역사), 한↔영 교차. **언어모드: auto**.
     **held-out 정성 sanity** — 정답 텍스트의 단어·철자가 부정확할 수 있어 **WER/F1 채택 게이팅에서 제외**. 전반적 화자·문장 분리 + 대규모 누락/환각 유무만 정성 확인.
+    **알려진 개선 불가 구간**: `[spk2]`(통역사) 영어 도입부("Good morning, ladies and gentlemen. Welcome to the Dialogue with K-Innovative Companies at ITS 2021.")는 화자 본인의 콩글리시 발음이 원인이라 발음대로 한국어로 오전사되는 것이 정상 — 개선 대상 아님(상세: [TRANSCRIPTION_REQUIREMENTS.md](TRANSCRIPTION_REQUIREMENTS.md) kinno 절).
 - **정답 스크립트**: 위 모든 파일에 `<name>.txt`가 존재(canonical, `[spkN]` 헤더+화자·문장 전처리 완료). 2026-07-18 이전엔 `_speak,sentence_sperate.txt` 접미사 파일로 별도 관리됐으나 폐지·통합됨.
 - 용도: STT 전사 정확도(WER) + 화자분리 F1 + 문장분리 F1 정량 분석(우선순위 화자분리 F1 > WER > 문장분리 F1)
 

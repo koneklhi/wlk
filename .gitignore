@@ -171,3 +171,15 @@ whisperlivekit/llm_translation/*.db
 deploy/
 
 test_data.zip
+
+# React 배포 UI — 빌드 산출물(백엔드 --frontend-dir 기본 서빙 루트). 소스는 frontend/app/.
+frontend/static/
+frontend/app/node_modules/
+frontend/.pnpm-store/
+*.tsbuildinfo
+
+# pnpm 임시 스토어 (1회성 명령 부산물, 추적 불필요)
+.pnpm-store-tmp/
+
+# 전사 테스트 산출물 (루트 위치, 임시)
+transcripts/

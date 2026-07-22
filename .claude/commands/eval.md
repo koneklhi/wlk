@@ -1,7 +1,8 @@
 # /eval — 경로 C 성능 평가 (실제 파이프라인 기준)
 
 기능 수정 후 경로 C(VBCable 루프백)로 실제 오디오 파이프라인 전체를 통과한 성능을 측정한다.
-**WER(전사 정확도) + 화자분리 F1 + 문장분리 F1**를 출력한다. 개선·채택 우선순위 = **화자분리 F1 > WER > 문장분리 F1** (요구사항 정본 [docs/TRANSCRIPTION_REQUIREMENTS.md](../../docs/TRANSCRIPTION_REQUIREMENTS.md)). *2지표(화자분리/문장분리) 분리 구현 완료 — 신형식 정답(`<name>_speak,sentence_sperate.txt`) 존재 시 `seg_f1`=화자분리 F1, `sentence_f1`=문장분리 F1(모든 블록이 단일 문장이면 `None`)로 함께 산출된다. 아직 이 regime v2 기준 경로 C 베이스라인 실측 전이다.*
+**WER(전사 정확도) + 화자분리 F1 + 문장분리 F1**를 출력한다. 개선·채택 우선순위 = **화자분리 F1 > WER > 문장분리 F1** (요구사항 정본 [docs/TRANSCRIPTION_REQUIREMENTS.md](../../docs/TRANSCRIPTION_REQUIREMENTS.md)). *2지표(화자분리/문장분리) 분리 구현 완료 — 신형식 정답(`[spkN]` 헤더가 있는 `<name>.txt`) 존재 시 `seg_f1`=화자분리 F1, `sentence_f1`=문장분리 F1(모든 블록이 단일 문장이면 `None`)로 함께 산출된다. 아직 이 regime v2 기준 경로 C 베이스라인 실측 전이다.*
+추가로 **언어 불일치율(LMR)**이 함께 출력되나 이는 **WER 하위 진단 지표**이며 채택 게이트가 아니다(아래 §결과 해석 기준).
 서버 기동/종료와 VBCable 장치 설정/복원은 스크립트가 자동으로 처리한다.
 **세션 언어모드 매트릭스**(CLAUDE.md §3.2·§3.8 — `--lan`은 서버 기동당 전역 1값이라 언어모드가 다른 파일은 **run을 분리**):
 - **auto 테스트(채택/기각) = `bong1.wav` + `ytn2.mp3` + `sbs1.mp3`** (`--lan auto`; 화자분할 ON; ytn2·bong1 공동 최우선)
@@ -83,6 +84,8 @@ $ts = Get-Date -Format "yyyyMMdd_HHmm"
 2. VBCable 자동 설정 여부 로그 확인 (성공/실패/건너뜀)
 3. 저장된 JSON에서 파일별 `wer_median/min/max/stdev`, `seg_f1_median`, `avg_wer_c_median`/`avg_seg_f1_c_median` 추출.
    **median + 최악 케이스(max)를 함께** 본다 (경로 C = 성능 기준 지표).
+   진단용으로 `lmr_ko`/`lmr_wer_pp`(집계)와 `lang_mismatch`(회차별 원카운트)도 함께 읽는다 — 해석은 아래
+   §결과 해석 기준 "언어 불일치율(LMR)" 참조. **채택 게이트는 아니다.**
 4. `.omc/transcripts/`에 저장된 전사 파일을 읽어 **정성 평가**를 수행한다 (아래 §정성 평가 절차 참조).
    정량(WER/F1)과 정성(목표 달성 여부·신규 이슈)을 **함께** 고려해 채택/기각/사용자 확인을 판정한다.
 5. `.omc/benchmarks/`의 가장 최근 JSON과 비교:
@@ -106,6 +109,9 @@ eval.py 완료 후 `.omc/transcripts/`에 저장된 `{파일명}_{경로}_R{회�
 3. **목표 달성**: 이번 실험의 가설(예: "언어 전환 시 truncation 감소")이 실제로 개선됐는가?
    - 가설이 겨냥한 구간(예: 코드스위칭 전환부, 다화자 발화 경계)의 오류 패턴 변화 확인
 4. **신규 문제**: 이전에 없던 오류 유형(환각 폭주·**한/영 외 언어 혼용**·단어 누락 폭증)이 생겼는가?
+   - **언어잠금 전사**: `LMR_ko`가 높은 회차는 전사 txt에서 한국어 구간이 통째로 영어로 나온 지점을 찾아 확인한다
+     (예 `누가 주인공일까…` → `Who is the one who is the one who…`). `en_del` 폭증 회차는 **영어 누락**이라는
+     별개 축이므로 따로 본다.
 5. **오류 분포 변화**: WER 개선/악화가 어느 구간에서 발생했는가? (특정 구간 집중인지 전반적인지)
 6. **[3순위·nice-to-have] 문장 분리 로직**: 전사 txt의 `[문장별 확정 트리거]` 섹션(각 문장 뒤 `⟨silence/punctuation/language_switch/speaker_change⟩`)을 읽어, 문장이 **어떤 로직으로 확정·분리됐는지** 분석한다. 동일 화자 인접 문장이 붙어 나오는 **Case A는 허용**(감점 아님). 조기/지연 확정, 코드스위칭·화자전환 경계에서 트리거가 기대대로 작동했는지 F1 정성 판단에 활용한다.
 7. **kinno(정성 sanity held-out) 전용**: 정답 텍스트가 부정확하므로 **WER/F1 수치를 신뢰하지 말 것**. 대규모 누락/환각 유무 + 전반적 화자·문장 분리가 대충 되는지만 본다.
@@ -167,6 +173,41 @@ eval.py 완료 후 `.omc/transcripts/`에 저장된 `{파일명}_{경로}_R{회�
 > 파일을 빈 줄 경계=구 regime으로 폴백 — 이 경우 `sentence_f1`은 `None`).
 > 상세는 [docs/TRANSCRIPTION_REQUIREMENTS.md](../../docs/TRANSCRIPTION_REQUIREMENTS.md) §5 참조. 경로 C 화자 id
 > 배선(§5 step 4, 귀속 정확도)은 아직 미구현이며, regime v2 기준 신 베이스라인 실측도 다음 세션 과제다.
+
+### 언어 불일치율(LMR) — WER **하위 진단 지표**(채택 게이트 아님)
+
+콘솔 요약에 `언어불일치: X.X% (Y.Y%p)`, 전사 txt 헤더·HTML 리포트에 `언어불일치(KO→EN) X.X% (WER Y.Y%p)`,
+JSON에는 `lmr_ko`/`lmr_en`/`lmr_wer_pp`
++ 원카운트 `lang_mismatch`로 나온다. 정답 KO 단어가 **영어로 치환 전사된 비율**이다(정의·공식·bong1 소급 수치
+= [docs/TRANSCRIPTION_REQUIREMENTS.md](../../docs/TRANSCRIPTION_REQUIREMENTS.md) §3).
+
+| 읽는 법 | 의미 |
+|---|---|
+| `lmr_ko`가 높다 | **언어잠금 전사**가 일어났다 — `detected_language`가 `en`에 고착된 채 한국어를 영어로 번역·음차 출력. WER 악화의 원인 귀속에 쓴다 |
+| `lmr_wer_pp` | 그 실패가 **WER 몇 %p**를 차지하는지(WER과 분모 공유 → 덧셈 가능) |
+| `lmr_en`이 오른다 | 반대 방향 **부작용** — 언어잠금을 고치려다 영어를 한국어로 뒤집고 있는지 감시 |
+| `N/A` | 해당 스크립트 정답 단어가 0개(eng1의 `lmr_ko`, kor1~3의 `lmr_en`) — "0%"가 아니라 **측정 불가**다 |
+
+주의:
+
+- **LMR 단독으로 기각·채택하지 않는다.** 게이트 순서는 화자분리 F1 worst → WER max → WER median → 문장분리 F1
+  그대로다. LMR은 그 수치의 **원인 설명**에만 쓴다.
+- **LMR은 하한(lower bound)**이다 — 정렬이 `del`+`ins`로 갈라진 뒤집힘 피해는 안 잡힌다. "정확한 총량"으로
+  서술하지 말고 "적어도 이만큼"으로 보고한다.
+- **`en_del` 폭증은 별개 축**이다(영어 정답 단어 누락). LMR과 같은 실패로 묶어 설명하지 말 것 — bong1 worst
+  회차에서 영어 누락이 30단어대로 튄 관측이 있다(평시 6~16).
+- **문장 단위 뒤집힘 이벤트**(`lang_flip_events`)는 해상도가 낮아(bong1 KO 지배 문장 7개, median 1.5건)
+  **정성 서술에만** 쓴다.
+
+과거 벤치 JSON에 LMR이 없으면 재측정 없이 소급 계산한다(서버·오디오 불필요):
+
+```powershell
+.venv\Scripts\python.exe scripts/backfill_lang_mismatch.py .omc/benchmarks/eval_<ts>.json `
+  --ref-file test_data/bong1.txt `
+  --output .omc/benchmarks/eval_<ts>_lmr.json
+```
+`--ref-file`은 문장 단위 뒤집힘 이벤트까지 계산하며, 벤치 JSON의 `reference`와 정답 판본이 다르면 assert로
+즉시 중단한다(조용한 오정렬 방지). `--output`은 항상 **새 파일**(원본 in-place 수정 금지).
 
 ## VBCable 자동 설정
 

@@ -111,6 +111,13 @@ class FileResult:
     sentence_precision: Optional[float] = None
     sentence_recall: Optional[float] = None
     ref_format: Optional[str] = None   # "new"([spkN] 헤더 신형식) | "old"(빈 줄 경계 구형식) | None(정답 없음) — 파일은 항상 <stem>.txt
+    # 언어 불일치율(LMR) — 정답 단어가 반대 스크립트로 뒤집혀 전사된 비율. 전부 None 기본값이라
+    # 이 필드들이 없던 구 JSON도 그대로 로드된다(하위호환).
+    lmr_ko: Optional[float] = None            # KO 정답 단어 중 EN으로 뒤집힌 비율 (주지표)
+    lmr_en: Optional[float] = None            # EN 정답 단어 중 KO로 뒤집힌 비율 (부작용 감시)
+    lmr_wer_pp: Optional[float] = None        # 양방향 뒤집힘 / 전체 정답 단어 = WER 귀속 %p
+    lang_mismatch: Optional[dict] = None      # compute_language_mismatch() 전체 카운트
+    lang_flip_events: Optional[list] = None   # 문장 단위 지배 스크립트 뒤집힘(정성 리포트 전용)
 
 
 @dataclass
@@ -148,6 +155,14 @@ class EvalResult:
     def avg_sentence_f1_c(self) -> Optional[float]:
         return self._avg("sentence_f1", "C")
 
+    @property
+    def avg_lmr_ko_c(self) -> Optional[float]:
+        return self._avg("lmr_ko", "C")
+
+    @property
+    def avg_lmr_wer_pp_c(self) -> Optional[float]:
+        return self._avg("lmr_wer_pp", "C")
+
 
 def _save_transcript(transcript_dir: Path, file_result: "FileResult", rep: int = 1) -> None:
     """전사 결과를 정답과 나란히 텍스트 파일로 저장한다 (LLM 비교 평가용)."""
@@ -164,10 +179,13 @@ def _save_transcript(transcript_dir: Path, file_result: "FileResult", rep: int =
             trig = ln.get("trigger") or "-"
             rows.append(f"{i}. {ln['text']}  ⟨{trig}⟩")
         lines_block = "\n[문장별 확정 트리거]\n" + "\n".join(rows) + "\n"
+    lmr_ko_str = f"{file_result.lmr_ko * 100:.1f}%" if file_result.lmr_ko is not None else "N/A"
+    lmr_pp_str = f"{file_result.lmr_wer_pp * 100:.1f}%p" if file_result.lmr_wer_pp is not None else "N/A"
     content = (
         f"파일: {file_result.audio_file}\n"
         f"경로: {file_result.path} | 회차: R{rep} | 정답형식: {ref_format_str}\n"
         f"WER: {wer_str} | 화자분리F1: {f1_str} | 문장분리F1: {sent_f1_str}\n"
+        f"언어불일치(KO→EN): {lmr_ko_str} (WER {lmr_pp_str})\n"
         f"\n[전사]\n{file_result.transcription}\n"
         f"{lines_block}"
         f"\n[정답]\n{file_result.reference or '(정답 없음)'}\n"
@@ -177,7 +195,7 @@ def _save_transcript(transcript_dir: Path, file_result: "FileResult", rep: int =
 
 
 def _aggregate_runs(runs: list) -> dict:
-    """runs(FileResult 리스트)에서 wer, seg_f1의 median/min/max/stdev를 계산한다."""
+    """runs(FileResult 리스트)에서 wer, seg_f1, sentence_f1, lmr_ko, lmr_wer_pp의 median/min/max/stdev를 계산한다."""
 
     def _stats(vals):
         v = [x for x in vals if x is not None]
@@ -194,15 +212,33 @@ def _aggregate_runs(runs: list) -> dict:
         "wer": _stats([r.wer for r in runs]),
         "seg_f1": _stats([r.seg_f1 for r in runs]),
         "sentence_f1": _stats([r.sentence_f1 for r in runs]),
+        "lmr_ko": _stats([r.lmr_ko for r in runs]),
+        "lmr_wer_pp": _stats([r.lmr_wer_pp for r in runs]),
     }
 
 
 def parse_reference_sentences(ref_text: str) -> list:
-    """빈 줄(\\n\\n)로 구분된 블록 = 문장 1개."""
-    return [b.strip() for b in re.split(r"\n\s*\n", ref_text) if b.strip()]
+    """빈 줄(\\n\\n)로 구분된 블록 = 문장 1개. 비언어적 태그는 제외."""
+    out = []
+    for b in re.split(r"\n\s*\n", ref_text):
+        s = _strip_nonverbal_tags(b.strip())
+        if s:
+            out.append(s)
+    return out
 
 
 _SPEAKER_HEADER_RE = re.compile(r"^\[(spk\d+)\]\s*$", re.MULTILINE)
+_NONVERBAL_TAG_RE = re.compile(r"\([^)]*\)")
+
+
+def _strip_nonverbal_tags(text: str) -> str:
+    """정답 텍스트에서 비언어적 표시((웃음)(박수)(환호)(잡음)(더듬) 등 괄호 태그)를 제거한다.
+
+    괄호로 감싼 내용은 키워드 무관하게 전부 비언어 잡음/디스플루언시 주석으로 간주해
+    WER·화자분리F1·문장분리F1 계산 대상에서 제외한다.
+    """
+    text = _NONVERBAL_TAG_RE.sub(" ", text)
+    return re.sub(r"\s+", " ", text).strip()
 
 
 def parse_speaker_sentence_reference(ref_text: str) -> Optional[dict]:
@@ -229,7 +265,11 @@ def parse_speaker_sentence_reference(ref_text: str) -> Optional[dict]:
         start = m.end()
         end = headers[idx + 1].start() if idx + 1 < len(headers) else len(ref_text)
         block_text = ref_text[start:end]
-        sentences = [s.strip() for s in re.split(r"\n\s*\n", block_text) if s.strip()]
+        sentences = []
+        for raw in re.split(r"\n\s*\n", block_text):
+            s = _strip_nonverbal_tags(raw.strip())
+            if s:
+                sentences.append(s)
         blocks.append({"speaker": speaker, "sentences": sentences})
         all_sentences.extend(sentences)
 
@@ -330,6 +370,8 @@ def _build_result(audio_path: Path, transcription: str, hyp_sentences: list, pat
     seg_f1은 구 정의(빈 줄 경계) 그대로다.
     """
     from whisperlivekit.metrics import (
+        compute_language_flip_events,
+        compute_language_mismatch,
         compute_segmentation,
         compute_speaker_sentence_segmentation,
         compute_wer,
@@ -342,6 +384,8 @@ def _build_result(audio_path: Path, transcription: str, hyp_sentences: list, pat
     ref_sentences_count = hyp_sentences_count = None
     sentence_f1 = sentence_precision = sentence_recall = None
     ref_format = None
+    lang_mismatch = None
+    lang_flip_events = None
 
     ref_path = audio_path.with_suffix(".txt")
     parsed = None
@@ -361,14 +405,23 @@ def _build_result(audio_path: Path, transcription: str, hyp_sentences: list, pat
             sentence_precision = sentence["precision"]
             sentence_recall = sentence["recall"]
         ref_format = "new"
+        # reference는 이미 파서 출구에서 비언어 태그가 제거된 텍스트다 — 여기서 다시 제거하지 않는다.
+        lang_mismatch = compute_language_mismatch(reference, transcription.strip())
+        # 문장 단위 뒤집힘 이벤트는 화자 정보를 함께 실을 수 있는 신형식에서만 산출한다(정성 리포트용).
+        flat_sentences = [
+            {"text": s, "speaker": b["speaker"]} for b in parsed["blocks"] for s in b["sentences"]
+        ]
+        lang_flip_events = compute_language_flip_events(flat_sentences, transcription.strip())
     else:
         if ref_path.exists():
-            reference = ref_path.read_text(encoding="utf-8").strip()
+            ref_blocks = parse_reference_sentences(ref_path.read_text(encoding="utf-8"))
+            reference = " ".join(ref_blocks)
             wer = compute_wer(reference, transcription.strip())["wer"]
-            seg = compute_segmentation(parse_reference_sentences(reference), hyp_sentences)
+            seg = compute_segmentation(ref_blocks, hyp_sentences)
             seg_f1, seg_precision, seg_recall = seg["f1"], seg["precision"], seg["recall"]
             ref_sentences_count, hyp_sentences_count = seg["ref_sentences"], seg["hyp_sentences"]
             ref_format = "old"
+            lang_mismatch = compute_language_mismatch(reference, transcription.strip())
 
     return FileResult(
         audio_file=str(audio_path),
@@ -386,6 +439,11 @@ def _build_result(audio_path: Path, transcription: str, hyp_sentences: list, pat
         sentence_precision=sentence_precision,
         sentence_recall=sentence_recall,
         ref_format=ref_format,
+        lmr_ko=lang_mismatch["lmr_ko"] if lang_mismatch else None,
+        lmr_en=lang_mismatch["lmr_en"] if lang_mismatch else None,
+        lmr_wer_pp=lang_mismatch["lmr_wer_pp"] if lang_mismatch else None,
+        lang_mismatch=lang_mismatch,
+        lang_flip_events=lang_flip_events,
     )
 
 
@@ -430,6 +488,10 @@ def _fmt_pct(v: Optional[float]) -> str:
     return f"{v * 100:.1f}%" if v is not None else "N/A"
 
 
+def _fmt_pp(v: Optional[float]) -> str:
+    return f"{v * 100:.1f}%p" if v is not None else "N/A"
+
+
 def print_summary(result: EvalResult, repeat: int = 1, file_summaries: Optional[list] = None) -> None:
     print("\n" + "=" * 60)
     print(f"평가 결과 | {result.timestamp}")
@@ -447,21 +509,31 @@ def print_summary(result: EvalResult, repeat: int = 1, file_summaries: Optional[
                 wer_str = _fmt_pct(r.wer)
                 f1_str = _fmt_pct(r.seg_f1)
                 sent_f1_str = _fmt_pct(r.sentence_f1)
+                lmr_str = _fmt_pct(r.lmr_ko)
+                lmr_pp_str = _fmt_pp(r.lmr_wer_pp)
                 prefix = f"  [C] {name:20s}" if i == 0 else " " * (6 + 20)
-                print(f"{prefix}  R{i+1}: WER {wer_str:>7s}  화자F1 {f1_str:>7s}  문장F1 {sent_f1_str:>7s}")
+                print(
+                    f"{prefix}  R{i+1}: WER {wer_str:>7s}  화자F1 {f1_str:>7s}  문장F1 {sent_f1_str:>7s}"
+                    f"  언어불일치 {lmr_str:>7s} ({lmr_pp_str:>7s})"
+                )
             # median 줄
             wer_agg = agg["wer"]
             f1_agg = agg["seg_f1"]
             sent_f1_agg = agg["sentence_f1"]
+            lmr_agg = agg.get("lmr_ko") or {}
+            lmr_pp_agg = agg.get("lmr_wer_pp") or {}
 
             med_wer = _fmt_pct(wer_agg["median"])
             med_f1 = _fmt_pct(f1_agg["median"])
             med_sent_f1 = _fmt_pct(sent_f1_agg["median"])
+            med_lmr = _fmt_pct(lmr_agg.get("median"))
+            med_lmr_pp = _fmt_pp(lmr_pp_agg.get("median"))
             min_wer = _fmt_pct(wer_agg["min"])
             max_wer = _fmt_pct(wer_agg["max"])
             std_wer = _fmt_pct(wer_agg["stdev"])
             print(
                 f"{'  ' + ' ' * 26}  median WER: {med_wer:>7s}  화자F1: {med_f1:>7s}  문장F1: {med_sent_f1:>7s}"
+                f"  언어불일치: {med_lmr:>7s} ({med_lmr_pp:>7s})"
                 f"  [min {min_wer} / max {max_wer} / stdev {std_wer}]"
             )
     else:
@@ -469,8 +541,13 @@ def print_summary(result: EvalResult, repeat: int = 1, file_summaries: Optional[
             wer_str = _fmt_pct(f.wer)
             f1_str = _fmt_pct(f.seg_f1)
             sent_f1_str = _fmt_pct(f.sentence_f1)
+            lmr_str = _fmt_pct(f.lmr_ko)
+            lmr_pp_str = _fmt_pp(f.lmr_wer_pp)
             name = Path(f.audio_file).name
-            print(f"  [{f.path}] {name:20s}  WER: {wer_str:>7s}  화자F1: {f1_str:>7s}  문장F1: {sent_f1_str:>7s}")
+            print(
+                f"  [{f.path}] {name:20s}  WER: {wer_str:>7s}  화자F1: {f1_str:>7s}  문장F1: {sent_f1_str:>7s}"
+                f"  언어불일치: {lmr_str:>7s} ({lmr_pp_str:>7s})"
+            )
 
     print("-" * 60)
     if result.avg_wer_a is not None:
@@ -587,6 +664,15 @@ def main() -> None:
         "실험용 스윕 오버라이드 — 서버 측 상한 2.0s 초과 불가(서버가 assert로 거부).",
     )
     parser.add_argument(
+        "--server-frontend-dir",
+        type=str,
+        default=None,
+        dest="server_frontend_dir",
+        help="서버에 전달할 --frontend-dir 오버라이드. 로컬에 frontend/static React dist가 있으면 GET /가 그쪽으로 "
+        "리다이렉트돼 eval.py의 Playwright 레거시 UI(#startButton) 테스트가 깨진다 — 빈 디렉터리(예: .omc/eval_empty_frontend)를 "
+        "지정해 레거시 내장 UI로 강제 폴백시킬 때 사용.",
+    )
+    parser.add_argument(
         "--expect-code-root",
         type=Path,
         default=None,
@@ -663,6 +749,8 @@ def main() -> None:
         )
     if args.silence_hard_secs is not None:
         extra_server_args.extend(["--silence-hard-secs", str(args.silence_hard_secs)])
+    if args.server_frontend_dir is not None:
+        extra_server_args.extend(["--frontend-dir", args.server_frontend_dir])
 
     for f in args.files:
         if not f.exists():
@@ -768,21 +856,33 @@ def main() -> None:
                 "wer": agg["wer"],
                 "seg_f1": agg["seg_f1"],
                 "sentence_f1": agg["sentence_f1"],
+                "lmr_ko": agg["lmr_ko"],
+                "lmr_wer_pp": agg["lmr_wer_pp"],
             })
 
     # median 기반 경로 C 평균 (repeat > 1일 때)
     avg_wer_c_median = None
     avg_seg_f1_c_median = None
     avg_sentence_f1_c_median = None
+    avg_lmr_ko_c_median = None
+    avg_lmr_wer_pp_c_median = None
     if args.repeat > 1 and file_summaries:
         wer_medians = [fs["agg"]["wer"]["median"] for fs in file_summaries if fs["agg"]["wer"]["median"] is not None]
         f1_medians = [fs["agg"]["seg_f1"]["median"] for fs in file_summaries if fs["agg"]["seg_f1"]["median"] is not None]
         sent_f1_medians = [
             fs["agg"]["sentence_f1"]["median"] for fs in file_summaries if fs["agg"]["sentence_f1"]["median"] is not None
         ]
+        lmr_ko_medians = [
+            fs["agg"]["lmr_ko"]["median"] for fs in file_summaries if fs["agg"]["lmr_ko"]["median"] is not None
+        ]
+        lmr_pp_medians = [
+            fs["agg"]["lmr_wer_pp"]["median"] for fs in file_summaries if fs["agg"]["lmr_wer_pp"]["median"] is not None
+        ]
         avg_wer_c_median = sum(wer_medians) / len(wer_medians) if wer_medians else None
         avg_seg_f1_c_median = sum(f1_medians) / len(f1_medians) if f1_medians else None
         avg_sentence_f1_c_median = sum(sent_f1_medians) / len(sent_f1_medians) if sent_f1_medians else None
+        avg_lmr_ko_c_median = sum(lmr_ko_medians) / len(lmr_ko_medians) if lmr_ko_medians else None
+        avg_lmr_wer_pp_c_median = sum(lmr_pp_medians) / len(lmr_pp_medians) if lmr_pp_medians else None
 
     output_data: dict = {
         "timestamp": result.timestamp,
@@ -796,6 +896,8 @@ def main() -> None:
         "avg_seg_f1_c": result.avg_seg_f1_c,
         "avg_sentence_f1_a": result.avg_sentence_f1_a,
         "avg_sentence_f1_c": result.avg_sentence_f1_c,
+        "avg_lmr_ko_c": result.avg_lmr_ko_c,
+        "avg_lmr_wer_pp_c": result.avg_lmr_wer_pp_c,
         "files": [asdict(f) for f in result.files],
     }
     if args.repeat > 1:
@@ -803,6 +905,8 @@ def main() -> None:
         output_data["avg_wer_c_median"] = avg_wer_c_median
         output_data["avg_seg_f1_c_median"] = avg_seg_f1_c_median
         output_data["avg_sentence_f1_c_median"] = avg_sentence_f1_c_median
+        output_data["avg_lmr_ko_c_median"] = avg_lmr_ko_c_median
+        output_data["avg_lmr_wer_pp_c_median"] = avg_lmr_wer_pp_c_median
 
     if args.output:
         args.output.parent.mkdir(parents=True, exist_ok=True)

@@ -37,6 +37,8 @@ description: master 변경사항을 배포 반입 산출물(deploy/, wlk_in/)에
    | `scripts/**` | 불필요 — wheel엔 안 들어감 | 변경 파일 복사(배포 PC에서 소스 그대로 직접 실행) |
    | `docs/**` | 불필요 | 변경 파일 복사(배포 PC 운영자 참고용 — "배포 산출물 없음"과 "wlk_in 사본 갱신 불필요"는 다른 얘기다) |
    | `test_data/**`, `tests/**`, 루트 메타파일(`README.md`·`EXPERIMENTS*.md` 등) | 불필요 | 변경 파일 복사 |
+   | `frontend/app/**` (React 소스) | 불필요 | 변경 파일 복사(배포 PC는 빌드하지 않는다 — 참고·재빌드 대비용) |
+   | **`frontend/static/**` (빌드 dist)** | 해당 없음 | **`.gitignore` 비추적이라 git diff·`git archive`로 절대 안 잡힌다 — 아래 4-B 참조. 배포 PC가 실제로 서빙하는 유일한 UI 산출물이므로 누락하면 화면이 구버전에 머문다** |
    | `whisperlivekit/model/**` | 해당 없음 | `.gitignore` 비추적이라 git diff로 안 잡힘 — 새 모델 파일 추가 여부를 사용자에게 별도 확인 |
    | `.claude/`, `.memorize/`, `.omc/` | 불필요 | **범위 밖** — 배포 PC는 Claude Code를 쓰지 않는다. `wlk_in`에 이미 있는 구버전은 방치해도 무방(정리 불필요) |
 
@@ -51,7 +53,31 @@ description: master 변경사항을 배포 반입 산출물(deploy/, wlk_in/)에
    - 패키징 버그 등 **코드 자체를 고쳐야 하는 문제가 발견되면 여기서 직접 고치지 않는다** — 별도
      브랜치+워크트리로 분리하고, 병합은 사용자 승인 후 진행한다(main 브랜치 편집 규약).
 
+4-B. **프론트엔드 dist 갱신이 필요한 경우(`frontend/app/**` 변경 시)**
+
+   `frontend/static/`은 `.gitignore` 대상이라 2단계의 `git diff --name-status`에도, 6단계의
+   `git archive`에도 **나타나지 않는다**. 그런데 배포 PC(`--frontend-dir` 기본값 `frontend/static`,
+   cwd 상대)가 실제로 서빙하는 것은 이 dist뿐이다. 소스만 복사하고 끝내면 배포 PC UI는 구버전에
+   머문 채 "반입했는데 안 바뀐다"가 된다. 따라서 프론트 소스가 바뀌었으면 반드시 여기를 거친다.
+
+   1. **빌드**: `frontend/app`에서 `pnpm install && pnpm typecheck && pnpm test && pnpm build`.
+      산출물은 `vite.config.ts`의 `outDir: '../static'` 설정대로 `frontend/static/`에 떨어진다.
+      (`pnpm lint`는 반입 이전부터 있던 기존 위반으로 exit 1이 될 수 있다 — 신규 위반 유무만 본다.)
+   2. **출처 확인**: 빌드한 트리의 HEAD가 동기화 대상 커밋과 같은지 `git rev-parse`로 대조한다.
+      워크트리에서 빌드했다면 그 워크트리 HEAD가 master(또는 master의 머지 부모)여야 한다 —
+      다른 커밋으로 빌드한 dist를 반입하면 소스와 화면이 어긋난다.
+   3. **복사**: `wlk_in\frontend\static\`을 **통째로 지우고 새로 복사**한다. 여기는 빌드 산출물만
+      들어 있는 leaf 디렉터리라 6단계의 "전체 트리 재추출 금지" 경고(모델 가중치 유실 위험)가
+      적용되지 않는다. 오히려 지우지 않으면 Vite의 해시 파일명(`index-<hash>.js`) 탓에 구버전
+      asset이 무한히 쌓인다.
+   4. **검증**: `diff -rq <소스 dist> <wlk_in dist>`로 바이트 단위 동일 확인.
+
+   배포 PC 적용도 같은 이유로 **디렉터리 교체**다 — `C:\whist\wlk\frontend\static\`을 지우고
+   새로 덮어쓴다. 파일 단위 복사만 하면 구 asset이 남는다(동작은 하지만 계속 누적된다).
+
 5. **반영 산출물 검증**
+   - `frontend/app/**`가 바뀌었으면: `wlk_in\frontend\static\index.html`이 참조하는 asset 해시가
+     방금 빌드한 것과 같은지 확인한다 — 소스만 갱신되고 dist가 구버전인 상태가 가장 흔한 실수다.
    - `whisperlivekit/**`가 바뀌었으면: 이번에 바뀐 설정값(`parse_args.py` 기본값 등)과 신규/변경
      서브패키지(예: `whisperlivekit.filtering`·`whisperlivekit.llm_translation`)가 `wlk_in\whisperlivekit\`에
      실제로 반영됐는지 `diff -q`로 확인한다 — 프로젝트가 wheel로 설치되지 않으므로 이 raw 사본 확인이

@@ -254,11 +254,22 @@ class SimulStreamingOnlineProcessor:
         self.buffer = []
         self._session_cfg = self._resolve_session_cfg(language)
         self.model = self._create_alignatt()
+        # 시나리오 튜닝(Phase A) — asr(kwargs)로 전달된 CLI 오버라이드, 미지정 시 기존
+        # 모듈 상수로 폴백(무회귀). 사용 지점에서는 getattr(self, ..., None) or CONST로
+        # 재조회한다 — 테스트가 __new__로 __init__을 우회해 인스턴스를 만드는 경우에도
+        # 안전한 기본값 폴백을 보장하기 위함(§backend.py 유닛테스트 관례).
+        self.short_lang_reset_secs = getattr(asr, "short_lang_reset_secs", None) or MIN_DURATION_SHORT_LANG_RESET
+        self.new_speaker_max_keep_secs = getattr(asr, "new_speaker_max_keep_secs", None) or _NEW_SPEAKER_MAX_KEEP
+        self.script_anchor_n_words = getattr(asr, "script_anchor_n_words", None) or _SCRIPT_ANCHOR_N_WORDS
         self._last_emitted_word: str = None
         self._last_emit_end: float = 0.0  # 마지막으로 토큰을 방출한 시점의 audio end (stall 복구 baseline)
         self._consecutive_char_repeat: int = 0
         self._short_silence_check_at: float = 0.0
         self._last_eager_lang_check_end: Optional[float] = None  # Exp-189 버스트 쿨다운
+        # 직전 eager 감지 결과(실패 시 None). 쿨다운으로 재감지를 건너뛴 화자전환에서
+        # "언어가 그대로인가" 판정에만 재사용한다 — 쿨다운 창(_EAGER_LANG_COOLDOWN_SECS)
+        # 안에서만 참조하므로 값의 노후도는 그 창 길이로 자동 상한이 걸린다.
+        self._last_eager_lang_result: Optional[str] = None
         self._recent_emitted_words: List[str] = []  # 중복 방출 계측용 최근 방출 단어(정규화) tail
         # P2 스크립트 불일치 게이트: 실측(TokenTrace)상 배치가 보통 1~3 토큰 단위라
         # 한 배치만으로는 TTR 판정 표본이 부족하다 — detected_language와 반대
@@ -342,10 +353,13 @@ class SimulStreamingOnlineProcessor:
         """Handle silence period."""
         self.end += silence_duration
         long_silence = silence_duration >= MIN_DURATION_REAL_SILENCE
+        # 시나리오 튜닝(Phase A) — CLI --short-lang-reset-secs 오버라이드, 미지정/미설정
+        # (__init__ 우회 테스트 포함) 시 기존 모듈 상수로 폴백.
+        short_lang_reset_secs = getattr(self, "short_lang_reset_secs", None) or MIN_DURATION_SHORT_LANG_RESET
         # 계측용(행동 비변경): 어느 분기를 타는지는 아래 if/elif와 동일 조건으로 별도 계산해
         # 로그 라벨만 만든다 — 기존 if/elif 조건식 자체는 건드리지 않는다.
         _short_cond = (
-            silence_duration >= MIN_DURATION_SHORT_LANG_RESET
+            silence_duration >= short_lang_reset_secs
             and self.model.cfg.language == "auto"
             and self.model.state.detected_language is not None
         )
@@ -387,7 +401,7 @@ class SimulStreamingOnlineProcessor:
             self._anchor_repeat_window = []
             self._reset_script_anchor_streak()
         elif (
-            silence_duration >= MIN_DURATION_SHORT_LANG_RESET
+            silence_duration >= short_lang_reset_secs
             and self.model.cfg.language == "auto"
             and self.model.state.detected_language is not None
         ):
@@ -434,6 +448,10 @@ class SimulStreamingOnlineProcessor:
         # 현재 버퍼 시작의 절대 시각 그대로다 — 화자전환 절대시각과의 차이가 버퍼상대 오프셋.
         lang_locked = self.model.cfg.language != "auto"
         boundary_offset = change_speaker.start - self.model.global_time_offset
+        # 쿨다운으로 재감지를 건너뛴 경우의 직전 결과. eager와 분리해 둔다 — eager에 그대로
+        # 실으면 아래 _apply_detected_language까지 타서 Exp-189가 억제하려던 flip-flop 구간의
+        # 토크나이저 재적용이 되살아난다. 이 값은 재디코딩 스킵 판정에만 쓴다.
+        eager_cached = None
         if lang_locked:
             # 언어 고정 세션: 화자전환 시 언어 재감지 안 함(인코더 forward 절약 +
             # 오전환에 의한 세션 고정 파괴 방지). 경계 재디코딩 자체는 아래에서 유지.
@@ -448,23 +466,56 @@ class SimulStreamingOnlineProcessor:
                     self.end - last_check_end, _EAGER_LANG_COOLDOWN_SECS,
                 )
                 eager = None
+                eager_cached = getattr(self, "_last_eager_lang_result", None)
             else:
                 eager = self.model.detect_current_language(
                     window_secs=1.5, min_prob=0.85, since_offset=boundary_offset,
                 )
                 self._last_eager_lang_check_end = self.end
+                # 감지 실패(None)도 그대로 저장한다 — 더 오래된 성공값이 남아 재사용되면
+                # 실제보다 확신이 센 판정이 된다.
+                self._last_eager_lang_result = eager
         logger.info(
             "[NewSpeaker] spk=%s→%s det_before=%s eager=%s",
             self.model.state.speaker, change_speaker.speaker,
             self.model.state.detected_language, eager,
         )
+        # 1-b. 같은 언어가 확정된 화자전환은 경계 재디코딩을 건너뛴다.
+        # 경계 재디코딩의 목적은 "새 화자의 언어로 다시 읽기"인데, 언어가 그대로면 그 목적이
+        # 없다. 그런데도 refresh_segment는 init_tokens()로 디코더 prefix(이미 확정한 토큰)를
+        # 버리면서 그 발화가 담긴 오디오는 keep_secs만큼 남겨, 다음 패스가 같은 구간을 백지에서
+        # 다시 전사해 중복 방출을 만든다 — ytn2 "우선 우선"/"왕성 왕성한"이 전부 언어가 바뀌지
+        # 않은(det_before=ko, eager=ko) 화자 라벨 변경 경계에서 재현됐다. 화자 귀속만 갱신하면
+        # 화자전환 문장 분리는 token.speaker 변화로 그대로 실현된다.
+        # 근거는 이번 eager 감지 결과, 없으면 쿨다운 직전 결과(eager_cached)를 쓴다. 후자는
+        # 쿨다운 창 안에서만 존재하므로 최대 _EAGER_LANG_COOLDOWN_SECS 만큼만 낡았고, 쿨다운이
+        # 없었다면 어차피 그 값이 이번 판정에 쓰였을 값이다.
+        # 둘 다 None(감지 실패)이면 언어 동일을 확신할 수 없으므로 기존 재디코딩 경로를 탄다 —
+        # 화자전환 창은 두 화자 음성이 섞여 확신도가 떨어지는데, 그 지점이 곧 실제 언어가
+        # 바뀌는 지점일 수 있다. 잘못 스킵하면 새 화자 발화를 이전 언어로 전사해 붕괴하므로
+        # (중복 1건보다 훨씬 나쁘다) 불확실할 때는 재디코딩을 택한다.
+        lang_evidence = eager if eager is not None else eager_cached
+        if (
+            lang_evidence is not None
+            and self.model.state.detected_language is not None
+            and lang_evidence == self.model.state.detected_language
+        ):
+            logger.info(
+                "[NewSpeaker] 같은 언어(%s) 확정%s — 경계 재디코딩 스킵 (중복 방출 방지)",
+                lang_evidence, "" if eager is not None else " (쿨다운 직전 결과 재사용)",
+            )
+            self.model.speaker = change_speaker.speaker
+            return
         # 2. flush 생략 + 경계 오디오 유지(complete=False) + 미확정 음역 폐기
         # damage B 수정: 고정 [-2:] 대신, 화자전환 시각(change_speaker.start)부터 현재(self.end)
         # 까지의 실제 경계 오디오 길이만큼만 유지한다 — 그래야 경계 앞쪽(새 화자 발화 서두)이
         # 정책적으로 잘려나가지 않는다. MAX_KEEP으로 상한을 두고(과거 환각 전례),
         # max(..., MARGIN)은 계획에 없는 방어적 클램프 — change_speaker.start가 self.end보다
         # 늦게 도착하는 극단 케이스(음수/0에 가까운 keep_secs)에서도 최소 여유를 보장한다.
-        keep_secs = min(self.end - change_speaker.start + _NEW_SPEAKER_KEEP_MARGIN, _NEW_SPEAKER_MAX_KEEP)
+        # 시나리오 튜닝(Phase A) — CLI --new-speaker-max-keep-secs 오버라이드, 미지정/미설정
+        # (__init__ 우회 테스트 포함) 시 기존 모듈 상수로 폴백.
+        new_speaker_max_keep_secs = getattr(self, "new_speaker_max_keep_secs", None) or _NEW_SPEAKER_MAX_KEEP
+        keep_secs = min(self.end - change_speaker.start + _NEW_SPEAKER_KEEP_MARGIN, new_speaker_max_keep_secs)
         keep_secs = max(keep_secs, _NEW_SPEAKER_KEEP_MARGIN)
         self.model.refresh_segment(complete=False, keep_secs=keep_secs)
         self.buffer = []
@@ -696,7 +747,10 @@ class SimulStreamingOnlineProcessor:
             self._reset_script_anchor_streak()  # 잠긴 스크립트 포함 → 정상 콘텐츠 재개
         if not self._script_anchor_streak:
             return False
-        if len(self._script_anchor_streak) >= _SCRIPT_ANCHOR_N_WORDS:
+        # 시나리오 튜닝(Phase A) — CLI --script-anchor-n-words 오버라이드, 미지정/미설정
+        # (__init__ 우회 테스트 포함) 시 기존 모듈 상수로 폴백.
+        script_anchor_n_words = getattr(self, "script_anchor_n_words", None) or _SCRIPT_ANCHOR_N_WORDS
+        if len(self._script_anchor_streak) >= script_anchor_n_words:
             return True
         return (
             self._script_anchor_streak_start is not None
@@ -1020,6 +1074,8 @@ class SimulStreamingASR:
                 compression_ratio_threshold=self.compression_ratio_threshold,
                 lang_restrict_koen=getattr(self, 'lang_restrict_koen', True),
                 periodic_lang_check_secs=getattr(self, 'periodic_lang_check_secs', None),
+                lang_detect_general_secs=getattr(self, 'lang_detect_general_secs', None),
+                nonspeech_prob=getattr(self, 'no_speech_threshold', None) or 0.5,
         )
 
         # Set up tokenizer for translation if needed

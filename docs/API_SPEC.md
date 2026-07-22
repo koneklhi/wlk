@@ -55,7 +55,7 @@
 ### 2.1 연결
 
 ```
-ws://<host>:<port>/asr[?language=<code>]
+ws://<host>:<port>/asr[?language=<code>][&mode=delta|full]
 ```
 
 **쿼리 파라미터**(선택)
@@ -63,6 +63,12 @@ ws://<host>:<port>/asr[?language=<code>]
 | 파라미터   | 타입   | 기본               | 설명                                                            |
 | ---------- | ------ | ------------------ | --------------------------------------------------------------- |
 | `language` | string | 서버 `--lan`(기본 `auto`) | 세션 소스 언어 지정. 허용값 `{auto, ko, en}`. 생략 시 서버 전역 `--lan` 따름(세션 오버라이드 없음) |
+| `mode`     | string | 서버 `--ws-protocol`(기본 `full`) | 출력 프로토콜(§2.4.2). `full`=매 메시지 전체 스냅샷(**기본**, 구 동작), `delta`=snapshot 1회+이후 diff(**opt-in**). `diff`는 `delta`의 하위호환 별칭. 허용값 외는 경고 로그 후 서버 기본값 폴백 |
+
+> **`mode=delta` opt-in**: 기본값이 `full`이므로 **델타 미대응 클라이언트는 코드를 고치지 않아도 기존 그대로
+> 동작한다**. 델타 재구성(§2.4.2)을 구현한 클라이언트가 `?mode=delta`로 명시적으로 전환한다 — 세션이 길어져도
+> 페이로드·재렌더 비용이 늘지 않는다. 모든 클라이언트가 델타를 지원하게 되면 서버 기본값을
+> `--ws-protocol delta`로 올릴 수 있다. 실제 적용된 프로토콜은 `config` 메시지의 `protocol` 필드로 통지된다(§2.4.1).
 
 > **⚠️ 실효 시점(2026-07-17~): 이제 기본 백엔드(SimulStreaming)에서 실제로 동작한다.** 과거엔 이 파라미터가
 > 문서에만 명세돼 있었을 뿐, 세션 언어 주입이 `transcribe()`만 가로채는 프록시로 구현돼 있었는데 기본 백엔드는
@@ -97,10 +103,11 @@ Client                                   Server
   │◀──── {"type":"config", ...} ──────────│   1회, 오디오 송신 방식 통지
   │                                        │
   │───── 오디오 바이너리 프레임 ─────────▶│   (config 수신 후 시작, 반복)
-  │◀──── 상태 스냅샷(JSON) ───────────────│   (~50ms, 직전과 다를 때만, 반복)
+  │◀──── {"type":"snapshot", ...} ────────│   1회, 전체 상태(델타 모드)
+  │◀──── {"type":"diff", ...} ────────────│   (~50ms, 직전과 다를 때만, 반복)
   │           …                           │
   │───── ArrayBuffer(0) (빈 프레임) ──────▶│   (녹음 종료 신호)
-  │◀──── 잔여 스냅샷 ─────────────────────│   (flush 결과)
+  │◀──── 잔여 diff ───────────────────────│   (flush 결과)
   │◀──── {"type":"ready_to_stop"} ────────│   (처리 완료)
   │───── close() ────────────────────────▶│
 ```
@@ -126,27 +133,81 @@ Client                                   Server
 
 ### 2.4 Server → Client 메시지 (JSON 텍스트)
 
-수신 JSON은 **`type` 필드 유무**로 종류를 구분한다.
+수신 JSON은 **`type` 필드**로 종류를 구분한다.
 
-- `type` 있음 → **제어 메시지**(§2.4.1: `config`, `ready_to_stop`)
-- `type` 없음 → **상태 스냅샷**(§2.4.2)
+- `type: "config" | "ready_to_stop"` → **제어 메시지**(§2.4.1)
+- `type: "snapshot" | "diff"` → **상태 메시지(델타 모드 = `?mode=delta` opt-in)**(§2.4.2)
+- `type` 없음 → **상태 스냅샷(full 모드 = 기본)**(§2.4.2)
 
 #### 2.4.1 제어 메시지
 
 | `type`          | 시점           | 페이로드                                                  | 의미                                                                            |
 | --------------- | -------------- | --------------------------------------------------------- | ------------------------------------------------------------------------------- |
-| `config`        | 연결 직후 1회  | `{"type":"config","useAudioWorklet":false,"mode":"full","language":"auto"}` | 오디오 송신 형식 + **세션 적용 언어** 통지. `useAudioWorklet`/`mode`는 배포 기본값에선 고정(구현 불필요) |
+| `config`        | 연결 직후 1회  | `{"type":"config","useAudioWorklet":false,"protocol":"full","mode":"full","language":"auto"}` | 오디오 송신 형식 + **적용 프로토콜** + **세션 적용 언어** 통지. `useAudioWorklet`은 배포 기본값에선 고정(구현 불필요) |
 | `ready_to_stop` | 종료 처리 완료 | `{"type":"ready_to_stop"}`                                | 최종 렌더 후 `close()` 하라는 신호                                              |
 
+> **`config.protocol`(신설)**: 그 세션에 실제 적용된 출력 프로토콜(`"delta"`|`"full"`). `mode`는 같은 값을 싣는 구
+> 클라이언트 호환 별칭이다(과거 `mode`는 항상 `"full"`이었다). 클라이언트는 `protocol ?? mode ?? "full"`로 읽는다.
+>
 > **`config.language`(2026-07-17 신설, 하위호환·필드 추가만)**: 그 세션에 실제 적용된 소스 언어. `?language=`로
 > 세션 언어를 지정했으면 그 값(`auto`/`ko`/`en`), 지정하지 않았으면 서버 전역 `config.lan`(기본 `auto`)이 담긴다.
 > 클라이언트는 이 값으로 세션 언어가 의도대로 걸렸는지 확인할 수 있다(필드가 없는 구버전 서버 대비 방어적으로 읽을 것).
 
-#### 2.4.2 상태 스냅샷
+#### 2.4.2 상태 메시지 — full(기본) / 델타(opt-in)
 
-`type` 필드 없음. 매 처리 사이클(~50ms) 중 **직전 스냅샷과 내용이 다를 때만** 전송된다.
-`lines[]`는 **세션 전체 확정 히스토리를 무제한 유지**하며 매 스냅샷 그대로 재전송된다 — 클라이언트는
-받은 `lines[]`를 **전체 교체 렌더**만 해도 히스토리가 유지된다(별도 누적 불필요, §6 리텐션 참조).
+매 처리 사이클(~50ms) 중 **직전 상태와 내용이 다를 때만** 전송된다. `lines[]`는 **세션 전체 확정 히스토리를
+무제한 유지**한다(§6 리텐션) — 다만 **그 전체를 매번 보내지는 않는다.**
+
+##### 델타 프로토콜 (opt-in, `?mode=delta`)
+
+> **왜 있나**: full 모드는 매 메시지가 전체 상태 스냅샷이라, 세션이 길어질수록 WebSocket 페이로드와 전체 재렌더
+> 비용이 누적 줄 수에 비례해 커진다(실측: 109초 시점 이미 메시지당 ~5.5KB, 총 전송량 4.7배). 델타는 매 메시지
+> 1~2줄만 실어 이 증가를 없앤다.
+> **델타를 쓰려면 클라이언트가 상태를 누적해야 한다.** 미구현 클라이언트는 아무것도 하지 않으면 된다 —
+> 서버 기본값이 `full`이라 기존 동작이 유지된다(§2.1).
+
+- 첫 메시지 `{"type":"snapshot","seq":1, ...아래 전체 필드...}` — 전체 상태.
+- 이후 `{"type":"diff","seq":N,"n_lines":M,"status":…,"buffer_*":…,"remaining_time_*":…,`
+  `(선택)"lines_pruned":K,(선택)"new_lines":[Segment,…],(선택)"error":…}`
+
+| 필드           | 타입      | 항상 존재 | 의미                                                                 |
+| -------------- | --------- | :-------: | -------------------------------------------------------------------- |
+| `seq`          | number    |     O     | 1부터 증가하는 메시지 순번(연결 단위). 누락 감지용 참고값            |
+| `n_lines`      | number    |  O(diff)  | 이 메시지 적용 **후** 클라이언트가 가져야 할 총 줄 수 — 검증 기준     |
+| `lines_pruned` | number    |     ✕     | 앞에서 잘려나간 줄 수. 있으면 **먼저** 앞에서 그만큼 제거            |
+| `new_lines`    | Segment[] |     ✕     | **공통 prefix 이후의 꼬리 전체**(append 대상 아님 — 아래 ⚠️)          |
+
+**⚠️ `new_lines`는 append가 아니라 꼬리 교체다.** 백엔드는 최근 줄을 **소급 수정**한다(경계 재조정·침묵 게이트
+재개방, 대략 8초 이내 — §2.4.4의 ①②가 바로 이 현상이다). 그러면 이미 보낸 줄이 갱신된 내용으로 `new_lines`에 다시
+실린다. append 하면 같은 줄의 옛 판과 새 판이 함께 쌓여 **중복 표시**된다.
+
+```js
+// 재구성 알고리즘 (참조 구현: whisperlivekit/web/live_transcription.js `reconstructLines`)
+function applyMessage(lines, msg) {
+  if (msg.type === "snapshot") return msg.lines.slice();            // 전체 교체
+  if (msg.lines_pruned) lines.splice(0, msg.lines_pruned);          // ① 앞부분 prune
+  const newLines = msg.new_lines || [];
+  const common = msg.n_lines - newLines.length;                     // ② 공통 prefix 길이
+  lines = lines.slice(0, common).concat(newLines);                  // ③ 꼬리 교체(append 아님)
+  if (lines.length !== msg.n_lines) reconnect();                    // ⑤ 검증 실패 → 재동기
+  return lines;
+}
+// ④ status·buffer_transcription·buffer_diarization·buffer_translation·
+//    remaining_time_transcription·remaining_time_diarization·error 는 매 메시지 값으로 그대로 교체.
+```
+
+- **렌더도 증분으로**: `common` 이전 줄은 DOM/컴포넌트를 건드리지 않고 꼬리만 교체한다. React라면 `key={line.id}`
+  로 리스트를 렌더하면 앞부분이 자동으로 재사용된다(내장 UI는 `reconcileTranscriptDom`이 같은 일을 한다).
+- **재동기 수단은 재연결뿐**이다(새 연결 = 새 `snapshot`). 서버는 재전송 요청을 받지 않는다.
+- 줄 dedup·key는 여전히 **`id` 단독**(§2.4.4). 복합키 금지.
+
+##### full 모드 (기본)
+
+`type` 필드 **없음**. 매 메시지가 아래 전체 상태를 담으며, `lines[]`는 세션 전체 히스토리를 그대로 재전송한다 —
+클라이언트는 받은 `lines[]`를 전체 교체 렌더만 해도 히스토리가 유지된다(별도 누적 불필요). 페이로드·재렌더 비용이
+세션 길이에 비례해 커지므로, 장시간 세션을 다루는 클라이언트는 `?mode=delta`로 전환하는 것이 좋다.
+
+##### 전체 상태 페이로드 (델타의 `snapshot`, full의 매 메시지)
 
 ```jsonc
 {
@@ -223,12 +284,12 @@ Segment 예시:
 2. **확정 세그먼트가 다시 진행중으로 재개방된다** — `finalized`가 `true`→`false`로 돌아오고 같은 `id`로 계속 자란다
    (예: 스퓨리어스 온점으로 조기 확정 → 온점 철회 후 문장 계속).
 
-**권장 = 전체 교체 렌더.** `lines[]`는 세션 전체 히스토리를 무제한 유지하며 매 스냅샷 전량 재전송된다(§2.4.2·§6).
-따라서 **매 스냅샷 `lines[]`를 통째로 다시 그리기만 하면** 위 ①②가 자동으로 맞춰진다 — 클라이언트가 확정 줄을
-직접 누적할 필요가 없다. 이게 가장 단순하고 버그 없는 경로다.
+**델타 프로토콜(`?mode=delta`)에서 이 재조정은 `new_lines` 꼬리 재전송으로 나타난다.** §2.4.2의 꼬리 교체를 그대로
+수행하면 위 ①②가 자동으로 맞춰진다 — 재조정된 줄이 **같은 `id`로 갱신 내용을 실어 다시 오기 때문**이다.
+full 모드(기본)에서는 매 스냅샷 `lines[]`를 통째로 다시 그리면 동일한 결과가 된다.
 
-**클라이언트 누적을 굳이 한다면(선택) — 반드시 `id`로:** React key나 컴포넌트 상태 유지, 또는 세션 초기의 빈
-`no_audio_detected` 스냅샷 대비로 라인을 Map에 누적한다면, **키는 `id` 단독**을 쓴다.
+**별도 누적 Map을 둔다면 — 반드시 `id`로:** React key나 컴포넌트 상태 유지, 또는 세션 초기의 빈
+`no_audio_detected` 상태 대비로 라인을 Map에 누적한다면, **키는 `id` 단독**을 쓴다.
 - ❌ `start|end|speaker` 복합키 금지 — `end`가 자랄 때마다 새 항목으로 쌓여 같은 문장의 절단판이 누적된다(**growing-prefix 중복**).
 - ❌ `start` 단독도 부적합 — 1초 해상도라 같은 초에 시작한 다른 세그먼트(특히 다화자)가 충돌한다.
 - ✅ `id`로 upsert(같은 `id`면 덮어쓰기) + **진행중 줄 우선**(같은 `id`의 이전 확정판보다 `finalized:false` 줄을 우선 렌더 →
@@ -250,16 +311,17 @@ Segment 예시:
 > 참조 구현 = 내장 테스트 UI `whisperlivekit/web/live_transcription.js`(누적 Map을 `id`로 키잉 + 진행중 줄과 같은 `id`
 > 확정판 억제). 배경: 이 규칙 미준수(`start|end|speaker` 누적)가 실측에서 kor 낭독체 WER을 3배 이상 부풀린 사례가 있었다
 > (성능 측정이 UI DOM을 스크래핑하므로 렌더 중복이 지표까지 오염 — 프론트 버그가 백엔드 지표로 오인됨).
-> **단, 내장 UI가 `finalizedHistory` Map으로 확정 줄을 누적하는 것은 과거 서버가 확정 줄을 5분 슬라이딩 윈도우로
-> 잘라내던 시절의 레거시다.** 현재 서버는 `lines[]`를 세션 전체 **무제한 유지·재전송**하므로(§2.4.2·§6), React는 그 Map
-> 누적/stale 억제 로직을 그대로 옮길 필요가 없다 — **전체 교체 렌더가 더 단순·안전**하고 위 ①②(`end` 성장·재개방)도
-> 자동 해소된다. 누적은 렌더 최적화(안정 key)가 필요할 때만, 그때도 키는 `id` 단독.
+> **누적의 최소 단위는 델타 재구성이다**(§2.4.2): 서버는 `lines[]`를 세션 전체 **무제한 유지**하지만 매번
+> 전량 전송하지는 않으므로, 클라이언트는 `snapshot`+`diff`로 서버-권위 `lines[]` 미러를 반드시 들고 있어야 한다.
+> 그 미러 위에서 `id`를 key로 리스트를 렌더하면 위 ①②(`end` 성장·재개방)가 자동 해소된다.
+> 내장 UI의 `finalizedHistory` Map(확정 줄 별도 누적)은 과거 서버가 확정 줄을 5분 슬라이딩 윈도우로 잘라내던
+> 시절의 레거시로, 지금은 중복 안전장치일 뿐이다 — React가 그대로 옮길 필요는 없다.
 
 ### 2.5 `status` 값
 
 | 값                     | 의미                                  | 클라이언트 렌더 권장                                                                                             |
 | ---------------------- | ------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
-| `active_transcription` | 정상 처리 중                          | 스냅샷대로 렌더                                                                                                  |
+| `active_transcription` | 정상 처리 중                          | 재구성된 상태대로 렌더                                                                                           |
 | `no_audio_detected`    | `lines`·버퍼 모두 비어 "그릴 게 없음" | 화면 자막만 가리되 **누적 state는 유지**(다음 active에서 복원). 이 status에서 클라이언트 히스토리를 비우지 말 것 |
 | `error`                | 처리 오류                             | `error` 필드 표시. 내장 UI엔 배너 없음 → 필요 시 클라이언트가 직접 구현                                          |
 
@@ -378,8 +440,9 @@ Segment 예시:
 { "6군": "육군", "공군참모총장": "공참총장" }
 ```
 
-> **사용자가 추가한 항목(SQLite)만** 반환한다. 서버 내장 기본 사전(base JSON)은 이 응답에 포함되지 않으므로,
-> 관리 UI가 GET 결과만 표시하면 기본 사전 항목은 보이지 않는다.
+> **서버 내장 기본 사전(base JSON) + 사용자가 추가한 항목(SQLite)을 병합해** 반환한다
+> (`word_manager.combined_replacements`). 관리 UI는 이 GET 결과만 표시하면 base 사전 항목도
+> 함께 보인다. 동일 `wrong_word`가 base와 사용자 DB 양쪽에 있으면 사용자 DB 값이 우선한다.
 
 #### `POST /api/corrections`
 
@@ -397,11 +460,19 @@ Segment 예시:
 
 #### `DELETE /api/corrections/{wrong_word}`
 
-경로 파라미터 `wrong_word`로 항목 삭제.
-**응답 200**
+경로 파라미터 `wrong_word`로 항목 삭제. **base JSON 전용 항목**(사용자 DB엔 없고 base JSON에만 있는 단어)은
+삭제할 수 없다 — 삭제 대신 경고를 반환한다(`/api/prompts/delete-item`의 기본 glossary 항목 보호와 동일 패턴).
+
+**응답 200 (일반 삭제 성공 · 존재하지 않는 단어 삭제 포함)**
 
 ```json
 { "status": "success" }
+```
+
+**응답 200 (base 전용 항목 삭제 시도 — 삭제되지 않음)**
+
+```json
+{ "status": "warning", "message": "기본 사전 항목은 삭제할 수 없습니다." }
 ```
 
 ### 3.4 번역 glossary — `/api/prompts`
@@ -510,11 +581,12 @@ Segment 예시:
 | -------------------- | --------------------------- | ----------------------------------------------------------------------------- |
 | 기본 WS/REST 포트    | `8900`                      | 서버 `--port`(개발 기본)                                                      |
 | WS 경로              | `/asr`                      | —                                                                             |
+| **WS 출력 프로토콜** | **`full`(기본)**            | 서버 `--ws-protocol {delta,full}`; 세션별 `?mode=delta\|full` 오버라이드(§2.1·§2.4.2). 기본 full = 매 메시지 전체 스냅샷(누적 불필요). `?mode=delta` opt-in 시 `snapshot` 1회+이후 `diff` — **클라이언트 누적 필수** |
 | 오디오 입력          | WebM(MediaRecorder) 고정    | `useAudioWorklet=false`                                                       |
 | WebM 청크 timeslice  | 100ms                       | `recorder.start(100)`                                                         |
 | 화자분할             | 기본 ON                     | 서버 `--diarization`(기본 True)                                               |
 | 번역                 | **기본 ON**(2026-07-16~) | 서버 `--llm-translation`(끄려면 `--no-llm-translation`)                       |
-| **전사 라인 리텐션** | **무제한**                  | `lines[]` 세션 전체 유지·재전송(과거 5분 슬라이딩 → 무제한, master `606ecac`) |
+| **전사 라인 리텐션** | **무제한**                  | 서버가 `lines[]`를 세션 전체 유지(과거 5분 슬라이딩 → 무제한, master `606ecac`). 단 **전송은 델타** — 전량 재전송 아님 |
 | 전사 저장 디렉터리   | `./transcripts`             | 서버 `--transcript-save-dir`                                                  |
 
 ---
@@ -523,4 +595,7 @@ Segment 예시:
 
 - 연동 개요·wl→wlk 마이그레이션 가이드·코드 근거 상세: [FRONTEND_HANDOFF_SUMMARY.md](FRONTEND_HANDOFF_SUMMARY.md)
 - 메시지 스키마 변경 이력: [SCHEMA_CHANGES.md](SCHEMA_CHANGES.md)
-- OpenAI/Deepgram 호환 계층·diff 프로토콜 상세: [0.Metafile/docs/API.md](../0.Metafile/docs/API.md)
+- OpenAI/Deepgram 호환 계층: [0.Metafile/docs/API.md](../0.Metafile/docs/API.md)
+  (⚠️ 이 upstream 문서는 diff 프로토콜을 "`?mode=diff` 옵트인"으로 기술한다 — 본 저장소도 **opt-in**이지만
+  권장 파라미터는 `?mode=delta`이며 `diff`는 하위호환 별칭이다. 델타 계약의 정본은 위 §2.4.2다.)
+- 서버측 델타 구현: `whisperlivekit/diff_protocol.py`(모듈 docstring에 재구성 알고리즘 명세)

@@ -14,7 +14,7 @@ from pathlib import Path
 _SCRIPTS_DIR = Path(__file__).parent.parent / "scripts"
 sys.path.insert(0, str(_SCRIPTS_DIR))
 
-from eval import parse_speaker_sentence_reference  # noqa: E402
+from eval import _strip_nonverbal_tags, parse_reference_sentences, parse_speaker_sentence_reference  # noqa: E402
 
 # test_data/ytn2.txt(신형식) 발췌 — 2화자, 화자당 문장 1개, spk1이 비인접 재등장.
 YTN2_EXCERPT = """[spk1]
@@ -212,3 +212,77 @@ def test_plain_text_strips_labels_and_matches_sentence_concatenation():
     assert "[spk" not in result2["plain_text"]
     all_sentences2 = [s for b in result2["blocks"] for s in b["sentences"]]
     assert result2["plain_text"] == " ".join(all_sentences2)
+
+
+# ── 비언어적 태그((웃음)(박수)(환호)(잡음)(더듬) 등) 제거 ──────────────────────
+
+# test_data/bong1.txt 최근 청취 재검수로 추가된 비언어적 표시 실사례 발췌.
+BONG1_NONVERBAL_EXCERPT = """[spk3]
+(웃음) So my son who is holding up the rock over there has a little bit more screen time than I do in the film.
+
+Who is the main protagonist? it's him.(환호)
+
+[spk2]
+This man.(박수)
+
+[spk4]
+아니 그 (더듬) 플라스틱...
+
+[spk1]
+(잡음)
+"""
+
+
+def test_strip_nonverbal_tags_leading():
+    assert _strip_nonverbal_tags("(웃음) So my son") == "So my son"
+
+
+def test_strip_nonverbal_tags_trailing():
+    assert _strip_nonverbal_tags("It's just the rock.(웃음)") == "It's just the rock."
+
+
+def test_strip_nonverbal_tags_mid_sentence():
+    assert _strip_nonverbal_tags("아니 그 (더듬) 플라스틱") == "아니 그 플라스틱"
+
+
+def test_strip_nonverbal_tags_tag_only_returns_empty_string():
+    assert _strip_nonverbal_tags("(웃음)") == ""
+    assert _strip_nonverbal_tags("  (잡음)  ") == ""
+
+
+def test_strip_nonverbal_tags_keyword_agnostic():
+    """키워드가 무엇이든(웃음/박수/환호/잡음/더듬 그 외) 괄호 태그는 전부 제거된다."""
+    assert _strip_nonverbal_tags("(코골이) 아 (한숨) 진짜") == "아 진짜"
+
+
+def test_parse_speaker_sentence_reference_strips_nonverbal_tags():
+    """[spkN] 헤더 + 태그가 섞인 입력에서 blocks 문장·plain_text 어디에도 태그 문자열이
+    남지 않고, 태그만 있던 독립 블록(spk1)은 문장 리스트가 완전히 비어야 한다."""
+    result = parse_speaker_sentence_reference(BONG1_NONVERBAL_EXCERPT)
+    assert result is not None
+
+    all_text = result["plain_text"] + " ".join(
+        s for b in result["blocks"] for s in b["sentences"]
+    )
+    for tag in ("(웃음)", "(환호)", "(박수)", "(더듬)", "(잡음)"):
+        assert tag not in all_text
+
+    speakers = [b["speaker"] for b in result["blocks"]]
+    assert speakers == ["spk3", "spk2", "spk4", "spk1"]
+
+    spk3_sentences = result["blocks"][0]["sentences"]
+    assert spk3_sentences == [
+        "So my son who is holding up the rock over there has a little bit more screen time than I do in the film.",
+        "Who is the main protagonist? it's him.",
+    ]
+    assert result["blocks"][1]["sentences"] == ["This man."]
+    assert result["blocks"][2]["sentences"] == ["아니 그 플라스틱..."]
+    # spk1 블록은 (잡음) 하나뿐이었으므로 태그 제거 후 문장이 완전히 사라져야 한다.
+    assert result["blocks"][3]["sentences"] == []
+
+
+def test_parse_reference_sentences_strips_nonverbal_tags():
+    """구형식 파서도 동일하게 태그를 제거하고, 태그만 있던 블록은 리스트에서 완전히 빠진다."""
+    text = "(웃음) So my son\n\n(잡음)\n\nIt's just the rock.(웃음)"
+    result = parse_reference_sentences(text)
+    assert result == ["So my son", "It's just the rock."]

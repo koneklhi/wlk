@@ -4420,3 +4420,614 @@ ruff 신규오류 0(main 저장소 동일 스코프 대비 pre-existing 26건과
 언어전환 경계의 철회 실패모드를 파괴적→복원가능으로 구조 변경(Exp-171/172/173/174 철회 관련 결론은
 tombstone 메커니즘으로 **대체**되며 모순 아님, 선례대로 **E5 유지(epoch 미bump)** — 디코더·VAD·언어고정
 불변, 정렬 계층 국소 변경).
+
+---
+
+## Exp-193 — frame_threshold를 KO→EN 경계 꼬리유실 제어 레버로 규명 + is_last flush 코드수정 dead-end [E5, `exp/boundary-tail-flush`(미머지)]
+
+### 배경 — 배포 실사용 제보(Exp-192 반입본 이후)
+Exp-192(`b001e38`) 반입 후 배포 PC(RTX 5090) 실사용 제보: 코드스위칭 KO→EN 경계에서 **한국어 문장 마지막
+단어가 단어 중간까지 잘려 유실**("갱신하겠습니다"→"갱신하.", "되었습니다"→"되."). 잘린 꼬리가 다음 줄로도
+안 가고 소멸(Case B와 다름). 개발 PC(3080)+개발 데이터에선 드물 수 있음 → 사용자 지시: ① dev에서 코드스위칭
+`--repeat 3` 충분히 측정해 재현 확인, ② 재현되면 수정, ③ 미재현이면 GPU 성능차/데이터차 고려해 배포 PC 파라미터·
+디버깅 제안. (측정 착수 전 공유 `.venv` 반쪽손상 발견·무중단 복구 — 별건.)
+
+### 근본원인 (코드 조사로 확정 — 병렬 4서브시스템 읽기전용 조사)
+- 매 infer는 버퍼 끝 `frame_threshold`(기본 25≈0.5s) 구간을 디코딩하지 않고 남긴다(align_att_base.py:501-508).
+  아직 구언어(KO) 토큰으로 커밋 안 된 꼬리가 이 미디코딩/held 구간에 있을 수 있다.
+- 언어전환 감지 시 `_apply_detected_language`(align_att_base.py:229-277)가 `_trim_segments_to_recent` +
+  `create_tokenizer(EN)` + `init_tokens()`/`init_context()`로 디코더 리셋 → 미커밋 KO 꼬리는 다음 infer에서
+  EN 토크나이저로 재디코딩돼 garbage→`ScriptMismatchFilter`(backend.py:794) 드롭 = **순유실**. 온점은
+  `_append_terminal_punctuation`(audio_processor.py) 합성이지 모델 디코딩 아님.
+- Exp-192 재조정 계층은 **이미 커밋된 토큰만** tombstone/복원 → 미커밋 꼬리는 시야 밖(구조적 사각지대).
+- **왜 5090에서 잦은가**: `get_all_from_queue`(audio_processor.py:70-71)가 큐 축적분을 concat해 배치를 만드는데,
+  빠른 GPU는 infer 사이 큐 축적이 적어 배치가 `vac_chunk_size` 하한(≈0.2s)에 수렴 → KO 어절 꼬리와 EN 서두가
+  별개 배치로 쪼개져 꼬리가 버퍼끝 미디코딩 구간에 걸릴 확률↑. 느린 3080은 배치가 커서 어절이 통째 디코딩됨.
+  = 동일 원천유실 버그, 심각도가 GPU 속도(배치크기)에 비례.
+
+### 측정 (경로 C, `--lan auto`, diar-ON, turbo, beams=2, CRT=3.0, `--trace-tokens`)
+**① baseline ft=25, `--repeat 3`** (master `b001e38`, `eval_repro_boundary.json`):
+| 파일 | WER median [min/max] | 화자F1 | 문장F1 |
+|---|---|---|---|
+| bong1 | 25.7% [23.3/31.4] | 76.5% | 25.0% |
+| ytn2 | 15.8% [14.8/17.2] | 77.8% | — |
+| sbs1 | 8.9% [8.3/10.1] | 100% | 88.9% |
+| ytn1(held-out) | 11.7% [9.2/25.8] | 84.2% | 57.1% |
+평균 WER 16.8%·화자F1 83.7%. → **mid-word "갱신하." 미재현이나, 동일 메커니즘의 완화형(문장꼬리 종결동사 유실)
+재현**: ytn2 "…합의점에." (종결동사 "이르렀습니다" 유실) **3/3 일관**, ytn1 "미국은." 파편 1회.
+
+**② ft=35, `--repeat 3`** (`eval_ampl_ft35.json`) — GPU 작은배치 레짐 모사(미디코딩 tail 구간 확대) 증폭 시도:
+| 파일 | WER median | 화자F1 | 문장F1 |
+|---|---|---|---|
+| bong1 | 26.6% | **62.9%(↓)** | 30.0% |
+| ytn2 | **11.8%** | 90.0% | — |
+| sbs1 | 11.3% | 100% | 88.9% |
+| ytn1 | 15.3% | 77.8% | 57.1% |
+평균 WER 16.1%·화자F1 81.3%. **예상과 반대 — 증폭이 아니라 완화**: ytn2 "합의점에 이르었습니다" **3/3 복원**,
+ytn1 "미국은." 파편 소멸. 두 run의 유일 차이가 `--frame-threshold`이고 이 경계가 3/3 뒤집혔으므로 인과 확증.
+**→ frame_threshold = KO 꼬리유실을 직접 제어하는 레버(↑=꼬리 복원, AlignAtt가 경계영역을 더 오래 물어 꼬리가
+전환 트리거 前에 커밋됨)**. 단 전역 상향이라 **모든 커밋 지연 → 다화자 화자전환 분리 저하**(bong1 화자F1 median
+76.5→62.9, 3회 전부 하락). Case B 신규 0.
+
+**③ is_last flush 코드수정** (`exp/boundary-tail-flush@b001e38 분기`, 스크리닝 `--repeat 1`, `eval_tailflush_scr.json`):
+언어전환 트림/스왑 **직전**에 구언어 토크나이저로 `infer(is_last=True)`(frame_threshold=4, 버퍼 끝까지) 강제 flush
+→ `state.pending_langswitch_flush`로 process_iter 전파(현재 배치에 이어붙임) → `ASRToken.retract_protected`로
+철회 보호 + infer 재진입 가드(`_infer_active`) + 롤백 플래그 `LANG_SWITCH_TAIL_FLUSH_ENABLED`. TDD 신규
+`test_langswitch_tail_flush.py` 14케이스(red 9→green), 전체 **554 passed / 1 skip**, ruff clean.
+스크리닝: bong1 23.9%/화자72.2, ytn2 14.8%/100, sbs1 6.5%/100, ytn1 10.4%/88.9 — 회귀 없음. **그러나 서버로그상
+flush 발동 = ytn2 0/9회·bong1 0·sbs1 0·ytn1 1회뿐** → **실질 미작동**. 원인: 이 데이터의 KO↔EN 전환은
+`[NewSpeaker]` 34회·`eager` 37회 등 **화자전환(diarization) 주도**인데, new_speaker는 `detected_language=None`
+리셋+버퍼 refresh를 먼저 하므로 flush의 `detected_language is None` 가드에 스킵됨(설계상 신화자 garbage 방지).
+유일한 ytn1 1회 flush는 `prev_lang=en 꼬리 "에는"`(EN전환인데 KO garbage 디코딩)→픽업 반대스크립트 드롭 = 무효.
+**근본원인 재규명: 전환 대부분이 화자전환 주도 + boundary 검출 지연으로 KO꼬리·EN서두가 버퍼에서 얽혀 있어
+"경계에서 flush"는 이미 늦어 garbage가 된다.** (ytn2 "합의점에 이르었습니다" 완결은 flush=0이므로 fix 효과 아닌
+단일run 분산.) ft=35가 더 잘 동작한 이유 = 정상 디코드가 경계 前에 꼬리를 커밋하기 때문.
+
+### 분석 (전사 내용 정성 대조)
+**bong1** (다화자): ft=25→ft=35에서 한국어 컨텐츠는 유사하나 **화자전환 분리 저하**(화자F1 76.5→62.9) — 큰
+frame_threshold가 화자경계 커밋을 지연시킨 결과. 웃음/필러 환각(기존 실패모드)은 두 조건 유사, frame_threshold와 무관.
+**ytn2** (코드스위칭 핵심): **코드스위칭 실패=꼬리유실** — ft=25 `"합의점에."` 3/3(종결동사 유실) vs ft=35
+`"합의점에 이르었습니다"` 3/3 복원. flush 스크리닝도 완결됐으나 flush 0회라 분산.
+**sbs1** (KO 낭독 위주): 주요 실패 없음. 경계 적어 frame_threshold 영향 미미, 안정.
+**ytn1** (held-out): ft=25 `"미국은."` 파편(문장 첫 어절만 확정) vs ft=35 소멸(완결 문장). flush의 `"Hand-mi."`는
+EN 디코더가 "한미"를 로마자로 환각한 것(align_att 로그 17693)이지 flush 무관.
+**이번 변경 영향**: frame_threshold↑는 ytn2/ytn1의 KO 꼬리유실(코드스위칭 실패)을 완화하되 bong1 다화자 화자분리를
+희생. is_last flush는 전환 경로(new_speaker 주도) 미스매치로 무영향. Case B 신규 0(ft↑는 오히려 Case B 위험 감소).
+
+### 채택 (조건) 판정
+- **frame_threshold=35 전역**: ①화자분리 F1 worst-case = bong1 76.5→62.9 **회귀(1순위 지표 위반)** → 전역 기본값
+  채택 불가. ②WER max/median = 회귀 없음(오히려 ytn2 개선). ③Case B 0. → **전역 채택 불가, 단 원인·수정방향 확정**.
+- **is_last flush**: 실질 미작동(발동 ~0) → **dead-end, 기각**(브랜치 `exp/boundary-tail-flush` 미머지 보존).
+
+### 결론 — frame_threshold를 배포 PC 레버로 (사용자 승인)
+전역 기본값 변경 대신, 배포 서버 기동에 `--frame-threshold 35`(필요시 스윕 40~50) opt-in. 배포 PC(5090)에서
+심각형 감소 확인 + content에 맞춰 **꼬리복원 ↔ 다화자 화자F1** 트레이드오프 튜닝. 무코드변경·무재배포. 정본 명령:
+`C:\Python312\python.exe -m whisperlivekit.basic_server --frame-threshold 35 …`. **frame_threshold는 §3.8 backend
+레벨 파라미터라 데이터특화 하드코딩 아님**(일반 레버).
+
+### 다음/후속
+- **사용자 신규 요청(완료 → Exp-194)**: frame_threshold '외' 대안 설계공간 탐색 — (A)조건부/국소 frame_threshold·
+  토크나이저 스왑 유예, (B)경계시각 슬라이스 표적 재디코딩(얽힘 회피), (C)문법-조건부 확정 유예(Exp-190 게이트
+  확장), (D)화자전환 지연보정 재귀속(Exp-168/171/174 좌표계 재사용) 병렬조사 → **D1(=B1, new_speaker 경계
+  슬라이스) 1순위 도출·프로토타입 착수 → 스크리닝 기각(Exp-194 참조)**.
+- 배포 PC frame_threshold 실측 확인 후 최적값·트레이드오프 회신 대기.
+- Exp-192 확정 r3/held-out 미실시분과 별개 트랙.
+
+### epoch
+E5 유지(epoch 미bump) — frame_threshold는 파라미터 값(구조 변경 아님), is_last flush는 미머지 기각. JSON:
+`.omc/benchmarks/eval_repro_boundary.json`(baseline ft25 N=3)·`eval_ampl_ft35.json`(ft35 N=3)·
+`worktrees/boundary-tail-flush/.omc/benchmarks/eval_tailflush_scr.json`(flush 스크리닝 N=1).
+
+---
+
+## Exp-194 — frame_threshold 외 대안 설계공간 탐색 → D1(화자전환 경계 슬라이스 재디코딩) 프로토타입·스크리닝 기각 [E5, `exp/boundary-tail-flush`(미머지·미커밋)]
+
+### 배경 — 사용자 요청(Exp-193 후속)
+Exp-193에서 frame_threshold를 배포 레버로 확정한 직후, 사용자가 "frame_threshold 외에도 다른 해결 방안이
+있는지 검토해봐" 요청. 다화자 화자F1 비용(bong1 76.5→62.9) 없이 KO 꼬리를 복원할 코드 대안을 병렬 탐색.
+
+### 대안 설계공간 탐색 (읽기전용 4클러스터 병렬조사 + 랭킹, 코드변경 없음)
+클러스터 A(조건부/국소 frame_threshold·토크나이저 스왑 유예) / B(경계시각 슬라이스 표적 재디코딩) / C(문법-조건부
+확정 유예, Exp-190 게이트 확장) / D(화자전환 지연보정 재귀속, Exp-168/171/174 좌표계 재사용)를 코드 근거로 평가·
+랭킹. **결론**: 근본원인(꼬리 미커밋+EN 재디코딩 드롭)을 실제로 뚫으면서 전역 다화자 비용이 0인 계열은 **D1≡B1
+(new_speaker의 refresh_segment 직전 pre-boundary KO-슬라이스 재디코딩)** 뿐 — 실패한 Exp-193 is_last flush의
+두 실패원인(①삽입점이 화자전환 아닌 언어전환 감지 경로라 미발동 ②버퍼 전체 tail 디코딩이라 EN서두까지 오디코드)을
+정확히 교정하는 접근으로 판정. C계열(확정 유예 단독)은 "꼬리가 애초에 KO 토큰으로 도착 안 함"이 코드로 확정돼
+**원리적으로 무효**(refresh_segment가 꼬리 오디오 자체를 폐기·EN 재디코딩은 드롭). A1(조건부 ft)은 화자전환
+활성 신호(eager)가 정확히 꼬리 보존이 필요한 지점과 겹쳐 신호정렬 충돌. D2(비재디코딩 재귀속)는 순유실엔 무효.
+필수 가드 3종을 조건으로 D1 프로토타입 승인(사용자).
+
+### 구현 — D1 (`exp/boundary-tail-flush` 워크트리 재작업, Exp-193 flush 인프라 일부 재사용)
+- **삽입점 이동**: `_apply_detected_language`의 `_flush_prev_language_tail` 호출·`process_iter`의
+  `pending_langswitch_flush` 픽업 블록 **제거**(원거동 복원) → **`backend.py new_speaker()`의
+  `refresh_segment`(경계 트림) 직전**으로 이동(버퍼 온전·토크나이저/detected_language/speaker 모두 아직
+  구언어·구화자인 시점).
+- **슬라이스**: `align_att_base.py` 신규 `decode_tail_slice(boundary_abs)` — 버퍼를 `[0, change_speaker.start]`
+  로 tail-truncate(EN 서두 오디오 제외, 원 텐서 불변 뷰)한 뒤 현재(구언어) 토크나이저로 `infer(is_last=True)`
+  1회. 재방출 방지는 slice_lower 명시 없이 **디코더 커밋 프리픽스 연속성**(state.tokens 이후분만 방출)으로 구조적
+  실현 + `retract_protected`(Exp-193 재사용) 철회보호 + dedup_batch 백스톱.
+- **save/restore**: 슬라이스 직후 `refresh_segment`가 `init_tokens`/`init_context`로 디코더 상태(tokens/context/
+  kv_cache/last_attend_frame/pending_incomplete_tokens)를 어차피 리셋 → 명시 복원 대상은 `state.segments`(원
+  버퍼)+`quality_suppress_streak` 둘뿐(검증됨, B2 격리 디코드 에스컬레이션 불필요로 판정).
+- **Case B 가드**: `_snap_tail_to_word_boundary` — 슬라이스 상한(경계)에 0.20s 이내로 맞닿은 마지막 어절은 hold
+  (어절중간 절단 위험).
+- **전파**: `audio_processor.py`의 `ChangeSpeaker` 분기가 `new_speaker()` 반환(꼬리 토큰)을 캡처해 공유 emit
+  블록(all_tokens/new_tokens/번역 큐)으로 라우팅(선행은 반환값을 버리고 `continue`).
+- 롤백 플래그 `NEW_SPEAKER_TAIL_SLICE_ENABLED`, 고정(ko/en) 세션은 회귀위험 최소화로 미발동(auto 전용).
+
+### TDD
+신규 `tests/test_boundary_tail_slice.py`(17케이스: 슬라이스 커밋·EN서두 미포함·Case B hold·재방출 없음·버퍼
+restore·플래그OFF레거시·화자귀속), 선행 `test_langswitch_tail_flush.py` 제거·`test_lang_switch_wiring.py` 원복.
+전체 **557 passed / 1 skipped**, ruff clean(변경 파일 전부).
+
+### 측정 (경로 C, `--lan auto`, diar-ON, turbo, beams=2, CRT=3.0, `--trace-tokens`, **스크리닝 `--repeat 1`**)
+| 파일 | baseline(Exp-193 ft25) WER | D1 스크리닝 WER | 화자F1(baseline→D1) |
+|---|---|---|---|
+| bong1 | 25.7% | **30.8%**(악화) | 76.5→66.7(악화) |
+| ytn2 | 15.8% | 13.8%(개선, 단 아래 참조) | 77.8→80.0 |
+| sbs1 | 8.9% | **23.8%**(약 2.7배 악화) | 100→66.7(악화) |
+| ytn1 | 11.7% | **21.5%**(악화) | 84.2→66.7(악화) |
+
+`[TailSlice]` 실제 발동 확인(선행 flush의 ytn2 0/9와 대조): bong1 12회(hold 2)·ytn2 8회(hold 1)·sbs1 2회·ytn1
+8회(hold 2) — 삽입점 이동(new_speaker=지배 경로)이 발동 자체는 성공시킴.
+
+### 분석 (전사 내용 정성 대조)
+**ytn2**(핵심 타깃): **목표 미달성** — "합의점에." 유실이 일어나는 정확한 화자전환(`spk=1→0 det_before=ko
+eager=None`) 지점에서 **TailSlice 로그가 전무**(발동도 hold도 "없음" 로그도 없음). 코드에 무로그 조기리턴 경로가
+3곳(`detected_language is None`/`segments 없음`/`slice_secs<audio_min_len`) 있어 어느 조건에 걸렸는지 특정
+불가 — **진단 계측 갭**. ytn2 WER 자체는 개선(13.8%)됐으나 다른 지점 발동의 부수효과로 보이며 핵심 타깃과 무관.
+**bong1**: `"So my son, who's So my son, who's holding up..."` — **어절 반복(중복 방출)** 신규 발생. D1이
+"디코더 프리픽스 연속성으로 구조적 방지"라 주장한 바로 그 문제가 재현된 것으로 의심(정확한 TailSlice 인과는
+로그 컨텍스트 부족으로 미확정).
+**sbs1**: `"영구적인 지상 플랫폼이라고 정의했습니다."` — baseline엔 있던 앞부분("특히 한국을... 미국의 힘을
+고정하는")이 **신규 유실**. `"사태리아 기자가 보도합니다."` — baseline에 없던 **신규 환각**(정답 무관 텍스트).
+**ytn1**: `"Han-kong."`, `"- 감사합니다."` — 신규 파편/환각.
+**이번 변경 영향**: 목표(ytn2 핵심 꼬리) 미복원 + 3/4 파일 WER·화자F1 악화 + bong1/sbs1/ytn1에 신규 중복·유실·
+환각 패턴. 스크리닝 1회라 일부 변동은 노이즈 가능성이나, **목표 라인 자체가 미복원된 것은 노이즈가 아니라 로직
+결함**(무로그 스킵 경로)이며, 부작용 패턴의 광범위성(4파일 중 3파일)도 우연으로 보기엔 일관적.
+
+### 채택 (조건) 판정
+스크리닝 단계에서 이미 ①표적 미달성 ②화자분리 F1 worst-case 다수 회귀(1순위 지표 위반, D1의 존재이유였던
+"전역비용 0" 가정이 실측에서 성립 안 함) ③신규 중복/환각 발생 — **`--repeat 3` 확정측정 진행 없이 스크리닝
+단계에서 기각**. 정확한 인과(왜 그 경계에서 스킵됐는지, 왜 중복/환각이 생겼는지)는 로그 계측 부족으로 미규명.
+
+### 결론 — D1 기각, frame_threshold 배포 레버로 최종 확정 (사용자 결정)
+코드 레벨 시도가 두 번(Exp-193 is_last flush, 본 Exp D1) 모두 실패 판정. 이미 검증되고 사용자 승인된 안전한
+대안(Exp-193 frame_threshold 배포 opt-in)이 있는 상태에서, 추가 진단 계측 없이 3차 코드 시도로 넘어가는 대신
+**여기서 코드 레벨 탐색을 종료**(사용자 승인) — `--frame-threshold 35`(스윕 40~50) 배포 PC opt-in이 최종 권고.
+**D1 재시도 금지**(추가 진단 계측 없이는) — 재시도 시 최소 `[TailSlice] 스킵(사유)` 로그를 3개 조기리턴 경로
+전부에 추가해 "합의점에" 경계에서 왜 스킵됐는지부터 규명해야 함.
+
+### 다음/후속
+- 배포 PC frame_threshold 실측 확인 후 최적값·트레이드오프 회신 대기(Exp-193과 동일 트랙).
+- 워크트리 `worktrees/boundary-tail-flush`(브랜치 `exp/boundary-tail-flush`)에 D1 변경 **미커밋 상태로 보존**
+  (사용자 명시 요청 시에만 커밋 — 세션 전역 규칙). `.omc/transcripts/*.txt`는 측정 부산물이라 커밋 대상 아님.
+- Exp-192 확정 r3/held-out 미실시분과 별개 트랙.
+
+### epoch
+E5 유지(epoch 미bump) — D1은 미커밋·기각. JSON:
+`worktrees/boundary-tail-flush/.omc/benchmarks/eval_tailslice_scr.json`(D1 스크리닝 N=1).
+
+---
+
+## Exp-195 — 언어잠금 Stage 0: LMR 진단지표 + SOT 사후분포 프로브 + 단일언어 세션 오탐률 표본확대 [E5, `exp/lang-lock-stage0`(미머지)]
+
+**언어모드**: ko(kor1~3) + en(eng1) + auto(bong1·ytn2·sbs1·ytn1) — run 분리 측정.
+**코드 변경**: 계측·지표 전용. **디코딩 행동 변경 0**(추가 forward 0, 텐서 미수정, 분기 미관여).
+
+### 가설
+`detected_language`가 `en`에 고착된 채 한국어 오디오가 들어오면 Whisper가 off-manifold 상태에서
+**한국어 발화를 영어로 번역 출력**한다(자유 환각이 아니라 언어 토큰 오지정 — 의미가 보존되는 것이 증거).
+① 이 피해량을 WER과 분리해 정량화할 수 있는가(LMR). ② 그 실패를 **방출 전에** 검출할 신호가
+디코더 내부에 이미 존재하는가(SOT 위치 언어 사후분포).
+
+### 변경 (커밋 순)
+| 커밋 | 내용 |
+|---|---|
+| `6b6336e` | 정답 비언어 태그(`(웃음)(박수)(환호)(잡음)(더듬)`)를 WER·F1에서 제외 |
+| `9ba0f2d` | `[RefreshSegment]`·`[ShortSilenceLangCheck]`·`[QualityGate]` 진단 로깅 |
+| `38bf97b` | **LMR 지표** — `metrics.py` `_align_ops`/`compute_language_mismatch` + eval 배선 + `backfill_lang_mismatch.py` |
+| `b1a5e63` | **SOT 사후분포 계측** — `_read_sot_posteriors`/`[SotLangProbe]`/`[LangDriftStats]` |
+| `cdbb452` | 연동 문서 갱신(TRANSCRIPTION_REQUIREMENTS §2~5, eval.md, TESTING.md, CLAUDE.md) |
+| `5466b87` | **Stage 0 판별력 분석** — `analyze_sot_lang_probe.py` + `docs/research/SOT_LANG_PROBE_STAGE0.md` |
+| `8f20dd5` | **표본 확대** — 동 문서 §10 (코드 변경 0) |
+
+### 결과 ① — 피해량 (LMR, bong1 10회 소급 · 재측정 0회)
+| | median | min | max |
+|---|---|---|---|
+| WER | 30.06% | 22.36% | 43.50% |
+| LMR_ko | **15.4%** | 7.7% | 37.4% |
+| WER 귀속량 `lmr_wer_pp` | **4.38%p** | 2.11%p | **10.27%p** |
+
+언어잠금이 bong1 WER median의 약 14%, 최악 회차의 24%를 먹는다. `corr(LMR_ko, WER)=+0.724`.
+실패는 **en 잠금 단방향**(역방향 10회 통틀어 4건). LMR은 **하한**이다(del+ins로 갈라진 피해 미포착).
+**채택 게이트가 아니라 원인 귀속용 진단지표.**
+
+### 결과 ② — 검출 신호 판별력 (Stage 0, bong1 R1 + ytn2 R1)
+살아남은 신호는 **`p_opp`(잠긴 언어의 반대쪽 재정규화 확률) 하나뿐**. τ=0.97에서
+bong1 배경 median 0.000763 → 발동 28/457(4버스트), ytn2 0.000312 → 25/239(4버스트).
+버스트가 실패 지점에만 뭉치고, 선제성은 A −0.80s / B 0.00s / C −2.88s.
+
+**반증되어 폐기된 신호**: `p_translate`(723 프로브 전부 정확히 0 → task 토큰 누출 가설 S3 사망) ·
+`resid`(bong1 88% 통과, ytn2 방향 역전) · `H_lang`(ytn2 역전) · `p_nospeech`(전 배치 0) ·
+top1−top2 마진(`lang_restrict_koen` ON이라 `2p−1`, p의 단조변환).
+**반증된 용법**: "전환을 프로브로 승인" — 프로브는 *버퍼 내용*을 읽어 전환 경계에선 직전 잠금에
+동조하므로, 이 규칙은 정당한 한국어 전환 2건을 차단했을 것이다.
+
+### 결과 ③ — 단일언어 세션 오탐률 (표본 확대, 이번 회차 신규 측정)
+경로 C · `--repeat 1` · 화자분할 ON · CRT 3.0 · `--trace-tokens` · `vbcable=ok` · 6파일.
+
+| 파일 | 모드 | WER | 화자F1 | 문장F1 | LMR_ko | probes | 발동 τ=0.97 | 연속 run | 게이트 통과¹ |
+|---|---|---|---|---|---|---|---|---|---|
+| kor1 | ko | 40.9% | 0.0%² | 75.0% | 0.0% | 365 | 3 | 3 (전부 K=1) | 0 |
+| kor2 | ko | 18.6% | 100.0%² | 100.0% | 0.0% | 285 | 1 | 1 (K=1) | 0 |
+| kor3 | ko | 33.8% | 100.0%² | 100.0% | 0.0% | 321 | 1 | 1 (K=1) | 0 |
+| eng1 | en | 5.7% | 0.0%² | 66.7% | n/a | 121 | 0 | 0 | 0 |
+| sbs1 | auto | 11.3% | 100.0% | 94.7% | 0.0% | 249 | 0 | 0 | 0 |
+| ytn1 | auto | 20.2% | 82.4% | 40.0% | **19.7%**(9.2%p) | 266 | 25 | 4 | 2 |
+
+¹ 오프라인 재현(`K≥3 ∧ T≥1.0s ∧ seglen≥2.0s`) — 런타임 쿨다운·타 arm 미반영이라 **상한**.
+² 단일화자 낭독의 화자F1 0/100 극단은 산식 경계 아티팩트이지 화자분리 실패 아님.
+
+**ko 발동 5건 전수**: 순수 오탐 2건(kor2 b1 `먼저 육군`, kor3 b30 `원 거리 타격` — 정상 전사 구간) +
+kor1 서두 자막 환각 구간 1건(`자막 제공 배달의민족`, 정답 "전투발전부장 최창수 육군 소장입니다" 통째 유실) +
+회색 2건. → **Stage 0의 "순수 오탐 0"은 코드스위칭 파일 한정 결과였다.**
+단 5건 전부 **K=1 단발 · seglen 0.24~1.02s**이며 다음 배치에서 즉시 문턱 아래로 자기교정된다
+(kor2 건은 `Refreshing segment` 직후 잔여버퍼임이 로그로 확인 — Exp-189 실패모드의 정확한 재현).
+
+**ytn1 25건은 전부 참양성**: 정답 한국어(`안녕하십니까 / 지난 세 달 만에 두 번째로 대한민국에 다시
+방문할 수 있게 되어 기쁘게 생각합니다`)가 `Yeah, I'm not sure how many years I'm happy to be here.
+to be able to visit the United States`로 전사 — 의미 보존형 영어 번역. LMR_ko 19.7%(`ko_to_en=15`)가
+독립 확증. Exp-160 스퓨리어스 재현 없음.
+
+**LMR 교차검증**: 단일언어 4종 전부 `ko_to_en=0`·`en_to_ko=0` — 프로브와 독립적으로 같은 결론
+(단일언어 세션엔 언어잠금 실패가 없다). 따라서 ko 발동 5건은 "LMR이 놓친 실패"가 아니라 신호 쪽 오탐이다.
+
+### 결과 ④ — ko 오탐률 `--repeat 3` 확증 (같은 세션, 코드 변경 0)
+결과 ③의 판정이 스크리닝 1회에 얹혀 있어 kor1~3을 `--lan ko --repeat 3`으로 재측정했다.
+WER med: kor1 **21.6%**(16.4/26.3, stdev 5.0) · kor2 **24.1%**(19.3/24.8, 3.0) · kor3 **35.8%**(28.5/39.1, 5.4).
+LMR 9/9 세션 0.0%.
+
+**ko 세션 누계 12개 / 3756 프로브**
+
+| | 값 |
+|---|---|
+| 발동 τ=0.97 | **23건 (0.61%)** |
+| 발동 시 `seglen` | 0.24s ×20 · 0.48s ×2 · 1.02s ×1 → 최대 **1.02s** |
+| `seglen ≥ 2.0s` 발동 | **0건** |
+| 최대 연속 K | **2** (K=3 미달) |
+| 게이트 통과 | **0 / 23** |
+| 세션 초입 15초 이내 | 17 / 23 |
+
+**오탐은 랜덤이 아니라 결정론적이다** — kor2 b1은 3/3 회차, kor3 b1·b30은 3/3 회차에서 같은 지점에
+반복 발동한다. 따라서 ① Stage 0의 "순수 오탐 0"은 **최종 반증**됐고, 동시에 ② 오탐이 `seglen≤1.02s`
+단일 체제에만 살아 `seglen≥2.0s`(Exp-189 대응으로 **미리** 지정된 값) 하나로 23/23이 배제된다는
+사실도 12세션 규모로 굳었다.
+
+### 결과 ⑤ — en 방향 확증 + 오탐/참양성의 **방향 분리**
+eng1도 `--lan en --repeat 3` 재측정(코드 변경 0). **누계 4세션 500프로브 = 발동 0건.**
+WER med **3.8%**(2.9/6.7, stdev 2.0). → 안 A 사전 등록 표본 전부 닫힘.
+
+| 방향 | 세션 | probes | 발동 | 성격 | 게이트 통과 |
+|---|---|---|---|---|---|
+| `locked=ko` (ko 세션) | 12 | 3756 | **23 (0.61%)** | **전부 오탐/회색**(참양성 0) | **0/23** |
+| `locked=en` (en 세션) | 4 | 500 | **0** | — | 0 |
+| `locked=en` (auto ytn1) | 1 | 266 | 25 | **전부 참양성** | 2 run |
+| auto sbs1 | 1 | 249 | 0 | — | 0 |
+
+**15세션 통틀어 `locked=ko` 참양성 0건 · `locked=en` 오탐 0건** — 오탐과 참양성이 방향으로 완전히 갈린다.
+해석은 **가설로만** 남긴다(극소버퍼에서 사후분포가 영어 사전확률로 끌린다면 설명되나 사전확률 미측정).
+설계 함의로 방향 비대칭 문턱(`locked=ko`만 τ↑)이 자연스럽지만, **게이트 파라미터를 실측에 맞춰 사후
+조정하는 것이 곧 정지 사유로 든 행위**이므로 구현하지 않고 기록만 남긴다. 또한 `locked=ko` 방향
+**참양성 판별력이 미측정**(그 방향 실패 0건)이라 비대칭 문턱이 진짜 실패를 놓치는지는 알 수 없다.
+
+### 판정 — 계측 채택 / 개입(Stage 1) 정지
+- **계측·지표는 채택 권고**(행동 변경 0이라 회귀 위험 없음). 단 `exp/lang-lock-stage0` **미머지** 상태.
+- **Stage 1(재감지 강제) 착수는 정지**. 사전 등록 진행 조건("단일언어 세션 정상 전사 구간 발동 0건")을
+  충족하지 못했다. 기준을 사후 완화해 진행하는 것은 게이트 파라미터의 임의 튜닝에 해당하므로
+  **사용자 판단으로 이관**(CLAUDE.md §4 "목표 필수 기능 채택은 사용자 질의").
+- **양쪽 근거**: (계속) 오탐 5건은 인계서 §4 게이트가 사후 튜닝 없이 이미 배제하도록 설계돼 있었고
+  would_fire 0인 반면 ytn1 참양성 run 2개는 통과한다 / (중단) Exp-189가 경고한 "p=0.95~1.00 고신뢰
+  오탐"이 실제로 재현됐고, 게이트가 막아준다는 판단은 `--repeat 1` 표본 1회에 의존한다.
+- **재개 시 권고 순서**: ~~① kor1~3 `--repeat 3` 재측정~~ **완료(결과 ④)** → 곧바로 **② 안 B(섀도우
+  `would_fire` 로깅)** 가능. 착수 시 확인할 값은 "런타임 게이트가 오프라인 재현과 동일하게 23/23을
+  막는가"이며, 그것이 정확히 섀도우 모드의 측정 대상이다.
+- 정지 사유의 성격이 이동했다: "표본이 1회뿐이라 모른다" → **"재현되는 고신뢰 오탐이 존재한다는 사실 자체"**.
+  즉 정보 부족이 아니라 **설계 수용 여부** 판단이다.
+
+### 한계
+- ko 오탐률 0.61%는 12세션 기반 추정치. `--repeat 3`은 이 프로젝트의 채택확정 최소 규모이지 대표본은 아니다.
+- **`locked=ko` 방향 참양성 판별력 미측정** — 15세션 통틀어 그 방향 실패가 0건이라, "`locked=ko` 발동은
+  전부 오탐"인지 "그 방향 실패가 이 데이터셋에 없었을 뿐"인지 **구분되지 않는다**.
+- 게이트 통과 판정은 **로그 사후 재현**이지 런타임 게이트 실행이 아니다.
+- **반대 방향(`locked=ko` + 영어 오디오) 판별력은 이번에도 미측정** — ytn1 실패도 `locked=en` 방향이라
+  6파일 통틀어 `locked=ko` 실패 0건.
+- 위음성률 미정량 · 개입 효과 전혀 미측정(검출 가능성만 보였다) · kinno 미측정.
+- 잠재 버그 미수정(행동 변경 금지 원칙): `state.sot_index`가 context 길이를 반영하지 않아
+  `--max-context-tokens > 0` 또는 `--static-init-prompt` 사용 시 `_check_no_speech`가
+  `<|startofprev|>` 위치를 읽는다. 운영 기본값에선 잠복 — 별도 백로그.
+
+### epoch
+E5 유지(epoch 미bump) — 계측 전용이라 실패 모드를 바꾸지 않고, 브랜치도 미머지.
+산출물: `docs/research/SOT_LANG_PROBE_STAGE0.md`(분석 정본) ·
+`docs/backlog/LANG_LOCK_STAGE0_HANDOFF.md`(인계·정지 사유) ·
+`.omc/benchmarks/stage0_probe/*_tau097.txt`(프로브 전수 분석 6파일).
+
+---
+
+## Exp-196 — 화자전환 시 동일언어 확정 경계 재디코딩 스킵 (samelang 머지, Exp-190 계열 후속) (2026-07-22) [E5→E6, `fix/samelang-no-refresh`(master 머지 `3ad14a6`)]
+
+**언어모드**: auto(bong1·ytn2·sbs1) — 다른 세션(별도 워크트리)에서 구현·측정·머지, 이 세션(`exp/lang-lock-stage0`)은
+`git merge master`로 반영만 하고 후속 문서 정리를 담당.
+**코드 변경**: `whisperlivekit/simul_whisper/backend.py`만.
+
+### 배경 — Exp-155와의 관계 (같은 가설, 두 번째 시도)
+**Exp-155**(2026-07-03, **E4 base 기질**, 브랜치 `exp/conditional-speaker-reset`)가 이미 같은 방향을 시도해
+**기각**됐다 — "동일언어 화자전환이면 new_speaker 리셋(`refresh_segment`·`detected_language=None`·`_apply`)을
+통째로 생략"하는 넓은 범위 설계였다. bong1의 new_speaker 15/15가 전부 동일언어로 판정돼 리셋이 100% 생략됐고,
+그 안에 섞여 있던 **진짜 다른 화자(영어 화자 2명·한국어 화자 2명)를 "같은 언어"라는 이유로 블렌딩**해
+화자F1 -4.1(38.1%p WER 악화 동반)로 악화됐다. 타겟이었던 sbs1은 new_speaker 자체가 0회 발동해 애초에
+검증 불능이었다.
+
+이번 시도는 다르다:
+- **기질(substrate)**: 이번은 **E5 turbo**(Exp-155는 E4 base) — 코드스위칭 실패모드 자체가 다르다(EXPERIMENTS.md
+  이월 핵심사실 참조: turbo는 "Thank you" 필러 환각형, base는 방송클로징 환각형).
+- **리셋 범위**: Exp-155는 리셋 블록 전체(화자 귀속 갱신까지 포함)를 생략했지만, 이번은 **경계 재디코딩
+  (`refresh_segment` 호출) 하나만** 스킵하고 화자 귀속(`token.speaker`)·`global_time_offset`은 그대로
+  갱신한다. 즉 "같은 화자처럼 취급"이 아니라 "화자는 바뀌었다고 기록하되 그 경계의 오디오를 다시 읽지는
+  않는다"는 설계 — Exp-155가 실패한 정확한 지점(진짜 다른 화자를 같은 화자로 뭉갬)을 피해간다.
+
+### 변경 내용 (커밋 순)
+| 커밋 | 내용 |
+|---|---|
+| `47fd76c` | 화자전환 시 eager 언어감지가 기존 언어와 동일함을 확정하면 경계 재디코딩(`refresh_segment`)을 생략. `refresh_segment`가 디코더 prefix는 버리면서 오디오(keep_secs분)는 남겨, 다음 패스가 같은 구간을 백지에서 다시 전사해 중복 방출(ytn2 "우선 우선"/"왕성 왕성한")을 만들던 것이 근본원인 — 언어가 안 바뀌었으면 "새 화자의 언어로 다시 읽기"라는 재디코딩 목적 자체가 성립하지 않는다는 관찰. eager=None(쿨다운·감지실패)이면 동일언어를 확신 못 해 기존 경로(재디코딩) 유지 |
+| `4448288` | Exp-189 쿨다운(1.5s)에 eager 감지가 걸려 `eager=None`이 되면 "동일 언어 확정"에 실패해 재디코딩이 강행되던 사각지대 수정 — 직전 감지결과를 `_last_eager_lang_result`에 캐시해 쿨다운 구간의 스킵 판정에만 재사용(캐시값은 `eager` 자체와 분리 보관해 `_apply_detected_language`까지 타지 않게 함 — Exp-189가 억제한 flip-flop 재적용 방지). bong1 화자전환 25건 중 8건이 이 쿨다운 사각지대였다 |
+
+### 측정 (경로 C, `--lan auto`, `--repeat 1` 스크리닝, diar ON — 다른 세션 측정, 커밋 메시지 인용)
+| 파일 | 지표 | 전 | 후 |
+|---|---|---|---|
+| ytn2 | WER | 15.8% | 12.3% |
+| ytn2 | 화자분리 F1 | 80.0% | 94.7% |
+| bong1 | 화자분리 F1 | 73.7% | **78.8%**(자체 최고) |
+| sbs1 | 화자분리 F1 | 80~100% 밴드 | 회귀 없음 |
+
+정성: bong1 "everyone here Everyone here" 등 중복 해소.
+
+### 판정 — 이번 세션은 반영·정리만
+이 실험은 `worktrees/bong1-eval-diagnostics`(`exp/lang-lock-stage0`)가 아닌 별도 세션에서 구현·측정·머지됐다
+(`3ad14a6`). 이 세션은 `git merge master`로 반영했을 뿐 — 코드 파일 충돌 0건(브랜치는
+`align_att_base.py`/`simul_whisper.py`/`scripts/`/`metrics.py`를, 이 머지는 `backend.py`만 건드려 파일
+집합이 완전히 분리돼 있었다). **ko/en 세션에는 영향 없음** — `lang_locked` 분기에서 `eager=None`·
+`eager_cached=None`이라 `lang_evidence=None`이 되어 스킵 판정 자체가 early return으로 미진입한다(Exp-195의
+ko/en 오탐 수치 23건·0.61%·게이트 통과 0/23은 그대로 유효). **auto 세션은 영향 있음** — 동일언어 화자전환에서
+`refresh_segment` 미호출로 버퍼가 안 잘려 세그먼트가 계속 자라므로(재디코딩이 스킵되니 잘릴 계기가 없다),
+Exp-195의 auto 오탐/참양성 수치(ytn1 25건 등)는 이 머지 이후 **직접 비교 불가**해졌다.
+
+**✅ 채택(머지 완료 확인, 이 세션은 재기각하지 않음)** — 위 수치는 N=1 스크리닝이나 이미 master에 머지된
+상태(다른 세션의 결정)이며, CLAUDE.md §4 채택 확정(`--repeat 3`) 게이트 적용은 그 세션의 범위였다. 이 세션은
+merge 반영 + epoch 정합성 정리만 담당한다.
+
+### epoch
+**E5 → E6 bump** — new_speaker의 실패모드를 바꾸는 구조 변경이다(경계 재디코딩이 화자전환마다 무조건
+발동하던 것에서, 동일언어 확정 시 조건부 스킵으로 변경). E5에서 new_speaker/경계재디코딩 경로에 얹혀
+있던 결론(frame_threshold 배포레버 Exp-193·boundary_reconcile Exp-192·keep_secs Exp-171/174 등)은
+`[E5·재검증]` 대상 — 그 경로들이 도달하는 빈도·조건이 스킵 신설로 달라졌기 때문이다. 상세는
+STATE(`EXPERIMENTS.md`) "코드 세대(Epoch)" 절 참조.
+
+## Exp-197 — 언어잠금 Stage 1 섀도우 게이트 실측 (안 B 완료, 로깅버그 발견·수정 포함) (2026-07-22) [E6, `exp/lang-lock-stage0`(미머지)]
+
+**언어모드**: auto(bong1·ytn2·sbs1·ytn1, `--lan auto --repeat 1`).
+**코드 변경**: `whisperlivekit/simul_whisper/align_att_base.py`(게이트 G1~G7 구현 + `[Stage1ShadowStats]`
+로깅버그 수정) + `tests/test_stage1_shadow_gate.py`(신규 테스트).
+
+### 배경
+안 B(Stage 1 섀도우 판정)는 §10-5(정지, 사용자 판단 대기)에서 멈춰 있었다 — 사용자가 재개를
+승인했다(goal 문서 `docs/goal_prompt/tranquil-floating-starfish.md`). 재개 전 이 goal 문서 §1이 다른
+세션의 samelang 머지(Exp-196, `3ad14a6`)와의 충돌을 사전 검증했다 — 코드 파일 충돌 0건(브랜치는
+`align_att_base.py`/`simul_whisper.py`/`scripts/`/`metrics.py`를, 머지는 `backend.py`만 건드려 파일
+집합 완전 분리), ko/en 세션에는 영향 없음(Exp-196과 동일 근거), **auto 세션은 영향 있음**(동일언어
+화자전환에서 `refresh_segment` 미호출로 세그먼트 성장 거동이 달라져 Exp-195의 auto 오탐/참양성 수치와
+직접 비교 불가해짐 — Exp-196 결론과 동일).
+
+### 구현
+`align_att_base.py`에 게이트 G1~G7(비-auto 가드 · 언어미감지 · 최소버퍼 `seglen≥2.0s` · `p_opp≥0.97` ·
+연속 `K≥3` ∧ 지속 `T≥1.0s` · 쿨다운 3.0s · 다른 트리거 진행중 배제) + 증거 리셋 훅
+(`refresh_segment()`·`_apply_detected_language()` 2곳) 신설. 트리거 지점은 기존
+`_sot_lang_probe_impl()` 직후(encoder_feature를 이미 쥔 지점이라 추가 forward 비용 0). **섀도우
+불변식**: 게이트가 전부 만족돼도 `_apply_detected_language`는 호출하지 않고
+`[Stage1Shadow] would_fire=True lang=%s p_opp=%.4f t=%.2f seglen=%.2f k=%d dur=%.2f` 로깅만 한다 —
+diff에서 `_apply_detected_language` 신규 호출 0건임을 확인했다(goal 문서 Step 4 검증 기준). 신규
+테스트(TDD, 14개 시나리오) 추가, pytest 648→670 pass·ruff clean.
+
+### 측정 중 발견 — `[Stage1ShadowStats]` 로깅 버그, 수정, 재측정
+Step 5 첫 스크리닝 run(커밋 `6af9b3d`)의 로그를 점검하다가, 세션요약 `[Stage1ShadowStats]`의
+중복억제 가드가 `would_fire`만 비교하는 버그를 발견했다 — `would_fire`가 세션 내내 0으로 고정되는
+(4파일 중 3개가 이 경우) run에서는 `blocked_by`가 계속 누적돼도 "직전과 동일"로 오판돼, 실제로는 첫
+`is_last` 시점(프로브 약 2회째) 이후로 요약 줄이 전혀 갱신되지 않았다 — 세션 나머지 전체의 진짜
+게이트별 차단 내역이 로그에 도달하지 못한 것. `d6bd66a`에서 중복억제 키를 총 호출수
+(`would_fire + sum(blocked_by.values())`)로 교체 — `_log_lang_drift_stats()`가 `probes`(총 호출수)로
+중복억제하는 기존 관례를 그대로 따랐다. 회귀 테스트(`test_shadow_stats_logs_again_when_only_blocked_by_changes`)
+추가, pytest 670→671 pass. `would_fire` 자체(배치마다 무조건 찍히는 개별 로그)는 이 버그와 무관해
+영향받지 않았다 — 영향은 `[Stage1ShadowStats]` 요약의 `blocked_by` 누적치에 한정된다.
+
+### 측정 (경로 C, `--lan auto --repeat 1` 스크리닝, diar ON·CRT 3.0·`--trace-tokens`, `vbcable=ok`,
+코드=`exp/lang-lock-stage0@d6bd66a` — 로깅 수정 후 v2 run)
+
+**WER/F1 sanity**
+
+| 파일 | WER | 화자F1 | 문장F1 | LMR_ko |
+|---|---|---|---|---|
+| bong1.wav | 28.9% | 70.3% | 21.1% | 10.9%(3.0%p) |
+| ytn2.mp3 | 13.3% | 100.0% | N/A | 0.0% |
+| sbs1.mp3 | 11.9% | 100.0% | 88.9% | 0.0% |
+| ytn1.mp3(held-out) | 22.1% | 84.2% | 57.1% | 19.7%(9.2%p) |
+| **종합** | **19.1%** | **88.6%** | **55.7%** | — |
+
+samelang 머지(Exp-196)로 auto 베이스라인 자체가 이동해 **Exp-195 auto 수치와 직접 비교하지 않는다** —
+sanity 목적(0%/100% 이상치·붕괴형 catastrophic 없음)만 확인, 이상 없음. 참고(비교 아님): 로깅버그가
+있던(디코딩은 동일한) v1 첫 run은 bong1 27.1/57.1/28.6, ytn2 16.3/72.7/NA, sbs1 11.9/57.1/76.2,
+ytn1 14.7/88.9/66.7, 종합 17.5/69.0/57.1 — v1↔v2 편차는 로그 한 줄만 건드린 수정이 만든 게 아니라
+CLAUDE.md §4가 문서화한 통상적 회차간 분산(±30~120%p대) 범위다.
+
+**`[Stage1ShadowStats]` 게이트별 차단 (v2, 세션 최종 누적치)**
+
+| 파일 | would_fire | G1 | G2 | G3 | G4 | G5 | G6 | G7 | 총 게이트호출수 |
+|---|---|---|---|---|---|---|---|---|---|
+| bong1.wav | 0 | 0 | 13 | 25 | 424 | 5 | 0 | 0 | 467 |
+| ytn2.mp3 | 0 | 0 | 10 | 6 | 330 | 0 | 0 | 0 | 346 |
+| sbs1.mp3 | 0 | 0 | 2 | 6 | 238 | 0 | 0 | 0 | 246 |
+| ytn1.mp3(held-out) | **15** | 0 | 2 | 10 | 227 | 8 | 0 | 0 | 262 |
+
+G4(`p_opp<0.97`)가 4파일 전부에서 차단의 압도적 다수 — 대부분 프로브가 버퍼길이와 무관하게 애초에
+문턱에 도달 못 함. G1=0 전 파일은 이 run이 auto 전용이라 예상된 결과(ko/en 가드 자체는 §10-6이
+12세션 규모로 이미 검증). G6·G7도 전 파일 0 — 쿨다운·타 트리거 진행중이 이번 run에서 병목이 된 적
+없음.
+
+**ytn1 `would_fire=15` = 독립 15건이 아니라 연속 1개 에피소드** — 같은 성장버퍼에서 K가 5→19로
+자라나는 연속 배치, 지속시간 1.20s→5.88s, 전부 `lang=en`: t=8.07s(p_opp=0.9962,k=5)→8.31(0.9801,6)→
+8.55(0.9911,7)→8.79(0.9867,8)→9.27(0.9950,9)→9.75(0.9994,10)→9.99(0.9913,11)→10.23(0.9860,12)→
+10.47(0.9861,13)→10.95(0.9983,14)→11.19(0.9995,15)→11.43(0.9992,16)→11.67(0.9985,17)→
+11.67(0.9985,18, 동일 t_abs)→12.74(0.9906,19).
+
+**정성 교차검증(참양성 확정)**: 이 시간창(t≈8~12.7s)은 `ytn1_C_R1.txt` 전사 도입부
+(`"Yeah, I'm sorry. I'm sorry, I'm sorry, but I the United States. I'm happy to be here today. I
+want to first thank you for hosting today's Security Consultative Meeting. I want to."`, 문장#1~4
+`finalize_trigger=⟨punctuation⟩`)와 정확히 겹치고, 뒤이은 문장#5가 `⟨language_switch⟩`로 확정되며
+한국어로 전환된다 — §10-4/Exp-195가 이미 규명한 **동일한 ytn1 언어잠금 실패**(한국인 개회사가 영어로
+잠겨 전사)다. 이 run의 LMR_ko(19.7%/9.2%p)가 Exp-195 원보고 LMR_ko 19.7%와 거의 정확히 일치 — 독립
+교차확증. bong1/ytn2/sbs1 3파일은 `would_fire=0`(오탐신호 0) — 단 이 run의 목적은 오탐률 재측정이
+아니라(그 작업은 Exp-195가 12세션 규모로 이미 완료) 런타임 게이트가 설계대로 동작하는지 확인이었고,
+결과는 설계대로였다.
+
+### 판정
+🟡 **계측 완료 — 개입(실제 트리거 배선)은 정지, 사용자 판단 대기.** would_fire: bong1/ytn2/sbs1=0
+(오탐 신호 없음), ytn1(held-out)=15(연속 1에피소드, 정성 확인상 참양성·오탐 아님). 게이트가 이번
+run에서 발동한 유일한 사례가 이미 알려진 실제 실패를 정확한 위치에서 잡아냈다는 점에서 **설계대로
+동작**했다고 판단한다. 다만 `_apply_detected_language`에 실제로 배선해 섀도우를 졸업시킬지는 **이번
+작업 범위 밖**이다 — CLAUDE.md의 "핵심 불변 제약 직결 기능은 정량 결과만으로 자율 채택/기각하지 않고
+사용자에게 채택 여부를 묻는다" 규칙과 goal 문서 Step 6("master 머지는 사용자 확인 후, 실제 적용은
+별도 단계")에 따라 사용자 확인을 기다린다. 브랜치(`exp/lang-lock-stage0`)는 master 미머지 유지.
+정본 = `docs/research/SOT_LANG_PROBE_STAGE0.md` §11 · 인계 = `docs/backlog/LANG_LOCK_STAGE0_HANDOFF.md` §4-0-3.
+
+### epoch
+**E6 그대로(bump 없음)** — 이번 변경은 섀도우 계측 전용이고, `_apply_detected_language`에 대한 신규
+호출이 diff상 0건임을 Step 3/4에서 직접 확인했다(위 "섀도우 불변식" 참조). 실제 디코딩 결정 경로를
+전혀 바꾸지 않으므로 어떤 실패모드도 바꿀 수 없다 — epoch bump 대상이 아니다.
+
+## Exp-198 — Stage 1 섀도우 게이트 지속문턱 T 1.0s→0.8s 완화 (오프라인 리플레이 근거) (2026-07-22) [E6, `exp/lang-lock-stage1-duration`(미머지)]
+
+**언어모드**: auto(bong1·ytn2·sbs1·ytn1, `--lan auto --repeat 1`, ytn2만 N=2 재측정).
+**코드 변경**: `whisperlivekit/simul_whisper/align_att_base.py`의 상수 `STAGE1_MIN_DURATION`
+**1.0 → 0.8** 단 한 개(커밋 `6868c2d`) + 회귀 테스트 3건. 게이트 로직·섀도우 불변식 무변경 —
+`_apply_detected_language` 신규 호출 **0건**(섀도우 유지). pytest 674→677 pass·1 skip, ruff clean.
+
+### 배경 — Exp-197 사후분석에서 드러난 40ms 미스
+Exp-197은 bong1 `blocked_g5=5`(K/T 미달 차단)를 집계만 하고 내용을 열어보지 않았다. 이번에 그 5건을
+프로브 단위로 뜯어보니 그중 하나가 **확정 참양성이 T 문턱에 0.04s 못 미쳐 막힌 사례**였다.
+정답 `test_data/bong1.txt:43` = `아니 그 (더듬) 플라스틱 말랑말랑한 것도 만들었죠 우리가 안전한
+소품으로 물론.` 인데, 전사는 한국어로 시작했다가(`아이 그` / `플라스틱 안색`) 영어로 뒤집힌다 —
+`Plastic, sorry` / `Malang mal` / `ang an` / `awesome thing to make . We're going` — 그 뒤에야
+올바른 한국어가 재방출된다. 잘못 방출된 영어는 삽입 오류 + 환각으로 남는 **확정 언어잠금 실패**다
+(§10-4 ytn1과 동형). 이 구간 버스트: t=91.20(k=1, p_opp=0.9797, seglen=4.36) → 91.68(k=2, 0.9945,
+4.84) → 91.92(k=3, 0.9896, 5.08, dur=0.72) → 92.16(k=4, **0.9996**, 5.32, **dur=0.96**). G3·G4·K≥3
+전부 통과, **오직 `T≥1.0s`에서만 차단**. 버스트가 여기서 끝나 K=5로 이어지지 않으므로 "더 기다리면
+어차피 발동"이 성립하지 않는다.
+
+### 방법 — 오프라인 리플레이(주 증거)와 그 검증
+섀도우 게이트는 디코딩에 영향이 0이고 입력이 프로브 스트림(`t_abs`·`p_opp`·`seglen`·`lang`)의 순수
+함수이며 그 스트림이 서버 로그에 전부 남으므로, **기측정 로그만으로 임의 상수의 `would_fire`를
+재계산**할 수 있다(재측정 0회). 분산이 ±30~120%p인 이 프로젝트에서 게이트 로직 질문에 **결정론적
+증거**를 주는 유일한 수단이다. 신뢰하기 전에 Exp-197 4파일의 실측 `[Stage1ShadowStats]` 카운트를
+**정확히 재현하는지** 대조했고 완전 일치했다 — bong1 g2=13/g3=25/g4=424/g5=5/fire=0, ytn2
+g2=10/g3=6/g4=330/fire=0, sbs1 g2=2/g3=6/g4=238/fire=0, ytn1 g2=2/g3=10/g4=227/g5=8/fire=15.
+
+**로그 판독 함정(재사용 지식)**: 첫 시도에서 4파일 전부 G4만 정확히 **+1**씩 어긋났다. 원인은
+`infer(is_last=True)`가 **그 호출의 마지막 프로브를 처리하기 전에** 세션 요약을 방출하기 때문이다 —
+로그상 요약 줄 뒤에 프로브가 한 줄 더 남지만 그 프로브는 요약 카운트에 없다. 마지막 프로브 1개를
+제외하자 4파일이 전부 정확히 일치. (Exp-197의 중복억제 버그와는 **별개** 사안 — 그쪽은 요약이
+갱신 안 되는 문제, 이쪽은 요약과 프로브의 순서 문제.)
+
+### T 스윕 (K≥3·`seglen≥2.0s`·τ=0.97 고정, would_fire bong1/ytn2/sbs1/ytn1)
+
+| T | bong1 | ytn2 | sbs1 | ytn1 |
+|---|---|---|---|---|
+| 1.0s(현행) | 0 | 0 | 0 | 15 |
+| 0.9s | 1 | 0 | 0 | 16 |
+| **0.8s(채택)** | **1** | **0** | **0** | **16** |
+| 0.7s | 2 | 0 | 0 | 17 |
+| 0.5s | 2 | 0 | 0 | 17 |
+| 0.0s | 2 | 0 | 0 | 19 |
+
+**에피소드 커버리지는 T=0.5~0.9에서 완전히 동일**하다 — 이 구간에서 달라지는 것은 *어떤 에피소드를
+잡는가*가 아니라 *같은 에피소드 안에서 몇 번째 배치에 발동하는가*(발동 지연)뿐이다. 즉 0.8은 관측
+한 건에 맞춰 깎은 knife-edge 값이 아니라 넓은 평탄구간 안의 값이다. **ytn2·sbs1은 T=0.0까지 내려도
+0**(G3·G4에서 이미 전멸 — 후보 자체가 안 생긴다). T=0.8에서 새로 통과하는 발동점은 정확히 2개이고
+둘 다 `k=4/dur=0.96`: **bong1 t=92.16**(위 확정 참양성)과 **ytn1 t=4.95**(p_opp=0.9838,
+seglen=4.95 — ytn1의 이미 알려진 서두 실패 구간 *안쪽*이라 신규 오탐이 아니라 같은 실패의 더 이른
+포착).
+
+### 오탐 위험 검증 — T의 기여분은 0, 차단은 전적으로 G3
+Exp-195의 ko/en 세션 로그 **16개**(kor1~3 각 4회 + eng1 4회)를 **G1(비-auto 가드) 의도적 우회**로
+리플레이했다 — 실제 ko/en 세션은 G1이 첫 관문에서 다 막지만, 알고 싶은 것은 "**같은 단일언어 내용이
+auto 세션으로 들어왔을 때**" 나머지 게이트가 버티는가라는 worst case이기 때문이다. **결과: 16파일
+전부, T=0.0을 포함한 모든 T에서 `would_fire`=0.** 이유는 명확하다 — 그 로그들에서 `p_opp≥0.97`을
+통과한 프로브의 **최대 seglen이 1.02s**이고 G3 문턱은 2.0s다(여유 **0.98s**). 즉 **알려진 오탐
+계열의 차단은 전적으로 G3가 하고 있고 T의 기여분은 0** — T 완화는 오탐 방어를 전혀 잠식하지 않는다.
+Exp-195(§4-0-1)의 "오탐은 `seglen ≤ 1.02s`라는 좁은 체제에만 산다"와 같은 구조를 T 축에서 독립
+재확인한 셈이다.
+
+### 측정 (경로 C, `--lan auto --repeat 1`, diar ON·CRT 3.0·`--trace-tokens`, `vbcable=ok`,
+코드=`exp/lang-lock-stage1-duration@6868c2d`)
+
+| 파일 | WER | 화자F1 | 문장F1 | LMR_ko | would_fire | 차단 G2/G3/G4/G5 |
+|---|---|---|---|---|---|---|
+| bong1.wav | 24.7% | 62.5% | 23.5% | 13.0%(3.6%p) | 0 | 18/41/432/2 |
+| ytn2.mp3(N=2 재측정 median) | **11.1%** | **95.0%** | N/A | 0.0% | 0 | — |
+| sbs1.mp3 | 8.9% | 80.0% | 90.0% | 0.0% | 0 | 0/2/248/0 |
+| ytn1.mp3(held-out) | 11.7% | 84.2% | 57.1% | 1.3%(0.6%p) | **2** | 10/8/224/3 |
+
+**ytn2 1차 run 폐기(하니스/자원 stall — STT 회귀 아님)**: 1차 수치 WER 69.0% / 화자F1 26.7%.
+세 신호가 동시에 나와 측정 자체가 무효다 — ① 로그에 `FFmpeg read timeout`, ② 처리 lag 최대
+**58.70s**(같은 run의 sbs1은 2.17s), ③ 프로브 수 **150**으로 반토막(Exp-197의 비교 가능한 run은
+347). 이번 diff는 **로그 한 줄이 언제 찍히는지만** 바꾸므로 디코딩에 영향을 줄 경로가 물리적으로
+없다 — 원인은 코드가 아니라 머신 경합.
+
+**ytn2 재측정(한산한 머신: GPU 1.0/10.2 GiB·util 8%·경합 STT 서버 없음, N=2)**: R1 WER 8.4% /
+화자F1 100.0%, R2 WER 13.8% / 화자F1 90.0% → median WER 11.1% / 화자F1 95.0%(min 8.4 / max 13.8 /
+stdev 3.8), LMR 0.0%. 건강도 정상 복귀 — lag max 0.99s/0.98s, timeout 0건, 프로브 364/371.
+**`would_fire`는 2회차 모두 0**(`blocked_g5`도 양쪽 0) — ytn2는 애초에 후보를 만들지 않는다는
+리플레이 예측과 일치.
+
+**Exp-197(T=1.0) 수치와의 비교는 효과가 아니다**: Exp-197은 bong1 28.9/70.3/21.1 · ytn2 13.3/100.0 ·
+sbs1 11.9/100.0/88.9 · ytn1 22.1/84.2/57.1이었다. **diff가 로깅 전용인 이상 두 run의 WER/F1 차이는
+전부 회차간 분산이며 개선도 회귀도 아니다** — 이 표를 "T 완화로 bong1 WER 28.9→24.7 개선"처럼
+인용해서는 안 된다.
+
+### 한계 — `would_fire`의 실현(realization) 의존성이 매우 크다
+**실측 run은 bong1 발동을 재현하지 못했다**(`would_fire=0`, `blocked_g5=2`). 리플레이는 Exp-197
+스트림에서 bong1 1건을 예측하지만 실측은 **다른 오디오 실현**이었고, 그 회차의 플라스틱 구간에서는
+같은 `p_opp` 버스트가 생기지 않았다. 같은 이유로 ytn1은 이번에 2건만 발동했다(Exp-197 15건).
+따라서 두 증거의 역할을 섞지 않는다 — **게이트 로직 질문("T=0.8이 옳은가")의 주 증거는 결정론적
+리플레이**(동일 스트림에 상수만 바꿔 비교하므로 분산 미개입)이고, **실측 run의 역할은 end-to-end
+확인**(구현 동작·로그 포맷 정상·크래시 없음·변경에 귀속 가능한 회귀 없음 — 달성)이다. 실측은 bong1
+리플레이 결과를 확증하지도 반증하지도 않는다.
+
+이 실현편차는 **섀도우 졸업(실제 트리거 배선) 판단에 직접 걸리는 사실**이다: 게이트 발동은 회차마다
+있다가 없다가 하는 **희소·간헐 이벤트**다(같은 파일·같은 코드에서 15건→2건, 1건→0건). 실제 트리거로
+승격해도 효과가 회차별로 나타났다 사라질 것이므로 **단회 측정으로 이익/해악을 귀속하는 것은
+원리적으로 불가능**하며, N≥3 반복 + 발동 카운트 기반 짝지음 대조가 사실상 필수다.
+
+### 판정
+🟡 **계측 개선(섀도우 유지) — T 1.0→0.8 채택.** 근거 = ① T=1.0이 확정 참양성 1건을 0.04s 차로
+놓치고 있었다 ② T 스윕상 0.5~0.9가 동일 커버리지 평탄구간이라 0.8은 knife-edge가 아니다 ③ ko/en
+16세션 G1 우회 리플레이에서 T=0.0까지 오탐 통과 0 — 오탐 차단은 전적으로 G3의 몫이라 T 완화가
+방어를 잠식하지 않는다. 실측은 end-to-end 동작 확인(ytn1 2건 발동·회귀 없음)에 성공했고, WER/F1은
+로깅 전용 diff이므로 Exp-197 대비 차이가 곧 회차간 분산이다. **실제 트리거 배선(섀도우 졸업)은
+여전히 사용자 판단 대기** — CLAUDE.md의 "핵심 불변 제약 직결 기능은 자율 채택/기각하지 않는다"
+규칙에 따른다. 브랜치 `exp/lang-lock-stage1-duration`은 master 미머지 유지.
+정본 = `docs/research/SOT_LANG_PROBE_STAGE0.md` §12 · 인계 = `docs/backlog/LANG_LOCK_STAGE0_HANDOFF.md` §4-0-4.
+
+### epoch
+**E6 그대로(bump 없음)** — 변경은 섀도우/로깅 전용 상수 1개이고 `_apply_detected_language` 신규
+호출이 여전히 0건이다. 실제 디코딩 결정 경로를 전혀 건드리지 않으므로 어떤 실패모드도 바꿀 수 없다
+(Exp-197과 동일한 논거).

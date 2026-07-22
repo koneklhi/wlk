@@ -115,6 +115,16 @@ class TokensAlignment:
         assert self.silence_hard_secs <= 2.0, (
             "silence_hard_secs는 backend.py long-silence 하드리셋 상한(2.0s)을 넘을 수 없다"
         )
+        # 시나리오 튜닝(Phase A) — CLI 오버라이드, 미지정 시 기존 모듈 상수로 폴백(무회귀).
+        self.pending_resolve_cap_secs: float = float(
+            getattr(args, "pending_resolve_cap_secs", None) or PENDING_RESOLVE_CAP
+        )
+        self.min_speaker_attribution_secs: float = float(
+            getattr(args, "min_speaker_attribution_secs", None) or MIN_SPEAKER_ATTRIBUTION_SECS
+        )
+        self.finalize_grace_secs: float = float(
+            getattr(args, "finalize_grace_secs", None) or FINALIZE_GRACE_SECS
+        )
         # diar 경로(무상태 재계산) 플래핑 방지 메모 — 한 번 캡 만료로 분할 확정된 침묵은
         # 이후 재계산에서도 병합으로 되돌리지 않는다. 키 = round(silence.start, 2).
         self.resolved_split_silences: set = set()
@@ -511,7 +521,7 @@ class TokensAlignment:
         if b_unresolved:
             cap_expired = (
                 audio_time is not None and silence_seg.end is not None
-                and (audio_time - silence_seg.end) >= PENDING_RESOLVE_CAP
+                and (audio_time - silence_seg.end) >= self.pending_resolve_cap_secs
             )
             if flush or cap_expired:
                 self.resolved_split_silences.add(key)
@@ -716,7 +726,7 @@ class TokensAlignment:
                         prev_resolved_speaker is not None
                         and max_overlap_speaker != prev_resolved_speaker
                         and diar_seg_dur is not None
-                        and diar_seg_dur < MIN_SPEAKER_ATTRIBUTION_SECS
+                        and diar_seg_dur < self.min_speaker_attribution_secs
                     ):
                         # 짧게 고립된 diar 세그먼트의 화자 귀속 노이즈 — 직전 확정 화자 승계.
                         logger.debug(
@@ -874,14 +884,14 @@ class TokensAlignment:
             return
         if last.is_silence() and not prev.is_silence() and prev.text:
             elapsed = audio_time - last.start
-            prev.finalized = flush or elapsed >= FINALIZE_GRACE_SECS
+            prev.finalized = flush or elapsed >= self.finalize_grace_secs
             prev.finalize_trigger = (
                 ("punctuation" if prev.has_punctuation() else "silence")
                 if prev.finalized else None
             )
             logger.debug(
                 "[FinalizeGrace] finalized=%s flush=%s elapsed=%.3f grace_secs=%.3f trigger=%s",
-                prev.finalized, flush, elapsed, FINALIZE_GRACE_SECS, prev.finalize_trigger,
+                prev.finalized, flush, elapsed, self.finalize_grace_secs, prev.finalize_trigger,
             )
 
     # ─── 비-diar 경로 헬퍼(게이트 decide-late 지원) ──────────────────────────
@@ -1014,7 +1024,7 @@ class TokensAlignment:
             return
         cap_expired = (
             audio_time is not None and pending.end is not None
-            and (audio_time - pending.end) >= PENDING_RESOLVE_CAP
+            and (audio_time - pending.end) >= self.pending_resolve_cap_secs
         )
         if not (flush or cap_expired):
             return

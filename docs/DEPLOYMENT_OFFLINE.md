@@ -455,6 +455,25 @@ C:\Python312\python.exe -m whisperlivekit.basic_server
 - **통과 기준**: 문장이 **확정되는 순간** `lines[].translation`에 번역문이 채워져 표시된다.
 - 화자분할 ON 상태에선 화자가 바뀌어야 직전 문장이 확정·번역된다(§5.4 한계). 한 화자만 길게 말하면 번역이 늦으니, 검증은 **두 사람이 번갈아** 또는 짧게 끊어 발화.
 
+### 4.5 배포 상황별 파라미터 튜닝(`--scenario`, Phase A)
+
+현장 음성 상황(화자 수·언어 전환 텀·겹침 여부)에 따라 문장 확정·화자 귀속·언어 재감지 관련 파라미터를
+서버 재시작 없이 코드 수정 없이 조정할 수 있다 — `--scenario {mono,dialogue,sequential,codeswitch,multi}`
+플래그로 상황별 프리셋을 한 번에 적용한다(예: 다화자 겹침이 많은 현장이면 `multi`).
+
+```powershell
+# 다화자·텀 없이 겹치는 상황(bong1류)
+C:\Python312\python.exe -m whisperlivekit.basic_server --scenario multi
+
+# 프리셋 + 특정 값만 개별 override(개별 플래그가 프리셋보다 항상 우선)
+C:\Python312\python.exe -m whisperlivekit.basic_server --scenario multi --frame-threshold 40
+```
+
+`--scenario` 미지정 + 개별 플래그도 미지정이면 기존 마스터와 100% 동일하게 동작한다(무회귀). 프리셋
+값은 **미검증 방향값 출발점**이라 배포 현장에서 실제 음성으로 들어보며 미세조정하는 것을 전제로 한다 —
+knob별 방향(↑/↓ 효과)·상황별 매트릭스·프리셋 수치 전체는 [OPERATOR_TUNING_GUIDE.md](OPERATOR_TUNING_GUIDE.md)
+참조.
+
 ---
 
 ## 5. 번역(gpt-oss-20b) 배포 설정 — Q3
@@ -668,3 +687,4 @@ C:\Python312\python.exe -m whisperlivekit.basic_server `
 | **공유 `.venv` 반쪽 손상** (dev PC §2.2 패키징 전용 — 배포/협업 PC는 venv가 없어 해당 없음) | dev PC에서 `.venv\Scripts\python.exe`가 `No pyvenv.cfg file`(exit 106)로 기동 불가 → 측정·pytest 전면 차단. `.venv` 최상위에 `Lib`/`pyvenv.cfg` 없이 `Scripts`/`share`만 잔존 | **원인**: 배포/wheelhouse 작업(§2.2)의 `uv venv`/`uv pip`/`uv sync`를 **공유(Junction) `.venv`에 실행**했고, 그 순간 IDE Jedi 언어서버가 python.exe를 잠가 Scripts 제거가 실패한 반쪽 손상. **예방**: §2.2 경고대로 wheelhouse 빌드는 독립 `.venv`에서 + IDE 인터프리터 분리. **복구(무중단)**: `uv venv` 출력의 base python(`Using CPython … at <경로>`)으로 임시 probe venv 생성 → 그 `pyvenv.cfg`를 손상된 `.venv\`에 복사 → python 기동 회복 → `uv sync --extra diarization-sortformer --extra vbcable --extra cu128`로 Lib 재설치(Scripts 제거를 안 하므로 IDE 잠금과 무관). 진행 중 uv 경합이 있으면 먼저 멈춘 뒤 복구 |
 | **`wlk_in` 최신화 ≠ 배포 PC 반영** | dev PC의 `wlk_in`은 최신 master 기준으로 갱신됐는데, 배포 PC(`C:\whist\wlk`)는 여전히 구버전 코드로 동작(예: `model_dir` 미전파로 인터넷 다운로드 시도 → `getaddrinfo failed`) | `wlk_in`을 갱신하는 것과 그걸 USB로 옮겨 배포 PC에 실제로 덮어쓰는 것은 별개 단계다. `wlk_in\SYNC_STATE.txt`의 `deploy_pc_confirmed_applied`가 `unknown`이면 아직 배포 PC 반영이 확인되지 않은 것 — 매번 USB 반입·적용 여부를 사용자에게 확인한다 |
 | **raw 소스 파일 복사 누락** | 일부 `whisperlivekit/**` 변경이 반영 안 된 듯 보이는데 재설치할 wheel이 없음(예: 특정 버그 수정이 재현되거나, 신규 서브패키지의 API가 404) | whisperlivekit 프로젝트는 wheel로 설치하지 않으므로 유일한 반영 경로는 raw 소스 파일 복사뿐이다 — `C:\Python312\python.exe -c "import whisperlivekit; print(whisperlivekit.__file__)"`로 실제 로드 경로(`C:\whist\wlk\whisperlivekit\...`)를 확인하고, `deploy-sync` 절차의 `git diff --name-status` 목록과 `wlk_in`/배포 PC의 실제 파일을 `diff -q`로 대조해 빠짐없이 복사됐는지 확인한다 — wheel이라는 안전장치가 사라졌으므로 이 확인이 유일한 검증 수단이다 |
+| **`git show`로 반입 복사 시 줄바꿈만 다른 거짓 mismatch** | `deploy-sync` 6단계에서 `git show master:<path> > wlk_in\<path>`로 복사하면 `diff -q`가 매번 실제 변경 없는 파일까지 mismatch로 잡음 | 이 저장소는 `core.autocrlf=true`라 워킹트리 체크아웃 파일은 CRLF인데, `git show`는 blob 원본(LF 정규화됨)을 그대로 출력한다 — 내용은 같고 줄바꿈만 달라 `diff -q`가 오탐한다. 반입 복사는 `git show`가 아니라 **워킹트리 파일을 직접 복사**(`cp`/`Copy-Item`)한다 |

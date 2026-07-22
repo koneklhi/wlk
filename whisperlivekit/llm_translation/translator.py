@@ -1,6 +1,10 @@
+import logging
+
 import httpx
 
 from whisperlivekit.llm_translation import get_prompt_manager
+
+logger = logging.getLogger(__name__)
 
 
 class TranslatorBase:
@@ -76,6 +80,24 @@ class TranslatorBase:
         <|start|>assistant<|channel|>final<|message|>
         """
 
+    def _log_failure(self, serve: str, exc: Exception) -> None:
+        """번역 실패를 진단 가능한 형태로 남긴다.
+
+        번역 결과는 실패해도 빈 문자열로 삼켜야 한다(전사까지 멈출 수는 없다). 그런데 로그마저
+        없으면 서버 미기동·모델명 오타·404 가 전부 "번역이 안 나온다" 하나로 보인다. 폐쇄망
+        배포 PC 에는 디버거가 없으므로 이 로그가 유일한 진단 수단이다.
+
+        스택 트레이스는 남기지 않는다 — 문장마다 실패하면 로그가 그것만으로 가득 찬다.
+        """
+        logger.warning(
+            "[Translation] %s 번역 실패 — endpoint=%s model=%s reason=%s: %s",
+            serve,
+            self.endpoint,
+            self.model_name,
+            type(exc).__name__,
+            exc,
+        )
+
     async def translate_sentence(self, content: str, src_lang: str) -> str:
         raise NotImplementedError
 
@@ -114,7 +136,8 @@ class LlamaTranslator(TranslatorBase):
                 text = text[: text.find("<")]
             text = text.strip().strip('"').strip("'")
             return text
-        except Exception:
+        except Exception as e:
+            self._log_failure("llama", e)
             return ""
 
 
@@ -145,7 +168,8 @@ class OllamaTranslator(TranslatorBase):
             response.raise_for_status()
             data = response.json()
             return data["choices"][0]["message"]["content"].strip()
-        except Exception:
+        except Exception as e:
+            self._log_failure("ollama", e)
             return ""
 
 
