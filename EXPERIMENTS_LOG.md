@@ -5234,6 +5234,8 @@ T5가 0.5s→0.2s로 재설계된 뒤(Exp-204 후속), 결합 워크트리에 �
 
 **JSON**: `.omc/benchmarks/eval_20260722_2305_hallu_t1_ko_screen.json`(스크리닝 N=1) · `eval_20260722_2316_hallu_t1_auto_noregress.json`(auto 무회귀) · `eval_20260722_2329_hallu_t1_ko_confirm_N3.json`(확정 N=3). 서버 트레이스 `.omc/server_logs/server_kor{1,2,3}_C_R{1,2,3}_20260722_23*.log`.
 
+**★★재후속 — 종료 직전 kor1 4차 시도(N=1)도 0-firing**: 루프 종료 직전(04:04) 결합 브랜치(`1b65d8a`)에서 kor1 `--lan ko --repeat 1` 1회 추가 시도. NewSpeaker 0회(Refresh 3회, WER 14.6%) — **이번 루프 중 결합 브랜치 kor1 측정 4회 전부 0-firing**으로 종료. 버스트 포착 실패가 하니스 문제가 아니라 kor1 flip-flop 자체의 간헐성(이번 세션 전체 kor1 측정 20여 회 중 버스트 재현 3회뿐 — T1 단독 확정측정 R2/R3, T5 단독 0.2s 확정측정 R4)임을 재확인. 결합 브랜치의 완전억제 최종 확인은 다음 세션으로 이월(§goal 진행 리포트 "다음 할 일" #3).
+
 ---
 
 ## Exp-202 — 침묵 클로징 환각 섀도우 계측(`[SilenceHalluProbe]`) 실측 — would_hold 오탐 3/3, 게이트 배선 보류 (2026-07-22/23) [E6, `exp/hallu-t2-silence-hallu-probe`(커밋 `0348f1d`, **미머지·계측전용** — 환각루프 T2]
