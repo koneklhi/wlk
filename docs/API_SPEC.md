@@ -440,8 +440,9 @@ full 모드(기본)에서는 매 스냅샷 `lines[]`를 통째로 다시 그리�
 { "6군": "육군", "공군참모총장": "공참총장" }
 ```
 
-> **사용자가 추가한 항목(SQLite)만** 반환한다. 서버 내장 기본 사전(base JSON)은 이 응답에 포함되지 않으므로,
-> 관리 UI가 GET 결과만 표시하면 기본 사전 항목은 보이지 않는다.
+> **서버 내장 기본 사전(base JSON) + 사용자가 추가한 항목(SQLite)을 병합해** 반환한다
+> (`word_manager.combined_replacements`). 관리 UI는 이 GET 결과만 표시하면 base 사전 항목도
+> 함께 보인다. 동일 `wrong_word`가 base와 사용자 DB 양쪽에 있으면 사용자 DB 값이 우선한다.
 
 #### `POST /api/corrections`
 
@@ -459,11 +460,19 @@ full 모드(기본)에서는 매 스냅샷 `lines[]`를 통째로 다시 그리�
 
 #### `DELETE /api/corrections/{wrong_word}`
 
-경로 파라미터 `wrong_word`로 항목 삭제.
-**응답 200**
+경로 파라미터 `wrong_word`로 항목 삭제. **base JSON 전용 항목**(사용자 DB엔 없고 base JSON에만 있는 단어)은
+삭제할 수 없다 — 삭제 대신 경고를 반환한다(`/api/prompts/delete-item`의 기본 glossary 항목 보호와 동일 패턴).
+
+**응답 200 (일반 삭제 성공 · 존재하지 않는 단어 삭제 포함)**
 
 ```json
 { "status": "success" }
+```
+
+**응답 200 (base 전용 항목 삭제 시도 — 삭제되지 않음)**
+
+```json
+{ "status": "warning", "message": "기본 사전 항목은 삭제할 수 없습니다." }
 ```
 
 ### 3.4 번역 glossary — `/api/prompts`

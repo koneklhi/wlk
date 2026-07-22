@@ -34,9 +34,9 @@ def create_test_app():
 
     @app.get("/api/corrections")
     async def get_corrections():
-        """사용자 단어 교정 사전 조회."""
+        """단어 교정 사전 조회 (기본 base JSON + 사용자 추가분 병합)."""
         word_manager = get_word_manager()
-        return word_manager.user_replacements
+        return word_manager.combined_replacements
 
     @app.post("/api/corrections")
     async def add_correction(update: CorrectionUpdate):
@@ -47,8 +47,10 @@ def create_test_app():
 
     @app.delete("/api/corrections/{wrong_word}")
     async def delete_correction(wrong_word: str):
-        """단어 교정 삭제. 즉시 반영."""
+        """단어 교정 삭제. 즉시 반영. 기본(base JSON) 항목은 삭제 불가."""
         word_manager = get_word_manager()
+        if not word_manager.is_user_defined(wrong_word) and wrong_word in word_manager.base_replacements:
+            return {"status": "warning", "message": "기본 사전 항목은 삭제할 수 없습니다."}
         word_manager.delete_user_word(wrong_word)
         return {"status": "success"}
 
@@ -83,6 +85,32 @@ def isolated_word_manager(tmp_path):
     yield manager
 
     # 테스트 후 원래 매니저로 복원
+    filtering_module._word_manager = original_manager
+
+
+@pytest.fixture
+def isolated_word_manager_with_base(tmp_path):
+    """base JSON에 사전 항목이 채워진 상태로 격리된 WordCorrectionManager를 생성한다.
+
+    관리자 UI가 base JSON 항목(예: "6군" -> "육군")을 노출해야 하는 시나리오를 검증하기 위함.
+    """
+    json_path = tmp_path / "admin_replacement.json"
+    db_path = tmp_path / "user_replacement.db"
+    json_path.write_text(
+        json.dumps(
+            [{"origin": "6군", "replaced": "육군"}, {"origin": "공참총장", "replaced": "공군참모총장"}],
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    manager = WordCorrectionManager(base_json_path=str(json_path), db_path=str(db_path))
+
+    import whisperlivekit.filtering as filtering_module
+    original_manager = filtering_module._word_manager
+    filtering_module._word_manager = manager
+
+    yield manager
+
     filtering_module._word_manager = original_manager
 
 
@@ -168,3 +196,55 @@ def test_multiple_corrections(client, isolated_word_manager):
     assert "틀림2" not in data
     assert data["틀림1"] == "맞음1"
     assert data["틀림3"] == "맞음3"
+
+
+# ---------------------------------------------------------------------------
+# base JSON 항목 노출 + 삭제 방지 (관리자 UI 가시성 버그 수정)
+# ---------------------------------------------------------------------------
+
+def test_get_corrections_includes_base_json_entries(client, isolated_word_manager_with_base):
+    """GET /api/corrections - base JSON 항목이 응답에 포함되는지 (base+user 병합 확인)."""
+    response = client.get("/api/corrections")
+    assert response.status_code == 200
+    data = response.json()
+    assert data.get("6군") == "육군"
+    assert data.get("공참총장") == "공군참모총장"
+
+
+def test_get_corrections_merges_base_and_user(client, isolated_word_manager_with_base):
+    """GET /api/corrections - base 항목 + 사용자 추가 항목이 함께 반환되는지."""
+    client.post(
+        "/api/corrections",
+        json={"wrong_word": "테스트", "correct_word": "검증"}
+    )
+    response = client.get("/api/corrections")
+    assert response.status_code == 200
+    data = response.json()
+    assert data.get("6군") == "육군"
+    assert data.get("테스트") == "검증"
+
+
+def test_delete_base_only_entry_returns_warning(client, isolated_word_manager_with_base):
+    """DELETE /api/corrections/{wrong_word} - base 전용 항목은 삭제 시도 시 warning 반환, 실제로는 안 지워짐."""
+    response = client.delete("/api/corrections/6군")
+    assert response.status_code == 200
+    assert response.json() == {"status": "warning", "message": "기본 사전 항목은 삭제할 수 없습니다."}
+
+    # 삭제되지 않고 여전히 GET 결과에 남아있는지 확인
+    data = client.get("/api/corrections").json()
+    assert data.get("6군") == "육군"
+
+
+def test_delete_user_override_of_base_entry_succeeds(client, isolated_word_manager_with_base):
+    """base 항목과 같은 단어를 사용자가 DB에도 추가한 경우, 삭제는 성공(user DB 항목만 제거)."""
+    client.post(
+        "/api/corrections",
+        json={"wrong_word": "6군", "correct_word": "육군상급부대"}
+    )
+    response = client.delete("/api/corrections/6군")
+    assert response.status_code == 200
+    assert response.json() == {"status": "success"}
+
+    # user DB 항목은 지워졌지만 base 항목은 여전히 병합 결과에 남는다(fallback)
+    data = client.get("/api/corrections").json()
+    assert data.get("6군") == "육군"

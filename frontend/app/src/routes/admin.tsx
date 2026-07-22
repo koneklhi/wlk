@@ -127,7 +127,12 @@ function useItems(type: ItemKind) {
     setError(null);
     try {
       if (type === 'words') {
-        await deleteCorrection(src);
+        // 기본 단어교정 사전 항목은 삭제할 수 없다 — 서버가 HTTP 200 + status:'warning' 으로 알려준다.
+        const res = await deleteCorrection(src);
+        if (res.status === 'warning') {
+          toast.warn(res.message ?? '삭제할 수 없는 항목입니다.');
+          return;
+        }
       } else {
         // 기본 glossary 항목은 삭제할 수 없다 — 서버가 HTTP 200 + status:'warning' 으로 알려준다.
         const res = await deletePromptItem(BLOCK_KEY[type], src);

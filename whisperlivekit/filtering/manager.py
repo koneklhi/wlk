@@ -98,3 +98,7 @@ class WordCorrectionManager:
             cursor.execute("DELETE FROM user_corrections WHERE wrong_word = ?", (wrong,))
             conn.commit()
         self.refresh_replacements()
+
+    def is_user_defined(self, wrong: str) -> bool:
+        """`wrong`이 사용자 DB(user_corrections)에 존재하는지 여부."""
+        return wrong in self.user_replacements
