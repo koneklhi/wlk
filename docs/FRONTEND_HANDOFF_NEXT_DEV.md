@@ -15,6 +15,9 @@ React 빌드 결과물(dist)을 직접 서빙한다.
 
 - dist를 `frontend/static/`에 두면 백엔드가 base(`/wlkies`)를 자동으로 잡아 서빙한다. 접속은 `localhost:8900`.
   개발 PC에서는 `frontend/app`에서 `pnpm build`하면 `frontend/static/`으로 바로 떨어진다.
+- **`localhost:8900/dev` = 백엔드 내장 데모 UI**(dist 유무와 무관하게 항상 뜬다). 배포 UI에서 뭔가 안 될 때
+  같은 서버·같은 `/asr`를 내장 UI로 눌러보면 백엔드 문제인지 프론트 문제인지 바로 갈린다. 포트는 같고
+  경로만 다르므로 서버를 따로 띄울 필요가 없다.
 - 전사 WebSocket은 `/asr`. **연결 하나가 세션 하나다.** 빈 프레임(0바이트)을 보내면 그 세션은 끝나고
   `ready_to_stop`이 오며, 같은 연결로는 다시 전사할 수 없다. 다시 녹음하려면 새로 연결해야 한다.
 - `/asr?language=ko|en|auto`로 세션 언어를 고정할 수 있다. **3글자 코드(`kor`/`eng`)는 허용값이 아니다** —

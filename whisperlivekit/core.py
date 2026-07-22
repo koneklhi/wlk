@@ -241,6 +241,24 @@ class TranscriptionEngine:
                     nllb_size=config.nllb_size,
                 )
 
+        # Stage 2 RAG(Qdrant 유사 예시 검색) 매니저를 서버 기동 시 1회 준비한다.
+        # 자산 경로는 whisperlivekit/llm_translation/__init__.py에 고정돼 있고, 그 디렉터리가
+        # 실제로 있으면 켜지고 없으면 조용히 비활성화된다(설정 불필요). 여기서 미리 부르는
+        # 이유는 bge-m3 로드가 수 초 걸려서다 — 첫 확정 문장 번역이 그 지연을 물면 안 된다.
+        # try/except: RAG는 부가 기능이므로 어떤 이유로 못 뜨든 서버 기동을 막아선 안 된다.
+        # TranscriptionEngine.__init__은 예외를 그대로 re-raise하므로 여기가 마지막 방어선이다.
+        if config.llm_translation:
+            try:
+                from whisperlivekit.llm_translation import get_rag_manager
+                rag_manager = get_rag_manager()
+                logger.info(
+                    "Translation RAG(Qdrant) %s", "enabled" if rag_manager.enabled else "disabled"
+                )
+            except Exception as e:
+                logger.warning(
+                    "Translation RAG(Qdrant) disabled: warm-up failed (%s: %s)", type(e).__name__, e
+                )
+
 
 def online_factory(args, asr, language=None):
     """Create an online ASR processor for a session.

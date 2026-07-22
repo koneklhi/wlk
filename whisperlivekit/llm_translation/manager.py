@@ -25,9 +25,14 @@ class TranslationManager:
         return (start, seg.text or "")
 
     async def _translate_and_cache(self, key: tuple, text: str, src_lang: str) -> None:
-        """번역 완료 후 캐시에 저장. 에러 시 in_flight 에서 제거."""
+        """번역 완료 후 캐시에 저장. 에러 시 in_flight 에서 제거.
+
+        확정 문장 경로이므로 use_rag=True — Qdrant 유사 예시가 프롬프트에 주입된다.
+        재확정(finalize-grace 재오픈 등)으로 다시 불려도 캐시 키 (start, text)가 같으면
+        apply_translations()에서 캐시 히트로 걸러지므로 RAG 재검색은 일어나지 않는다.
+        """
         try:
-            result = await self.translator.translate_sentence(text, src_lang)
+            result = await self.translator.translate_sentence(text, src_lang, use_rag=True)
             if result:
                 self._cache[key] = result
         except Exception as e:
@@ -53,9 +58,14 @@ class TranslationManager:
                 asyncio.ensure_future(self._translate_and_cache(key, seg.text, src_lang))
 
     async def _translate_interim_and_store(self, text: str, src_lang: str) -> None:
-        """중간(미확정) 버퍼 번역 완료 후 결과 저장. 에러 시 로그만 남기고 삼킴."""
+        """중간(미확정) 버퍼 번역 완료 후 결과 저장. 에러 시 로그만 남기고 삼킴.
+
+        미확정 경로이므로 use_rag=False — 버퍼는 발화 중 계속 갱신되므로 여기에 RAG를 태우면
+        임베딩 인코딩 + 벡터 검색이 초당 수 회 반복돼 실시간성이 무너진다. 기본값과 같지만
+        의도를 드러내기 위해 명시한다.
+        """
         try:
-            result = await self.translator.translate_sentence(text, src_lang)
+            result = await self.translator.translate_sentence(text, src_lang, use_rag=False)
             if result:
                 self._interim_result = result
         except Exception as e:

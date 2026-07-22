@@ -107,6 +107,8 @@ class WhisperLiveKitConfig:
     translation_serve: str = "llama"
     translation_endpoint: str = "http://localhost:2010"
     translation_model: str = "gpt-oss-20b"
+    # Stage 2 Qdrant RAG(유사 예시 검색)는 설정 필드가 없다 — 자산 경로가
+    # whisperlivekit/llm_translation/__init__.py에 고정돼 있고, 그 디렉터리 존재 여부로만 켜지고 꺼진다.
 
     # vLLM Realtime backend
     vllm_url: str = "ws://localhost:8000/v1/realtime"

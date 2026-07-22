@@ -71,6 +71,10 @@ diarization-diart = [
     "torchaudio<2.9.0",
     "torchvision<0.24.0",
 ]
+translation-rag = [
+    "qdrant-client>=1.9",
+    "sentence-transformers>=3.0",
+]
 
 [dependency-groups]
 dev = [

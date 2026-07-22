@@ -125,7 +125,8 @@ async def test_translate_and_cache_stores_result_and_removes_in_flight():
     assert key in manager._cache, "번역 결과가 캐시에 저장되지 않았습니다"
     assert manager._cache[key] == "번역 결과", f"캐시 값이 올바르지 않습니다: {manager._cache[key]}"
     assert key not in manager._in_flight, "_in_flight에서 키가 제거되지 않았습니다"
-    translator.translate_sentence.assert_called_once_with("test text", "en")
+    # 확정 경로이므로 use_rag=True — Qdrant RAG 예시가 프롬프트에 주입돼야 한다(Stage 2).
+    translator.translate_sentence.assert_called_once_with("test text", "en", use_rag=True)
 
 
 @pytest.mark.anyio

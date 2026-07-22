@@ -1,8 +1,17 @@
+import asyncio
 import logging
 
 import httpx
 
-from whisperlivekit.llm_translation import get_prompt_manager
+from whisperlivekit.llm_translation import get_prompt_manager, get_rag_manager
+
+
+def _search_rag_examples(content: str) -> str:
+    """RAG 매니저 획득 + 유사 예시 검색. 워커 스레드에서 실행되는 전 구간 블로킹 함수."""
+    rag_manager = get_rag_manager()
+    if not rag_manager.enabled:
+        return ""
+    return rag_manager.search_similar(content)
 
 logger = logging.getLogger(__name__)
 
@@ -50,8 +59,17 @@ class TranslatorBase:
             f"10. Contextual Translation: While following the glossary, ensure the overall sentence structure is grammatically correct in {to_lang}."
         )
 
-    def build_system_blocks(self, from_lang: str, to_lang: str, content: str) -> list:
-        """정적 프롬프트 + (매칭 시) glossary 블록 + (존재 시) sentence 예시 블록 조립."""
+    async def build_system_blocks(
+        self, from_lang: str, to_lang: str, content: str, use_rag: bool = False
+    ) -> list:
+        """정적 프롬프트 + (매칭 시) glossary 블록 + (존재 시) sentence 예시 블록 +
+        (use_rag이고 활성 시) Qdrant RAG 유사 예시 블록을 조립.
+
+        use_rag는 **문장이 확정된 번역 경로에서만** True다(TranslationManager._translate_and_cache).
+        미확정 버퍼 번역은 버퍼가 갱신될 때마다 재호출되므로, 여기에 RAG를 태우면 초당 수 회의
+        bge-m3 인코딩 + Qdrant 검색이 돌아 실시간성이 무너진다. 기본값을 False로 두어
+        새 호출자가 플래그를 빠뜨려도 RAG가 미확정 경로로 새지 않게 한다(fail-safe).
+        """
         blocks = [self.get_static_system_text(from_lang, to_lang)]
 
         prompt_manager = get_prompt_manager()
@@ -63,6 +81,16 @@ class TranslatorBase:
         sentence_part = prompt_manager.get_sentence_block()
         if sentence_part:
             blocks.append(sentence_part)
+
+        if use_rag:
+            # 매니저 획득까지 통째로 to_thread에 넣는다. get_rag_manager()는 최초 호출 시
+            # bge-m3 로드(수 초)를 유발할 수 있는데, core.py 워밍업을 타지 못한 경우
+            # (엔진 싱글턴이 이미 초기화된 뒤 등) 그 로드가 이벤트루프 위에서 벌어져
+            # 모든 세션의 오디오 수신이 멈춘다. 인코딩+검색 자체도 블로킹 CPU 호출이다
+            # (원본 whisperlive_code/translator.py 124줄과 동일한 to_thread 처리).
+            rag_part = await asyncio.to_thread(_search_rag_examples, content)
+            if rag_part:
+                blocks.append(rag_part)
 
         return blocks
 
@@ -98,17 +126,17 @@ class TranslatorBase:
             exc,
         )
 
-    async def translate_sentence(self, content: str, src_lang: str) -> str:
+    async def translate_sentence(self, content: str, src_lang: str, use_rag: bool = False) -> str:
         raise NotImplementedError
 
 
 class LlamaTranslator(TranslatorBase):
     """prod 환경용 — llama.cpp/vLLM completions API"""
 
-    async def translate_sentence(self, content: str, src_lang: str) -> str:
+    async def translate_sentence(self, content: str, src_lang: str, use_rag: bool = False) -> str:
         from_lang = self.convert_lang_formal(src_lang)
         to_lang = self.convert_lang_formal(self.get_to_lang(src_lang))
-        system_blocks = self.build_system_blocks(from_lang, to_lang, content)
+        system_blocks = await self.build_system_blocks(from_lang, to_lang, content, use_rag=use_rag)
         prompt = self.build_prompt(content, system_blocks)
         return await self._call_completions(prompt)
 
@@ -144,10 +172,10 @@ class LlamaTranslator(TranslatorBase):
 class OllamaTranslator(TranslatorBase):
     """dev 환경용 — Ollama chat completions API (harmony 태그 미지원)"""
 
-    async def translate_sentence(self, content: str, src_lang: str) -> str:
+    async def translate_sentence(self, content: str, src_lang: str, use_rag: bool = False) -> str:
         from_lang = self.convert_lang_formal(src_lang)
         to_lang = self.convert_lang_formal(self.get_to_lang(src_lang))
-        system_blocks = self.build_system_blocks(from_lang, to_lang, content)
+        system_blocks = await self.build_system_blocks(from_lang, to_lang, content, use_rag=use_rag)
         system_text = "\n\n".join(system_blocks)
         return await self._call_chat(system_text, content)
 

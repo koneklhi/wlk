@@ -476,6 +476,8 @@ def create_parser():
         dest="translation_model",
         help="번역 모델명. 기본값: gpt-oss-20b (배포 PC). dev는 qwen2.5:7b 지정.",
     )
+    # Stage 2 Qdrant RAG는 CLI 플래그가 없다 — 자산 경로가
+    # whisperlivekit/llm_translation/__init__.py에 고정돼 있고, 그 디렉터리가 있으면 켜진다.
 
     # 배포 시나리오 튜닝 인자 (Phase A — CLI 승격, 기본값은 기존 하드코딩 상수와 동일).
     # 미지정(None)이면 각 소비 지점의 기존 상수로 폴백한다(무회귀).

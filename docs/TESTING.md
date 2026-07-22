@@ -38,6 +38,9 @@
   리다이렉트한다(`--frontend-base`, 기본값 `auto`). **내장 UI**
   ([whisperlivekit/web/live_transcription.html](../whisperlivekit/web/live_transcription.html))는 더 이상
   검증에 사용하지 않는다 — dist가 없을 때만 뜨는 레거시 폴백이며, 경로 C 자동화의 과도기 우회 경로로만 남아있다.
+- **dist가 있어도 내장 UI를 쓰려면 `http://localhost:8900/dev`** — 이 경로는 `--frontend-dir` 유무와 무관하게
+  항상 내장 UI를 서빙한다. `GET /`는 dist가 있으면 배포 UI(React)로 넘어가므로, 두 UI를 같은 서버에서
+  번갈아 확인할 때(배포 UI 이슈가 프론트 문제인지 백엔드 문제인지 가르기) 이 경로를 쓴다.
 - 마이크에 직접 말하면서 전사 결과를 실시간 확인 (정성적 평가)
 - 서버 기동: `whisperlivekit-server` (모든 인자가 parse_args.py 기본값 — `--lan auto` + simulstreaming. `--periodic-lang-check` 기본 None(비활성 — turbo 기질 Exp-160 채택, PLC=4.0이 ytn2에서 스퓨리어스 전환→환각 유발 확인); 탐색 시 다른 값 명시. 상세는 [OPEN_QUESTIONS.md](OPEN_QUESTIONS.md) 참조)
 - 목적: 실제 마이크 입력에 대한 정성적 평가 (경로 C 정량 평가와 병행)

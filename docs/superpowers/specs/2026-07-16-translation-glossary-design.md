@@ -212,6 +212,17 @@ Stage 2는 `qdrant-client`(로컬 임베디드 모드, `QdrantClient(path=...)`)
 (bge-m3 로컬 모델 직접 로드)를 신규 의존성으로 추가하며, 별도 스펙에서 pyproject extra·
 `docs/DEPLOYMENT_OFFLINE.md` §2 갱신까지 함께 다룬다.
 
+→ 2026-07-21 구현 완료, 코드는 `whisperlivekit/llm_translation/rag_manager.py`(`TranslationRagManager`) 참조.
+배포 PC 미검증(Qdrant payload 스키마 가정·`client.search()` API 버전 이슈 — `docs/DEPLOYMENT_OFFLINE.md` §6.3 참조).
+
+**구현 시 확정된 설계 변경 — RAG는 확정 문장에만 적용한다.** 위 의사코드는 `build_system_blocks()`에
+무조건 append하는 형태였으나, 실제로는 번역 경로가 둘(확정 문장 → `lines[].translation`, 진행 중 버퍼 →
+`buffer_translation`)이고 둘 다 같은 `translate_sentence()`를 타므로 그대로 두면 **미확정 버퍼 번역에도
+RAG가 걸린다**. 버퍼는 발화 중 초당 수 회 갱신되므로 임베딩 인코딩 + 벡터 검색이 그 빈도로 반복돼
+실시간성이 무너진다. 따라서 `build_system_blocks(..., use_rag: bool = False)` 플래그를 두고
+`TranslationManager._translate_and_cache()`(확정)만 `use_rag=True`로 호출한다. 기본값 `False`는
+새 호출자가 플래그를 빠뜨려도 미확정 경로로 새지 않게 하는 fail-safe다.
+
 ## 9. 관련 문서 갱신 체크리스트 (구현 단계에서 처리)
 
 - `ROADMAP.md` Phase 5 5-2 — 현재 "whisperlive_code/manager.py 기반"으로 잘못 적혀 있음(실제로는

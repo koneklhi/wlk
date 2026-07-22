@@ -57,6 +57,7 @@ C:\Python312\python.exe -m whisperlivekit.basic_server
 | 5 | **의존성 + 설치도구** | `deploy/` 전체 — `wheelhouse/`(서드파티 의존성 패키지), `uv-installer/`(uv, 선택 — plain pip 설치엔 불필요), `python-installer/`(Python 3.12), `deploy_source.zip`, `requirements-deploy.txt` (§2에서 생성) | 오프라인 pip 설치용. **배포 PC Python은 반드시 3.12** — wheelhouse가 dev(3.12) 태그로 고정됨(§2.2·§3.0). whisperlivekit 프로젝트 자체는 wheel로 만들지 않는다 — raw 소스(①)만으로 실행 |
 | 6 | **playwright 브라우저** | `%USERPROFILE%\AppData\Local\ms-playwright\` (chromium) | 경로 C 자동화에 필요 |
 | 7 | **시스템 바이너리** | `ffmpeg.exe`(PATH 등록), VBCable 드라이버 설치본 | ffmpeg=WebM/mp3 디코딩, VBCable=경로 C 루프백 |
+| 8 | **번역 RAG 자산**(선택) | `whisperlivekit/llm_translation/local_qdrant_db/`, `whisperlivekit/llm_translation/bge-m3/` | **배포 PC에 기존 whisperlive 것이 기보유**(`src/realtime_asr/filtering/` 하위) → 별도 반입 불필요. 단 `.gitignore` 비추적이라 `git archive` zip에 안 들어간다 — **새 폴더에 압축 해제해 트리를 재구축하면 수동으로 다시 배치**해야 RAG가 켜진다(§6.3) |
 
 > `whisperlivekit/model/whisper-large-v3/`(turbo 아님) 폴더와 그 안의 `.cache/huggingface/download/*.lock` 잔재는
 > **배포에 불필요**하다. 용량 절약 차 제외해도 된다(실제 사용 모델은 turbo).
@@ -96,7 +97,7 @@ USB에 담을 3가지:
 | # | 내용 | 방법 |
 |---|---|---|
 | ① `deploy/deploy_source.zip` | master 소스 코드 | `git archive master --output=deploy\deploy_source.zip` |
-| ② `whisperlivekit/model/` 디렉터리(≈20GB + ≈1.5GB) | STT·화자분할 모델 | `.gitignore` 비추적이라 아카이브에 안 들어옴 → **폴더 수동 복사** |
+| ② `whisperlivekit/model/` 디렉터리(≈20GB + ≈1.5GB) + (번역 RAG를 쓴다면) `whisperlivekit/llm_translation/local_qdrant_db/`·`whisperlivekit/llm_translation/bge-m3/` | STT·화자분할 모델 / 번역 RAG 자산 | `.gitignore` 비추적이라 아카이브에 안 들어옴 → **폴더 수동 복사**. RAG 자산은 배포 PC에 기존 whisperlive 것이 이미 있으므로 USB로 옮길 필요는 없지만, zip을 **새 폴더에 풀어 트리를 재구축**하면 자산이 따라오지 않으므로 그 위치로 수동 재배치해야 RAG가 켜진다(§6.3) |
 | ③ `deploy/` 전체 | 서드파티 의존성 패키지+uv 설치도구 | §2에서 생성 (`wheelhouse/`·`uv-installer/` 포함) |
 
 배포 PC에서 unzip 후 §3대로 `C:\Python312`에 오프라인 설치하면 Python 경로가 폐쇄망 기준으로 새로 잡혀 정상 동작한다.
@@ -123,6 +124,7 @@ USB 반입·적용 여부는 매번 별도로 확인해야 한다. **`whisperliv
 | 화자분할(sortformer) | `nemo-toolkit[asr]` (**무겁다** — lightning/hydra 등 다수 의존) | `diarization-sortformer` |
 | 경로 C 자동측정 | `playwright`, `comtypes`, **`sounddevice`**(+chromium 바이너리) | `vbcable` |
 | 번역(LLM) | `httpx` (이미 `uv.lock`에 포함) | (별도 extra 불필요) |
+| 번역 RAG(Stage 2, Qdrant 벡터 유사 예시 검색) | `qdrant-client`, `sentence-transformers`(+ `portalocker`·`pywin32`·`h2` 계열) | `translation-rag`. **다만 이 extra로 wheelhouse를 다시 만들 필요는 없다** — 필요한 wheel만 [wheelhouse/translation-rag/](../wheelhouse/translation-rag/)에 이미 담겨 저장소로 함께 반입된다(§6.3.1). **자산 디렉터리(§6.3)와 이 패키지가 둘 다 있어야 활성** — 하나만 있으면 조용히 비활성 |
 | GPU(RTX 30/50) | torch/torchaudio **cu128** 휠 | `cu128` |
 
 > **[정정]** 과거 이 문서는 "`listen`(sounddevice) extra는 경로 B/C에 불필요"라고 적었으나 **틀렸다** —
@@ -153,6 +155,9 @@ New-Item -ItemType Directory -Force deploy\wheelhouse, deploy\uv-installer | Out
 #    --no-emit-project 필수: 빼면 프로젝트 자체가 editable(-e .)로 박혀 hash 모드 pip download가 실패한다.
 uv export --frozen --no-dev --no-emit-project `
   --extra diarization-sortformer --extra vbcable --extra cu128 -o deploy\requirements-deploy.txt
+#    번역 RAG(Stage 2)는 여기에 --extra translation-rag 를 넣지 않는다. 넣으면 이 wheelhouse가
+#    torch를 포함한 전체 트리를 다시 해석하게 되고, 배포 PC의 cu128 torch를 덮어쓸 위험이 생긴다.
+#    RAG용 wheel은 wheelhouse/translation-rag/ 에 "wlk에 없는 것만" 따로 담아뒀다 — §6.3.1 참조.
 
 # 2) 모든 wheel 다운로드 (torch cu128 인덱스 포함)
 #    uv엔 pip download 서브커맨드가 없다. .venv에 pip를 넣고 그 python으로 받는다
@@ -397,6 +402,10 @@ C:\Python312\python.exe -m whisperlivekit.basic_server
 자동 서빙, base 있으면 리다이렉트 — 없으면 내장 UI로 폴백하지만 더 이상 검증에 쓰지 않는다, §4.4 참조)에서
 마이크로 발화, 실시간 전사·화자 확인.
 
+> 배포 PC처럼 `frontend/static`에 React dist가 들어 있으면 `GET /`는 배포 UI로 넘어간다. 그때 내장 UI로
+> 교차 확인하려면 **http://localhost:8900/dev** 를 쓴다(dist 유무와 무관하게 항상 내장 UI). 배포 UI에서
+> 증상이 보일 때 백엔드 계약 문제인지 프론트 문제인지 가르는 가장 빠른 방법이다.
+
 ### 4.3 경로 A — 파일 직접 송신 (빠른 스모크, 참고)
 
 VBCable 없이 코드 회귀만 빠르게 보는 용도(성능 판정 아님):
@@ -603,10 +612,13 @@ C:\Python312\python.exe -m whisperlivekit.basic_server `
 | 한글이 깨져서 전송됨 | curl로 직접 호출 시 인코딩 문제 | httpx(wlk 내부)는 `ensure_ascii`로 정상 처리됨 — curl 자체 결함이니 wlk 실사용에는 무관 |
 
 **알려진 차이 — 기존 whisperlive 대비(버그 아님, 의도적 보류)**:
-- **Qdrant 벡터 few-shot 미이식(Stage 2)**: 기존 whisperlive는 Qdrant(bge-m3 임베딩) 벡터 검색으로
-  입력과 유사한 예시 문장을 동적으로 골라 프롬프트에 주입한다. wlk는 이 벡터 검색 단계만 미이식이다 —
-  용어집(`glossary_block`) 동적 주입·고정 예시 문장(`sentence_block`) 주입은 이미 이식·연결 완료됐다
-  (Stage 1, §6.3 참조). 동일 입력이라도 예시 선택 방식 차이로 번역 품질/용어 일관성이 기존과 다를 수 있다.
+- **Qdrant 벡터 few-shot — 이식 완료, 배포 PC 실물 데이터 미검증(Stage 2, 2026-07-21)**: 기존
+  whisperlive는 Qdrant(bge-m3 임베딩) 벡터 검색으로 입력과 유사한 예시 문장을 동적으로 골라 프롬프트에
+  주입한다. wlk도 이제 이 벡터 검색 단계 코드를 이식했다(`whisperlivekit/llm_translation/rag_manager.py`,
+  §6.3 참조) — 용어집(`glossary_block`) 동적 주입·고정 예시 문장(`sentence_block`) 주입(Stage 1)에 더해
+  Stage 2 RAG 블록까지 프롬프트 조립 경로에 연결돼 있다. 단 Qdrant 로컬 DB·bge-m3 임베딩 모델 실물 파일은
+  배포 PC에만 있어 dev 환경에서는 단위 테스트(가짜 모듈 주입)로만 검증했고 **배포 PC 실물 데이터로는
+  아직 검증되지 않았다** — §6.3의 미검증 가정 2가지를 배포 전 반드시 확인할 것.
 - **스트리밍 미사용**: 기존은 SSE 스트리밍(`_stream`), wlk는 단일 non-streaming POST(`stream:false`). 최종
   번역 결과는 동등하나, 화면에 토큰 단위로 흘러나오는 연출은 없다.
 
@@ -655,9 +667,118 @@ C:\Python312\python.exe -m whisperlivekit.basic_server `
 | `admin_translation_glossary.json` | `whisperlivekit/llm_translation/` | 배포 원본의 실제 용어집으로 내용 교체. **포맷은 `{origin: translation}` dict** — 단어교정 `admin_replacement.json`의 리스트 포맷(§6.1)과 다르므로 혼동 금지 |
 | `user_translation_glossary.db` | `whisperlivekit/llm_translation/` | 기존 사용자 glossary를 이어쓰려면 배포 DB 파일 복사, 새로 시작이면 불필요(매니저가 테이블 자동 생성) |
 
-**미이식으로 남은 것은 Stage 2(Qdrant 벡터 유사 예시 검색)뿐**이다 — `sentence_block`(few-shot 예시 문장)
-자체는 이미 동작하며 항상 전체가 주입된다, "입력과 유사도가 가장 높은 예시만 동적으로 고른다"는 부분만
-아직 없다. 설계 상세: [docs/superpowers/specs/2026-07-16-translation-glossary-design.md](superpowers/specs/2026-07-16-translation-glossary-design.md) §8.
+**Stage 2(Qdrant 벡터 유사 예시 검색)도 코드 이식이 완료됐다**(2026-07-21,
+`whisperlivekit/llm_translation/rag_manager.py`) — 단 **배포 PC 실물 데이터로는 아직 검증되지
+않았다**. `sentence_block`(few-shot 고정 예시 문장)은 항상 전체가 주입되고, Stage 2 RAG는 그 위에
+"입력과 유사도가 가장 높은 예시만 동적으로 고른다"는 블록을 추가로 붙인다. 설계 상세:
+[docs/superpowers/specs/2026-07-16-translation-glossary-design.md](superpowers/specs/2026-07-16-translation-glossary-design.md) §8.
+
+**RAG에는 CLI 플래그가 없다 — 자산 디렉터리를 제자리에 두면 켜지고, 없으면 꺼진다.** 경로는
+[whisperlivekit/llm_translation/\_\_init\_\_.py](../whisperlivekit/llm_translation/__init__.py) 상단
+상수에 고정돼 있고(글로서리 JSON/DB와 같은 콜로케이션 디렉터리), 서버 기동 시 존재 여부를 확인해
+자동으로 활성/비활성이 결정된다. 개발 PC에는 자산이 없으므로 항상 비활성이다.
+
+| 상수 | 고정 경로 | 배포 시 해야 할 일 |
+|---|---|---|
+| `RAG_QDRANT_DB_PATH` | `whisperlivekit/llm_translation/local_qdrant_db/` | 기존 whisperlive의 `src/realtime_asr/filtering/local_qdrant_db/` 디렉터리를 **통째로 복사** |
+| `RAG_EMBEDDING_MODEL_PATH` | `whisperlivekit/llm_translation/bge-m3/` | 기존 whisperlive의 `src/realtime_asr/filtering/bge-m3/` 디렉터리를 **통째로 복사** |
+| `RAG_COLLECTION_NAME` | `official_translation` | 기존 whisperlive 컬렉션명과 동일 — 다르면 상수 수정 |
+| `RAG_TOP_K` | `3` | 유사 예시 검색 개수 — 기존과 동일 |
+
+> 두 자산 디렉터리는 `.gitignore`에 등록돼 있어(bge-m3는 수 GB) 저장소에 커밋되지 않는다. 곧
+> **소스 트리 갱신 시 함께 오지 않는다**는 뜻이므로, 마스터 반입으로 `whisperlivekit/`를 덮어쓸 때
+> 이 두 디렉터리를 지우거나 덮지 않도록 주의한다(지웠다면 다시 복사하면 그만 — 코드 수정은 불필요).
+> 같은 이유로 §1.1 `git archive` zip에도 들어가지 않으므로, zip을 **새 폴더에 풀어 트리를 재구축**하는
+> 전체 셋업 경로에서는 두 디렉터리를 수동으로 다시 배치해야 한다(§1 체크리스트 ⑧).
+
+> **⚠️ 상수를 배포 PC에서 고쳤다면 dev master에도 반드시 반영할 것.** 위 4개 상수는 추적 파일인
+> `whisperlivekit/llm_translation/__init__.py` 안에 있다. 마스터 반입(`/deploy-sync`)은 변경된
+> `whisperlivekit/**` 경로를 `git show master:<path>`로 **덮어쓰므로**, 배포 PC에서만 고친
+> 컬렉션명·`top_k`는 다음 반입 때 조용히 원래 값으로 되돌아간다. 되돌아가면 컬렉션명 불일치 →
+> 검색 예외 → WARNING 1줄 후 빈 문자열 반환이라 **번역은 계속 되고 RAG만 죽는 무증상 실패**가 된다.
+> 배포 PC에서 상수를 수정했다면 그 값을 dev master에 동일하게 반영해 두는 것이 유일한 영구 조치다.
+
+**두 디렉터리가 모두 있어야 켜진다**(하나만 있으면 비활성 유지). **번역이 켜져 있을 때** 기동 로그에
+`Translation RAG(Qdrant) enabled` / `disabled`가 찍히므로 여기서 상태를 확인한다 — 이 로그는
+`config.llm_translation` 가드 안에서만 나오므로 `--no-llm-translation`으로 띄웠다면 **한 줄도 안 찍히는
+것이 정상**이다(RAG 고장으로 오진하지 말 것). `disabled`인데 켜져야 한다면 로그의
+`Translation RAG disabled: ...` WARNING 줄이 원인(경로 없음 / 패키지 import 실패 / 로드 실패)을 알려준다.
+
+**기동 실패로는 이어지지 않도록 하드닝돼 있다.** ① `rag_manager.py`의 지연 import는 `except ImportError`가
+아니라 `except Exception`이라, 미설치뿐 아니라 torch DLL 로드 실패(OSError WinError 126)·transformers/
+tokenizers 버전 스큐 등 **ImportError가 아닌 import 예외**도 서버를 죽이지 않고 RAG만 끈다. ②
+`core.py`의 워밍업 호출도 `try/except`로 감싸 마지막 방어선을 둔다. ③ 임베더는
+`SentenceTransformer(path, local_files_only=True)`로 연다 — 디렉터리는 있는데 내용이 불완전 복사된
+경우(가중치·`config.json` 누락) HF Hub로 나가 폐쇄망에서 수 분간 연결 타임아웃으로 멈추는 대신
+**즉시 실패해 조용히 비활성**된다(§3.1 폐쇄망 제약). ④ `search_similar()`의 인코딩+검색 구간은
+`threading.Lock`으로 직렬화한다 — 한 틱에 여러 문장이 확정되면 `asyncio.to_thread`로 여러 스레드가
+동시에 들어오는데 QdrantClient 로컬 임베디드 모드와 SentenceTransformer는 스레드 안전이 아니다
+(`top_k=3` 조회라 직렬화 비용은 무시 가능).
+
+**RAG는 문장이 확정될 때만 주입된다.** 번역 경로는 두 갈래인데(확정 문장 → `lines[].translation`,
+진행 중 버퍼 → `buffer_translation`; [API_SPEC.md §4](API_SPEC.md) 참조), RAG 블록은 **확정 경로에만**
+붙는다. 구현상 `TranslatorBase.build_system_blocks(..., use_rag)` 플래그로 갈리며,
+`TranslationManager._translate_and_cache()`(확정)만 `use_rag=True`로,
+`_translate_interim_and_store()`(미확정)는 `use_rag=False`로 호출한다. 미확정 버퍼는 발화 중 초당 수 회
+갱신되므로 거기까지 RAG를 태우면 bge-m3 인코딩 + Qdrant 검색이 그 빈도로 반복돼 실시간성이 무너진다.
+`use_rag` 기본값은 `False`라 새 호출자가 플래그를 빠뜨려도 미확정 경로로 새지 않는다(fail-safe).
+확정 번역은 `(start, text)` 키로 캐시되므로, finalize-grace 재오픈 등으로 같은 문장이 다시 확정돼도
+캐시 히트로 걸러져 RAG 재검색은 일어나지 않는다.
+
+#### 6.3.1 RAG 패키지 설치 (wlk 전용 Python 3.12)
+
+기존 whisperlive가 Qdrant를 쓰고 있었더라도 그건 whisperlive가 쓰던 인터프리터 기준이다. wlk는
+`C:\Python312`(§3)로 따로 설치되므로 거기에도 있는지는 별개 문제이고, 없으면 RAG가 **조용히
+비활성화**된다(서버는 정상 기동 — 그래서 눈치채기 어렵다).
+
+저장소에 **wlk 환경에 아직 없는 wheel만** 골라 담아뒀다 — [wheelhouse/translation-rag/](../wheelhouse/translation-rag/)
+(7개, 7.7MB). 상세·재생성 방법은 그 디렉터리의 `README.md`가 정본이다.
+
+```cmd
+cd C:\whist\wlk
+C:\Python312\python.exe -m pip install --no-index --no-deps ^
+  --find-links wheelhouse\translation-rag ^
+  qdrant-client sentence-transformers portalocker pywin32 h2 hpack hyperframe
+```
+
+> **`--no-deps`를 절대 빼지 마라.** 빼면 pip이 `sentence-transformers`의 의존성을 해석하며
+> **CPU 빌드 torch로 cu128을 덮어쓴다** — Whisper와 Sortformer가 그 자리에서 죽는다.
+> 담기지 않은 의존성(`torch`·`transformers`·`tokenizers`·`numpy`·`scipy`·`scikit-learn`·`httpx`·
+> `pydantic`·`protobuf`·`grpcio`·`urllib3`)은 wlk 환경에 **이미 있어서** 뺀 것이다.
+> 개발 PC 실측(Python 3.12.10 동일)으로 `sentence-transformers 5.6.0`의 요구 범위
+> (`transformers>=4.41,<6`, `torch>=1.11`)를 설치본 `transformers 4.53.3` / `torch 2.11.0+cu128`이
+> 만족함을 확인했다 — 업그레이드 불필요.
+
+설치 확인 — **두 명령을 모두** 돌린다(두 번째는 torch가 안 바뀌었는지 보는 안전장치):
+
+```cmd
+C:\Python312\python.exe -c "import qdrant_client, sentence_transformers, portalocker; print('import ok')"
+C:\Python312\python.exe -c "import torch, transformers, tokenizers; print(torch.__version__, torch.cuda.is_available(), transformers.__version__, tokenizers.__version__)"
+```
+
+두 번째 명령의 기대값은 `2.11.0+cu128 True 4.53.3 0.21.4`다. 다르면 설치가 뭔가를 덮어쓴 것이니
+즉시 중단하고 원인을 확인하라.
+
+> **⚠️ 배포 PC 미검증 가정 1가지 — 실제 데이터로 테스트하기 전 반드시 확인**:
+> 1. **payload 스키마 가정**: 기존 Qdrant 컬렉션은 langchain의 `Qdrant` vectorstore로 색인됐다고
+>    가정해 payload를 `metadata.source`/`metadata.target` 중첩 구조로 읽는다(langchain-qdrant 기본
+>    `metadata_payload_key="metadata"`; flat payload도 폴백으로 지원은 하지만 우선순위는 중첩).
+>    실제 배포 PC 컬렉션의 payload 스키마가 이와 다르면 RAG가 "활성화됐는데 결과가 계속 빈 문자열"로
+>    조용히 실패할 수 있다. 배포 PC에서
+>    `qdrant_client.QdrantClient(path=...).scroll(collection_name="official_translation", limit=1)`로
+>    실제 payload 구조를 먼저 확인해볼 것.
+>
+> **[해소됨] qdrant-client API 버전 이슈**: 과거 이 자리에 "구 API `search()`를 쓰므로 배포 PC 버전이
+> 1.12+면 `query_points()`로 교체해야 한다"는 항목이 있었다. 현재 `rag_manager.py`의 `_query()`가
+> **신 API `query_points()`를 먼저 시도하고 없으면 구 API `search()`로 폴백**하므로 배포 PC의
+> qdrant-client 버전과 무관하게 동작한다 — 확인·수정 불필요.
+> 실제로 §6.3.1이 담고 있는 **qdrant-client 1.18.0에는 `search()`가 아예 없다**(개발 PC에서 진짜
+> 클라이언트로 왕복 검증 완료 — `query_points` 존재, `search` 부재). 구 API 고정이었다면 배포
+> PC에서 100% 조용히 실패했을 자리다.
+>
+> **[해소됨] 임베더 오프라인 강제**: `SentenceTransformer(path, local_files_only=True)`로 로드하고,
+> 구버전이라 그 인자를 안 받으면 `HF_HUB_OFFLINE=1`/`TRANSFORMERS_OFFLINE=1`로 대체 후 재시도한다.
+> 어느 경로로도 HF Hub에 접근하지 않는다(§3.1).
 
 > **⚠️ 배포 PC 반영 확인 필수**: `whisperlivekit/llm_translation/` 서브패키지 raw 소스 파일 복사가
 > 누락되면(§8 트랩 "raw 소스 파일 복사 누락") 이 API 자체가 없는 것처럼(404) 보인다. 배포 후
@@ -692,6 +813,7 @@ C:\Python312\python.exe -m whisperlivekit.basic_server `
 | 번역 미동작(과거) | `--llm-translation` 줘도 번역 안 붙음 | **해결됨** — config.py 4필드 master 머지(§5.2) |
 | diar + 번역(과거) | 화자분할 ON이면 번역 공백 | **해결됨** — `get_lines_diarization` finalized 마킹 master 머지(§5.4). 동시 사용 가능 |
 | **번역이 의도치 않게 켜짐/시도됨(2026-07-16~)** | 전사만 보려 했는데 llama.cpp 연결 시도 로그가 남거나, dev PC에서 없는 서버(`localhost:2010`)로 연결 실패 경고가 뜸 | `--llm-translation`이 **기본 ON**으로 바뀜(과거엔 기본 OFF). 전사만 보려면 `--no-llm-translation`, dev Ollama로 쓰려면 §5.6 재정의 플래그 필요(§5.3·§5.7) |
+| **번역 RAG 조용한 비활성** | 서버는 정상 기동하고 번역도 나오는데 번역 품질이 기존 whisperlive와 똑같다(유사 예시가 안 붙음). RAG에는 CLI 플래그가 없어 "켰는데 안 된다"는 신호 자체가 없음 | 기동 로그(번역 ON일 때만 찍힘)에서 `Translation RAG(Qdrant) disabled`와 그 원인인 `Translation RAG disabled: ...` WARNING을 확인 → ① 자산 디렉터리 2개(`whisperlivekit/llm_translation/local_qdrant_db/`·`bge-m3/`)가 모두 실제로 있는지, ② `C:\Python312\python.exe -c "import qdrant_client, sentence_transformers"`가 통과하는지 확인(§6.3·§2.1) |
 | VBCable 불안정 | 경로 C 무음/100% WER/분산 폭증 | 케이블 상태(코드 아님) — 재부팅/Audiosrv 재시작, `vbcable_test.py --verify` |
 | playwright 미설치 | 경로 C 실패 | chromium 바이너리 복사 + `PLAYWRIGHT_BROWSERS_PATH` |
 | React dist가 `frontend/static`에 있음(§4.4 2단계 완료 후) | 경로 C 자동측정(`closed_test.py`/`eval.py`)이 `#startButton` 타임아웃 실패 | `scripts/vbcable_test.py`가 아직 내장 UI 전용이라 배포 UI로 리다이렉트되면 못 찾는다 — `--server-frontend-dir <빈 디렉터리>`로 내장 UI 과도기 폴백(§4.1). 후속 조치는 [docs/backlog/BACKLOG_EVAL_DEPLOY_UI_MIGRATION.md](backlog/BACKLOG_EVAL_DEPLOY_UI_MIGRATION.md) 참조 |

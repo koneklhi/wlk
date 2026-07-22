@@ -167,6 +167,10 @@ whisperlivekit/model/Voxtral-Mini-4B-Realtime-2602/
 whisperlivekit/filtering/*.db
 whisperlivekit/llm_translation/*.db
 
+# Stage 2 번역 RAG 자산 (배포 PC에만 실물 존재 — bge-m3 모델은 수 GB, 절대 커밋 금지)
+whisperlivekit/llm_translation/local_qdrant_db/
+whisperlivekit/llm_translation/bge-m3/
+
 # 폐쇄망 배포 산출물 (개발 PC에서 생성 → USB 반입, git 비추적; docs/DEPLOYMENT_OFFLINE.md §1.1·§2)
 deploy/
 
