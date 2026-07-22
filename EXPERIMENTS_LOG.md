@@ -5228,6 +5228,10 @@ CLAUDE.md §4 "채택 확정 = repeat 3" 게이트는 **생략**(사용자가 �
 - kor2/kor3도 NewSpeaker 발동 회차를 잡으면 동일 패턴(Refresh 무회귀·중복 0) 재확인 여지.
 - kor1 Sortformer flip-flop 자체 완화는 별도 과제(§3 T5 예비, `MIN_SPEAKER_ATTRIBUTION_SECS` 재분석) — 이번 T1 fix와 독립적으로 진행.
 
+### ★후속 — T5 0.2s 최종본으로 결합 재검증 (kor1 재현 실패, WER 무회귀만 확인)
+
+T5가 0.5s→0.2s로 재설계된 뒤(Exp-204 후속), 결합 워크트리에 갱신 커밋(`703794c`)을 추가 cherry-pick(`1b65d8a`)해 kor1을 `--lan ko --repeat 3`로 재측정. **3회 전부 0-firing**(flip-flop 버스트 미재현 — kor1 특유의 간헐성, 이번 세션에서만 벌써 여러 차례 관측된 패턴). WER 12.9~14.6%(무관 밴드, 회귀 없음). **결합 시 0.2s 버전의 버스트 완전억제 여부는 이번 표본으로도 재확인 못함** — T5 단독 0.2s 측정(Exp-204 후속)에서 이미 "12회 버스트가 여전히 일부 WER 악화(26.3%)를 일으킴"을 확인했으므로, **결합 브랜치에서도 버스트 회차를 잡으면 T1의 스킵 로직 덕분에 그 12회가 전부 무해화되는지가 다음 세션 최우선 확인사항**(메커니즘상 그래야 하지만 실측 미확인 상태로 이번 루프 종료).
+
 **JSON**: `.omc/benchmarks/eval_20260722_2305_hallu_t1_ko_screen.json`(스크리닝 N=1) · `eval_20260722_2316_hallu_t1_auto_noregress.json`(auto 무회귀) · `eval_20260722_2329_hallu_t1_ko_confirm_N3.json`(확정 N=3). 서버 트레이스 `.omc/server_logs/server_kor{1,2,3}_C_R{1,2,3}_20260722_23*.log`.
 
 ---
