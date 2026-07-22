@@ -4813,3 +4813,103 @@ merge 반영 + epoch 정합성 정리만 담당한다.
 있던 결론(frame_threshold 배포레버 Exp-193·boundary_reconcile Exp-192·keep_secs Exp-171/174 등)은
 `[E5·재검증]` 대상 — 그 경로들이 도달하는 빈도·조건이 스킵 신설로 달라졌기 때문이다. 상세는
 STATE(`EXPERIMENTS.md`) "코드 세대(Epoch)" 절 참조.
+
+## Exp-197 — 언어잠금 Stage 1 섀도우 게이트 실측 (안 B 완료, 로깅버그 발견·수정 포함) (2026-07-22) [E6, `exp/lang-lock-stage0`(미머지)]
+
+**언어모드**: auto(bong1·ytn2·sbs1·ytn1, `--lan auto --repeat 1`).
+**코드 변경**: `whisperlivekit/simul_whisper/align_att_base.py`(게이트 G1~G7 구현 + `[Stage1ShadowStats]`
+로깅버그 수정) + `tests/test_stage1_shadow_gate.py`(신규 테스트).
+
+### 배경
+안 B(Stage 1 섀도우 판정)는 §10-5(정지, 사용자 판단 대기)에서 멈춰 있었다 — 사용자가 재개를
+승인했다(goal 문서 `docs/goal_prompt/tranquil-floating-starfish.md`). 재개 전 이 goal 문서 §1이 다른
+세션의 samelang 머지(Exp-196, `3ad14a6`)와의 충돌을 사전 검증했다 — 코드 파일 충돌 0건(브랜치는
+`align_att_base.py`/`simul_whisper.py`/`scripts/`/`metrics.py`를, 머지는 `backend.py`만 건드려 파일
+집합 완전 분리), ko/en 세션에는 영향 없음(Exp-196과 동일 근거), **auto 세션은 영향 있음**(동일언어
+화자전환에서 `refresh_segment` 미호출로 세그먼트 성장 거동이 달라져 Exp-195의 auto 오탐/참양성 수치와
+직접 비교 불가해짐 — Exp-196 결론과 동일).
+
+### 구현
+`align_att_base.py`에 게이트 G1~G7(비-auto 가드 · 언어미감지 · 최소버퍼 `seglen≥2.0s` · `p_opp≥0.97` ·
+연속 `K≥3` ∧ 지속 `T≥1.0s` · 쿨다운 3.0s · 다른 트리거 진행중 배제) + 증거 리셋 훅
+(`refresh_segment()`·`_apply_detected_language()` 2곳) 신설. 트리거 지점은 기존
+`_sot_lang_probe_impl()` 직후(encoder_feature를 이미 쥔 지점이라 추가 forward 비용 0). **섀도우
+불변식**: 게이트가 전부 만족돼도 `_apply_detected_language`는 호출하지 않고
+`[Stage1Shadow] would_fire=True lang=%s p_opp=%.4f t=%.2f seglen=%.2f k=%d dur=%.2f` 로깅만 한다 —
+diff에서 `_apply_detected_language` 신규 호출 0건임을 확인했다(goal 문서 Step 4 검증 기준). 신규
+테스트(TDD, 14개 시나리오) 추가, pytest 648→670 pass·ruff clean.
+
+### 측정 중 발견 — `[Stage1ShadowStats]` 로깅 버그, 수정, 재측정
+Step 5 첫 스크리닝 run(커밋 `6af9b3d`)의 로그를 점검하다가, 세션요약 `[Stage1ShadowStats]`의
+중복억제 가드가 `would_fire`만 비교하는 버그를 발견했다 — `would_fire`가 세션 내내 0으로 고정되는
+(4파일 중 3개가 이 경우) run에서는 `blocked_by`가 계속 누적돼도 "직전과 동일"로 오판돼, 실제로는 첫
+`is_last` 시점(프로브 약 2회째) 이후로 요약 줄이 전혀 갱신되지 않았다 — 세션 나머지 전체의 진짜
+게이트별 차단 내역이 로그에 도달하지 못한 것. `d6bd66a`에서 중복억제 키를 총 호출수
+(`would_fire + sum(blocked_by.values())`)로 교체 — `_log_lang_drift_stats()`가 `probes`(총 호출수)로
+중복억제하는 기존 관례를 그대로 따랐다. 회귀 테스트(`test_shadow_stats_logs_again_when_only_blocked_by_changes`)
+추가, pytest 670→671 pass. `would_fire` 자체(배치마다 무조건 찍히는 개별 로그)는 이 버그와 무관해
+영향받지 않았다 — 영향은 `[Stage1ShadowStats]` 요약의 `blocked_by` 누적치에 한정된다.
+
+### 측정 (경로 C, `--lan auto --repeat 1` 스크리닝, diar ON·CRT 3.0·`--trace-tokens`, `vbcable=ok`,
+코드=`exp/lang-lock-stage0@d6bd66a` — 로깅 수정 후 v2 run)
+
+**WER/F1 sanity**
+
+| 파일 | WER | 화자F1 | 문장F1 | LMR_ko |
+|---|---|---|---|---|
+| bong1.wav | 28.9% | 70.3% | 21.1% | 10.9%(3.0%p) |
+| ytn2.mp3 | 13.3% | 100.0% | N/A | 0.0% |
+| sbs1.mp3 | 11.9% | 100.0% | 88.9% | 0.0% |
+| ytn1.mp3(held-out) | 22.1% | 84.2% | 57.1% | 19.7%(9.2%p) |
+| **종합** | **19.1%** | **88.6%** | **55.7%** | — |
+
+samelang 머지(Exp-196)로 auto 베이스라인 자체가 이동해 **Exp-195 auto 수치와 직접 비교하지 않는다** —
+sanity 목적(0%/100% 이상치·붕괴형 catastrophic 없음)만 확인, 이상 없음. 참고(비교 아님): 로깅버그가
+있던(디코딩은 동일한) v1 첫 run은 bong1 27.1/57.1/28.6, ytn2 16.3/72.7/NA, sbs1 11.9/57.1/76.2,
+ytn1 14.7/88.9/66.7, 종합 17.5/69.0/57.1 — v1↔v2 편차는 로그 한 줄만 건드린 수정이 만든 게 아니라
+CLAUDE.md §4가 문서화한 통상적 회차간 분산(±30~120%p대) 범위다.
+
+**`[Stage1ShadowStats]` 게이트별 차단 (v2, 세션 최종 누적치)**
+
+| 파일 | would_fire | G1 | G2 | G3 | G4 | G5 | G6 | G7 | 총 게이트호출수 |
+|---|---|---|---|---|---|---|---|---|---|
+| bong1.wav | 0 | 0 | 13 | 25 | 424 | 5 | 0 | 0 | 467 |
+| ytn2.mp3 | 0 | 0 | 10 | 6 | 330 | 0 | 0 | 0 | 346 |
+| sbs1.mp3 | 0 | 0 | 2 | 6 | 238 | 0 | 0 | 0 | 246 |
+| ytn1.mp3(held-out) | **15** | 0 | 2 | 10 | 227 | 8 | 0 | 0 | 262 |
+
+G4(`p_opp<0.97`)가 4파일 전부에서 차단의 압도적 다수 — 대부분 프로브가 버퍼길이와 무관하게 애초에
+문턱에 도달 못 함. G1=0 전 파일은 이 run이 auto 전용이라 예상된 결과(ko/en 가드 자체는 §10-6이
+12세션 규모로 이미 검증). G6·G7도 전 파일 0 — 쿨다운·타 트리거 진행중이 이번 run에서 병목이 된 적
+없음.
+
+**ytn1 `would_fire=15` = 독립 15건이 아니라 연속 1개 에피소드** — 같은 성장버퍼에서 K가 5→19로
+자라나는 연속 배치, 지속시간 1.20s→5.88s, 전부 `lang=en`: t=8.07s(p_opp=0.9962,k=5)→8.31(0.9801,6)→
+8.55(0.9911,7)→8.79(0.9867,8)→9.27(0.9950,9)→9.75(0.9994,10)→9.99(0.9913,11)→10.23(0.9860,12)→
+10.47(0.9861,13)→10.95(0.9983,14)→11.19(0.9995,15)→11.43(0.9992,16)→11.67(0.9985,17)→
+11.67(0.9985,18, 동일 t_abs)→12.74(0.9906,19).
+
+**정성 교차검증(참양성 확정)**: 이 시간창(t≈8~12.7s)은 `ytn1_C_R1.txt` 전사 도입부
+(`"Yeah, I'm sorry. I'm sorry, I'm sorry, but I the United States. I'm happy to be here today. I
+want to first thank you for hosting today's Security Consultative Meeting. I want to."`, 문장#1~4
+`finalize_trigger=⟨punctuation⟩`)와 정확히 겹치고, 뒤이은 문장#5가 `⟨language_switch⟩`로 확정되며
+한국어로 전환된다 — §10-4/Exp-195가 이미 규명한 **동일한 ytn1 언어잠금 실패**(한국인 개회사가 영어로
+잠겨 전사)다. 이 run의 LMR_ko(19.7%/9.2%p)가 Exp-195 원보고 LMR_ko 19.7%와 거의 정확히 일치 — 독립
+교차확증. bong1/ytn2/sbs1 3파일은 `would_fire=0`(오탐신호 0) — 단 이 run의 목적은 오탐률 재측정이
+아니라(그 작업은 Exp-195가 12세션 규모로 이미 완료) 런타임 게이트가 설계대로 동작하는지 확인이었고,
+결과는 설계대로였다.
+
+### 판정
+🟡 **계측 완료 — 개입(실제 트리거 배선)은 정지, 사용자 판단 대기.** would_fire: bong1/ytn2/sbs1=0
+(오탐 신호 없음), ytn1(held-out)=15(연속 1에피소드, 정성 확인상 참양성·오탐 아님). 게이트가 이번
+run에서 발동한 유일한 사례가 이미 알려진 실제 실패를 정확한 위치에서 잡아냈다는 점에서 **설계대로
+동작**했다고 판단한다. 다만 `_apply_detected_language`에 실제로 배선해 섀도우를 졸업시킬지는 **이번
+작업 범위 밖**이다 — CLAUDE.md의 "핵심 불변 제약 직결 기능은 정량 결과만으로 자율 채택/기각하지 않고
+사용자에게 채택 여부를 묻는다" 규칙과 goal 문서 Step 6("master 머지는 사용자 확인 후, 실제 적용은
+별도 단계")에 따라 사용자 확인을 기다린다. 브랜치(`exp/lang-lock-stage0`)는 master 미머지 유지.
+정본 = `docs/research/SOT_LANG_PROBE_STAGE0.md` §11 · 인계 = `docs/backlog/LANG_LOCK_STAGE0_HANDOFF.md` §4-0-3.
+
+### epoch
+**E6 그대로(bump 없음)** — 이번 변경은 섀도우 계측 전용이고, `_apply_detected_language`에 대한 신규
+호출이 diff상 0건임을 Step 3/4에서 직접 확인했다(위 "섀도우 불변식" 참조). 실제 디코딩 결정 경로를
+전혀 바꾸지 않으므로 어떤 실패모드도 바꿀 수 없다 — epoch bump 대상이 아니다.
