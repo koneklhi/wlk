@@ -7,6 +7,9 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+_MIN_INTERIM_CHARS = 6  # 미확정 버퍼가 이 미만이면 문맥 부족 → 환각 위험이 커 아직 번역 요청하지 않는다.
+                        # (확정 경로 apply_translations는 이 게이트와 무관 — 짧은 확정 발화 "다음"→"Next"는 정상 번역)
+
 
 class TranslationManager:
     """확정 세그먼트 LLM 번역 캐시 및 비차단 스케줄러."""
@@ -84,6 +87,13 @@ class TranslationManager:
             self._interim_result = ""
             self._interim_in_flight = False
             return ""
+
+        # 미확정 버퍼가 너무 짧으면(문맥 부족) 아직 번역 요청하지 않는다 — 짧은 조각을 LLM이
+        # 문장으로 상상해 늘어놓는(멀티라인) 폭주를 예방. 직전 결과를 그대로 유지해 반환한다.
+        # 이 게이트는 미확정 미리보기 경로 전용이며, 확정 경로(apply_translations)는 무관하다
+        # ("다음"(2글자) 같은 짧은 확정 발화도 apply_translations에서 정상 번역돼야 하므로).
+        if len(text.strip()) < _MIN_INTERIM_CHARS:
+            return self._interim_result
 
         if not self._interim_in_flight and text != self._interim_source:
             self._interim_in_flight = True
