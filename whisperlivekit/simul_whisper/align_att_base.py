@@ -75,7 +75,9 @@ STAGE1_SHADOW_ENABLED = True   # 짝지음 A/B 롤백 스위치
 STAGE1_TAU = 0.97              # p_opp 문턱
 STAGE1_MIN_SEGLEN = 2.0        # 최소 버퍼 — 가장 중요(Exp-189 고신뢰 오탐 배제)
 STAGE1_MIN_BATCHES = 3         # 연속 K
-STAGE1_MIN_DURATION = 1.0      # 지속 T (10Hz라 K만으론 0.3s)
+STAGE1_MIN_DURATION = 0.8      # 지속 T (10Hz라 K만으론 0.3s) — 1.0에서 완화(bong1 참양성이
+                               # dur=0.96s로 40ms 차이로 막혔음. ko 오탐군은 G3(seglen≥2.0)가
+                               # 전담 차단하므로 T 완화가 오탐 보호를 깎지 않는다)
 STAGE1_COOLDOWN_SECS = 3.0     # last_lang_switch_time 재사용
 
 logger = logging.getLogger(__name__)

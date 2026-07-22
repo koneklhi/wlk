@@ -77,6 +77,34 @@ def _make_model(language="auto", detected_language="en", seglen=2.5,
     return model
 
 
+def _make_model_growing_buffer(**kwargs):
+    """seglen이 스텝마다 변하는 **실측 시퀀스** 재현용 고정체.
+
+    `_make_model`은 seglen을 고정값으로 잠그지만, 실제 서버 로그의 프로브 버스트는
+    버퍼가 자라는 구간에서 나오므로 t_abs와 seglen이 **함께** 증가한다. 여기서는
+    `segments_len()`이 가변 속성(`_seglen`)을 읽게 만들어 `_feed_probe`가 스텝마다
+    seglen을 지정할 수 있게 한다.
+    """
+    model = _make_model(**kwargs)
+    model._seglen = kwargs.get("seglen", 2.5)
+    model.segments_len = lambda: model._seglen
+    return model
+
+
+def _feed_probe(model, locked, p_opp, t_abs, seglen):
+    """실측 프로브 1건을 흘려보낸다 — t_abs/seglen을 로그 값 그대로 재현.
+
+    게이트는 t_abs = global_time_offset + cumulative_time_offset + segments_len() 으로
+    시각을 계산하므로, 원하는 t_abs가 나오도록 global_time_offset을 역산해 넣는다.
+    """
+    model._seglen = seglen
+    model.state.global_time_offset = t_abs - seglen - model.state.cumulative_time_offset
+    if locked == "en":  # p_opp = 반대쪽(=ko) 확률
+        model._stage1_shadow_gate(locked, p_opp, 1.0 - p_opp)
+    else:               # locked == "ko" → p_opp = p_en
+        model._stage1_shadow_gate(locked, 1.0 - p_opp, p_opp)
+
+
 def _build_evidence(model, p_opp, offsets, p_field="p_ko"):
     """model에 연속 호출을 흘려보내 증거를 누적시킨다. 마지막 호출의 반환(로그) 관찰용."""
     for off in offsets:
@@ -315,11 +343,23 @@ def test_probe_constant_default_enabled():
 
 
 def test_gate_constants_match_handoff_values():
-    """인계서 §4가 미리 정한 게이트 값 — Exp-195 오탐 23/23을 전부 걸러야 하는 값이다."""
+    """인계서 §4가 미리 정한 게이트 값 — Exp-195 오탐 23/23을 전부 걸러야 하는 값이다.
+
+    단 `STAGE1_MIN_DURATION`만 인계서 초기값 1.0 → **0.8**로 완화됐다. 근거:
+      - bong1의 확증된 참양성(정답 `bong1.txt:43` "플라스틱 말랑말랑한 것도 만들었죠"
+        구간이 영어로 뒤집혀 방출된 언어잠금 실패)에 정확히 얹힌 프로브 버스트가
+        t=92.16·k=4·**dur=0.96s**에서 T=1.0에 **40ms 차이로** 막혀 있었다.
+      - 검증된 오프라인 리플레이 T 스윕 결과 T=0.8은 bong1 참양성 1건 + ytn1 1건만
+        새로 통과시키고 ytn2·sbs1은 T=0.0까지 내려도 0건이다. 커버리지가 T=0.5~0.9에서
+        동일하므로 0.8은 단일 관측에 맞춘 knife-edge 값이 아니다.
+      - 알려진 오탐군(Exp-195 ko/en 로그 16건, G1 우회 리플레이)은 T를 0.0으로 내려도
+        0건이다 — p_opp≥0.97을 통과하는 프로브의 최대 seglen이 1.02s로 G3(2.0) 문턱에
+        0.98s 미달이라, 그 계열 차단은 **전적으로 G3 담당**이고 T는 기여분이 없다.
+    """
     assert STAGE1_TAU == 0.97
     assert STAGE1_MIN_SEGLEN == 2.0
     assert STAGE1_MIN_BATCHES == 3
-    assert STAGE1_MIN_DURATION == 1.0
+    assert STAGE1_MIN_DURATION == 0.8
     assert STAGE1_COOLDOWN_SECS == 3.0
 
 
@@ -335,6 +375,86 @@ def test_exp195_observed_sequence_never_fires():
     st = model._stage1_shadow_gate_state
     assert st["would_fire"] == 0
     assert st["blocked_by"]["g3"] == 23
+
+
+# ── #15 T=1.0→0.8 완화의 근거·행동 델타 회귀 (bong1 플라스틱/말랑말랑 참양성) ──
+#
+# bong1 정답 `test_data/bong1.txt:43`
+#   "아니 그 (더듬) 플라스틱 말랑말랑한 것도 만들었죠 우리가 안전한 소품으로 물론."
+# 이 구간에서 한국어로 시작했다가("아이 그" / "플라스틱 안색") 영어로 뒤집혀
+#   "Plastic, sorry" / "Malang mal" / "ang an" / "awesome thing to make . We're going"
+# 이 방출된, **확증된 언어잠금 실패(참양성)**다. 그 위에 정확히 얹혀 있던 p_opp 버스트가
+# 아래 시퀀스이며, G3(seglen)·G4(p_opp)·K는 통과하고 오직 T=1.0에만 dur=0.96s로
+# 40ms 차이로 막혀 있었다.
+
+BONG1_PLASTIC_BURST = [
+    # (t_abs, seglen, p_opp)  — locked="en"이므로 p_opp = p_ko
+    (91.20, 4.36, 0.9797),
+    (91.68, 4.84, 0.9945),
+    (91.92, 5.08, 0.9896),
+    (92.16, 5.32, 0.9996),
+]
+
+
+def test_bong1_plastic_true_positive_fires_at_new_duration(caplog):
+    """확증된 bong1 참양성 버스트가 새 T=0.8에서 정확히 1회(k=4·dur=0.96s) 발동한다."""
+    model = _make_model_growing_buffer(language="auto", detected_language="en")
+
+    with caplog.at_level(logging.WARNING, logger=LOGGER_NAME):
+        for t_abs, seglen, p_opp in BONG1_PLASTIC_BURST:
+            _feed_probe(model, "en", p_opp, t_abs, seglen)
+
+    st = model._stage1_shadow_gate_state
+    assert st["would_fire"] == 1
+    assert st["count"] == 4
+    # 1~3번째는 전부 G5에서 막힌다(1·2회차 count<K, 3회차 dur=0.72s<0.8)
+    assert st["blocked_by"]["g5"] == 3
+
+    lines = [r.getMessage() for r in caplog.records if "[Stage1Shadow] would_fire=True" in r.getMessage()]
+    assert len(lines) == 1
+    fields = dict(kv.split("=", 1) for kv in lines[0].split()[1:])
+    assert fields["lang"] == "en"
+    assert fields["k"] == "4"
+    assert fields["t"] == "92.16"
+    assert fields["dur"] == "0.96"
+
+
+def test_bong1_plastic_true_positive_was_blocked_at_old_duration(monkeypatch):
+    """동일 버스트가 구 T=1.0에서는 발동하지 않았다 — 이 커밋의 행동 델타 고정."""
+    monkeypatch.setattr(align_att_base, "STAGE1_MIN_DURATION", 1.0)
+    model = _make_model_growing_buffer(language="auto", detected_language="en")
+
+    for t_abs, seglen, p_opp in BONG1_PLASTIC_BURST:
+        _feed_probe(model, "en", p_opp, t_abs, seglen)
+
+    st = model._stage1_shadow_gate_state
+    assert st["would_fire"] == 0
+    assert st["count"] == 4
+    assert st["blocked_by"]["g5"] == 4  # 마지막 k=4도 dur=0.96s < 1.0으로 탈락
+
+
+# ── #16 알려진 오탐군(Exp-195 ko)은 T와 무관하게 G3가 전담 차단한다 ──────────
+
+def test_exp195_ko_false_positives_blocked_by_g3_even_with_zero_duration(monkeypatch):
+    """T를 0.0까지 내려도 Exp-195 ko 오탐군은 한 건도 통과하지 못한다.
+
+    Exp-195 ko/en 세션 로그 16건을 G1을 일부러 우회해 리플레이해도 would_fire=0이었고,
+    p_opp≥τ를 통과하는 프로브의 seglen은 최빈 0.24s·최대 1.02s로 G3(2.0)에 크게 미달한다.
+    즉 이 오탐 계열의 유일한 방벽은 G3이며 T 완화는 오탐 보호를 깎지 않는다.
+    """
+    monkeypatch.setattr(align_att_base, "STAGE1_MIN_DURATION", 0.0)
+    model = _make_model_growing_buffer(language="auto", detected_language="ko")
+
+    # 실측 seglen 분포(최빈 0.24s, 최대 1.02s)를 K=2까지 연속으로 흘려보낸다
+    for seglen in (0.24, 1.02):
+        for k in range(2):
+            _feed_probe(model, "ko", 0.99, 10.0 + k * 0.1, seglen)
+
+    st = model._stage1_shadow_gate_state
+    assert st["would_fire"] == 0
+    assert st["blocked_by"]["g3"] == 4     # 4건 전부 G3에서 탈락
+    assert st["blocked_by"]["g5"] == 0     # G5(K·T)까지 도달조차 못 한다
+    assert st["count"] == 0                # 증거도 매번 리셋
 
 
 # ── 세션 요약 로그([Stage1ShadowStats]) — [LangDriftStats] 포맷 불변 확인 ────
