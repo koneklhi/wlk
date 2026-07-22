@@ -16,7 +16,6 @@ import pytest
 from whisperlivekit.llm_translation.manager import TranslationManager
 from whisperlivekit.timed_objects import Segment
 
-
 # ─── 헬퍼 ────────────────────────────────────────────────────────────────────
 
 def make_text_seg(text: str, start: float = 0.0, end: float = 1.0,
@@ -143,3 +142,89 @@ async def test_translate_and_cache_removes_in_flight_on_error():
 
     assert key not in manager._in_flight, "예외 후에도 _in_flight에 키가 남아 있습니다"
     assert key not in manager._cache, "예외 시 캐시에 저장되면 안 됩니다"
+
+
+# ─── 수정1: interim 캐리오버 (line_id 생성가드 리셋) ──────────────────────────
+
+def test_interim_line_id_change_discards_previous_block_translation():
+    """미확정 줄(블록)이 바뀌면(line_id 변경) 이전 블록 미리보기 번역이 즉시 버려진다.
+
+    캐리오버 버그 회귀 방어 — 새 블록 초반(짧아 아직 새 번역 없음)에 이전 블록 번역이
+    반환되면 프론트 마지막 행에 이전 번역이 잠깐 보인다.
+    """
+    import unittest.mock as mock_module
+
+    translator = make_translator_mock()
+    manager = TranslationManager(translator)
+
+    # 블록 A: 번역이 완료돼 결과가 남아있는 상태를 시뮬레이션
+    manager._interim_line_id = 10.0
+    manager._interim_result = "블록 A 번역"
+    manager._interim_source = "block A source"
+
+    # 블록 B(새 line_id)의 짧은 조각 — 길이 게이트에 걸려 새 번역은 아직 없음.
+    # 캐리오버가 없다면 이전 블록 결과가 아니라 "" 를 반환해야 한다.
+    short_b = "가"  # _MIN_INTERIM_CHARS 미만
+    with mock_module.patch("asyncio.ensure_future") as mock_ensure:
+        result = manager.apply_interim_translation(short_b, "ko", line_id=20.0)
+
+    mock_ensure.assert_not_called()
+    assert result == "", "새 블록에서 이전 블록 번역이 반환되면 안 된다(캐리오버 방지)"
+    assert manager._interim_line_id == 20.0
+    assert manager._interim_result == ""
+    assert manager._interim_source == ""
+
+
+def test_interim_same_line_id_keeps_previous_result():
+    """같은 line_id면 리셋되지 않아 직전 결과를 계속 미리보기로 반환한다(정상 유지)."""
+    import unittest.mock as mock_module
+
+    translator = make_translator_mock()
+    manager = TranslationManager(translator)
+    manager._interim_line_id = 10.0
+    manager._interim_result = "진행 중 번역"
+    manager._interim_source = "some long enough source text"
+
+    # 같은 블록에서 짧은 조각(게이트 미달)이 와도 직전 결과 유지
+    with mock_module.patch("asyncio.ensure_future") as mock_ensure:
+        result = manager.apply_interim_translation("가", "ko", line_id=10.0)
+
+    mock_ensure.assert_not_called()
+    assert result == "진행 중 번역"
+    assert manager._interim_result == "진행 중 번역"
+
+
+@pytest.mark.anyio
+async def test_translate_interim_generation_guard_ignores_stale_line():
+    """_translate_interim_and_store 세대 가드: 번역 왕복 중 줄이 바뀌면(line_id 불일치)
+    이전 줄의 뒤늦은 완료가 현재 줄 상태를 오염시키지 않는다.
+    """
+    translator = make_translator_mock(return_value="이전 줄 번역")
+    manager = TranslationManager(translator)
+
+    # 현재 줄은 이미 블록 B(line_id=20.0)로 넘어가 있고 그 상태가 세팅돼 있음
+    manager._interim_line_id = 20.0
+    manager._interim_result = "블록 B 번역"
+    manager._interim_in_flight = True
+
+    # 블록 A(line_id=10.0)의 뒤늦은 완료가 도착 — 현재 줄을 덮어쓰면 안 됨
+    await manager._translate_interim_and_store("block A source", "en", line_id=10.0)
+
+    assert manager._interim_result == "블록 B 번역", "이전 줄 결과가 현재 줄을 덮어쓰면 안 된다"
+    assert manager._interim_in_flight is True, "이전 줄 완료가 현재 줄 in_flight를 건드리면 안 된다"
+
+
+@pytest.mark.anyio
+async def test_translate_interim_stores_when_line_id_matches():
+    """세대 가드: line_id가 현재 줄과 일치하면 정상적으로 결과를 저장하고 in_flight를 내린다."""
+    translator = make_translator_mock(return_value="현재 줄 번역")
+    manager = TranslationManager(translator)
+    manager._interim_line_id = 10.0
+    manager._interim_in_flight = True
+
+    await manager._translate_interim_and_store("block source", "en", line_id=10.0)
+
+    assert manager._interim_result == "현재 줄 번역"
+    assert manager._interim_in_flight is False
+    # 미확정 경로이므로 use_rag=False 로 호출돼야 한다.
+    translator.translate_sentence.assert_called_once_with("block source", "en", use_rag=False)
