@@ -26,6 +26,7 @@ logging.getLogger().setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 logging.getLogger("whisperlivekit.qwen3_asr").setLevel(logging.DEBUG)
+logging.getLogger("whisperlivekit.llm_translation").setLevel(logging.DEBUG)
 
 config = parse_args()
 if config.trace_tokens:

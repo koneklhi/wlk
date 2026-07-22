@@ -170,6 +170,10 @@ class TranslationRagManager:
         `hit.payload.get("metadata", hit.payload)`로 중첩 유무를 방어적으로 처리한다.
         """
         if not self._enabled or not content:
+            logger.warning(
+                "[RagProbe] search_similar skipped: enabled=%s content_empty=%s",
+                self._enabled, not content,
+            )
             return ""
 
         try:
@@ -186,11 +190,17 @@ class TranslationRagManager:
                 if source and target:
                     lines.append(f"{source} : {target}")
 
+            logger.warning(
+                "[RagProbe] search_similar ok: hits=%d valid_pairs=%d sample_payload=%r",
+                len(hits), len(lines), (hits[0].payload if hits else None),
+            )
+
             if not lines:
                 return ""
 
             return "### SIMILAR EXAMPLES (RAG)\n" + "\n".join(lines)
         except Exception as e:
+            logger.warning("[RagProbe] search_similar EXCEPTION: %s: %s", type(e).__name__, e)
             if not self._warned:
                 logger.warning("Translation RAG search_similar failed, suppressing further warnings: %s", e)
                 self._warned = True

@@ -10,8 +10,11 @@ def _search_rag_examples(content: str) -> str:
     """RAG 매니저 획득 + 유사 예시 검색. 워커 스레드에서 실행되는 전 구간 블로킹 함수."""
     rag_manager = get_rag_manager()
     if not rag_manager.enabled:
+        logger.warning("[RagProbe] _search_rag_examples: skipped (rag_manager.enabled=False)")
         return ""
-    return rag_manager.search_similar(content)
+    result = rag_manager.search_similar(content)
+    logger.warning("[RagProbe] _search_rag_examples: use_rag path invoked, result_len=%d", len(result))
+    return result
 
 logger = logging.getLogger(__name__)
 
