@@ -251,12 +251,8 @@ class TranscriptionEngine:
             try:
                 from whisperlivekit.llm_translation import get_rag_manager
                 rag_manager = get_rag_manager()
-                logger.warning(
-                    "[RagProbe] startup: enabled=%s qdrant_path=%s embedding_model_path=%s collection=%s",
-                    rag_manager.enabled,
-                    rag_manager.qdrant_path,
-                    rag_manager.embedding_model_path,
-                    rag_manager.collection_name,
+                logger.info(
+                    "Translation RAG(Qdrant) %s", "enabled" if rag_manager.enabled else "disabled"
                 )
             except Exception as e:
                 logger.warning(
