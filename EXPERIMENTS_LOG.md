@@ -5031,3 +5031,151 @@ sbs1 11.9/100.0/88.9 · ytn1 22.1/84.2/57.1이었다. **diff가 로깅 전용인
 **E6 그대로(bump 없음)** — 변경은 섀도우/로깅 전용 상수 1개이고 `_apply_detected_language` 신규
 호출이 여전히 0건이다. 실제 디코딩 결정 경로를 전혀 건드리지 않으므로 어떤 실패모드도 바꿀 수 없다
 (Exp-197과 동일한 논거).
+
+## Exp-199 — UTF-8 seam 수렴 게이트 + 방출/보류 계약 정렬로 한국어 중간 단어 유실 완화 (2026-07-22) [E6, `exp/utf8-held-emit-loss`(master 머지 `f9f9cc5`)]
+
+**언어모드**: ko(kor1~3, `--lan ko --repeat 1`) + auto(sbs1, `--lan auto --repeat 1`, 컴퓨터 정지로 오염된
+1차 sbs1 회차는 폐기하고 재측정).
+**배경**: 같은 세션에서 배포 제보 2증상("녹음 시작/장침묵 후 전사 유실", "한국어 중간 단어 유실")을
+kor1~3+sbs1 각 5회 계측(`--trace-tokens`)으로 원인 규명 — 중간 단어 유실(BUG B)의 주원인은
+`align_att_base.py`의 UTF-8 hold-retry 로직이었다(스트리밍 배치 경계에 한글 멀티바이트가 걸려
+`[UTF-8 Filter] Skipping incomplete (held for retry)`로 보류됐다가 2회 재시도 후
+`[UTF-8 Fix] Dropping ... won't resolve`로 통째 폐기). 실측 사례(kor2 "보장하고 예비"→"부대는",
+kor3 "해역 함대 사이"→소실, sbs1 "한반도 동"·"전략적" 소실)가 전부 이 로그와 1:1 대응했다. 토크나이저
+실측으로 원인을 바이트 단위까지 확정: `" 보장"` = 토큰 `[7842, 252, 98]`이고 `7842`는 `" 보"`+
+`'장'`(3바이트)의 첫 바이트뿐이라, 배치 커밋 경계가 한글 글자 중간에 떨어지는 게 구조적으로 흔했다.
+당초 이 사고 진단은 신규 조사였으나, 착수 후 **이미 별도 goal 루프(`docs/goal_prompt/GOAL_UTF8_HELD_EMIT_LOSS.md`,
+2026-07-19 작성)로 같은 문제가 조사·구현까지 끝나 있었고**(브랜치 `exp/utf8-held-emit-loss`, 커밋
+`98e6089`/`b819738`, 2026-07-20) 다만 그 goal 문서가 "master 머지 금지 — 사용자 승인 대기"로 명시
+게이팅해둔 채 승인이 나지 않아 미머지 상태로 방치돼 있었다 — 이번 세션에서 그 브랜치를 master에 rebase
+(merge commit)해 재사용했다. (주의: 커밋 메시지에 "Exp-191"이 찍혀 있으나 이는 오기 — 진짜 Exp-191은
+EXPERIMENTS_LOG.md상 전혀 다른 실패한 실험 `exp/boundary-tail-dup`이다. 번호 재사용 혼선 주의.)
+
+### 근본 원인 (코드 확정) + 수정 내용
+Whisper BPE가 한글 1글자(UTF-8 3바이트)를 최대 3토큰에 바이트 단위로 흩뿌리므로, 스트리밍 커밋 경계가
+글자 중간에 떨어지는 상황 자체는 정상이고, 이를 복구하는 hold-retry 로직(`_handle_pending_tokens`,
+`MAX_PENDING_RETRIES=2`)에 결함 2가지가 있었다:
+1. **재이어붙이기 전제 붕괴**: 보류한 바이트를 다음 배치 앞에 무조건 prepend하지만, 재디코딩이 그 뒷바이트를
+   반드시 이어서 내놓는다는 보장이 없다 — attention이 지나쳐버리면 이어붙인 결과가 여전히 깨진 채로
+   2회 재시도 후 폐기된다. **수정**: `_merge_pending_tokens` 신설 — prepend 전에 `decode(pending+new)`가
+   여전히 U+FFFD를 포함하는데 `decode(new)` 단독은 clean이면 "죽은 seam"으로 판단해 pending을 즉시
+   폐기하고 new만 정상 처리(정상 이어받기 상황은 new 단독도 여전히 깨져 있으므로 게이트 미발동 —
+   Exp-087의 "미 미디어" hold/재emit 설계 보존).
+2. **방출부/보류부 계약 불일치**: 방출부(`_build_timestamped_words`)는 중간에 깨진 단어를 그냥 skip하고
+   계속 진행하는데, 보류부(`_handle_pending_tokens`)는 **마지막** 단어만 검사해 hold한다 — 중간에 낀
+   조각은 재시도 기회 없이 영구 유실. **수정**: 방출부는 **첫** U+FFFD 단어에서 멈추고(그 뒤 clean 단어도
+   다음 청크로 이연), 보류부도 첫 U+FFFD 단어부터 끝까지 전부 hold — 위치 무관 재시도 보장.
+`SEAM_CONVERGENCE_FIX_ENABLED`(기본 `True`) 롤백 플래그로 두 수정을 한 번에 토글.
+
+### TDD
+`tests/test_utf8_held_emission.py` 신규 13개(H1 계약불일치 RED→GREEN, H2 스테일seam RED→GREEN 2건,
+H3 retry/상한 drop 거동고정, H4 refresh/reset 클리어 거동고정, Exp-087 "미 미디어" 회귀가드, 플래그
+False=완전 기존동작 재현). master 재병합 후 H4 목이 Exp-197 계측(`_stage1_shadow_reset_evidence`)
+누락으로 깨져 스텁 보강(`8a5c694`). 전체 `pytest tests/ whisperlivekit/` **694 passed·1 skipped**
+(무관한 기존 `scripts/vbcable_test.py` 픽스처 수집 에러 1건은 master 동일 재현 확인 — pre-existing).
+
+### 측정 (경로 C, diar-ON, CRT=3.0, turbo, `--trace-tokens`, 짝지음 ON/OFF)
+사용자 시간 제약으로 **스크리닝 `--repeat 1`만 실시, 채택 확정(N=3) 생략** — 아래 수치는 방향 신호.
+
+| 파일 | OFF WER | ON WER | UTF-8 drop 이벤트 | 비고 |
+|---|---|---|---|---|
+| kor1 | 18.1% | **14.6%** | 1→1 | 개선 |
+| kor2 | 18.6% | 18.6% | 2→4 | **최종 방출 텍스트가 ON/OFF 완전 동일**(drop 증가분은 무해) — "보장하고" 유실은 seam 무관 잔존 |
+| kor3 | 39.1% | **33.1%** | 4→0 | drop 완전 해소, 가장 뚜렷한 개선 |
+| sbs1(1차) | — | — | — | 측정 중 사용자가 컴퓨터 정지 직접 목격 — 오염 판정, 폐기 |
+| sbs1(재측정) | 10.1% | 13.7% | 1→0 | drop은 줄었으나 WER 소폭 악화 — "플랫폼이라고"가 디코더 컨텍스트 덤프엔 U+FFFD 없이 멀쩡히 조립돼 있었음(로그 확인) → seam과 무관한 **별개의 기존 emit 동기화 버그**(디코더가 만든 단어가 방출 단계에서 누락, 원인 코드 미특정) 귀속, 이번 회차에 우연히 걸림
+
+**화자분리 F1**: kor1~3은 단일화자 아티팩트(기지, Exp-186)라 판정 제외. sbs1은 두 회차 모두 발동
+편차만 있고(50~100%) drop 이벤트와 무관.
+**Case B**: 4파일 5회 전부 미발견.
+
+### 판정 = 스크리닝 방향 신호 — **사용자 승인으로 확정측정 없이 조기 머지**
+CLAUDE.md §4 "채택 확정 = repeat 3" 게이트는 **생략**(사용자가 시간 제약으로 스크리닝만 지시,
+"master 머지 진행하자"로 직접 승인). 판단 근거: ① seam 자신의 표적 지표(UTF-8 drop)는 4파일 중
+나쁜 방향으로 텍스트가 바뀐 사례 0건(kor2는 drop 증가에도 텍스트 불변, sbs1 유일 WER 악화는 로그로
+확인된 무관 버그 귀속) ② Case B·신규 결함 0건 ③ pytest 전량 GREEN. **master 머지 완료(`f9f9cc5`)**.
+
+### 다음/후속
+- kor2 "보장하고" 잔존 유실 — 이 fix가 못 잡는 UTF-8 실패 변형이 있다는 뜻, 별도 조사 필요.
+- sbs1 "플랫폼이라고" emit 동기화 버그 — seam과 무관, 원인 미특정 상태로 잔존(이전 세션
+  `docs/research/2026-07-22_kor-silence-wordloss-diagnostic.md`가 유사 패턴을 이미 별도 항목으로 기록).
+- BUG A(침묵/세션시작 유실)는 이번 실험 범위 밖 — 위 진단 문서에 원인 갈래 3~4개 별도 정리됨, 후속
+  탐색 과제.
+- 사용자 승인으로 확정측정을 생략했으므로, 여유 있을 때 `--repeat 3` 짝지음으로 재확인 권장.
+
+### epoch
+**E6 그대로(bump 없음)** — emit 계층(seam/hold-retry) 국소 버그 수정. 디코더 파라미터·VAD·언어감지
+경로는 무변경.
+
+**주의: 원본 JSON/로그/전사 파일 전부 소실됨** — 워크트리 `worktrees/utf8-held-emit-loss`의
+`.omc/`(gitignored, 워크트리 로컬)에 저장돼 있었는데, 병합 직후 워크트리를 `git worktree remove --force`로
+정리하면서 함께 삭제됐다(파일명: `eval_20260722_1556_seam{ON,OFF}_{kor,sbs}.json`,
+`eval_20260722_1620_seam{ON,OFF}_sbs1only.json`, `server_{kor1,kor2,kor3,sbs1}_C_R1_20260722_*.log`,
+`transcripts_seam{ON,OFF}*/`). 위 표·인용문은 삭제 전 세션 내에서 직접 읽고 기록한 것 — 원본 재검증이
+필요하면 재측정해야 한다. **교훈**: 워크트리 삭제 전 `.omc/` 산출물을 커밋 밖 위치(예 워크트리 밖)로
+먼저 옮기거나 최소 이 로그에 수치·인용을 남겨둘 것.
+
+---
+
+## Exp-200 — UTF-8 반토막 음절 커밋 오염 근본수정 (클린 커밋 절단, Direction A) (2026-07-22) [E6, `exp/utf8-context-clean-commit`(커밋 `17cc4af` → master 머지 `76150ca`)]
+
+**언어모드**: ko(kor1~3, `--lan ko --repeat 1`) + auto(bong1·ytn2·sbs1, `--lan auto --repeat 1`). 짝지음 A/B — `CONTEXT_CLEAN_COMMIT_ENABLED` ON(True)/OFF(False), `SEAM_CONVERGENCE_FIX_ENABLED=True` 양쪽 공통. 측정 = **스크리닝 1회만**(사용자 시간제약, `--repeat 3` 확정단계 생략).
+
+**배경**: Exp-199(seam 수렴 게이트)가 한국어 중간 단어 유실(BUG B)을 **일부만** 잡고 잔존 유실이 남았다. 이번 세션 사전 진단(kor1~3+sbs1 각 5회 `--trace-tokens`)이 잔존 유실의 단일 근본원인을 바이트 단위까지 확정: Whisper byte-level BPE가 한글 1글자(UTF-8 3바이트)를 최대 3토큰에 흩뿌리고, AlignAtt 스트리밍이 음절 중간에서 배치를 커밋하면 그 배치 마지막 토큰이 반토막(디코드 시 U+FFFD `�`)이 된다. 방출 경로(`_build_timestamped_words`)와 hold 경로(`_handle_pending_tokens`)는 Exp-199 seam 수정으로 이미 "첫 `�` 단어"에서 멈추도록 정렬됐으나, **커밋 경로만 여전히 `�`를 넘어 전진**했다: `align_att_base.py`의 `self.state.tokens.append(new_tokens_tensor)`가 반토막 `�` 토큰 포함 hypothesis를 디코더 컨텍스트에 커밋 → 다음 청크는 high-water mark(`token_len_before`) 뒤쪽만 재디코딩하므로 커밋된 반토막이 mark에 묻혀 영영 재디코딩 안 됨 → hold된 완성 바이트는 재디코딩이 이어바이트를 안 주면 `MAX_PENDING_RETRIES=2` 소진 후 드롭. 결과: 앞바이트는 커밋돼 mark 전진, 완성분은 드롭 → 음절/단어 영구 유실.
+
+### 수정 내용
+- `whisperlivekit/simul_whisper/align_att_base.py:60` — 롤백 플래그 `CONTEXT_CLEAN_COMMIT_ENABLED = True` 신설(`SEAM_CONVERGENCE_FIX_ENABLED` 옆). False = 완전 기존 동작.
+- `align_att_base.py:939~` — 헬퍼 `_clean_commit_hypothesis(new_hypothesis, split_words, split_tokens)` 신설: `_handle_pending_tokens`의 `�` 검출 idiom(`next((i for i,w in enumerate(split_words) if "�" in w), None)`) 재사용해 첫 `�` 단어 인덱스를 찾고, 그 앞까지의 토큰만 반환. `incomplete_idx is None`이면 원본 그대로, `len(clean_prefix) < len(new_hypothesis)`일 때만 절단(둘 다 같은 순서 리스트의 프리픽스라 짧은 쪽이 교집합). **순수 subtractive**(길이 미증가) — 비-fire "마지막 단어 hold" 스트리밍 의미 불변. 새 tokenizer 호출·재디코딩 없음.
+- `align_att_base.py:868~870` — 커밋 지점: `new_hypothesis` 대신 `commit_hypothesis = self._clean_commit_hypothesis(...)`로 텐서 생성·커밋·`Output:` 로그. `_quality_gate`(:863~864)는 **원본 `new_hypothesis` 유지**(억제 판정은 전체 청크 기준, 절단은 컨텍스트 위생만).
+- PyTorch(`SimulWhisper`)·MLX(`MLXAlignAtt`) 둘 다 베이스 `infer()` 상속 → **한 곳 수정으로 양 백엔드 커버**(읽기전용 검증만: 빈 커밋 허용·zero-width 텐서 허용).
+
+의도한 인과사슬: 반토막 미커밋 → high-water mark 청결 유지 → 다음 청크가 그 오디오를 오염 없는 컨텍스트에서 재디코딩 → 온전한 단어 생성 → 기존 seam 게이트가 stale 반토막 정리. **핵심 검증(코드확인)**: 오디오 위치는 토큰 커밋과 분리(`simul_whisper.py:167` `insert_audio`가 `audio_max_len` 초과 시 **앞쪽만** 트림) — 반토막 음절은 버퍼 끝(fire 경계)에 있어 앞-트림 대상 아님 → 토큰 미커밋이어도 오디오는 버퍼에 남아 재디코딩됨.
+
+**TDD**: `tests/test_utf8_held_emission.py`에 `commit_prefix` 헬퍼 + 커밋계층 테스트 7개 신설. RED(수정 전, 메서드 부재로 7 fail)→GREEN(수정 후 신규 7 + 기존 13 = 20 pass). 무회귀: `test_media_no_leading_fragment_duplication`(미 미디어 중복 가드) 유지, A/B 플래그(`test_flag_false_commits_broken_token`), subtractive 증명(`test_commit_unchanged_when_all_clean`·`test_commit_nonfire_lastword_unchanged`), 복구통합(`test_full_redecode_supersedes_stale_pending_single_emit`). 전체 스위트 `tests/ whisperlivekit/` **701 passed·1 skipped**, ruff 신규위반 0.
+
+### 테스트 세트 결과 (경로 C, diar-ON Sortformer CRT=3.0, turbo, `--trace-tokens`, N=1 스크리닝, OFF→ON)
+
+| 파일 | 모드 | WER OFF→ON | 화자F1 OFF→ON | 문장F1 OFF→ON | Dropping OFF→ON |
+|------|------|-----------|--------------|--------------|-----------------|
+| kor1 | ko | 18.7→**14.6%** | 1.0→1.0 | 1.0→1.0 | 1→1 |
+| kor2 | ko | 21.4→**17.2%** | 1.0→1.0 | 1.0→1.0 | 2→**0** |
+| kor3 | ko | 39.7→**29.1%** | **0.0→1.0** | 0.92→0.91 | 3→**0** |
+| bong1 | auto | 25.3→**33.4%** ⚠️ | 0.63→0.71 | 0.10→0.33 | 1→1 |
+| ytn2 | auto | 14.8→**12.3%** | 1.0→0.9 | — | 2→**0** |
+| sbs1 | auto | ~12.5→**~8.9%** | 0.81→0.87 | 0.44→0.64 | 5→**0** |
+
+**표적 지표 (설계 메커니즘 확증)**:
+- **Dropping(영구유실) 이벤트 총 14→2**(86%↓): kor2·kor3·ytn2·sbs1 → 0. Discarding stale(seam 게이트 발동) 13→130, Prepending(stale 재접합) 145→20 — 반토막 미커밋 → 재디코딩 → seam이 stale 폐기로 이어지는 인과사슬이 트레이스 카운트로 그대로 관측됨.
+- **유실구 복구**: kor3 `보장`(2/0)·`로봇 등`(1/0), sbs1 `플랫폼`(1/0)을 ON이 정확 문맥에서 복구(하단 §분석). 유실 신규 추가 0.
+- **FFFD 방출 = 전 파일 0**(ON/OFF 공통) → Case B(바이트) 0·"미 미디어"류 중복 0.
+
+### 분석 (전사 내용 정성 대조)
+
+**kor3** (ko, ON WER 29.1% vs OFF 39.7%): 목표 유실구가 **정상 문맥으로 복구**됨.
+- **단어 유실 복구**: ON `"전문성 보장과 안정적인 운용을 위한"` / OFF `"전문성 위한"`("보장과 안정적인 운용을" 유실) — 계획 지목 유실구 복구.
+- **단어 유실 복구**: ON `"드론 로봇 등 유무인 복합전투체계"` / OFF `"드론 유무인 복합"`("로봇 등" 유실) — 정확 복구.
+- **화자경계**: ON 화자F1 1.0 vs OFF 0.0(diar 라벨 정합 개선). 환각·Case B 없음. ON L1 run-on(OFF가 2줄로 나눈 걸 1줄로)은 Case A(동일화자 문장 미분리, 허용).
+
+**kor1·kor2** (ko): 주요 신규 실패 없음. WER 개선은 ko_del(삭제=유실) 감소 주도 — kor1 ko_del 5→2, kor3 ko_del 18→10. OFF kor3는 `ins_runs_ge3=1`·`max_ins_run=3`(환각 run) 있었으나 ON은 `max_ins_run=1`(환각 run 소멸).
+
+**ytn2·sbs1** (auto): 개선. sbs1 `플랫폼` 복구, WER·문장F1 모두 개선. ytn2 WER 개선, 화자F1 -0.1(1회 분산 범위).
+
+**bong1** (auto, ON WER 33.4% vs OFF 25.3% — **회귀 +8.1pp**): 비-catastrophic.
+- **단어 유실(꼬리 절단)**: ON은 마지막 영어 번역 블록이 `"...the Sun character say within the film, this is."`에서 **끊김** / OFF는 `"...announcing it on screen."`까지 완결 — 최종 1~2문장 en_del(39 vs OFF 12, ON −165자). 계획이 잔존 리스크로 명시한 "반토막 오디오가 20s 창 밖 트림 전 재디코딩 못하는 희귀 폴백"으로 추정(단정 아님, 1회 측정).
+- **경미 중복**: ON `"So So my son"`·`"This This map"`(OFF도 `"It's him It's him"` 등 자체 중복 다수 — bong1 다화자 특성, fix 신규 아님). laughter 구간은 ON/OFF 둘 다 지저분(기존 알려진 bong1 웃음 환각). 환각 spiral·Case B 없음.
+
+**이번 변경 영향**: ko(한국어 단독 낭독)에서 반토막 커밋 오염 제거가 목표 유실구를 정상 복구하고 삭제·환각 run을 줄여 WER을 명확히 개선. auto는 ytn2·sbs1 개선·bong1 회귀(영어 다화자 꼬리 절단). Dropping 14→2 표적지표는 설계대로 작동.
+
+### 채택 (조건) 판정
+- **① 화자F1 worst-case 미회귀**: kor3 0.0→1.0·bong1 0.63→0.71·sbs1 0.81→0.87 개선, ytn2 1.0→0.9 소폭(1회 분산). 전반 개선/유지.
+- **② WER max 미회귀**: ko 3파일 전부 개선, auto ytn2·sbs1 개선. **bong1만 +8.1pp 회귀** — §3.8 최우선 파일이라 worst-case 관점 yellow flag. 단 1회 스크리닝 분산 범위이고 비-catastrophic(꼬리 절단, 환각 spiral 아님).
+- **③ Case B·중복 hard-gate**: FFFD 방출 0 → Case B 0, "미 미디어"류 중복 0. **통과**. (fix가 커밋에서 토큰을 빼기만 하므로 단어중간 분절 신규 생성 구조적으로 불가.)
+
+### 결론
+**브랜치 커밋(`17cc4af`) → master 머지 완료(`76150ca`).** 표적지표(Dropping 14→2·유실구 복구·FFFD 0)와 ko 개선은 명확하나, bong1 auto WER +8.1pp 회귀(§3.8 최우선 파일)가 계획의 자체 판정기준("worst-case 미회귀")과 상충 — CLAUDE.md §4 "목표 필수 기능 채택은 사용자 질의" 및 §3.2(한국어 단어유실 = 불변제약 직결)에 따라 자율 기각/머지 대신 **사용자 판단으로 에스컬레이션**했다. **사용자가 실사용 관찰상 만족으로 머지 승인**(bong1 `--repeat 3` 확정측정은 진행 중 중단·생략 지시). **1회 스크리닝 근거임**(seam Exp-199와 동일 규율 — 순수 커밋계층 정합성 수정 + 단위테스트로 로직 고정이라 회차편차 리스크 낮음). **후속(잔존 리스크)**: bong1 꼬리절단(en_del 39)이 재현되면 "반토막 오디오 20s 창 트림 전 재디코딩 실패" 폴백 경로 별도 조사 필요.
+
+### 다음 가설
+- master 머지 승인 시 → 필요하면 `--repeat 3` 확정측정으로 bong1 회귀가 실제인지 분산인지 확증(특히 화자F1 worst-case).
+- bong1 꼬리 절단이 재현되면 → "반토막 오디오 20s 창 트림 전 재디코딩 실패" 폴백 경로 별도 조사(계획 §잔존 명시). 범위 밖: kor1 "전자기"→"전작이"(무로그 앰비귀티, 반토막 아님), BUG A(침묵후 유실, 별개 패밀리 — `docs/research/2026-07-22_kor-silence-wordloss-diagnostic.md`).
+
+**JSON**: `.omc/benchmarks/eval_utf8_{ON,OFF}_{ko,auto}_20260722_1718.json`(4개) · 서버 트레이스 `.omc/server_logs/server_*_C_R1_20260722_17*.log`(12개, ON=이른 ts/OFF=늦은 ts).
