@@ -168,3 +168,55 @@ async def test_ollama_includes_glossary_in_joined_system_text():
     sent_messages = mock_post.call_args.kwargs["json"]["messages"]
     system_message = next(m["content"] for m in sent_messages if m["role"] == "system")
     assert "공군 : ROKAF" in system_message
+
+
+@pytest.mark.anyio
+async def test_llama_logs_failure_with_endpoint_and_model(caplog):
+    """실패를 조용히 삼키지 않는다 — 엔드포인트·모델명·원인이 로그에 남아야 한다.
+
+    번역 서버 미기동·모델명 오타·404 가 전부 빈 문자열로 끝나 "번역이 안 나온다"만 보이던
+    문제. 폐쇄망 배포 PC 에서는 이 로그가 유일한 진단 수단이다.
+    """
+    translator = LlamaTranslator("gpt-oss-20b", "http://localhost:2010")
+    boom = AsyncMock(side_effect=RuntimeError("connection refused"))
+
+    with patch.object(translator.client, "post", new=boom):
+        with caplog.at_level("WARNING"):
+            result = await translator.translate_sentence("Hello.", "en")
+
+    assert result == ""
+    joined = "\n".join(caplog.messages)
+    assert "http://localhost:2010" in joined
+    assert "gpt-oss-20b" in joined
+    assert "connection refused" in joined
+
+
+@pytest.mark.anyio
+async def test_ollama_logs_failure_with_endpoint_and_model(caplog):
+    """OllamaTranslator 도 동일하게 실패 원인을 남긴다."""
+    translator = OllamaTranslator("qwen2.5:7b", "http://localhost:11434")
+    boom = AsyncMock(side_effect=RuntimeError("model not found"))
+
+    with patch.object(translator.client, "post", new=boom):
+        with caplog.at_level("WARNING"):
+            result = await translator.translate_sentence("안녕하세요.", "ko")
+
+    assert result == ""
+    joined = "\n".join(caplog.messages)
+    assert "http://localhost:11434" in joined
+    assert "qwen2.5:7b" in joined
+    assert "model not found" in joined
+
+
+@pytest.mark.anyio
+async def test_success_does_not_log_warning(caplog):
+    """정상 번역은 경고를 남기지 않는다 — 로그가 노이즈가 되면 안 본다."""
+    translator = OllamaTranslator("qwen2.5:7b", "http://localhost:11434")
+    mock_resp = _make_chat_response("Hello.")
+
+    with patch.object(translator.client, "post", new=AsyncMock(return_value=mock_resp)):
+        with caplog.at_level("WARNING"):
+            result = await translator.translate_sentence("안녕하세요.", "ko")
+
+    assert result == "Hello."
+    assert [r for r in caplog.records if r.levelname == "WARNING"] == []
