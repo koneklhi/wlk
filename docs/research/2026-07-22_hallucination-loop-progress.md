@@ -4,7 +4,7 @@
 
 ## 상단 요약 (매 이터레이션 갱신)
 
-- **루프 시작**: 2026-07-22 22:53 · **경과**: ~4시간 20분 (갱신 시각 03:15 기준, 2026-07-23)
+- **루프 시작**: 2026-07-22 22:53 · **경과**: ~4시간 50분 (갱신 시각 03:45 기준, 2026-07-23)
 - **전체 상태**: **T1·T2·T3·T4·T5 전부 완료 + T1+T5 결합검증 완료 + T2 후속(★계열② 불확실성) + T5 후속(★★★bong1 회귀 원인규명+재설계로 해결)**. 큐 소진 — 사용자 확인 대기 항목 다수.
 - 3줄 요약:
   1. **T1**(lang_locked new_speaker 재디코딩 스킵) — TDD 재현·수정 + 실측 확증. **채택권고**(`9c17e0f`, Exp-201).
@@ -139,10 +139,24 @@
 - T2 후보 시그니처(침묵개시 강제flush + attention_reached_end + frame_advance≈0)는 정상 스트리밍의 짧은 단어 부분방출과 실제 환각을 구분하지 못함(오탐 3/3) — 이 형태로는 게이트 설계 불가로 종료.
 - T3 고아 run의 길이/시간간격 수치만으로는 환각·정상 꼬리가 분리되지 않음 — 자동 임계값 설계는 불가로 종료(메커니즘 자체는 유효).
 
+## 워크트리 현황 (master 머지 없음 — 전부 별도 브랜치/커밋만)
+
+| 워크트리 | 브랜치 | 최신 커밋 | 성격 |
+|---|---|---|---|
+| `hallu-t1-lang-locked-skip` | `exp/hallu-t1-lang-locked-skip` | `9c17e0f` | T1 — 채택권고, 머지 대기 |
+| `hallu-t2-silence-hallu-probe` | `exp/hallu-t2-silence-hallu-probe` | `0348f1d` | T2 — 계측 완료, 게이트 배선 안 함(오탐 3/3) |
+| `hallu-t3-preswitch-orphan-probe` | `exp/hallu-t3-preswitch-orphan-probe` | `57e8b71` | T3 — 계측 완료, 신규 환각 계열 발견 |
+| `hallu-t5-changespeaker-dispatch-filter` | `exp/hallu-t5-changespeaker-dispatch-filter` | `703794c` | T5 — 조건부 채택권고(0.2s 최종본), 머지 대기 |
+| `hallu-t1t5-combined-check` | `exp/hallu-t1t5-combined-check` | `1b65d8a` | T1+T5 상호작용 검증 전용(cherry-pick 산물) — 머지용 아님, 참고·재검증용 |
+| `hallu-pre-exp199-check` | (detached, `2957cc7`) | — | Exp-206 역사적 대조측정 1회용 — 코드 변경 없음, 삭제해도 무방 |
+| `hallu-plainmaster-bong1-check` | (detached, master 스냅샷) | — | Exp-204 대조측정 1회용 — 코드 변경 없음, 삭제해도 무방 |
+
+**master는 docs 커밋만 누적**(EXPERIMENTS.md·EXPERIMENTS_LOG.md·본 리포트) — 코드 변경은 전혀 없음. 머지 승인 시 실제 작업은 위 각 `exp/*` 브랜치에서 가져와야 함.
+
 ## 다음 할 일
 
 1. (사용자 판단) T1/T5(0.2s 최종본) 머지 여부·John Gyeong류 계열③ 편입·"영상편집" 신규 계열 추적·계열② 원 로그 재확인 여부 확정.
 2. **T5 0.2s 버전 정식 확정측정**(다음 세션 최우선): kor1 flip-flop 재현 회차를 잡을 때까지 ko 반복측정(억제력 재확인) + auto(bong1/ytn2/sbs1) `--repeat 3` 전체 재수행 — 이번 루프의 0.2s 측정은 스크리닝 수준(bong1 N=3, kor1 N=2 0-firing)이라 정식 채택 확정엔 미달.
-3. 승인 시 T1+T5 결합도 0.2s 기준으로 재검증(기존 Exp-205는 0.5s 버전 기준).
+3. T1+T5 결합은 0.2s 기준 WER 무회귀는 재확인 완료(§It-6 후속)했으나, kor1 flip-flop 완전억제 여부는 버스트 미재현으로 미확인 — 버스트 회차를 잡아 최종 확인.
 4. 여유 시 T2/T3 조건 좁히기 재시도(2a/3a 재계측): T2는 `long_silence` 연동, T3는 커밋 스냅샷의 "이후 철회 여부" 추적 신호 추가.
 5. bong1 웃음구간 필러환각(Layer 3b 비음성 게이팅)은 이번 루프 범위 밖의 기존 미해결 과제로 남김.
