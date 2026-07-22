@@ -308,3 +308,104 @@ def test_flag_false_disables_seam_gate(tk, monkeypatch):
     merged = merge_pending(fs, new)
     assert merged == held + new, "플래그 False에서 prepend가 억제됨(기존 동작 아님)"
     assert fs.state.pending_incomplete_tokens == held
+
+
+# ─── 커밋 계층 클린 절단 (Direction A — CONTEXT_CLEAN_COMMIT_ENABLED) ──────────
+
+
+def commit_prefix(fs, tokens, fire_detected, is_last):
+    """커밋 경로 재현: _split_tokens → _clean_commit_hypothesis 언바운드 호출.
+
+    반환 = 디코더 컨텍스트에 커밋될 토큰 리스트(commit_hypothesis).
+    """
+    new_hypothesis, split_words, split_tokens = AlignAttBase._split_tokens(
+        fs, tokens, fire_detected, is_last
+    )
+    return AlignAttBase._clean_commit_hypothesis(
+        fs, new_hypothesis, split_words, split_tokens
+    )
+
+
+def test_commit_excludes_trailing_incomplete_syllable(tk):
+    """fire 청크 끝의 반토막 음절(" 방어�")은 커밋에서 제외된다.
+
+    수정 전: 반토막 토큰이 컨텍스트에 커밋돼 high-water mark 오염 → 완성 바이트
+    재디코딩 불가 → 드롭·유실. 수정 후: 첫 U+FFFD 앞 클린 프리픽스만 커밋.
+    """
+    fs = make_decoder(tk)
+    tokens = tk.encode(" 구축하는") + tk.encode(" 방어선이라는")[:2]  # [" 구축하는", " 방어�"]
+    committed = commit_prefix(fs, tokens, fire_detected=True, is_last=False)
+    assert committed == tk.encode(" 구축하는"), f"반토막이 커밋됨: {committed}"
+    assert FFFD not in tk.decode(committed)
+
+
+def test_commit_halts_at_first_fffd_midposition(tk):
+    """중간 위치 U+FFFD면 그 앞까지만 커밋(뒤 clean 단어도 제외 — 재디코딩에 맡김)."""
+    fs = make_decoder(tk)
+    tokens = tk.encode(" 보장하고") + tk.encode(" 방어선이라는")[:2] + tk.encode(" 예비")
+    split_words, _ = tk.split_to_word_tokens(tokens)
+    # 전제: split에 중간 위치(마지막 아님) U+FFFD 단어가 존재해야 이 테스트가 유효
+    assert any(FFFD in w for w in split_words[:-1]), f"중간 U+FFFD 전제 불성립: {split_words}"
+    committed = commit_prefix(fs, tokens, fire_detected=True, is_last=False)
+    assert committed == tk.encode(" 보장하고"), f"첫 U+FFFD 앞까지만 커밋돼야 함: {committed}"
+
+
+def test_commit_empty_when_only_incomplete_word(tk):
+    """청크 전체가 반토막 단어("미�") 하나뿐이면 빈 커밋(안전 경로)."""
+    fs = make_decoder(tk)
+    committed = commit_prefix(fs, tk.encode("미디어")[:2], fire_detected=True, is_last=False)
+    assert committed == []
+
+
+def test_flag_false_commits_broken_token(tk, monkeypatch):
+    """CONTEXT_CLEAN_COMMIT_ENABLED=False면 반토막을 그대로 커밋(pre-fix 재현)."""
+    monkeypatch.setattr(aab, "CONTEXT_CLEAN_COMMIT_ENABLED", False, raising=False)
+    fs = make_decoder(tk)
+    tokens = tk.encode(" 구축하는") + tk.encode(" 방어선이라는")[:2]
+    committed = commit_prefix(fs, tokens, fire_detected=True, is_last=False)
+    assert committed == tokens, f"플래그 False에서 절단이 발생함: {committed}"
+
+
+def test_commit_unchanged_when_all_clean(tk):
+    """전부 clean이면 커밋 = 원본(순수 subtractive, no-op)."""
+    fs = make_decoder(tk)
+    tokens = tk.encode(" 구축하는 방어선을")
+    assert FFFD not in tk.decode(tokens)
+    committed = commit_prefix(fs, tokens, fire_detected=True, is_last=False)
+    assert committed == tokens
+
+
+def test_commit_nonfire_lastword_unchanged(tk):
+    """비-fire·마지막 단어 U+FFFD면 커밋 = _split_tokens의 new_hypothesis(no-op).
+
+    비-fire는 이미 마지막 단어를 hold(제외)하므로 클린 절단이 더 깎을 게 없다.
+    """
+    fs = make_decoder(tk)
+    tokens = tk.encode(" 구축하는") + tk.encode(" 방어선이라는")[:2]  # 마지막 " 방어�"
+    new_hypothesis, split_words, split_tokens = AlignAttBase._split_tokens(
+        fs, tokens, fire_detected=False, is_last=False
+    )
+    committed = AlignAttBase._clean_commit_hypothesis(
+        fs, new_hypothesis, split_words, split_tokens
+    )
+    assert committed == new_hypothesis, f"비-fire 마지막단어에서 추가 절단 발생: {committed}"
+
+
+def test_full_redecode_supersedes_stale_pending_single_emit(tk):
+    """복구 통합: 청크1 반토막 커밋 0 + hold → 청크2 전체 재디코딩 → seam 게이트가
+    stale 반토막 폐기 → 완성 단어 정확히 1회 방출, 중복 0.
+    """
+    fs = make_decoder(tk)
+    media = tk.encode("미디어")
+    # 청크1: fire, 반토막 음절만 — 커밋 0
+    committed1 = commit_prefix(fs, media[:2], fire_detected=True, is_last=False)
+    assert committed1 == []
+    # 같은 청크의 방출 경로: 무방출 + "미�" hold
+    emitted = run_chunk(fs, media[:2])
+    assert emitted == []
+    assert fs.state.pending_incomplete_tokens == media[:2]
+    # 청크2: 전체 "미디어" 재디코딩 → seam 게이트가 stale pending 폐기 → 1회 방출
+    emitted += run_chunk(fs, media)
+    assert emitted == ["미디어"], f"복구 실패/중복: {emitted}"
+    assert emitted.count("미디어") == 1
+    assert fs.state.pending_incomplete_tokens == []

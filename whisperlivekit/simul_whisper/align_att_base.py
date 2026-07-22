@@ -50,6 +50,15 @@ SESSION_START_LANG_MIN_PROB = 0.85  # 프로브 적용 확신도 게이트(틀�
 # builder에선 skip되는데 handler는 마지막 단어만 hold해 영구 유실되는 계약 불일치를 고친다.
 SEAM_CONVERGENCE_FIX_ENABLED = True  # False = 완전 기존 동작 — 짝지음 A/B 측정용 롤백 플래그
 
+# 커밋 계층 UTF-8 위생 (Direction A — 클린 커밋 절단): AlignAtt 스트리밍이 음절 중간에서
+# 배치를 커밋하면 마지막 토큰이 반토막 U+FFFD가 되어 디코더 컨텍스트를 오염시킨다. 방출/hold
+# 경로는 seam 수정으로 이미 첫 U+FFFD에서 멈추지만 커밋 경로(:869 tokens.append)만 반토막을
+# 넘어 전진해 high-water mark를 오염 → 완성 바이트가 재디코딩 못 되고 MAX_PENDING_RETRIES 소진
+# 후 드롭(음절/단어 영구 유실). 커밋 직전 new_hypothesis를 첫 U+FFFD 단어 앞 클린 프리픽스로
+# 절단(순수 subtractive)해 mark를 깨끗이 유지 → 다음 청크가 그 오디오를 오염 없는 컨텍스트로
+# 재디코딩. SEAM_CONVERGENCE_FIX_ENABLED=True와 함께 동작(게이트가 stale 반토막 정리 담당).
+CONTEXT_CLEAN_COMMIT_ENABLED = True  # False = 완전 기존 동작 — 짝지음 A/B 롤백 플래그
+
 # 일반(비-eager) 언어감지 누적 오디오 문턱(초). 화자전환 eager 경로의 1.5s와는 별도 —
 # CLI --lang-detect-general-secs(cfg.lang_detect_general_secs)로 오버라이드 가능(시나리오
 # 튜닝 Phase A). cfg 쪽이 숫자가 아니면(None 미지정·테스트 목객체 등) 이 상수로 폴백한다.
@@ -865,9 +874,12 @@ class AlignAttBase(ABC):
             return []
         self.state.quality_suppress_streak = 0
 
-        new_tokens_tensor = self._make_new_tokens_tensor(new_hypothesis)
+        commit_hypothesis = self._clean_commit_hypothesis(
+            new_hypothesis, split_words, split_tokens
+        )
+        new_tokens_tensor = self._make_new_tokens_tensor(commit_hypothesis)
         self.state.tokens.append(new_tokens_tensor)
-        logger.info(f"Output: {self.tokenizer.decode(new_hypothesis)}")
+        logger.info(f"Output: {self.tokenizer.decode(commit_hypothesis)}")
 
         self._clean_cache()
 
@@ -935,6 +947,30 @@ class AlignAttBase(ABC):
             else:
                 new_hypothesis = []
         return new_hypothesis, split_words, split_tokens
+
+    def _clean_commit_hypothesis(self, new_hypothesis, split_words, split_tokens):
+        """커밋용 hypothesis를 첫 U+FFFD(반토막 음절) 단어 앞 클린 프리픽스로 절단한다.
+
+        순수 subtractive — 길이를 늘리지 않는다. new_hypothesis(fire/is_last면 전체 청크,
+        비-fire면 마지막 단어 제외)와 split_words/split_tokens는 같은 순서라, 첫 U+FFFD 단어
+        인덱스 앞까지의 토큰이 new_hypothesis의 프리픽스가 된다. 반토막을 커밋에서 제외해
+        high-water mark를 깨끗이 유지 → 다음 청크가 해당 오디오를 오염 없는 컨텍스트로 재디코딩.
+        (_handle_pending_tokens의 U+FFFD 검출 idiom 재사용 — 새 tokenizer 호출·재디코딩 없음.)
+        """
+        if not CONTEXT_CLEAN_COMMIT_ENABLED:
+            return new_hypothesis
+        replacement_char = "�"
+        incomplete_idx = next(
+            (i for i, w in enumerate(split_words) if replacement_char in w), None
+        )
+        if incomplete_idx is None:
+            return new_hypothesis
+        clean_prefix = [t for toks in split_tokens[:incomplete_idx] for t in toks]
+        # clean_prefix는 new_hypothesis의 프리픽스(둘 다 같은 순서 리스트). 더 짧을 때만 절단 —
+        # 비-fire·U+FFFD가 마지막 단어면 clean_prefix == new_hypothesis라 no-op.
+        if len(clean_prefix) < len(new_hypothesis):
+            return clean_prefix
+        return new_hypothesis
 
     def _build_timestamped_words(self, split_words, split_tokens, l_absolute_timestamps):
         """Build list of timestamped ASRToken from split words."""
