@@ -10,6 +10,10 @@ logger = logging.getLogger(__name__)
 _MIN_INTERIM_CHARS = 6  # 미확정 버퍼가 이 미만이면 문맥 부족 → 환각 위험이 커 아직 번역 요청하지 않는다.
                         # (확정 경로 apply_translations는 이 게이트와 무관 — 짧은 확정 발화 "다음"→"Next"는 정상 번역)
 
+_MAX_FINAL_ATTEMPTS = 2  # 확정 번역 실패(에코 2연속·예외) 허용 시도 횟수. temperature=0이라 에코는
+                         # 결정적 반복 — 초과 시 캐시에 ""로 정착시켜 매 tick 재번역 무한루프를
+                         # 끊는다(빈칸이 오답 표시보다 낫다).
+
 
 class TranslationManager:
     """확정 세그먼트 LLM 번역 캐시 및 비차단 스케줄러."""
@@ -18,6 +22,7 @@ class TranslationManager:
         self.translator = translator
         self._cache: dict[tuple, str] = {}        # (start_rounded, text) -> 번역 결과
         self._in_flight: set[tuple] = set()       # 번역 중인 키 집합
+        self._attempts: dict[tuple, int] = {}     # 확정 번역 실패 시도 횟수 (키별) — 상한 도달 시 "" 정착
         self._interim_source: str = ""            # 마지막 번역 요청한 버퍼 텍스트
         self._interim_result: str = ""            # 마지막 완료된 번역 결과
         self._interim_in_flight: bool = False      # 번역 중 여부
@@ -34,15 +39,35 @@ class TranslationManager:
         확정 문장 경로이므로 use_rag=True — Qdrant 유사 예시가 프롬프트에 주입된다.
         재확정(finalize-grace 재오픈 등)으로 다시 불려도 캐시 키 (start, text)가 같으면
         apply_translations()에서 캐시 히트로 걸러지므로 RAG 재검색은 일어나지 않는다.
+
+        실패(빈 결과 = 에코 2연속 폐기·예외)는 _note_failure로 키별 시도 횟수를 세고,
+        _MAX_FINAL_ATTEMPTS 도달 시 캐시에 ""로 정착시켜 무한 재스케줄을 끊는다
+        (과거엔 예외·빈 결과가 캐시에 안 남아 매 tick 재번역되는 무한루프였다).
         """
         try:
             result = await self.translator.translate_sentence(text, src_lang, use_rag=True)
             if result:
                 self._cache[key] = result
+                self._attempts.pop(key, None)
+            else:
+                self._note_failure(key, text)
         except Exception as e:
             logger.warning(f"번역 실패: {e}")
+            self._note_failure(key, text)
         finally:
             self._in_flight.discard(key)
+
+    def _note_failure(self, key: tuple, text: str) -> None:
+        """확정 번역 실패 1회 기록. 상한 도달 시 캐시에 ""를 정착시켜 재시도를 종료한다."""
+        count = self._attempts.get(key, 0) + 1
+        self._attempts[key] = count
+        if count >= _MAX_FINAL_ATTEMPTS:
+            self._cache[key] = ""
+            self._attempts.pop(key, None)
+            logger.warning(
+                "[Translation] 확정 번역 %d회 연속 실패 — 빈 번역으로 정착 (text=%r)",
+                count, text[:50],
+            )
 
     def apply_translations(self, segments) -> None:
         """확정 세그먼트에 번역을 적용 (캐시에서) 또는 비차단 번역 task를 생성."""
@@ -66,13 +91,14 @@ class TranslationManager:
 
         미확정 경로이므로 use_rag=False — 버퍼는 발화 중 계속 갱신되므로 여기에 RAG를 태우면
         임베딩 인코딩 + 벡터 검색이 초당 수 회 반복돼 실시간성이 무너진다. 기본값과 같지만
-        의도를 드러내기 위해 명시한다.
+        의도를 드러내기 위해 명시한다. retry_on_echo=False — 에코가 감지돼도 재시도하지 않고
+        폐기한다(실시간성 우선; 버퍼는 곧 갱신·확정되므로 확정 경로 재시도가 품질을 책임진다).
 
         세대 가드: 번역 왕복 중 줄(블록)이 바뀌었으면 이 결과는 이전 줄 것이므로 현재 줄
         상태(_interim_result·_interim_in_flight)를 덮어쓰지 않는다(캐리오버 방지).
         """
         try:
-            result = await self.translator.translate_sentence(text, src_lang, use_rag=False)
+            result = await self.translator.translate_sentence(text, src_lang, use_rag=False, retry_on_echo=False)
             # 번역 왕복 중 줄(블록)이 바뀌었으면 이전 줄 결과이므로 버린다(캐리오버 방지).
             if result and line_id == self._interim_line_id:
                 self._interim_result = result

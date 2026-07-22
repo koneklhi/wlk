@@ -21,21 +21,34 @@ _HANGUL_RE = re.compile(r"[가-힣]")
 _LATIN_RE = re.compile(r"[A-Za-z]")
 
 _MAX_RESULT_CHARS = 500  # 개행 없는 한 줄 출력의 절대 상한. 실시간 자막 한 문장이 이보다 길면
-                         # runaway로 보고 절단한다(빈 문자열 폐기가 아니라 절단 — 폐기하면
-                         # 확정 경로에서 캐시에 안 남아 temperature=0 가비지가 매 tick 재번역되는
-                         # 무한 재시도가 된다).
+                         # runaway로 보고 절단한다(빈 문자열 폐기가 아니라 절단). 무한 재번역
+                         # 방지 책임은 manager의 시도 상한(_MAX_FINAL_ATTEMPTS·_attempts)으로
+                         # 이관됐지만, 여기서도 굳이 폐기하지 않는다 — 잘린 번역이 빈칸보다 낫다.
 
 _SCRIPT_DOMINANCE = 0.6  # 우세 스크립트 비율이 이 미만이면 진짜 한·영 혼합(code-switching)으로 보고
                          # 번역 방향 판정을 보류(§3.2 존중). 이상이면 약어가 섞여도 우세 언어로 판정.
 
+_PURE_LATIN_MIN = 4  # 라틴 단독을 en으로 확정하는 최소 글자수. 영어 약어(GPS·ROK)는 2~3자라 보류 유지.
+                     # 한글은 스크립트가 한국어 배타적이라 1자면 ko 확정.
+
 
 def _infer_script_lang(text: str) -> str | None:
     """텍스트의 문자 구성으로 실제 언어를 추정. 판단 불가하면 None.
-    한국어 발화에 흔한 영어 약어(GPS·ROK 등)가 섞여도 한글이 우세하면 ko로 판정하도록
-    다수결(우세 60%)을 쓴다 — 과거 85% 임계는 약어 한둘에 None이 돼 detected_language
+
+    순수 스크립트 fast-path: 한 스크립트만 존재하면 다수결·표본수 게이트를 건너뛰고 즉시
+    확정한다 — 짧은 순수 한국어 문장("감사합니다"=한글 5자<6)이 표본 부족으로 None이 돼
+    detected_language 캐리오버(en)를 못 잡던 사각지대 해소. 라틴 단독은 약어(GPS·ROK)
+    오판을 피하려 _PURE_LATIN_MIN(4자) 이상만 en으로 확정한다.
+
+    혼합문은 기존 다수결(우세 60%) 유지 — 한국어 발화에 흔한 영어 약어가 섞여도 한글이
+    우세하면 ko로 판정한다. 과거 85% 임계는 약어 한둘에 None이 돼 detected_language
     오검출로 인한 동일언어 통과를 못 잡았다(개발 PC 재현 확인)."""
     hangul = len(_HANGUL_RE.findall(text))
     latin = len(_LATIN_RE.findall(text))
+    if latin == 0 and hangul >= 1:
+        return "ko"
+    if hangul == 0 and latin >= _PURE_LATIN_MIN:
+        return "en"
     total = hangul + latin
     if total < 6:  # 표본 부족 — 판정 보류
         return None
@@ -91,7 +104,8 @@ class TranslatorBase:
         )
 
     async def build_system_blocks(
-        self, from_lang: str, to_lang: str, content: str, use_rag: bool = False
+        self, from_lang: str, to_lang: str, content: str, use_rag: bool = False,
+        strict_direction: bool = False,
     ) -> list:
         """정적 프롬프트 + (매칭 시) glossary 블록 + (존재 시) sentence 예시 블록 +
         (use_rag이고 활성 시) Qdrant RAG 유사 예시 블록을 조립.
@@ -100,6 +114,10 @@ class TranslatorBase:
         미확정 버퍼 번역은 버퍼가 갱신될 때마다 재호출되므로, 여기에 RAG를 태우면 초당 수 회의
         bge-m3 인코딩 + Qdrant 검색이 돌아 실시간성이 무너진다. 기본값을 False로 두어
         새 호출자가 플래그를 빠뜨려도 RAG가 미확정 경로로 새지 않게 한다(fail-safe).
+
+        strict_direction=True(에코 감지 후 재시도 경로)면 blocks 마지막에 출력 언어 강제
+        지시문을 덧붙인다 — Llama harmony·Ollama chat 양쪽이 blocks join을 쓰므로 여기
+        한 곳에 두면 두 백엔드에 모두 적용된다.
         """
         blocks = [self.get_static_system_text(from_lang, to_lang)]
 
@@ -122,6 +140,9 @@ class TranslatorBase:
             rag_part = await asyncio.to_thread(_search_rag_examples, content)
             if rag_part:
                 blocks.append(rag_part)
+
+        if strict_direction:
+            blocks.append(self._direction_directive(from_lang, to_lang))
 
         return blocks
 
@@ -179,10 +200,10 @@ class TranslatorBase:
 
         핵심 방어는 개행 제거다(관찰 증상 '6~7줄 폭주' = 개행 다수). 개행이 섞이면 다중 문장
         환각 신호로 보고 첫 번째 비어있지 않은 줄만 취한다. 길이는 개행 없는 한 줄 runaway를 위한
-        절대 상한으로만 절단한다 — **빈 문자열로 폐기하지 않는다**. 폐기하면 확정 경로에서 캐시에
-        안 남아(_translate_and_cache의 `if result:`) 같은 입력이 매 tick 재번역·재폐기되는 무한
-        재시도가 된다(temperature=0이라 결과가 늘 같음). 잘라서라도 non-empty로 돌려주면 캐시에
-        정착해 재시도가 끝난다.
+        절대 상한으로만 절단한다 — 빈 문자열로 폐기하지 않는다(잘린 번역이 빈칸보다 낫다).
+        과거엔 '폐기하면 무한 재번역'이라 폐기가 금지였지만, 지금은 확정 경로의 무한 재시도
+        방지 책임이 manager의 시도 상한(_MAX_FINAL_ATTEMPTS·_attempts — 빈 결과가 반복되면
+        캐시에 ""로 정착)으로 이관돼, 빈 문자열이 나와도 무한루프는 생기지 않는다.
         """
         if "\n" in text:
             lines = [ln.strip() for ln in text.split("\n") if ln.strip()]
@@ -192,18 +213,75 @@ class TranslatorBase:
             text = text[:_MAX_RESULT_CHARS].rstrip()
         return text
 
-    async def translate_sentence(self, content: str, src_lang: str, use_rag: bool = False) -> str:
+    @staticmethod
+    def _is_echo(content: str, result: str) -> bool:
+        """결과가 원문과 같은 언어(에코)인지. 양쪽 스크립트 판정이 모두 결정적일 때만 True —
+        한쪽이라도 None(혼합문·짧은 라틴)이면 보류(위양성 방지, §3.2 혼합문 STT 존중)."""
+        if not result:
+            return False
+        src = _infer_script_lang(content)
+        out = _infer_script_lang(result)
+        return src is not None and out is not None and src == out
+
+    @staticmethod
+    def _direction_directive(from_lang: str, to_lang: str) -> str:
+        return (
+            f"CRITICAL: The input is {from_lang}. You must write your answer ONLY in {to_lang}. "
+            "Never repeat or echo the input language."
+        )
+
+    async def translate_sentence(
+        self, content: str, src_lang: str, use_rag: bool = False, retry_on_echo: bool = True
+    ) -> str:
+        """번역 오케스트레이션(템플릿 메서드) — 백엔드 본체는 _translate_once가 담당.
+
+        출력측 에코 게이트: 결과가 원문과 같은 언어면(detected_language 캐리오버로 번역
+        방향이 반전돼 LLM이 원문을 에코) 확정 경로(retry_on_echo=True)는 문자구성 기반
+        src 강제 + 방향 지시문으로 1회 재시도하고, 재시도도 에코면 빈 문자열로 실패 처리한다.
+        interim 경로(retry_on_echo=False)는 실시간성 우선 — 재시도 없이 즉시 폐기한다.
+        """
+        src_lang = self.resolve_src_lang(content, src_lang)
+        result = await self._translate_once(content, src_lang, use_rag)
+        if not self._is_echo(content, result):
+            return result
+        if not retry_on_echo:
+            logger.warning(
+                "[Translation] 에코 감지(interim) — 재시도 없이 폐기 (src=%s content=%r result=%r)",
+                src_lang, content[:50], result[:50],
+            )
+            return ""
+        forced_src = _infer_script_lang(content) or src_lang
+        logger.warning(
+            "[Translation] 에코 감지 — src=%s 강제 + 방향 지시문 재시도 (content=%r result=%r)",
+            forced_src, content[:50], result[:50],
+        )
+        retry = await self._translate_once(content, forced_src, use_rag, strict_direction=True)
+        if not self._is_echo(content, retry):
+            return retry
+        logger.warning(
+            "[Translation] 재시도도 에코 — 번역 실패 처리 (content=%r retry=%r)",
+            content[:50], retry[:50],
+        )
+        return ""
+
+    async def _translate_once(
+        self, content: str, src_lang: str, use_rag: bool = False, strict_direction: bool = False
+    ) -> str:
+        """백엔드별 1회 번역 호출 본체. src_lang 보정·에코 게이트는 translate_sentence가 담당."""
         raise NotImplementedError
 
 
 class LlamaTranslator(TranslatorBase):
     """prod 환경용 — llama.cpp/vLLM completions API"""
 
-    async def translate_sentence(self, content: str, src_lang: str, use_rag: bool = False) -> str:
-        src_lang = self.resolve_src_lang(content, src_lang)
+    async def _translate_once(
+        self, content: str, src_lang: str, use_rag: bool = False, strict_direction: bool = False
+    ) -> str:
         from_lang = self.convert_lang_formal(src_lang)
         to_lang = self.convert_lang_formal(self.get_to_lang(src_lang))
-        system_blocks = await self.build_system_blocks(from_lang, to_lang, content, use_rag=use_rag)
+        system_blocks = await self.build_system_blocks(
+            from_lang, to_lang, content, use_rag=use_rag, strict_direction=strict_direction
+        )
         prompt = self.build_prompt(content, system_blocks)
         return await self._call_completions(prompt)
 
@@ -240,11 +318,14 @@ class LlamaTranslator(TranslatorBase):
 class OllamaTranslator(TranslatorBase):
     """dev 환경용 — Ollama chat completions API (harmony 태그 미지원)"""
 
-    async def translate_sentence(self, content: str, src_lang: str, use_rag: bool = False) -> str:
-        src_lang = self.resolve_src_lang(content, src_lang)
+    async def _translate_once(
+        self, content: str, src_lang: str, use_rag: bool = False, strict_direction: bool = False
+    ) -> str:
         from_lang = self.convert_lang_formal(src_lang)
         to_lang = self.convert_lang_formal(self.get_to_lang(src_lang))
-        system_blocks = await self.build_system_blocks(from_lang, to_lang, content, use_rag=use_rag)
+        system_blocks = await self.build_system_blocks(
+            from_lang, to_lang, content, use_rag=use_rag, strict_direction=strict_direction
+        )
         system_text = "\n\n".join(system_blocks)
         return await self._call_chat(system_text, content)
 

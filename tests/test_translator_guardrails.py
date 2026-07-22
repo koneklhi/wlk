@@ -13,11 +13,15 @@ resolve_src_lang/_sanitize_result 는 인스턴스 메서드지만 네트워크�
 """
 
 import unittest.mock as mock_module
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 from whisperlivekit.llm_translation.manager import _MIN_INTERIM_CHARS, TranslationManager
 from whisperlivekit.llm_translation.translator import (
     LlamaTranslator,
+    OllamaTranslator,
+    TranslatorBase,
     _infer_script_lang,
 )
 
@@ -68,6 +72,29 @@ def test_infer_script_lang_empty_returns_none():
     assert _infer_script_lang("") is None
 
 
+# ─── _infer_script_lang 순수 스크립트 fast-path ──────────────────────────────
+
+def test_infer_script_lang_pure_short_korean_fast_path():
+    """순수 한글은 표본수 무관 즉시 'ko' — "감사합니다"(한글 5자<6) 사각지대 해소."""
+    assert _infer_script_lang("감사합니다") == "ko"
+
+
+def test_infer_script_lang_single_hangul_char_fast_path():
+    """한글 1자("네")도 'ko' 확정 — 한글 스크립트는 한국어 배타적."""
+    assert _infer_script_lang("네") == "ko"
+
+
+def test_infer_script_lang_pure_latin_four_chars_is_en():
+    """라틴 단독 4자 이상("Okay.") → 'en' 확정."""
+    assert _infer_script_lang("Okay.") == "en"
+
+
+def test_infer_script_lang_short_latin_abbreviation_still_none():
+    """라틴 단독 3자 약어("GPS"·"ROK") → 여전히 None (약어 오판 방지, 기존 거동 유지)."""
+    assert _infer_script_lang("GPS") is None
+    assert _infer_script_lang("ROK") is None
+
+
 # ─── resolve_src_lang ────────────────────────────────────────────────────────
 
 def test_resolve_src_lang_corrects_misdetected_en_to_ko():
@@ -103,6 +130,13 @@ def test_resolve_src_lang_keeps_original_when_inference_none():
     # 짧은 약어 — _infer_script_lang → None
     assert t.resolve_src_lang("GPS", "en") == "en"
     assert t.resolve_src_lang("GPS", "ko") == "ko"
+
+
+def test_resolve_src_lang_corrects_short_pure_korean():
+    """대표 버그 회귀 방어: 짧은 순수 한국어("감사합니다", 한글 5자)가 detected='en'
+    캐리오버로 들어와도 fast-path가 'ko'로 보정한다 — 과거엔 표본 부족(<6)으로 사각지대."""
+    t = _translator()
+    assert t.resolve_src_lang("감사합니다", "en") == "ko"
 
 
 # ─── _sanitize_result ────────────────────────────────────────────────────────
@@ -234,3 +268,157 @@ def test_apply_translations_has_no_length_gate_for_short_finalized_seg():
     key = manager._cache_key(seg)
     assert key in manager._in_flight
     assert len(captured) == 1
+
+
+# ─── _is_echo (출력측 에코 게이트 판정) ──────────────────────────────────────
+
+def test_is_echo_ko_content_ko_result_true():
+    """ko 원문 + ko 결과 = 에코(True) — 방향 반전으로 원문이 그대로 돌아온 경우."""
+    assert TranslatorBase._is_echo("감사합니다", "감사합니다 정말로") is True
+
+
+def test_is_echo_ko_content_en_result_false():
+    """ko 원문 + en 결과 = 정상 번역(False)."""
+    assert TranslatorBase._is_echo("감사합니다", "Thank you very much") is False
+
+
+def test_is_echo_en_content_en_result_true():
+    """en 원문 + en 결과 = 에코(True)."""
+    assert TranslatorBase._is_echo("Thank you very much", "Thank you very much") is True
+
+
+def test_is_echo_mixed_content_returns_false():
+    """혼합문 원문(스크립트 판정 None) → 보류(False) — §3.2 혼합문 STT 존중, 위양성 방지."""
+    assert TranslatorBase._is_echo("I think 우리가 맞아요", "I think 우리가 맞아요") is False
+
+
+def test_is_echo_undecidable_result_returns_false():
+    """결과 쪽 판정 불가(짧은 라틴 "ROK") → 보류(False)."""
+    assert TranslatorBase._is_echo("감사합니다", "ROK") is False
+
+
+def test_is_echo_empty_result_returns_false():
+    """빈 결과 → False (실패 처리는 다른 계층 책임)."""
+    assert TranslatorBase._is_echo("감사합니다", "") is False
+
+
+# ─── translate_sentence 오케스트레이션 (에코 재시도 템플릿 메서드) ────────────
+
+class _StubTranslator(TranslatorBase):
+    """_translate_once 호출을 기록하고 미리 준비한 결과를 차례로 반환하는 스텁."""
+
+    def __init__(self, results: list[str]):
+        super().__init__("dummy", "http://x")
+        self._results = list(results)
+        self.calls: list[dict] = []
+
+    async def _translate_once(
+        self, content: str, src_lang: str, use_rag: bool = False, strict_direction: bool = False
+    ) -> str:
+        self.calls.append({
+            "content": content, "src_lang": src_lang,
+            "use_rag": use_rag, "strict_direction": strict_direction,
+        })
+        return self._results.pop(0)
+
+
+@pytest.mark.anyio
+async def test_translate_sentence_retries_with_forced_src_and_strict_direction():
+    """1차 에코 → 2차가 forced_src(문자구성 기준) + strict_direction=True로 호출되고,
+    2차가 정상이면 그 값을 반환한다."""
+    stub = _StubTranslator(["감사합니다 그대로 에코", "Thank you"])
+    result = await stub.translate_sentence("감사합니다", "en", use_rag=True)
+
+    assert result == "Thank you"
+    assert len(stub.calls) == 2
+    # 1차: resolve_src_lang이 이미 en→ko 보정 (fast-path)
+    assert stub.calls[0]["src_lang"] == "ko"
+    assert stub.calls[0]["strict_direction"] is False
+    assert stub.calls[0]["use_rag"] is True
+    # 2차: 문자구성 강제 src + 방향 지시문
+    assert stub.calls[1]["src_lang"] == "ko"
+    assert stub.calls[1]["strict_direction"] is True
+    assert stub.calls[1]["use_rag"] is True
+
+
+@pytest.mark.anyio
+async def test_translate_sentence_double_echo_returns_empty():
+    """2연속 에코 → 번역 실패로 빈 문자열 반환."""
+    stub = _StubTranslator(["감사합니다 에코", "감사합니다 재차 에코"])
+    result = await stub.translate_sentence("감사합니다", "ko")
+
+    assert result == ""
+    assert len(stub.calls) == 2
+
+
+@pytest.mark.anyio
+async def test_translate_sentence_no_retry_when_retry_on_echo_false():
+    """retry_on_echo=False(interim 경로) — 1차 에코 즉시 빈 문자열, 2차 호출 없음."""
+    stub = _StubTranslator(["감사합니다 에코"])
+    result = await stub.translate_sentence("감사합니다", "ko", retry_on_echo=False)
+
+    assert result == ""
+    assert len(stub.calls) == 1
+
+
+@pytest.mark.anyio
+async def test_translate_sentence_single_call_when_no_echo():
+    """1차 정상 → 재시도 없이 1회 호출로 끝난다."""
+    stub = _StubTranslator(["Thank you"])
+    result = await stub.translate_sentence("감사합니다", "ko")
+
+    assert result == "Thank you"
+    assert len(stub.calls) == 1
+    assert stub.calls[0]["strict_direction"] is False
+
+
+# ─── strict_direction 지시문 주입 (백엔드 프롬프트 레벨) ─────────────────────
+
+def _empty_prompt_manager() -> MagicMock:
+    pm = MagicMock()
+    pm.get_relevant_glossary.return_value = ""
+    pm.get_sentence_block.return_value = ""
+    return pm
+
+
+@pytest.mark.anyio
+async def test_llama_strict_direction_injects_directive_into_prompt():
+    """LlamaTranslator: strict_direction=True면 completions 프롬프트에 방향 강제 지시문 포함."""
+    t = LlamaTranslator("dummy", "http://x")
+    t._call_completions = AsyncMock(return_value="Thank you")
+
+    with patch("whisperlivekit.llm_translation.translator.get_prompt_manager",
+               return_value=_empty_prompt_manager()):
+        await t._translate_once("감사합니다", "ko", strict_direction=True)
+
+    prompt = t._call_completions.call_args[0][0]
+    assert "ONLY in" in prompt
+    assert "Korean" in prompt and "English" in prompt
+
+
+@pytest.mark.anyio
+async def test_llama_no_directive_without_strict_direction():
+    """strict_direction=False(기본) — 지시문이 프롬프트에 없어야 한다."""
+    t = LlamaTranslator("dummy", "http://x")
+    t._call_completions = AsyncMock(return_value="Thank you")
+
+    with patch("whisperlivekit.llm_translation.translator.get_prompt_manager",
+               return_value=_empty_prompt_manager()):
+        await t._translate_once("감사합니다", "ko")
+
+    prompt = t._call_completions.call_args[0][0]
+    assert "ONLY in" not in prompt
+
+
+@pytest.mark.anyio
+async def test_ollama_strict_direction_injects_directive_into_system_text():
+    """OllamaTranslator: strict_direction=True면 system 텍스트에 방향 강제 지시문 포함."""
+    t = OllamaTranslator("dummy", "http://x")
+    t._call_chat = AsyncMock(return_value="Thank you")
+
+    with patch("whisperlivekit.llm_translation.translator.get_prompt_manager",
+               return_value=_empty_prompt_manager()):
+        await t._translate_once("감사합니다", "ko", strict_direction=True)
+
+    system_text = t._call_chat.call_args[0][0]
+    assert "ONLY in" in system_text

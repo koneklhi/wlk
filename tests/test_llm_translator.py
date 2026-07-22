@@ -1,10 +1,10 @@
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 from whisperlivekit.llm_translation.translator import (
     LlamaTranslator,
     OllamaTranslator,
-    TranslatorBase,
     create_translator,
 )
 

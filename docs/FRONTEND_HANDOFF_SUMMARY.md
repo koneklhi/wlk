@@ -397,6 +397,8 @@ function applyMessage(lines, msg) {
 - **세그먼트별 확정 번역** `lines[].translation`(str): 번역 활성 + 해당 세그먼트
   `finalized=true`일 때 채워진다. 캐시 미스면 비차단으로 번역 요청 후 **다음 스냅샷부터**
   채워진다(확정 후 문장 통째로 등장 — wl처럼 토큰 단위로 흐르지 않음). **이 경로는 정상 동작한다.**
+  동일 언어 에코(방향 반전) 감지 시 서버가 1회 재시도하며, 재시도까지 실패하면 해당 세그먼트
+  `translation`이 **빈 문자열로 정착**될 수 있다 — 빈 값은 기존 규칙대로 표시 생략하면 된다.
 - ✅ **(2026-07-16 구현 완료) 진행중(미확정) 번역 `buffer_translation`도 이제 동작한다.** `TranslationManager`에
   `apply_interim_translation(text, src_lang)`이 추가돼, 확정 세그먼트 번역과 **동일한 `--llm-translation`
   경로/번역기 백엔드**로 `lines[]`의 마지막 `finalized:false` 세그먼트(아직 확정 안 된 자라나는 문장) 텍스트를
