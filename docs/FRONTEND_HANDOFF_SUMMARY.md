@@ -119,6 +119,10 @@ rows.map((line, i) => (
   서빙 루트는 `--frontend-dir`(기본값 `frontend/static`)로 지정한다. **dist가 Vite `base`(예 `/wlkies`)로 빌드됐으면**
   백엔드가 `index.html`에서 base를 자동 추출해 그 하위(`/wlkies/assets`, `/wlkies/{spa}`)로 서빙하고 `GET /`는 base로
   리다이렉트한다(`--frontend-base`, 기본값 `auto`; 루트 빌드도 하위호환). `/asr`는 어느 경우든 동일하게 쓰면 된다.
+- `GET /dev`는 **내장 데모 UI 고정 경로** — dist 유무(`--frontend-dir`)와 무관하게 항상 내장 UI를 서빙한다.
+  `GET /`는 dist가 있으면 배포 UI로 넘어가므로, 배포 UI 이슈가 프론트 문제인지 백엔드 문제인지 가를 때
+  같은 서버·같은 `/asr`를 내장 UI로 교차 확인하는 데 쓴다. SPA fallback은 base(`/wlkies`) 하위에만
+  걸려 있어 이 경로를 가로채지 않는다.
 - `GET /health`는 헬스체크용(§9.2) — React가 연결 전 서버 기동 확인에 활용 가능.
 - 쿼리 파라미터(선택):
   - `?language=<code>` — **세션별 소스 언어 지정**. 허용값 `{auto, ko, en}`. **생략** = 서버 전역 `--lan`(기본 `auto`)을

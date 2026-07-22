@@ -8,8 +8,10 @@ qdrant-client/sentence-transformers는 폐쇄망 배포 PC 전용 실물 의존�
 """
 
 import asyncio
+import os
 import sys
 import types
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -40,7 +42,9 @@ class _FakeEncodeResult:
 
 def _make_fake_sentence_transformers_module():
     class FakeSentenceTransformer:
-        def __init__(self, model_path):
+        def __init__(self, model_path, local_files_only=False, **kwargs):
+            # 폐쇄망 제약(CLAUDE.md §3.1) — 로더가 HF Hub로 나갈 여지를 남기면 안 된다.
+            assert local_files_only is True, "SentenceTransformer는 local_files_only=True로 로드해야 한다"
             self.model_path = model_path
 
         def encode(self, text):
@@ -51,13 +55,27 @@ def _make_fake_sentence_transformers_module():
     return module
 
 
-def _make_fake_qdrant_client_module(hits):
+def _make_fake_qdrant_client_module(hits, api="search"):
+    """api='search'는 구 qdrant-client, api='query_points'는 1.12+ 신 API를 흉내 낸다."""
+
     class FakeQdrantClient:
         def __init__(self, path=None):
             self.path = path
 
+    if api == "search":
         def search(self, collection_name, query_vector, limit):
             return hits
+
+        FakeQdrantClient.search = search
+    else:
+        class _QueryResponse:
+            def __init__(self, points):
+                self.points = points
+
+        def query_points(self, collection_name, query, limit):
+            return _QueryResponse(hits)
+
+        FakeQdrantClient.query_points = query_points
 
     module = types.ModuleType("qdrant_client")
     module.QdrantClient = FakeQdrantClient
@@ -105,6 +123,130 @@ def test_disabled_when_packages_unavailable(tmp_path):
 
 
 # ----------------------------------------------------------------------
+# 3-b. import 시점 예외가 ImportError가 **아닐** 때도 비활성화(서버 기동을 죽이지 않는다)
+#
+# 폐쇄망 wheelhouse에서 실제로 터지는 건 대개 ImportError가 아니다 — torch DLL 로드 실패
+# (OSError WinError 126), transformers/tokenizers 버전 스큐(RuntimeError), pydantic 스큐
+# (TypeError) 등. 이 경로가 새면 TranscriptionEngine 생성이 통째로 실패해 서버가 안 뜬다.
+# ----------------------------------------------------------------------
+@pytest.mark.parametrize(
+    "exc",
+    [OSError("[WinError 126] DLL load failed"), RuntimeError("version skew"), TypeError("pydantic v1/v2")],
+)
+def test_disabled_when_import_raises_non_import_error(tmp_path, exc):
+    qdrant_dir = tmp_path / "qdrant_db"
+    embedding_dir = tmp_path / "bge-m3"
+    qdrant_dir.mkdir()
+    embedding_dir.mkdir()
+
+    class _ExplodingModule(types.ModuleType):
+        def __getattr__(self, name):
+            raise exc
+
+    with patch.dict(
+        sys.modules,
+        {
+            "qdrant_client": _ExplodingModule("qdrant_client"),
+            "sentence_transformers": _make_fake_sentence_transformers_module(),
+        },
+    ):
+        mgr = TranslationRagManager(str(qdrant_dir), str(embedding_dir))
+
+    assert mgr.enabled is False
+    assert mgr.search_similar("hi") == ""
+
+
+def test_embedder_loads_with_local_files_only(tmp_path):
+    """폐쇄망 제약 — 임베더는 반드시 로컬 파일만 보고 로드해야 한다(HF Hub 접근 금지)."""
+    qdrant_dir = tmp_path / "qdrant_db"
+    embedding_dir = tmp_path / "bge-m3"
+    qdrant_dir.mkdir()
+    embedding_dir.mkdir()
+
+    seen = {}
+    st_module = types.ModuleType("sentence_transformers")
+
+    class _RecordingST:
+        def __init__(self, path, local_files_only=False, **kwargs):
+            seen["local_files_only"] = local_files_only
+
+        def encode(self, text):
+            return _FakeEncodeResult()
+
+    st_module.SentenceTransformer = _RecordingST
+
+    with patch.dict(
+        sys.modules,
+        {"qdrant_client": _make_fake_qdrant_client_module([]), "sentence_transformers": st_module},
+    ):
+        mgr = TranslationRagManager(str(qdrant_dir), str(embedding_dir))
+
+    assert mgr.enabled is True
+    assert seen["local_files_only"] is True
+
+
+def test_embedder_falls_back_to_offline_env_on_old_sentence_transformers(tmp_path, monkeypatch):
+    """구버전 sentence-transformers가 local_files_only를 안 받으면 환경변수로 오프라인을 강제한다.
+
+    폴백 경로에서도 네트워크로 나가지 않는 것이 핵심이다.
+    """
+    qdrant_dir = tmp_path / "qdrant_db"
+    embedding_dir = tmp_path / "bge-m3"
+    qdrant_dir.mkdir()
+    embedding_dir.mkdir()
+
+    monkeypatch.delenv("HF_HUB_OFFLINE", raising=False)
+    monkeypatch.delenv("TRANSFORMERS_OFFLINE", raising=False)
+
+    st_module = types.ModuleType("sentence_transformers")
+
+    class _OldST:
+        """local_files_only를 모르는 구버전 흉내."""
+
+        def __init__(self, path):
+            self.path = path
+
+        def encode(self, text):
+            return _FakeEncodeResult()
+
+    st_module.SentenceTransformer = _OldST
+
+    with patch.dict(
+        sys.modules,
+        {"qdrant_client": _make_fake_qdrant_client_module([]), "sentence_transformers": st_module},
+    ):
+        mgr = TranslationRagManager(str(qdrant_dir), str(embedding_dir))
+
+    assert mgr.enabled is True, "구버전에서도 비활성화되면 안 된다"
+    assert os.environ.get("HF_HUB_OFFLINE") == "1"
+    assert os.environ.get("TRANSFORMERS_OFFLINE") == "1"
+
+
+def test_disabled_when_model_load_raises(tmp_path):
+    """import는 되는데 모델 로드가 터지는 경우(가중치 누락 등)도 조용히 비활성."""
+    qdrant_dir = tmp_path / "qdrant_db"
+    embedding_dir = tmp_path / "bge-m3"
+    qdrant_dir.mkdir()
+    embedding_dir.mkdir()
+
+    st_module = types.ModuleType("sentence_transformers")
+
+    def _boom(*args, **kwargs):
+        raise OSError("config.json not found and local_files_only=True")
+
+    st_module.SentenceTransformer = _boom
+
+    with patch.dict(
+        sys.modules,
+        {"qdrant_client": _make_fake_qdrant_client_module([]), "sentence_transformers": st_module},
+    ):
+        mgr = TranslationRagManager(str(qdrant_dir), str(embedding_dir))
+
+    assert mgr.enabled is False
+    assert mgr.search_similar("hi") == ""
+
+
+# ----------------------------------------------------------------------
 # 4. 로드 성공(가짜 모듈 주입) + 검색 결과 파싱 검증 — 중첩(metadata) / flat payload 둘 다
 # ----------------------------------------------------------------------
 def test_search_similar_parses_nested_metadata_payload(tmp_path):
@@ -143,6 +285,31 @@ def test_search_similar_parses_flat_payload(tmp_path):
     assert result == "### SIMILAR EXAMPLES (RAG)\nfoo2 : 바2"
 
 
+def test_search_similar_uses_query_points_on_new_client(tmp_path):
+    """qdrant-client 1.12+처럼 search()가 없고 query_points()만 있는 버전에서도 동작해야 한다.
+
+    구 API 고정이면 배포 PC 버전에 따라 AttributeError가 나고, 그건 search_similar의
+    except에 잡혀 '켜져 있는데 결과가 늘 빈 문자열'인 무증상 실패가 된다.
+    """
+    qdrant_dir = tmp_path / "qdrant_db"
+    embedding_dir = tmp_path / "bge-m3"
+    qdrant_dir.mkdir()
+    embedding_dir.mkdir()
+
+    hits = [_FakeHit({"metadata": {"source": "foo3", "target": "바3"}})]
+    fake_qdrant_module = _make_fake_qdrant_client_module(hits, api="query_points")
+
+    with patch.dict(
+        sys.modules,
+        {"qdrant_client": fake_qdrant_module, "sentence_transformers": _make_fake_sentence_transformers_module()},
+    ):
+        mgr = TranslationRagManager(str(qdrant_dir), str(embedding_dir))
+        assert not hasattr(mgr._client, "search")  # 구 API가 실제로 없는 상태임을 고정
+        result = mgr.search_similar("hello")
+
+    assert result == "### SIMILAR EXAMPLES (RAG)\nfoo3 : 바3"
+
+
 def test_search_similar_no_hits_returns_empty(tmp_path):
     qdrant_dir = tmp_path / "qdrant_db"
     embedding_dir = tmp_path / "bge-m3"
@@ -157,6 +324,61 @@ def test_search_similar_no_hits_returns_empty(tmp_path):
         result = mgr.search_similar("hello")
 
     assert result == ""
+
+
+def test_search_similar_serializes_concurrent_calls(tmp_path):
+    """확정 문장이 한 틱에 여러 개면 to_thread로 동시 진입한다 — 그때 인코딩+검색이 겹치면 안 된다.
+
+    QdrantClient 로컬 임베디드 모드와 SentenceTransformer는 스레드 안전이 보장되지 않는다.
+    """
+    import threading
+
+    qdrant_dir = tmp_path / "qdrant_db"
+    embedding_dir = tmp_path / "bge-m3"
+    qdrant_dir.mkdir()
+    embedding_dir.mkdir()
+
+    in_flight = 0
+    max_in_flight = 0
+    counter_lock = threading.Lock()
+
+    class _TrackingHits(list):
+        pass
+
+    st_module = _make_fake_sentence_transformers_module()
+    _RealST = st_module.SentenceTransformer
+
+    class _TrackingST(_RealST):
+        def encode(self, text):
+            nonlocal in_flight, max_in_flight
+            with counter_lock:
+                in_flight += 1
+                max_in_flight = max(max_in_flight, in_flight)
+            try:
+                # 락이 없으면 다른 스레드가 이 창에 끼어든다.
+                threading.Event().wait(0.01)
+                return super().encode(text)
+            finally:
+                with counter_lock:
+                    in_flight -= 1
+
+    st_module.SentenceTransformer = _TrackingST
+    hits = _TrackingHits([_FakeHit({"source": "a", "target": "b"})])
+
+    with patch.dict(
+        sys.modules,
+        {"qdrant_client": _make_fake_qdrant_client_module(hits), "sentence_transformers": st_module},
+    ):
+        mgr = TranslationRagManager(str(qdrant_dir), str(embedding_dir))
+        assert mgr.enabled is True
+
+        threads = [threading.Thread(target=mgr.search_similar, args=(f"문장 {i}",)) for i in range(8)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+    assert max_in_flight == 1, f"동시 진입 {max_in_flight}건 — 검색 구간이 직렬화되지 않았다"
 
 
 def test_search_similar_empty_content_returns_empty_without_calling_client(tmp_path):
@@ -175,11 +397,61 @@ def test_search_similar_empty_content_returns_empty_without_calling_client(tmp_p
 
 # ----------------------------------------------------------------------
 # 5. get_rag_manager()/configure_rag_manager() 싱글턴 팩토리 동작
+#
+# RAG는 CLI 플래그가 아니라 코드에 고정된 경로로만 켜지고 꺼진다 — 자산 디렉터리가 있으면 켜지고
+# 없으면 조용히 비활성. 아래 세 테스트가 그 계약을 고정한다.
 # ----------------------------------------------------------------------
-def test_get_rag_manager_defaults_to_disabled_instance():
+def test_hardcoded_asset_paths_are_colocated_in_package():
+    """자산 경로는 llm_translation 패키지 디렉터리 하위로 고정(glossary JSON/DB와 같은 위치)."""
+    package_dir = Path(llm_translation_module.__file__).resolve().parent
+
+    assert Path(llm_translation_module.RAG_QDRANT_DB_PATH) == package_dir / "local_qdrant_db"
+    assert Path(llm_translation_module.RAG_EMBEDDING_MODEL_PATH) == package_dir / "bge-m3"
+    assert llm_translation_module.RAG_COLLECTION_NAME == "official_translation"
+    assert llm_translation_module.RAG_TOP_K == 3
+
+
+def test_get_rag_manager_uses_hardcoded_paths_and_is_disabled_without_assets(tmp_path, monkeypatch):
+    """자산이 없으면 비활성 — 그래도 하드코딩 상수를 그대로 들고 있어야 한다.
+
+    상수를 존재하지 않는 tmp 경로로 monkeypatch해, 체크아웃에 자산이 있고 없고(개발 PC vs
+    배포 PC)에 결과가 좌우되지 않게 한다 — 계약만 검증한다.
+    """
+    monkeypatch.setattr(llm_translation_module, "RAG_QDRANT_DB_PATH", str(tmp_path / "nope_qdrant"))
+    monkeypatch.setattr(llm_translation_module, "RAG_EMBEDDING_MODEL_PATH", str(tmp_path / "nope_bge"))
+
     mgr = get_rag_manager()
+
     assert isinstance(mgr, TranslationRagManager)
+    assert mgr.qdrant_path == llm_translation_module.RAG_QDRANT_DB_PATH
+    assert mgr.embedding_model_path == llm_translation_module.RAG_EMBEDDING_MODEL_PATH
+    assert mgr.collection_name == llm_translation_module.RAG_COLLECTION_NAME
+    assert mgr.top_k == llm_translation_module.RAG_TOP_K
     assert mgr.enabled is False
+
+
+def test_get_rag_manager_auto_enables_when_asset_dirs_exist(tmp_path, monkeypatch):
+    """배포 PC 시나리오 — 하드코딩 경로에 자산이 실제로 있으면 인자 없이도 자동으로 켜진다."""
+    qdrant_dir = tmp_path / "local_qdrant_db"
+    embedding_dir = tmp_path / "bge-m3"
+    qdrant_dir.mkdir()
+    embedding_dir.mkdir()
+
+    monkeypatch.setattr(llm_translation_module, "RAG_QDRANT_DB_PATH", str(qdrant_dir))
+    monkeypatch.setattr(llm_translation_module, "RAG_EMBEDDING_MODEL_PATH", str(embedding_dir))
+
+    with patch.dict(
+        sys.modules,
+        {
+            "qdrant_client": _make_fake_qdrant_client_module([]),
+            "sentence_transformers": _make_fake_sentence_transformers_module(),
+        },
+    ):
+        mgr = get_rag_manager()
+
+    assert mgr.enabled is True
+    assert mgr.qdrant_path == str(qdrant_dir)
+    assert get_rag_manager() is mgr  # 싱글턴 — 두 번째 호출에서 재로드하지 않는다
 
 
 def test_configure_rag_manager_updates_singleton(tmp_path):

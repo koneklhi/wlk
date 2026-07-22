@@ -476,35 +476,8 @@ def create_parser():
         dest="translation_model",
         help="번역 모델명. 기본값: gpt-oss-20b (배포 PC). dev는 qwen2.5:7b 지정.",
     )
-    parser.add_argument(
-        "--translation-rag-qdrant-path",
-        type=str,
-        default=None,
-        dest="translation_rag_qdrant_path",
-        help="Stage 2: Qdrant 로컬 임베디드 DB 디렉터리 경로(배포 PC 전용, 로컬 파일시스템 경로만 허용). "
-        "미지정 시 RAG 비활성(글로서리/예시문 이식은 이미 항상 동작).",
-    )
-    parser.add_argument(
-        "--translation-rag-embedding-model-path",
-        type=str,
-        default=None,
-        dest="translation_rag_embedding_model_path",
-        help="Stage 2: bge-m3 로컬 임베딩 모델 디렉터리 경로(배포 PC 전용). 미지정 시 RAG 비활성.",
-    )
-    parser.add_argument(
-        "--translation-rag-collection",
-        type=str,
-        default="official_translation",
-        dest="translation_rag_collection",
-        help="Stage 2: Qdrant 컬렉션 이름(기존 whisperlive 배포 컬렉션명과 동일 기본값).",
-    )
-    parser.add_argument(
-        "--translation-rag-top-k",
-        type=int,
-        default=3,
-        dest="translation_rag_top_k",
-        help="Stage 2: RAG 유사 예시 검색 개수(top-k, 기존과 동일 기본값 3).",
-    )
+    # Stage 2 Qdrant RAG는 CLI 플래그가 없다 — 자산 경로가
+    # whisperlivekit/llm_translation/__init__.py에 고정돼 있고, 그 디렉터리가 있으면 켜진다.
 
     # 배포 시나리오 튜닝 인자 (Phase A — CLI 승격, 기본값은 기존 하드코딩 상수와 동일).
     # 미지정(None)이면 각 소비 지점의 기존 상수로 폴백한다(무회귀).

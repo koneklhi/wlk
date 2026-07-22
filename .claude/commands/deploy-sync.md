@@ -38,6 +38,7 @@ description: master 변경사항을 배포 반입 산출물(deploy/, wlk_in/)에
    | `docs/**` | 불필요 | 변경 파일 복사(배포 PC 운영자 참고용 — "배포 산출물 없음"과 "wlk_in 사본 갱신 불필요"는 다른 얘기다) |
    | `test_data/**`, `tests/**`, 루트 메타파일(`README.md`·`EXPERIMENTS*.md` 등) | 불필요 | 변경 파일 복사 |
    | `whisperlivekit/model/**` | 해당 없음 | `.gitignore` 비추적이라 git diff로 안 잡힘 — 새 모델 파일 추가 여부를 사용자에게 별도 확인 |
+   | `whisperlivekit/llm_translation/local_qdrant_db/**`, `whisperlivekit/llm_translation/bge-m3/**` (번역 RAG 자산) | 해당 없음 | `.gitignore` 비추적이라 git diff로 안 잡힘 — **복사도 삭제도 하지 않는다**. 배포 PC 기보유 자산이며 이게 있어야 RAG가 켜진다(`docs/DEPLOYMENT_OFFLINE.md` §6.3). 6단계 파일 단위 갱신에서 이 두 디렉터리를 건드리지 않았는지, 배포 PC에 여전히 존재하는지만 확인 |
    | `.claude/`, `.memorize/`, `.omc/` | 불필요 | **범위 밖** — 배포 PC는 Claude Code를 쓰지 않는다. `wlk_in`에 이미 있는 구버전은 방치해도 무방(정리 불필요) |
 
 4. **서드파티 의존성 wheelhouse 재빌드가 필요한 경우(`pyproject.toml`/`uv.lock` 변경 시) — 공유 `.venv` 절대 접촉 금지**

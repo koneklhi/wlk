@@ -5,6 +5,14 @@ import httpx
 from whisperlivekit.llm_translation import get_prompt_manager, get_rag_manager
 
 
+def _search_rag_examples(content: str) -> str:
+    """RAG 매니저 획득 + 유사 예시 검색. 워커 스레드에서 실행되는 전 구간 블로킹 함수."""
+    rag_manager = get_rag_manager()
+    if not rag_manager.enabled:
+        return ""
+    return rag_manager.search_similar(content)
+
+
 class TranslatorBase:
     def __init__(self, model_name: str, endpoint: str):
         self.model_name = model_name
@@ -71,11 +79,13 @@ class TranslatorBase:
         if sentence_part:
             blocks.append(sentence_part)
 
-        rag_manager = get_rag_manager()
-        if use_rag and rag_manager.enabled:
-            # 임베딩 인코딩 + Qdrant 검색은 블로킹 CPU 호출이므로 이벤트루프를 막지 않도록
-            # asyncio.to_thread로 감싼다(원본 whisperlive_code/translator.py 124줄과 동일).
-            rag_part = await asyncio.to_thread(rag_manager.search_similar, content)
+        if use_rag:
+            # 매니저 획득까지 통째로 to_thread에 넣는다. get_rag_manager()는 최초 호출 시
+            # bge-m3 로드(수 초)를 유발할 수 있는데, core.py 워밍업을 타지 못한 경우
+            # (엔진 싱글턴이 이미 초기화된 뒤 등) 그 로드가 이벤트루프 위에서 벌어져
+            # 모든 세션의 오디오 수신이 멈춘다. 인코딩+검색 자체도 블로킹 CPU 호출이다
+            # (원본 whisperlive_code/translator.py 124줄과 동일한 to_thread 처리).
+            rag_part = await asyncio.to_thread(_search_rag_examples, content)
             if rag_part:
                 blocks.append(rag_part)
 
