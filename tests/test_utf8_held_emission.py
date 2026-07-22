@@ -252,6 +252,7 @@ def test_h4_refresh_segment_clears_pending(tk):
     fs.cfg = SimpleNamespace(rewind_threshold=200)
     fs.init_tokens = lambda: None
     fs.init_context = lambda: None
+    fs._stage1_shadow_reset_evidence = lambda: None  # master 머지(Exp-197 계측)로 refresh_segment가 호출
     fs.segments_len = types.MethodType(AlignAttBase.segments_len, fs)
     AlignAttBase.refresh_segment(fs, complete=True)
     assert fs.state.pending_incomplete_tokens == []
