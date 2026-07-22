@@ -8,8 +8,8 @@ import { fetchJson } from '@/utils/fetchJson';
 
 /**
  * GET /api/corrections 응답은 **평평한 dict** `{ "<wrong_word>": "<correct_word>" }` 다
- * (filtering/manager.py `word_manager.user_replacements`). 사용자 추가분만 나오고
- * 기본 내장 사전은 포함되지 않는다.
+ * (filtering/manager.py `word_manager.combined_replacements`). 기본 내장 사전(base JSON) +
+ * 사용자 추가분(DB)이 병합되어 반환된다.
  */
 export type CorrectionsMap = Record<string, string>;
 
@@ -21,8 +21,12 @@ export const addCorrection = (wrongWord: string, correctWord: string) =>
     body: JSON.stringify({ wrong_word: wrongWord, correct_word: correctWord }),
   });
 
+/**
+ * 삭제. 기본(base JSON) 항목은 HTTP 200 + `{status:'warning'}`로 온다(에러가 아니다) —
+ * 호출측에서 status를 확인할 것 (deletePromptItem과 동일 패턴).
+ */
 export const deleteCorrection = (wrongWord: string) =>
-  fetchJson<{ status: string }>(`${Api.CORRECTIONS}/${encodeURIComponent(wrongWord)}`, {
+  fetchJson<{ status: string; message?: string }>(`${Api.CORRECTIONS}/${encodeURIComponent(wrongWord)}`, {
     method: 'DELETE',
   });
 

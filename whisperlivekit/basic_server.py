@@ -499,9 +499,9 @@ async def list_models():
 
 @app.get("/api/corrections")
 async def get_corrections():
-    """사용자 단어 교정 사전 조회."""
+    """단어 교정 사전 조회 (기본 base JSON + 사용자 추가분 병합)."""
     word_manager = get_word_manager()
-    return word_manager.user_replacements
+    return word_manager.combined_replacements
 
 
 @app.post("/api/corrections")
@@ -514,8 +514,10 @@ async def add_correction(update: CorrectionUpdate):
 
 @app.delete("/api/corrections/{wrong_word}")
 async def delete_correction(wrong_word: str):
-    """단어 교정 삭제. 즉시 반영."""
+    """단어 교정 삭제. 즉시 반영. 기본(base JSON) 항목은 삭제 불가."""
     word_manager = get_word_manager()
+    if not word_manager.is_user_defined(wrong_word) and wrong_word in word_manager.base_replacements:
+        return {"status": "warning", "message": "기본 사전 항목은 삭제할 수 없습니다."}
     word_manager.delete_user_word(wrong_word)
     return {"status": "success"}
 
