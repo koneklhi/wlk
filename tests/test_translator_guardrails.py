@@ -17,7 +17,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from whisperlivekit.llm_translation.manager import _MIN_INTERIM_CHARS, TranslationManager
+from whisperlivekit.llm_translation.manager import (
+    _INTERIM_MIN_DELTA_CHARS,
+    _MIN_INTERIM_CHARS,
+    TranslationManager,
+)
 from whisperlivekit.llm_translation.translator import (
     LlamaTranslator,
     OllamaTranslator,
@@ -207,9 +211,15 @@ def test_interim_gate_blocks_short_text():
 
 
 def test_interim_gate_allows_long_enough_text():
-    """미확정 버퍼가 _MIN_INTERIM_CHARS 이상이면 정상적으로 번역 요청을 트리거한다."""
+    """미확정 버퍼가 충분히 길면 정상적으로 번역 요청을 트리거한다.
+
+    interim 디바운스(시간·델타) 도입 후, 새 줄(_interim_source="")의 첫 발동은
+    델타 게이트 _INTERIM_MIN_DELTA_CHARS(=12) 이상이어야 통과한다 — 이는
+    _MIN_INTERIM_CHARS(=6)보다 엄격하므로 여기서는 델타 게이트 기준으로 버퍼를 잡는다.
+    시간 게이트는 갓 생성한 manager(last_dispatch_ts=0.0)라 통과한다.
+    """
     manager = _manager()
-    long_enough = "가" * _MIN_INTERIM_CHARS
+    long_enough = "가" * _INTERIM_MIN_DELTA_CHARS
 
     captured = []
 

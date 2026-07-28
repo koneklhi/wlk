@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import time
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -14,6 +15,11 @@ _MAX_FINAL_ATTEMPTS = 2  # 확정 번역 실패(에코 2연속·예외) 허용 �
                          # 결정적 반복 — 초과 시 캐시에 ""로 정착시켜 매 tick 재번역 무한루프를
                          # 끊는다(빈칸이 오답 표시보다 낫다).
 
+_INTERIM_MIN_INTERVAL_S = 0.5   # 직전 interim 번역 발동 후 이 간격(초) 미만이면 보류 — LLM 요청률 상한.
+                                # 버퍼가 tick마다 갱신돼도 초당 발동 수를 묶어 LLM 서버 부하·확정 지연을 막는다.
+_INTERIM_MIN_DELTA_CHARS = 12   # 버퍼가 직전 번역 소스 대비 이만큼 자라지 않았으면 보류 — 잔단어 성장마다
+                                # ("미래의"→"미래의 합동"→"미래의 합동작전") 재번역하는 낭비를 방지한다.
+
 
 class TranslationManager:
     """확정 세그먼트 LLM 번역 캐시 및 비차단 스케줄러."""
@@ -27,6 +33,7 @@ class TranslationManager:
         self._interim_result: str = ""            # 마지막 완료된 번역 결과
         self._interim_in_flight: bool = False      # 번역 중 여부
         self._interim_line_id = None              # 현재 미확정 줄(블록) 식별자 — 전환 감지용
+        self._interim_last_dispatch_ts: float = 0.0  # 마지막 interim 번역 발동 시각(monotonic) — 시간 디바운스용
 
     def _cache_key(self, seg) -> tuple:
         """캐시 키: (시작시간 반올림, 텍스트)."""
@@ -142,8 +149,18 @@ class TranslationManager:
             return self._interim_result
 
         if not self._interim_in_flight and text != self._interim_source:
+            now = time.monotonic()
+            # 시간 디바운스: 직전 발동 후 최소 간격 미만이면 보류(직전 결과 유지 반환).
+            if now - self._interim_last_dispatch_ts < _INTERIM_MIN_INTERVAL_S:
+                return self._interim_result
+            # 델타 게이트: 버퍼가 직전 번역 소스 대비 충분히 자라지 않았으면 보류.
+            # (새 줄이면 _interim_source="" 라 len 차이가 곧 text 길이 → 첫 발동 실효 임계는
+            #  _INTERIM_MIN_DELTA_CHARS(=12)로, 위 _MIN_INTERIM_CHARS(=6) 게이트보다 엄격하다.)
+            if len(text) - len(self._interim_source) < _INTERIM_MIN_DELTA_CHARS:
+                return self._interim_result
             self._interim_in_flight = True
             self._interim_source = text
+            self._interim_last_dispatch_ts = now
             asyncio.ensure_future(self._translate_interim_and_store(text, src_lang, line_id))
 
         return self._interim_result

@@ -38,6 +38,14 @@ def make_translator_mock(return_value: str = "번역 결과") -> MagicMock:
     return mock
 
 
+def make_closing_ensure_future():
+    """ensure_future mock side_effect — 전달된 coroutine을 닫아 RuntimeWarning을 막는다."""
+    def _side_effect(coro):
+        coro.close()
+        return MagicMock()
+    return MagicMock(side_effect=_side_effect)
+
+
 # ─── 테스트 ──────────────────────────────────────────────────────────────────
 
 def test_apply_translations_schedules_task_for_finalized_seg():
@@ -309,3 +317,115 @@ async def test_success_after_failure_caches_result_and_clears_attempts():
 
     assert manager._cache[key] == "Success again"
     assert key not in manager._attempts
+
+
+# ─── interim 디바운스: 시간(_INTERIM_MIN_INTERVAL_S) + 델타(_INTERIM_MIN_DELTA_CHARS) ──
+
+def test_interim_time_debounce_holds_within_interval():
+    """시간 디바운스: 텍스트가 바뀌어도 직전 발동 후 0.5s 미만이면 dispatch 안 됨,
+    간격이 지나면 dispatch 된다."""
+    import unittest.mock as mock_module
+
+    translator = make_translator_mock()
+    manager = TranslationManager(translator)
+
+    text1 = "미래의 합동작전을 준비하고 있습니다"  # 충분히 김(델타 게이트 통과)
+
+    # t=1.0 첫 발동 (last_dispatch_ts=0.0 이므로 시간 게이트 통과)
+    with mock_module.patch("asyncio.ensure_future", make_closing_ensure_future()) as mock_ensure, \
+         mock_module.patch("time.monotonic", return_value=1.0):
+        manager.apply_interim_translation(text1, "ko", line_id=1.0)
+    assert mock_ensure.call_count == 1, "첫 발동은 일어나야 한다"
+    assert manager._interim_last_dispatch_ts == 1.0
+
+    # 번역 왕복이 끝났다고 가정하고 in-flight 내림 (시간 게이트만 격리 검증)
+    manager._interim_in_flight = False
+
+    text2 = text1 + " 그리고 새로운 문장이 더 붙었습니다"  # 델타 >= 12 (델타 게이트는 통과)
+
+    # t=1.3 → 1.3-1.0=0.3 < 0.5 : 시간 게이트에 걸려 보류
+    with mock_module.patch("asyncio.ensure_future") as mock_ensure, \
+         mock_module.patch("time.monotonic", return_value=1.3):
+        manager.apply_interim_translation(text2, "ko", line_id=1.0)
+    mock_ensure.assert_not_called()
+
+    # t=1.6 → 1.6-1.0=0.6 >= 0.5 : 간격 경과, 발동
+    with mock_module.patch("asyncio.ensure_future", make_closing_ensure_future()) as mock_ensure, \
+         mock_module.patch("time.monotonic", return_value=1.6):
+        manager.apply_interim_translation(text2, "ko", line_id=1.0)
+    assert mock_ensure.call_count == 1
+    assert manager._interim_last_dispatch_ts == 1.6
+
+
+def test_interim_delta_gate_holds_small_growth():
+    """델타 게이트: 직전 소스 대비 12자 미만 성장은 dispatch 안 됨, 12자 이상은 됨.
+    (시간 게이트는 통과하도록 last_dispatch_ts=0.0 + 큰 monotonic 값으로 격리.)"""
+    import unittest.mock as mock_module
+
+    translator = make_translator_mock()
+    manager = TranslationManager(translator)
+    # 줄 전환 리셋을 피하려 line_id 를 미리 맞추고, 이미 번역된 소스를 세팅
+    manager._interim_line_id = 1.0
+    manager._interim_source = "기존에 번역된 긴 소스 텍스트"
+
+    small = manager._interim_source + "가나다"  # 델타 3자 < 12
+    with mock_module.patch("asyncio.ensure_future") as mock_ensure, \
+         mock_module.patch("time.monotonic", return_value=100.0):
+        manager.apply_interim_translation(small, "ko", line_id=1.0)
+    mock_ensure.assert_not_called()
+
+    big = manager._interim_source + "가나다라마바사아자차카타"  # 델타 12자 >= 12
+    with mock_module.patch("asyncio.ensure_future", make_closing_ensure_future()) as mock_ensure, \
+         mock_module.patch("time.monotonic", return_value=100.0):
+        manager.apply_interim_translation(big, "ko", line_id=1.0)
+    assert mock_ensure.call_count == 1
+
+
+def test_interim_in_flight_guard_still_blocks():
+    """회귀: in-flight 가드는 그대로 유지 — 번역 중이면 새 dispatch 안 됨."""
+    import unittest.mock as mock_module
+
+    translator = make_translator_mock()
+    manager = TranslationManager(translator)
+    manager._interim_line_id = 1.0
+    manager._interim_in_flight = True  # 이미 번역 중
+
+    with mock_module.patch("asyncio.ensure_future") as mock_ensure, \
+         mock_module.patch("time.monotonic", return_value=100.0):
+        manager.apply_interim_translation("충분히 길고 새로운 미확정 버퍼 텍스트", "ko", line_id=1.0)
+    mock_ensure.assert_not_called()
+
+
+def test_interim_min_chars_gate_still_blocks_short_buffer():
+    """회귀: _MIN_INTERIM_CHARS 게이트는 그대로 — 짧은 버퍼는 새 게이트 이전에 보류된다."""
+    import unittest.mock as mock_module
+
+    translator = make_translator_mock()
+    manager = TranslationManager(translator)
+    manager._interim_line_id = 1.0
+
+    with mock_module.patch("asyncio.ensure_future") as mock_ensure, \
+         mock_module.patch("time.monotonic", return_value=100.0):
+        manager.apply_interim_translation("짧다", "ko", line_id=1.0)  # 2자 < 6
+    mock_ensure.assert_not_called()
+
+
+def test_interim_last_dispatch_ts_survives_line_transition():
+    """회귀+설계: 줄(블록) 전환 리셋 시 _interim_last_dispatch_ts 는 리셋되지 않아
+    전역 요청률 상한이 줄 경계를 넘어 유지된다(폭주 방지)."""
+    import unittest.mock as mock_module
+
+    translator = make_translator_mock()
+    manager = TranslationManager(translator)
+
+    # 줄 A 에서 방금 발동한 상태
+    manager._interim_line_id = 1.0
+    manager._interim_last_dispatch_ts = 10.0
+
+    # 줄 B 로 전환 + 충분히 긴 버퍼. t=10.2 (< 10.5) 이면 시간 게이트에 걸려 보류돼야 한다.
+    with mock_module.patch("asyncio.ensure_future") as mock_ensure, \
+         mock_module.patch("time.monotonic", return_value=10.2):
+        manager.apply_interim_translation("새 줄의 충분히 긴 미확정 버퍼 텍스트", "ko", line_id=2.0)
+    mock_ensure.assert_not_called()
+    assert manager._interim_line_id == 2.0  # 줄 전환은 반영됨
+    assert manager._interim_last_dispatch_ts == 10.0  # 발동 시각은 유지됨
