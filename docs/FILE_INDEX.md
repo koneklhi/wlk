@@ -55,7 +55,6 @@
 - [docs/MASTER_CHANGES.md](MASTER_CHANGES.md) — master 최종본 upstream 대비 전체 변경 요약 + 향후 개선 (채택 실험 증류본)
 - [docs/SCHEMA_CHANGES.md](SCHEMA_CHANGES.md) — React 메시지 스키마 변경 이력
 - [docs/API_SPEC.md](API_SPEC.md) — React가 실제 사용하는 WebSocket `/asr` + REST 엔드포인트 정식 명세 (최신 정본)
-- [docs/FRONTEND_HANDOFF_SUMMARY.md](FRONTEND_HANDOFF_SUMMARY.md) — React 연동 정본 (TL;DR 변경표·화자분할 인계·SCHEMA_CHANGES 상위 확장본; 구 상세본 FRONTEND_HANDOFF.md는 archive로 이동, 내용 대체)
 - [docs/DEPLOYMENT_OFFLINE.md](DEPLOYMENT_OFFLINE.md) — 폐쇄망 오프라인 반입·서버 기동(venv 없이 `C:\Python312` 직접 설치, DLP 회피)·경로 C 자동/경로 B 테스트 + 단어집·번역(기본 ON) 배포 설정 §5
 - [docs/OPEN_QUESTIONS.md](OPEN_QUESTIONS.md) — 설계 결정 이력 (대부분 해소 — 정본 문서 링크)
 - [docs/TESTING.md](TESTING.md) — 실행 명령어·검증 순서·test_data 구조

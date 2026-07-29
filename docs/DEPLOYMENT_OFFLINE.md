@@ -13,7 +13,7 @@
 > 엔드포인트·모델)은 이 문서 §5로 통합됐다(구 `TRANSLATION_SETUP.md`·`TRANSLATION_DEPLOY_RUNBOOK.md`는 폐지).
 >
 > 관련 문서: [TESTING.md](TESTING.md)(경로 정의) · [MASTER_CHANGES.md](MASTER_CHANGES.md)(master 변경요약) ·
-> [FRONTEND_HANDOFF_SUMMARY.md](FRONTEND_HANDOFF_SUMMARY.md)(React 연결).
+> [API_SPEC.md](API_SPEC.md)(React 연결 계약).
 
 ---
 
@@ -438,12 +438,11 @@ C:\Python312\python.exe -m whisperlivekit.basic_server --no-llm-translation
 허용 후 한·영 섞어 발화.
 - **통과 기준**: 발화가 끊김·환각 없이 실시간 전사되고, 화자가 바뀌면 화자 배지(1·2·3…)가 분리된다.
 - 음성 파일로 보려면 VBCable 재생장치를 통해 틀거나(경로 C), 빠른 방법은 마이크 앞에서 직접 발화.
-- **배포 UI엔 현재 저장 버튼이 없다**(2026-07-22 제거, [FRONTEND_HANDOFF_SUMMARY.md](FRONTEND_HANDOFF_SUMMARY.md) §8). 과거 내장 UI는 저장 버튼 클릭 시 그 시점까지의 누적 전사를 서버 로컬 폴더(`--transcript-save-dir`, 기본값 `./transcripts`)에 `.txt`로 저장했다 — API 계약(`POST /api/save-transcript`) 자체는 유지된다.
+- **배포 UI엔 현재 저장 버튼이 없다**(2026-07-22 제거). 과거 내장 UI는 저장 버튼 클릭 시 그 시점까지의 누적 전사를 서버 로컬 폴더(`--transcript-save-dir`, 기본값 `./transcripts`)에 `.txt`로 저장했다 — API 계약([API_SPEC.md](API_SPEC.md) §3.2 `POST /api/save-transcript`) 자체는 유지된다.
 
 #### 2단계 — 배포 UI 정적 서빙 배선 (1단계에서 이미 사용한 방법의 상세)
 1단계에서 접속한 배포 UI가 어떻게 서빙되는지의 배선 설명이다 — 연결 자체는 1단계에서 이미 끝났으니, dist를
-아직 안 두었다면 여기부터 먼저 확인한다. 기존 whisperlive와 **달라진 점**만 맞추면 된다는 원리는 그대로
-유효 — 상세·코드 위치는 [FRONTEND_HANDOFF_SUMMARY.md](FRONTEND_HANDOFF_SUMMARY.md):
+아직 안 두었다면 여기부터 먼저 확인한다:
 
 > **정적 서빙 배선 구현 완료**: React 빌드 산출물(dist)을 배포 PC의 `frontend/static/`(즉 `frontend/static/index.html` +
 > `frontend/static/assets/...`)에 배치하고 서버를 재기동하면, `GET /`가 내장 데모 UI 대신 그 dist를 자동 서빙한다
@@ -531,7 +530,7 @@ C:\Python312\python.exe -m whisperlivekit.basic_server
 ### 5.4 [수정 완료] 화자분할 ON + 번역 동시 가능
 - **과거 버그**: 화자분할 경로가 `finalized=True`를 설정하지 않아 번역 매니저가 모든 세그먼트를 건너뛰어, 화자분할과 번역을 함께 쓰면 번역이 안 붙었다.
 - **수정(완료)**: `get_lines_diarization()`이 화자 전환이 끝난 세그먼트(`segments[:-1]`)에 `finalized=True`를 부여한다([tokens_alignment.py:214-216](../whisperlivekit/tokens_alignment.py#L214-L216)). master 머지 완료 → 화자분할 + 번역 **동시 기동 가능**(현재 기본값 그대로가 이 조합).
-- **한 가지 한계**: 현재 발화 중인 마지막 세그먼트(`segments[-1]`)는 아직 미확정이라, **다음 화자로 전환되는 순간** 확정되며 번역이 붙는다(화자가 계속 말하는 동안엔 그 문장 번역이 한 박자 늦게 표시됨). 실사용엔 무방하나 동작 특성으로 알아둘 것. (스키마 영향은 [FRONTEND_HANDOFF_SUMMARY.md §5](FRONTEND_HANDOFF_SUMMARY.md))
+- **한 가지 한계**: 현재 발화 중인 마지막 세그먼트(`segments[-1]`)는 아직 미확정이라, **다음 화자로 전환되는 순간** 확정되며 번역이 붙는다(화자가 계속 말하는 동안엔 그 문장 번역이 한 박자 늦게 표시됨). 실사용엔 무방하나 동작 특성으로 알아둘 것. (스키마 영향은 [API_SPEC.md](API_SPEC.md) §2.4.3 참조)
 
 ### 5.5 배포 전 점검 — LLM 서버 격리 스모크 (wlk 기동 전)
 

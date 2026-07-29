@@ -222,7 +222,7 @@ React는 `key={line.id}`로 렌더하면 재조정이 알아서 바뀐 항목만
 | 문서 | 내용 |
 |---|---|
 | [API_SPEC.md](API_SPEC.md) §2.4.2 | 델타 계약 정본 + 전체 메시지 스키마 |
-| [FRONTEND_HANDOFF_SUMMARY.md](FRONTEND_HANDOFF_SUMMARY.md) §4 | `Segment` 필드·`buffer_*` 표시·화자분할 등 전체 렌더 규칙 |
+| [API_SPEC.md](API_SPEC.md) §2.4.3 | `Segment` 필드·`buffer_*` 표시·화자분할 등 전체 렌더 규칙 |
 | [SCHEMA_CHANGES.md](SCHEMA_CHANGES.md) §1.1 | 기존 `whisperlive` SSE 대비 변경 이력 |
 | `whisperlivekit/web/live_transcription.js` | 참조 구현(내장 UI, 실제로 `?mode=delta`로 접속) |
 | `whisperlivekit/diff_protocol.py` | 서버측 구현 — 모듈 docstring에 알고리즘 명세 |

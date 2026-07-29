@@ -5,8 +5,6 @@
 > `/api/save-transcript`, `/api/corrections`, `/api/prompts`). OpenAI/Deepgram 호환 계층
 > (`/v1/audio/transcriptions`, `/v1/listen` 등)은 이 프론트와 무관하며 상세는
 > [0.Metafile/docs/API.md](../0.Metafile/docs/API.md) 참조.
-> **연동 개요·마이그레이션 가이드·코드 근거 상세**는 [FRONTEND_HANDOFF_SUMMARY.md](FRONTEND_HANDOFF_SUMMARY.md)
-> 참조(구 상세본 FRONTEND_HANDOFF.md는 `docs/archive/`로 이동, 내용은 SUMMARY로 대체).
 >
 > 문서 기준: master `534bad1` 시점(전사 라인 리텐션 = **무제한**, 번역 glossary 관리 API·진행중 번역 구현 완료). 값·기본값은 §6 참조.
 
@@ -604,7 +602,6 @@ full 모드(기본)에서는 매 스냅샷 `lines[]`를 통째로 다시 그리�
 
 ## 7. 관련 문서
 
-- 연동 개요·wl→wlk 마이그레이션 가이드·코드 근거 상세: [FRONTEND_HANDOFF_SUMMARY.md](FRONTEND_HANDOFF_SUMMARY.md)
 - 메시지 스키마 변경 이력: [SCHEMA_CHANGES.md](SCHEMA_CHANGES.md)
 - OpenAI/Deepgram 호환 계층: [0.Metafile/docs/API.md](../0.Metafile/docs/API.md)
   (⚠️ 이 upstream 문서는 diff 프로토콜을 "`?mode=diff` 옵트인"으로 기술한다 — 본 저장소도 **opt-in**이지만

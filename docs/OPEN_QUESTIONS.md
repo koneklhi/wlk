@@ -17,7 +17,7 @@
 
 ## 3. React UI 연결 범위 — 스키마 해소, 통합 검증만 대기
 
-- 메시지 스키마 **확정·구현 완료**(후보 A: `whisperlivekit` 출력 + `completed` / `lang` 등 React 호환 별칭 유지). 정본 = [SCHEMA_CHANGES.md](SCHEMA_CHANGES.md) / [FRONTEND_HANDOFF_SUMMARY.md](FRONTEND_HANDOFF_SUMMARY.md).
+- 메시지 스키마 **확정·구현 완료**(후보 A: `whisperlivekit` 출력 + `completed` / `lang` 등 React 호환 별칭 유지). 정본 = [SCHEMA_CHANGES.md](SCHEMA_CHANGES.md) / [API_SPEC.md](API_SPEC.md).
 - 남은 것은 React UI 실제 연결·표출 검증(ROADMAP Phase 4-7 대기)뿐 — 스키마 설계 선택지가 아니라 통합 동작 확인의 문제다.
 
 ## 4. 폐쇄망 모델 디렉터리 레이아웃·배포 패키징 — 해소

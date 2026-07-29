@@ -16,6 +16,7 @@ goal 프롬프트 지침 파일을 보관한다. **완료·머지된 goal은 [do
 
 | 파일 | 내용 | 상태 |
 |---|---|---|
+| [GOAL_HALLUCINATION_REDUCTION_LOOP.md](GOAL_HALLUCINATION_REDUCTION_LOOP.md) | **환각 빈도 저감 무정지 자율 루프(6h/토큰 소진)** — 2026-07-22 로그 분석으로 확정한 환각 3계열(① ko 고정 세션 refresh 폭주 중복 — `backend.py:449-501` 코드 갭 확정 ② 침묵 클로징 "감사합니다" — 타임스탬프 정체 시그니처 ③ 잠금언어 음차 "사태라" — Exp-172 사각지대)을 T1→T5 큐로 순회. master 머지 금지(채택권고까지만), 진행 리포트 = `docs/research/2026-07-22_hallucination-loop-progress.md` | 미실행 — 신규 작성(2026-07-22) |
 | [GOAL_CODESWITCH_BOUNDARY.md](GOAL_CODESWITCH_BOUNDARY.md) | 코드스위칭 경계 3증상 수정 루프 — Stage 0(Exp-172) 완료, Stage 1은 별도 goal(archive의 GOAL_SCRIPT_ANCHOR_REDETECT.md, Exp-175)로 분리 완료, **Stage 2(③ 계측기반 수정)는 미착수** | 부분 완료 — Stage 2 대기 |
 | [GOAL_BOUNDARY_QG_PRESERVE.md](GOAL_BOUNDARY_QG_PRESERVE.md) | 경계 복구 구간 QualityGate 버퍼 폐기 유실(Type B 삼킴) 제거 | 미실행 — 다음 예정 루프 |
 | [GOAL_SCRIPTANCHOR_ACRONYM_GUARD.md](GOAL_SCRIPTANCHOR_ACRONYM_GUARD.md) | ScriptAnchorRedetect 철자 낭독(약어) 오발동 가드 | 진행 중(워크트리 `scriptanchor-acronym-guard`) |

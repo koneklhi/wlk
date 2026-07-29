@@ -10,14 +10,7 @@
 
 - **목적**: 기존 `whisperlive` 라이브러리 기반 실시간 STT 통역 시스템을, `whisperlivekit` 라이브러리 기반으로 새로 개발한다.
 - **상위 라이브러리**: `whisperlivekit` 패키지 본체가 이 저장소에 포함되어 있다. 우리 시스템은 이 위에 얹혀 동작한다.
-- **기존 `whisperlive` 코드 참조 디렉터리**: [whisperlive_code/](whisperlive_code/)
-  - 공식 `whisperlive` 코드를 우리 요구사항에 맞게 수정했던 주요 파일들이 들어 있다.
-  - **기본 용도**: 요구사항 이해용 참고 자료. 임시방편 로직(같은 문장 N회 반복 시 확정, 타임스탬프 변화량 임계치 등)은
-    **그대로 이식하지 않는다**.
-  - **이식 우선 영역**: §3.4 번역 파이프라인, §3.5 필터링/단어 교정, §3.6 Glossary 동적 관리,
-    그리고 ROADMAP Phase 4(React UI 연결 + 번역 통합)는 `whisperlive_code/`의 코드·로직을 **우선 따른다**.
-  - **이식 방식**: `whisperlive` 코드를 글자 그대로 복사하지 않는다 — 상위 라이브러리가 다르므로 **큰 흐름·로직은 따르되 필요한 곳만 최소 변경**해 `whisperlivekit` 구조에 맞춘다. 본체는 최소 범위만 수정, 가능하면 새 모듈로 분리.
-  - **프론트엔드 인계**: 추후 `whisperlive` React UI 연결 시 백엔드에서 달라진 점(스키마·엔드포인트·전송형식)은 [docs/SCHEMA_CHANGES.md](docs/SCHEMA_CHANGES.md)에 기록·갱신한다.
+- **기존 `whisperlive` 코드 참조 디렉터리**: [whisperlive_code/](whisperlive_code/) — 기존 체계를 우리 요구사항에 맞게 수정했던 주요 파일들. **성능·기법 비교용 참고 자료**로만 쓴다: 현재 whisperlivekit 구현/접근과 견주거나 아이디어를 얻을 때 참고하되, 코드·임시방편 로직(같은 문장 N회 반복 시 확정, 타임스탬프 변화량 임계치 등)을 그대로 이식하지 않는다.
 
 ## 2. 행동 지침 (플러그인으로 분리)
 
@@ -34,44 +27,39 @@
 ### 3.2 언어 강제
 - **한국어 / 영어 두 언어만** 들어오는 환경. 두 언어 모두 인식률 극대화가 목표. 이것은 **출력 언어 집합 제한**(일본어·중국어 등 환각 금지)이며, 아래 "세션 언어모드"(입력 소스 지정)와는 다른 개념이다 — 혼용 주의.
 - **Code-Switching**(한 발화 안에 한·영 혼용) 상황에서 단어 유실 / 환각 / 문장 조기 확정이 발생하지 않도록 설계한다. 특히 **전환 간격이 짧은 환경**(대표 데이터 = ytn2) 및 **다화자 장시간 발화 환경**(대표 데이터 = bong1 — 영어 2명+한국어 2명)에서도 인식률을 유지하는 것이 현재 최우선 과제다.
-- **세션 언어모드 (auto / ko / en)**: 배포 UI에서 사용자가 세션 시작 시 전사 언어를 **한국어 / 영어 / 자동** 중 선택한다(`--lan`/WebSocket `?language=` 값은 ISO 639-1 코드 `ko`/`en`/`auto` — "kor"/"eng" 3글자 코드는 코드베이스에 없음). 세션별 언어 고정 자체의 구현은 `feat/session-lang-lock` 브랜치/워크트리에서 진행 중(master 미머지)이며, 이 절은 그 기능이 확립하는 **운영 개념의 정본**이다.
-  - **auto**: 코드스위칭 세션. 언어 자동감지 + 화자전환/스크립트 재감지 + 언어전환 경계 처리(§3.3 confirmed 전환 로직)가 **모두 활성**.
-  - **ko / en**: 단일언어 세션. 세션 시작 시 언어를 고정하고, **코드스위칭 재감지 로직만 비활성**(자동감지·주기 재확인·화자전환 eager 재감지·긴 침묵 언어리셋 게이트가 전부 스킵). **나머지 전사 파이프라인(디코더 파라미터·VAD·필터·문장확정 로직)은 auto와 동일하게 유지** — ko/en 전용 하드코딩·별도 튜닝을 두지 않는다.
-  - **성능 개선 착수 규칙**: 새 실험을 시작하기 전 **개선 대상 세션 언어모드를 먼저 선언**한다(auto/ko/en 중 어느 것인가). 측정은 선언한 모드에 맞는 `--lan` 값으로 수행하고(§4), 한 모드용 변경이 **다른 모드를 회귀시키지 않는지** 함께 확인한다(§3.8 범용 개선 원칙의 언어모드 축 확장). 실험 기록에는 측정 언어모드를 명시한다(§4 실험 기록 규칙).
+- **세션 언어모드 (auto / ko / en) — 배포 UI 기능**: 배포 UI에서 사용자가 세션 시작 시 전사 언어를 한국어/영어/자동 중 선택하는 기능이다(`--lan`/WebSocket `?language=` 값 = ISO 639-1 `ko`/`en`/`auto`; "kor"/"eng" 3글자 코드는 코드베이스에 없음). ko/en 단일언어 세션은 코드스위칭 재감지 로직만 비활성화하고 나머지 파이프라인(디코더·VAD·필터·문장확정)은 auto와 동일하게 유지한다(ko/en 전용 하드코딩·별도 튜닝 없음). 세션별 언어 고정 구현은 `feat/session-lang-lock` 브랜치에서 진행 중(master 미머지).
+  - **현재 개선·측정 축 = auto 단일**: 지금 목표는 `--lan auto` 모드에서 최고 성능을 내는 것이다. **모든 채택/기각 측정은 `--lan auto`로 수행**한다 — 한국어 단독 데이터(kor1~3)·영어 데이터(eng1)도 auto로 측정한다(§3.8·§4). ko/en 고정 기능 자체를 검증할 때만 예외적으로 해당 `--lan` 값을 쓴다.
 
 ### 3.3 문장 단위 출력 — 백엔드 책임 범위
-- **백엔드(우리 작업)가 하는 일**: ① 한 문장이 끝났는지 판단(확정/비확정 상태 결정) ② 결과를 React UI에 메시지로 전달.
-- **배포 환경 React UI**(`frontend/app/`, 브랜치 `feat/deploy-ui`로 반입·통합검증 완료 — 2026-07-21)가 이제 이 저장소에 포함되어 있다. **개발/테스트 단계 검증(경로 B/C 포함)도 배포 UI를 기본으로 사용한다 — 내장 UI(`whisperlivekit/web/`)는 더 이상 검증에 쓰지 않는다.** 단 경로 C 자동화(`scripts/vbcable_test.py`)의 브라우저 스크래핑은 아직 내장 UI 전용 DOM에 하드코딩돼 있어 과도기 상태다(구현 계획 = [docs/backlog/BACKLOG_EVAL_DEPLOY_UI_MIGRATION.md](docs/backlog/BACKLOG_EVAL_DEPLOY_UI_MIGRATION.md)).
-- 메시지 스키마는 [docs/SCHEMA_CHANGES.md](docs/SCHEMA_CHANGES.md)로 **확정·구현됨**. 문장 확정 알고리즘·경계 신호 조합도 구현·문서화됨 — 정본 = [docs/SENTENCE_FINALIZATION_LOGIC.md](docs/SENTENCE_FINALIZATION_LOGIC.md)(설계 결정 이력 = [docs/OPEN_QUESTIONS.md](docs/OPEN_QUESTIONS.md) §1).
-- 문장 확정 품질은 `/eval`의 **화자분리 F1 + 문장분리 F1 2지표**로 정량 평가한다. 정답 = `test_data/<name>.txt` 단일 파일(**canonical**; 화자분리+문장분리 전처리 완료 — 2026-07-18부로 `_speak,sentence_sperate.txt` 접미사 규약 폐지, `<name>.txt`로 통합): `[spkN]` 전환 = **화자전환 경계**(화자분리 F1·1순위), 화자 블록 내 줄바꿈 = **문장 경계**(문장분리 F1·3순위). STT 확정 줄 경계와 단어 정렬로 비교한다. **요구사항·우선순위·측정·구현 계획 정본 = [docs/TRANSCRIPTION_REQUIREMENTS.md](docs/TRANSCRIPTION_REQUIREMENTS.md)**.
-  **성능 판정 기준은 경로 C(VBCable 루프백)만** 사용한다. 경로 A(PCM 파일 주입)는 브라우저 오디오 파이프라인을 우회해 실사용과 무관한 수치를 내므로 폐기.
-- **최종 목표 = 문장 단위 확정 (Exp-170~ 온점 형태소 분할 도입)**: 궁극 목표는 발화를 **한 문장씩 확정·분리**하는 것이다. 단 **화자가 바뀌는 순간에는 반드시 화자(문장) 분리**가 일어나야 한다(정답 신형식이 `[spkN]` 화자전환 기준으로 줄바꿈됨) — 이것이 **최우선 요구(화자분리 F1 1순위)**다. **개선·채택 우선순위 = 화자분리 F1 > WER > 문장분리 F1**(§4 재확인): 화자전환 경계 분리가 가장 위, 그다음 WER, 동일 화자의 온점 문장 분리(문장분리 F1)는 **nice-to-have**(인접 문장이 붙여 전사돼도 허용). 단 **한 단어/문장이 단어 중간에서 쪼개지는 분절(Case B, 예 "올렸"⏎"습니다")은 절대 금지**. `bong1`처럼 **다화자가 짧은 단어를 번갈아 말하는 케이스**는 그 순간 화자·문장 분리를 잘 해야 전사 정확도(WER)도 함께 개선된다 — 다화자 화자전환 경계에서의 정확한 분리가 §3.8 최우선(ytn2·bong1) 개선과 직결된다. 요구사항 정본 = [docs/TRANSCRIPTION_REQUIREMENTS.md](docs/TRANSCRIPTION_REQUIREMENTS.md).
+- **백엔드(우리 작업)가 하는 일**: ① 한 문장이 끝났는지 판단(확정/비확정 상태 결정) ② 결과를 React UI에 메시지로 전달. 프론트는 이 메시지를 받아 렌더만 한다.
+- 메시지 스키마 = [docs/SCHEMA_CHANGES.md](docs/SCHEMA_CHANGES.md)(확정·구현). 문장 확정 알고리즘·경계 신호 정본 = [docs/SENTENCE_FINALIZATION_LOGIC.md](docs/SENTENCE_FINALIZATION_LOGIC.md).
+- **최종 목표 = 문장 단위 확정**이되 **화자가 바뀌는 순간에는 반드시 화자(문장) 분리**가 일어나야 한다(정답이 `[spkN]` 화자전환 기준 줄바꿈) — 최우선 요구다. 한 단어/문장이 단어 중간에서 쪼개지는 분절(Case B, 예 "올렸"⏎"습니다")은 금지. 지표 우선순위·측정 방법 = §3.8·§4, 요구사항 정본 = [docs/TRANSCRIPTION_REQUIREMENTS.md](docs/TRANSCRIPTION_REQUIREMENTS.md).
 
-### 3.4 번역 트리거 (기존 흐름 이식)
-- 문장이 **확정된 시점**에 번역 수행 → UI 출력. 번역 파이프라인(LLM, 프롬프트, 번역기 모듈)은
-  기존 `whisperlive` 구조·로직을 **따르되 필요한 곳만 최소 적응**한다. 파이프라인 자체는 검증된 기존 구조를 유지. 참조 파일은 [docs/FILE_INDEX.md](docs/FILE_INDEX.md).
+### 3.4 번역 트리거
+- 문장이 **확정된 시점**에 그 문장을 LLM으로 번역해 UI에 출력한다(미확정 buffer는 미리보기 번역만).
+- **용어집(glossary) = 개발·배포 모두 적용**: 번역 용어집(예 `공군`:`ROKAF`)을 부분일치로 프롬프트에 주입한다. `prompt_manager`(정적 사전 `admin_translation_glossary.json` + 사용자 SQLite), 런타임 편집 = `/api/prompts`. Qdrant 없이 동작.
+- **의미검색 RAG(Qdrant) = 배포 PC 전용**: 과거 번역 예시를 임베딩 검색해 프롬프트에 덧붙이는 Stage 2 레이어(`rag_manager`, bge-m3). 자산 디렉터리(`whisperlivekit/llm_translation/local_qdrant_db/`·`bge-m3/`) 존재 여부로만 켜진다(CLI 플래그·env 없음). 이 자산은 배포 PC에만 두므로 **개발 PC 번역 테스트에서는 실행하지 않는다**(자산 부재 → 자동 비활성). 상용화 시에만 적용.
 
-### 3.5 필터링 / 단어 교정 (기존 우선, 개선 여지)
-- 환각 문장·단어 제거 + 사전 기반 단어 대치를 전사 직후 수행. **우선 기존 `whisperlive` 로직을 사용**한다(단순 키워드 대치, 예 `6군`→`육군`). 더 나은 방법(형태소·문맥 인지 등)이 검증되면 적용 가능.
+### 3.5 필터링 / 단어 교정
+- 전사 직후 ① 환각 문장·단어 제거(필터) ② 사전 기반 단어 대치(예 `6군`→`육군`)를 수행한다. 사전은 런타임 편집 가능(§3.6).
 
-### 3.6 Glossary / 사전 동적 관리 (기존 우선, 개선 여지)
-- 운용 중 단어 교정 사전 + 번역 glossary를 **동적으로 추가/삭제** 가능해야 함. 인터페이스·구현은 **우선 기존 `whisperlive` 구조를 사용**하되, 더 나은 방식이 검증되면 적용 가능(예 glossary `공군`:`ROKAF`).
-- 사전 갱신은 **즉시 반영** — 다음 전사/번역부터 새 사전 적용.
+### 3.6 Glossary / 사전 동적 관리
+- 단어 교정 사전 + 번역 glossary를 운용 중 **동적으로 추가/삭제**할 수 있다(REST `/api/corrections`·`/api/prompts`). 사전 갱신은 **즉시 반영** — 다음 전사/번역부터 새 사전 적용.
 
-### 3.7 React UI 재사용 정책
-- **React UI는 그대로 재사용을 우선**한다. 추가 기능은 가능한 한 백엔드에서 구현하되, 메시지 스키마 최적화 등으로
-  React 측 변경이 필요하면 [docs/OPEN_QUESTIONS.md](docs/OPEN_QUESTIONS.md)에서 의논해 결정한다.
-- 경로 C 자동화도 이 배포 UI를 기본 타깃으로 전환하는 것이 목표다(내장 UI 사용 중단 방침, §3.3). 구현 현황·후속 작업은 [docs/backlog/BACKLOG_EVAL_DEPLOY_UI_MIGRATION.md](docs/backlog/BACKLOG_EVAL_DEPLOY_UI_MIGRATION.md) 참조.
+### 3.7 프론트엔드 UI (내장 UI / 배포 UI)
+- **배포 UI** = `frontend/app/`(React 19+Vite, 빌드 산출물 `frontend/static/`, base `/wlkies`) — 실제 배포용이자 **개발 PC 검증(경로 B/C)의 기본 UI**.
+- **내장 UI** = `whisperlivekit/web/`(백엔드 내장 데모, `GET /dev`에서 서빙) — 델타 프로토콜 레퍼런스 구현. 더 이상 상시 검증에 쓰지 않고, 필요할 때만 호출해 쓴다.
+- 배포 UI 구조·기능 지침 = [frontend/app/README.md](frontend/app/README.md).
+- 추가 기능은 가능한 한 백엔드에서 구현한다. 프론트 변경이 필요하면 서버 계약 문서([docs/API_SPEC.md](docs/API_SPEC.md)·[docs/DELTA_PROTOCOL_SPEC.md](docs/DELTA_PROTOCOL_SPEC.md)·[docs/SCHEMA_CHANGES.md](docs/SCHEMA_CHANGES.md))와 어긋나지 않게 맞춘다.
+- 경로 C 자동화(`scripts/vbcable_test.py`)의 브라우저 스크래핑은 아직 내장 UI DOM에 하드코딩된 과도기 상태다(배포 UI 전환 계획 = [docs/backlog/BACKLOG_EVAL_DEPLOY_UI_MIGRATION.md](docs/backlog/BACKLOG_EVAL_DEPLOY_UI_MIGRATION.md)).
 
 ### 3.8 STT 개선 방향 제약 (Phase 4+)
 - **ytn2·bong1 공동 최우선**: 한↔영 전환 간격이 짧은 환경(ytn2) 및 다화자·긴 발화 환경(bong1 — 영어 2명+한국어 2명, 봉준호 기생충 인터뷰)이 현재 핵심 개선 대상. **음성 데이터 개선 1순위 = ytn2·bong1**. 목표는 각각 '짧은 텀 코드스위칭 역량'과 '다화자 화자전환 역량'의 **일반화 향상**이며, **데이터 특화 하드코딩(특정 단어·구절 암기) 금지** — 개선은 일반화돼야 한다.
 - **상용화 worst-case 우선**: 동일 음성·환경에도 실행마다 편차 큼 — 배포·상용화 관점에서 **worst 케이스 감소가 최우선**이다. 개선 방향 검토 시 median보다 **최악 케이스 축소를 먼저** 생각한다(채택 확정 단계 측정·채택 규칙은 §4).
-- **범용 개선만 + 테스트/held-out 분리 (언어모드 매트릭스)**: 측정 세트는 세션 언어모드별로 나뉜다.
-  - **auto 테스트(채택/기각) = bong1 + ytn2 + sbs1** — 채택 확정 시 `--repeat 3`, 스크리닝은 `--repeat 1`(§4).
-  - **ko 테스트(채택/기각) = kor1 + kor2 + kor3**(한국어 단독 낭독, Exp-178 발굴 데이터 — auto 모드에서 서두 영어 환각 등으로 붕괴한 사례가 계기가 되어 정식 테스트셋에 편입됨). 측정은 `--lan ko`로 서버 기동.
-  - **held-out**: auto 정량 = ytn1(ytn2 동일 이벤트 쌍둥이 → 미학습 코드스위칭 일반화 검증), en 정량 = eng1(영어 회귀 감시, `--lan en`), 정성 sanity = kinno(2화자 순차통역, 정답 텍스트가 부정확할 수 있어 **WER/F1 채택 게이팅에서 제외** — 전반 화자·문장 분리 + 대규모 누락/환각 유무만 정성 확인).
-  - eval.py의 `--lan`은 실행 1회당 전역 1값이라 **언어모드가 다른 파일은 run을 분리**해 측정한다(모드별 `--lan` 매핑은 §4).
-  - 새 실험 전 "이 변경이 bong1/ytn2/sbs1(혹은 kor1~3) 특화인가?" 자문. 추후 테스트 데이터 추가 시 회귀 없어야 한다.
+- **범용 개선만 + 테스트/held-out 분리**: 모든 측정은 `--lan auto`로 수행한다(현재 목표 = auto 단일 모드 최고 성능, §3.2).
+  - **테스트(채택/기각)** = bong1 + ytn2 + sbs1(코드스위칭·다화자) + kor1 + kor2 + kor3(한국어 단독 낭독). 채택 확정 시 `--repeat 3`, 스크리닝은 `--repeat 1`(§4). kor1~3은 auto 모드에서 서두 영어 환각 등으로 붕괴한 사례가 계기가 되어 정식 테스트셋에 편입됐다.
+  - **held-out** = 정량: ytn1(ytn2 동일 이벤트 쌍둥이 → 미학습 코드스위칭 일반화), eng1(영어 회귀 감시). 정성 sanity: kinno(2화자 순차통역, 정답 부정확 가능 → WER/F1 게이팅 제외, 누락/환각·거친 화자/문장 분리만 확인).
+  - 새 실험 전 "이 변경이 bong1/ytn2/sbs1/kor1~3 특화인가?" 자문. 추후 테스트 데이터 추가 시 회귀 없어야 한다.
 - **하드코딩·백엔드 우선, 탈출구 허용**: 디코더 파라미터(beam_size, compression_ratio_threshold, no_speech_threshold 등)·오디오 전처리·VAD 등 backend 레벨 개선을 우선한다. **정 방법이 없는 경우 하드코딩·후처리 필터도 사용 가능**(남용 금지; 근거는 실험기록에 남긴다). 특정 언어·패턴 특화 하드코딩(한국어 N-gram 필터, N-word 배치 드롭 등)은 신규 추가보다 backend 대안을 먼저 탐색한다. 기존 베이스라인 필터(Exp-002/028/057)는 유지.
 
 ## 4. 코드 스타일 / 운영 규칙
@@ -94,7 +82,7 @@
   - **지표 우선순위 — 화자분리 F1 > WER > 문장분리 F1**: **① 화자분리 F1**(정답 `[spk]` 화자전환 경계가 전사 줄분리로 실현되는지)이 **최우선** 개선·채택 지표, **② WER**(전사 정확도), **③ 문장분리 F1**(동일 화자 온점 문장 분리, nice-to-have). 채택 게이트 순서 = 화자분리 F1 worst-case 미회귀 → WER max 미회귀 → WER median 개선 → 문장분리 F1. **문장분리 F1 하락 단독은 기각 근거 아님**(Case A: 동일 화자 인접 문장이 붙여 전사돼도 허용). 단 **Case B(한 단어/문장이 단어 중간에서 쪼개짐, 예 "올렸"⏎"습니다")는 F1·WER 무관 hard-fail — flag·원인 수정**. 요구사항·측정·구현 정본 = [docs/TRANSCRIPTION_REQUIREMENTS.md](docs/TRANSCRIPTION_REQUIREMENTS.md). (신 regime v2 — 2지표 metric 코드 구현 완료.)
     - **진단 지표(채택 게이트 아님) = 언어 불일치율(LMR)**: 정답 KO 단어가 영어로 **치환** 전사된 비율(`lmr_ko`)과 그 WER 귀속량(`lmr_wer_pp`)이 eval 출력에 함께 나온다. 위 **게이트 순서는 그대로 두고**, LMR은 WER 변화의 **원인 귀속**(언어잠금 실패)에만 쓴다 — LMR 단독 악화·개선은 기각/채택 근거가 아니며, LMR은 하한(lower bound)이라 "정확한 총량"으로 서술하지 않는다. 정의·해석·소급 계산(`scripts/backfill_lang_mismatch.py`) = [docs/TRANSCRIPTION_REQUIREMENTS.md](docs/TRANSCRIPTION_REQUIREMENTS.md) §3·§4·§5.
   - **측정 기본 설정 = 화자분할 ON**(Sortformer; `--diarization --sortformer-model whisperlivekit/model/sortformer-4spk-v2.nemo --compression-ratio-threshold 3.0`; 테스트·held-out 분리는 §3.8). **정답 = `test_data/<name>.txt` 단일 파일 canonical**(`[spkN]` 헤더+화자·문장 전처리 완료; 2026-07-18부로 `_speak,sentence_sperate.txt` 접미사 규약 폐지·`<name>.txt`로 통합, `eval.py`도 동기화됨). held-out 정량(ytn1+eng1)은 채택 후보에 한해 **단회** 검증, held-out 정성 sanity(kinno)는 **게이팅 제외**(누락/환각·거친 화자/문장 분리만).
-  - **언어모드별 측정(§3.2)**: 현재 서버 기본은 `--lan auto`(암묵). auto 테스트(bong1/ytn2/sbs1)·held-out(ytn1)은 `--lan auto`, ko 테스트(kor1~3)는 `--lan ko`, en held-out(eng1)은 `--lan en`으로 서버를 기동해 측정한다. `--lan`은 실행당 전역 1값이므로 모드가 섞인 파일 목록을 한 run에 넣지 않는다 — 언어모드별로 eval.py를 별도 실행. 실험 기록(`/log-experiment`)에 측정 언어모드를 명시한다. ko/en 세션의 완전한 거동(코드스위칭 재감지 비활성화 포함)은 `feat/session-lang-lock` 브랜치 머지 이후 확립됨 — 그 전까지는 전역 `--lan ko/en`이 초기 언어만 고정할 뿐 일부 재감지 경로가 남아있을 수 있다.
+  - **측정 언어모드 = auto 단일**: 모든 채택/기각 측정은 `--lan auto`로 서버를 기동한다(테스트 bong1/ytn2/sbs1/kor1~3, held-out ytn1/eng1 전부). 현재 목표가 auto 모드 최고 성능이므로 kor1~3(한국어 단독)·eng1(영어)도 auto로 측정한다(§3.2·§3.8). ko/en 세션 고정 기능 자체를 검증할 때만 예외적으로 해당 `--lan`을 쓴다. 실험 기록(`/log-experiment`)에 측정 언어모드를 명시한다.
   - **안정화 단계 전환**: 테스트 3종 WER이 catastrophic worst-case 없이 일정 밴드로 수렴해 스크리닝 1회만으로 후보 우열을 가리기 어려워지면, **평소 측정 기본을 `--repeat 3`(상시 안정화 테스트)으로 되돌린다**. 이 전환은 **major 방향 전환**이므로 사용자에게 보고·확인 후 적용한다.
   - **정성 평가 통합**: eval.py 완료 후 `.omc/transcripts/` 전사 파일을 읽어 **목표 달성 여부·신규 이슈 발생 여부**를 정성 판정한다. 정량 수치만으로 채택/기각하지 않고 정성 분석을 반드시 함께 고려한다. WER이 악화돼도 목표 구간이 개선됐다면 자율 기각하지 않고 사용자 확인으로 에스컬레이션한다. **필수 확인**: ① 화자전환 경계마다 줄분리 실현(1순위), ② Case B(단어 중간 분절) 발생 시 hard-fail flag, ③ 대규모 누락/환각·한영 외 언어 환각. Case A(동일 화자 문장 미분리)는 허용. 판정 기준 상세는 `.claude/commands/eval.md §정성 평가 절차` 및 [docs/TRANSCRIPTION_REQUIREMENTS.md](docs/TRANSCRIPTION_REQUIREMENTS.md) §4 참조.
   - **원본 발화 확인 규칙 (화자 비유창성 ≠ 전사 결함)**: 전사에서 중복·반복·조각·말끊김을 발견하면 **결함으로 단정하기 전에 원본 음성이 실제로 그렇게 발화됐을 가능성을 먼저 의심**한다. 실제 화자가 더듬거나(`상당한.. 상당한 진전이`), 말끝을 흐리다 구절을 다시 시작하거나(`한국군 사성자... 한국군 사령관으로`), 같은 단어를 강조 반복하는 경우 **그 전사는 오히려 정확한 것**이며 개선 대상이 아니다. Claude는 음성을 들을 수 없으므로, 의심되면 **추측하지 말고 사용자에게 해당 구간 시각·문구를 특정해 청취 확인을 요청**한다(예: "ytn2 15.9~16.7초 `한국군 사성자 한국군` 구간이 실제 발화인지 확인 부탁드립니다"). 확인 전까지 그 구간을 근거로 코드를 고치지 않는다.
@@ -106,13 +94,13 @@
 
 | 변경한 코드 | 반드시 함께 갱신할 문서 |
 |---|---|
-| `parse_args.py` 기본값 (포트·모델경로·warmup·플래그·threshold) | `docs/TESTING.md` (경로 A/B/C 명령·URL), `ROADMAP.md`, `docs/FRONTEND_HANDOFF_SUMMARY.md`, `docs/API_SPEC.md`, `docs/DEPLOYMENT_OFFLINE.md` §3-4 |
+| `parse_args.py` 기본값 (포트·모델경로·warmup·플래그·threshold) | `docs/TESTING.md` (경로 A/B/C 명령·URL), `ROADMAP.md`, `docs/API_SPEC.md`, `docs/DEPLOYMENT_OFFLINE.md` §3-4 |
 | `scripts/eval.py` `SERVER_PORT` 또는 측정 기본 설정 | `docs/TESTING.md` 경로 C, `.claude/commands/eval.md` |
 | `whisperlivekit/test_client.py` 기본 URL | `docs/TESTING.md` 경로 A |
-| `config.py` `WhisperLiveKitConfig` 필드 (WebSocket 메시지 스키마 영향) | `docs/SCHEMA_CHANGES.md`, `docs/FRONTEND_HANDOFF_SUMMARY.md` |
+| `config.py` `WhisperLiveKitConfig` 필드 (WebSocket 메시지 스키마 영향) | `docs/SCHEMA_CHANGES.md`, `docs/API_SPEC.md` |
 | 문장 확정·분리 로직 변경 (`tokens_alignment.py` 확정 지점·`finalize_trigger` 라벨·경계 신호 조건·관련 임계치) | `docs/SENTENCE_FINALIZATION_LOGIC.md` (§7 갱신 규약 표대로 해당 절 갱신) |
 | `pyproject.toml` extras 추가/제거 | `docs/DEPLOYMENT_OFFLINE.md` §2.1 기능별 extra 표 및 §2.2 export 명령 |
-| 번역 파이프라인 변경 (`translator.py`, config 번역 필드) | `docs/DEPLOYMENT_OFFLINE.md` §5, `docs/FRONTEND_HANDOFF_SUMMARY.md`, `docs/API_SPEC.md` |
+| 번역 파이프라인 변경 (`translator.py`, config 번역 필드) | `docs/DEPLOYMENT_OFFLINE.md` §5, `docs/API_SPEC.md` |
 | `test_data/` 파일 추가 또는 정답 `<name>.txt` 추가/변경(`[spkN]` 헤더+화자·문장 전처리 완료) | `docs/TESTING.md` 파일 목록, `CLAUDE.md` §4 측정 기본 설정(테스트셋 변경 시), `docs/TRANSCRIPTION_REQUIREMENTS.md` §2(정답 형식) |
 | 세션 언어모드 정책 변경 또는 파일별 언어모드(auto/ko/en) 태그 변경 | `CLAUDE.md` §3.2·§3.8·§4, `docs/TESTING.md`, `docs/TRANSCRIPTION_REQUIREMENTS.md`, `EXPERIMENTS.md`, `.claude/commands/eval.md`·`log-experiment.md`·`phase2-improve.md`, `docs/SCHEMA_CHANGES.md` |
 | 측정 지표(WER·화자분리 F1·문장분리 F1) 정의·정답 파서·2지표 산출 (`scripts/eval.py`·`whisperlivekit/metrics.py`) | `docs/TRANSCRIPTION_REQUIREMENTS.md`(§2 형식·§3 측정·§4 분석·§5 구현), `.claude/commands/eval.md` 결과 해석 기준, `docs/TESTING.md` 경로 C |
@@ -121,8 +109,8 @@
 | 실패 모드를 바꾸는 **구조적** 코드 변경의 master 머지 (언어고정·비음성억제·디코더/VAD 파이프라인 등) | `EXPERIMENTS.md`(STATE) "코드 세대(Epoch)" 절 — epoch 마커 +1, 이전 세대 파라미터 결론에 `[E?·재검증]` 부여 |
 | 신규 실험(Exp-N) 기록 | `EXPERIMENTS_LOG.md`(전체 서술) + `EXPERIMENTS.md` 빠른참조 1행(Epoch 열) — `/log-experiment` |
 | WhisperLiveKit 본체 대규모 변경 | `docs/MASTER_CHANGES.md` — `/update-master-changes` 슬래시 커맨드 실행 |
-| 배포 UI(React) 계약 레이어 변경 (`frontend/app/src/types/stt.ts`·`utils/deltaProtocol.ts`·`utils/wsUrl.ts`·`constants/index.ts`·`api/**`) | `docs/API_SPEC.md`, `docs/DELTA_PROTOCOL_SPEC.md`, `docs/FRONTEND_HANDOFF_SUMMARY.md` — 서버 계약과 어긋나면 조용히 깨진다(과거 `?language=kor` 무시·복합키 중복·델타 메시지 폐기가 전부 이 부류) |
-| `frontend/app/vite.config.ts` 의 `base` 또는 `build.outDir` | `docs/DEPLOYMENT_OFFLINE.md`, `docs/TESTING.md`, `docs/FRONTEND_HANDOFF_NEXT_DEV.md` — 백엔드 `--frontend-dir`/`--frontend-base` 와 짝이다 |
+| 배포 UI(React) 계약 레이어 변경 (`frontend/app/src/types/stt.ts`·`utils/deltaProtocol.ts`·`utils/wsUrl.ts`·`constants/index.ts`·`api/**`) | `docs/API_SPEC.md`, `docs/DELTA_PROTOCOL_SPEC.md`, `docs/SCHEMA_CHANGES.md` — 서버 계약과 어긋나면 조용히 깨진다(과거 `?language=kor` 무시·복합키 중복·델타 메시지 폐기가 전부 이 부류) |
+| `frontend/app/vite.config.ts` 의 `base` 또는 `build.outDir` | `docs/DEPLOYMENT_OFFLINE.md`, `docs/TESTING.md`, `frontend/app/README.md` — 백엔드 `--frontend-dir`/`--frontend-base` 와 짝이다 |
 | 경로 C 자동화 대상 UI(내장→배포) 전환 관련 코드(`scripts/vbcable_test.py` DOM 스크래핑, `frontend/app` 테스트 훅 등) | `docs/TESTING.md`, `.claude/commands/eval.md`, `docs/DEPLOYMENT_OFFLINE.md` §4.1/§4.4, `docs/FILE_INDEX.md`, `docs/OPEN_QUESTIONS.md`, `docs/backlog/BACKLOG_EVAL_DEPLOY_UI_MIGRATION.md` |
 
 > 확인 방법: 변경한 플래그·포트·경로 값을 `grep`으로 docs 전체에 검색해 stale 참조가 남아있으면 제거.
@@ -149,6 +137,7 @@
 - 설계 결정 이력(문장 확정 알고리즘, 메시지 스키마, Code-Switching, 폐쇄망 패키징 — 대부분 해소, 정본 링크) → [docs/OPEN_QUESTIONS.md](docs/OPEN_QUESTIONS.md)
 - 문장 확정·분리 로직 상세(경계 원인 3종+온점 형태소 분할[Exp-170]·`punctuation` 라벨·파라미터·`finalize_trigger` 계측) → [docs/SENTENCE_FINALIZATION_LOGIC.md](docs/SENTENCE_FINALIZATION_LOGIC.md)
 - Phase 정의·태스크·완료 기준 → [ROADMAP.md](ROADMAP.md) / 실험 기록 3계층 → [EXPERIMENTS.md](EXPERIMENTS.md)(STATE·항상읽음) · [EXPERIMENTS_LOG.md](EXPERIMENTS_LOG.md)(LOG·온디맨드 Exp-131~) · [PHASE2_EXPERIMENTS.md](PHASE2_EXPERIMENTS.md)(ARCHIVE·Exp-001~130 동결)
+- 배포 UI(React) 구조·기능 지침 → [frontend/app/README.md](frontend/app/README.md) (내장 UI = `whisperlivekit/web/`, 필요 시 `GET /dev`)
 - master 최종본 upstream 대비 전체 변경 + 향후 개선 → [docs/MASTER_CHANGES.md](docs/MASTER_CHANGES.md)
 - **docs/ 유형별 하위 디렉토리**: 필수 참조 문서가 아닌 일회성 산출물은 유형별로 분리한다. 리서치·설계 조사 결과 →
   [docs/research/](docs/research/), 자율 루프 goal 프롬프트 → [docs/goal_prompt/](docs/goal_prompt/)(완료분은
