@@ -1,22 +1,6 @@
 Phase 1 — 기본 STT 동작 확인 ✅ 완료 (2026-05-19)
-목표
-whisperlivekit 위에서 whisper-large-v3-turbo 로컬 모델이 실시간으로 전사되는지 확인한다.
-번역·필터링·UI 연결 없이 백엔드 단독으로 동작을 검증한다.
-태스크
-
- 1-1. uv 가상환경 구성 및 whisperlivekit 의존성 설치
- 1-2. whisperlivekit/model/whisper-large-v3-turbo/ 로컬 경로로 모델 로드 확인
- 1-3. 두 가지 경로로 실시간 전사 동작 확인
-→ 경로 A (파일 기반, 정량): WhisperLiveKit 내장 `test_client.py`로 `test_data/` 내 mp3/wav 파일을 WebSocket `/asr`에 송신 (서버는 `--pcm-input`으로 기동, 터미널 출력 기준)
-→ 경로 B (마이크 직접, 정성): 서버를 `--pcm-input` 없이 기동, 브라우저에서 `http://localhost:8900/` 접속 → 내장 웹 UI로 마이크 직접 녹음하며 실시간 전사 결과 확인
-→ 가상 오디오 케이블(VB-Cable, VoiceMeeter 등) 의존 없음. 시스템 `ffmpeg` 설치만 필요.
- 1-4. 런타임에 외부 네트워크 호출이 없는지 확인 (HF Hub, PyPI, GitHub 접속 차단 상태에서 동작)
-
-완료 기준
-
-고정 음성 파일(`test_data/sbs1.mp3` 등)을 `python -m whisperlivekit.test_client`로 송신 → 터미널에 전사 텍스트가 실시간 스트리밍 출력됨 (경로 A)
-브라우저에서 `http://localhost:8900/` 접속 후 마이크 직접 녹음 → 내장 웹 UI에서 실시간 전사 결과 출력 확인 (경로 B)
-HF_HUB_OFFLINE=1 환경에서 서버 기동~첫 전사 출력까지 외부 HTTP 요청 0건 확인 (두 경로 모두)
+whisperlivekit + whisper-large-v3-turbo 로컬 모델로 실시간 전사 동작을 경로 A(파일 기반)·경로 B(마이크)
+양쪽에서 확인, 폐쇄망 환경(HF_HUB_OFFLINE=1)에서 외부 호출 0건 확인 완료.
 
 
 Phase 2 — 문장 단위 확정 로직 구현
@@ -118,154 +102,106 @@ Phase 2 성능 개선 우선순위 (반자율 개선 루프 기준)
    → 채택분을 master에 머지했다면 `/update-master-changes`로 docs/MASTER_CHANGES.md도 갱신
 
 
-Phase 3 — 필터링 / 단어 교정 이식 ✅ 이식 완료 (3-6 번역 Glossary는 Phase 5로 이월)
-목표
-기존 whisperlive의 환각 제거·단어 대치 로직을 현재 whisperlivekit 환경에 맞게 구현해 전사 결과에 적용한다.
-
-구현 방침
-각 태스크(3-1~3-7)를 구현하기 전 아래 순서를 따른다:
-1. 해당 로직의 기존 whisperlive 구현(whisperlive_code/)을 검토한다.
-2. 더 나은 방법(정확도·단순성·유지보수성 등)이 있는지 탐색한다.
-3. 기존 방식보다 나은 대안이 없으면 기존 whisperlive 로직을 따라 현재 whisperlivekit 환경에 맞게 구현한다.
-4. 더 나은 대안이 발견되면 근거를 명확히 해 사용자와 논의 후 결정한다.
-
-태스크
-
- ✅ 3-1. 환각 제거 로직 이식 [이식]
-→ whisperlivekit/filtering/__init__.py (realtime_asr.* import → Path(__file__).parent 기준으로 교체, 로직 동일)
- ✅ 3-2. 단어 대치 로직 이식 [이식]
-→ whisperlivekit/filtering/manager.py (WordCorrectionManager, 로직 동일)
- ✅ 3-3. 전사 직후 필터링 → 확정 판단 순서로 파이프라인 연결
-→ audio_processor.py results_formatter() 내 get_lines() 직후 filter_segments() 훅 (빈 JSON = no-op)
- ✅ 3-4. 사전 갱신 인터페이스 형태 결정 + 구현 (기존 whisperlive 인터페이스 그대로 이식)
-→ WordCorrectionManager.add_user_word / delete_user_word
- ✅ 3-5. 단어 교정 사전 동적 추가/삭제 기능
-→ SQLite DB 기반 즉시 반영 확인 완료 (pytest 18케이스)
- ⏳ 3-6. 번역 Glossary 이식 (이식만, 동작 검증은 Phase 5에서)
-→ prompt_manager.py 이식 예정 (Phase 5와 함께)
- ✅ 3-7. 사전 갱신 즉시 반영 확인 (다음 전사/번역부터 적용)
-→ 단어 교정 측 확인 완료 / 번역 측은 3-6 완료 후
-
-완료 기준
-
-고정 환각 사례 N개로 회귀 테스트 작성 후 모두 제거 확인
-대치 단어가 올바르게 치환됨
-운용 중 사전 수정 후 다음 발화부터 즉시 반영됨 (갱신 직후 도착하는 첫 발화에 반영)
+Phase 3 — 필터링 / 단어 교정 이식 ✅ 완료 (3-6 번역 Glossary는 Phase 5로 이월)
+whisperlive의 환각 제거(filtering/__init__.py)·단어 대치(WordCorrectionManager, SQLite 기반 동적
+추가/삭제, pytest 18케이스)를 whisperlivekit 파이프라인(filter_segments 훅)에 이식 완료. 사전 갱신은
+즉시 반영됨. 세부 태스크 3-1~3-5·3-7 전부 완료, 3-6(번역 Glossary)만 Phase 5로 이월.
 
 
-Phase 4 — React UI 연결 + 번역 파이프라인 통합 🔄 백엔드 완료 (2026-06-22, 4-7 React 연결 대기)
-목표
-whisperlivekit 백엔드와 기존 whisperlive React UI를 연결하고,
-번역(llama) 파이프라인까지 묶어 전체 흐름을 통합한다.
+Phase 4 — React UI 연결 + 번역 파이프라인 통합 ✅ 완료 (2026-07-21 배포 UI 반입·통합검증, 2026-07-19 배포 PC 실반영 확인)
+whisperlivekit 백엔드를 React UI(배포 UI, `frontend/app/`)와 WebSocket(`/asr`)으로 연결하고
+번역(LLM) 파이프라인까지 묶어 전체 흐름을 통합했다.
 
 스키마 방침
-기존 whisperlive 스키마({text, start, end, completed, lang, …})를 기준으로,
-whisperlivekit 출력 구조와의 차이로 인해 불가피한 부분만 최소 변경한다.
-React UI 수정은 이 최소 변경 범위 내에서 허용한다.
-변경된 사항은 기존 스키마 대비 변경점으로 명세화해 프론트엔드 개발자에게 인계한다.
-
-배경: 기존 whisperlive는 React와 SSE+REST({content, language, status})로 통신했으나,
-whisperlivekit은 WebSocket(/asr)으로 {status, lines[], buffer_transcription, …}을 전송한다.
-통신 방식 전환이 불가피하며, 이로 인해 React 측 수정이 필요하다.
+whisperlive 스키마({text, start, end, completed, lang, …}) 대비 whisperlivekit 출력 구조와의
+불가피한 차이만 최소 변경했다(SSE+REST → WebSocket 단일 연결로 전환). 변경 이력은
+[docs/SCHEMA_CHANGES.md](docs/SCHEMA_CHANGES.md)에 계약 문서로 기록·유지된다.
 
 Phase 4 사전 준비 — 번역 모델 테스트 환경 (2026-06-21 완료)
-배포 PC의 실제 번역 모델은 gpt-oss-20b(`gpt-oss-20b-F16.gguf`)이다.
-- 배포 PC 서빙: `start_oss.bat` 더블클릭 → llama.cpp 계열로 `localhost:2010`에 서빙.
-  config YAML은 `model_serve: llama`, `model_name: synatra`(synatra는 서빙용 별칭).
-- 코드(`whisperlive_code/translator.py`, `app.py`)의 `LlamaTranslator`/`OllamaTranslator`
-  네이밍은 모델명이 아니라 서빙 도구 구분용이다 — `model_serve` 값으로 분기.
-
-개발 PC(RTX 3080, VRAM 10GB)는 OSS 20B F16(~40GB)을 적재할 수 없다. Phase 4는 번역 자체
-품질이 아니라 React UI 연결·프롬프트 흐름 검증이 목적이므로, 테스트 전용 소형 대체 모델을 채택했다.
-- 개발 PC 테스트용 모델: qwen2.5:7b (Ollama, 4.7GB) — 다운로드 완료.
-- Ollama 기설치. OpenAI 호환 API: http://localhost:11434/v1/chat/completions
-- 한↔영 양방향 번역 정상 동작 확인 (군사 문장 샘플).
-- ⚠️ Windows에서 curl로 한글 전송 시 인코딩 깨짐 → Python urllib로 호출하고
-  sys.stdout.reconfigure(encoding='utf-8') 적용해야 함.
-
-> 배포(gpt-oss-20b @ llama.cpp:2010) vs 개발(qwen2.5:7b @ Ollama:11434)은 서빙
-> 엔드포인트·포트가 다르다. 4-2/4-4 이식 시 translator 엔드포인트를 환경별로 설정 가능하게 둘 것.
+배포(gpt-oss-20b @ llama.cpp:2010) vs 개발(qwen2.5:7b @ Ollama:11434)은 서빙 엔드포인트·포트가
+다르다. 상세 설정은 [docs/DEPLOYMENT_OFFLINE.md](docs/DEPLOYMENT_OFFLINE.md) §5 참조.
 
 태스크
 
  ✅ 4-1. 스키마 변경 범위 확정 [설계 세션]
-→ 기존 whisperlive React API(SSE, {content, language, status})와
-  whisperlivekit 출력({status, lines[{text,start,end,speaker,detected_language,translation}], buffer_transcription, …})을 필드별 비교
-→ 기존 스키마 기준으로 불가피한 변경 항목 목록화 후 사용자와 합의
-→ 합의 결과를 docs/SCHEMA_CHANGES.md에 정리 (프론트엔드 개발자 인계용)
-→ 호환 별칭 추가: completed←finalized, lang←detected_language (Segment.to_dict)
+→ whisperlive React API(SSE)와 whisperlivekit 출력({status, lines[], buffer_transcription, …})을
+  필드별 비교, 변경 항목을 docs/SCHEMA_CHANGES.md에 정리. 호환 별칭 추가: completed←finalized,
+  lang←detected_language (Segment.to_dict)
  ✅ 4-2. whisperlivekit 기반 API 서버 구현 [이식 + 신규]
-→ /api/corrections GET/POST/DELETE 연결 완료 (WordCorrectionManager)
-→ /api/save-transcript POST 연결 완료 (UI 저장 버튼 클릭 시 전사 .txt 저장, `--transcript-save-dir`)
-→ /api/recordings, /api/prompts — React 소스 확보 후 4-7과 함께 처리 예정
+→ /api/corrections, /api/save-transcript, /api/prompts 연결 완료
  ✅ 4-3. 번역 모델(OSS 20B LLM) 로컬 경로 및 파일 존재 확인
 → 배포: gpt-oss-20b @ llama.cpp:2010(기본값), 개발: qwen2.5:7b @ Ollama:11434(재정의) (docs/DEPLOYMENT_OFFLINE.md §5)
  ✅ 4-4. 번역 파이프라인 이식 [이식]
-→ whisperlivekit/llm_translation/translator.py (LlamaTranslator/OllamaTranslator, 정적 군사 프롬프트)
+→ whisperlivekit/llm_translation/translator.py (LlamaTranslator/OllamaTranslator)
  ✅ 4-5. 번역 결과 전달 필드 구현
 → Segment.translation 필드로 전달 (to_dict 직렬화 포함)
  ✅ 4-6. 문장 확정 시점 → 번역 수행 → UI 출력 흐름 연결
 → TranslationManager: finalized 세그먼트 확정 후 비차단 async 번역 캐시 (filter_segments 직후 훅)
- ⏳ 4-7. 기존 React UI에서 전사·번역 결과 최종 확인
-→ 백엔드 정적 서빙 배선(React dist를 `frontend/static/`에서 서빙, `--frontend-dir` 플래그, SPA
-  fallback 포함) 구현 완료(feat/frontend-static-serving) — dist가 있으면 자동 서빙, 없으면 내장 UI 폴백.
-  Vite `base`(예 `/wlkies`) 빌드 dist는 백엔드가 `index.html`에서 base를 자동 추출해 그 하위로 서빙하고
-  `GET /`는 base로 리다이렉트(`--frontend-base`, 기본값 `auto`; 루트 빌드 하위호환) — fix/frontend-base-serving.
-  단 **배포 PC에 실제 React dist를 배치해 최종 연결 검증**하는 것은 아직 미완료 — 사용자가 배포 PC에서 수행할
-  잔여 작업.
+ ✅ 4-7. React UI에서 전사·번역 결과 최종 확인
+→ 배포 UI(`frontend/app/`, `feat/deploy-ui`)가 이 저장소에 반입·통합검증 완료(2026-07-21).
+  백엔드 정적 서빙 배선(`frontend/static/`, `--frontend-dir`/`--frontend-base`, SPA fallback,
+  Vite `base` 자동 추출) 구현 완료. 배포 PC(`C:\whist\wlk`) 실제 반영·전사/번역/단어대치 동작
+  확인 완료(2026-07-19, `wlk_in/SYNC_STATE.txt`).
 
 완료 기준
 
 4-1에서 확정된 스키마로 백엔드 구현 완료
-기존 whisperlive 스키마에서 변경된 사항이 docs/SCHEMA_CHANGES.md에 빠짐없이 명세화됨 (프론트엔드 개발자 인계 가능)
+whisperlive 스키마에서 변경된 사항이 docs/SCHEMA_CHANGES.md에 빠짐없이 명세화됨
 확정된 문장이 번역되어 React UI에 출력됨
 인터넷 차단 상태에서 전체 파이프라인 동작함
+배포 PC에서 실제 React UI로 전사·번역 결과가 확인됨
 
 
-Phase 5 — Glossary 동적 관리
-목표
+Phase 5 — Glossary 동적 관리 ✅ 완료
 운용 중 단어 교정 사전과 번역 Glossary를 동적으로 추가·삭제하고 즉시 반영되도록 한다.
 태스크
 
- 5-1. 단어 교정 사전 동적 추가/삭제 기능 이식 [이식]
-→ whisperlive_code/manager.py 기반 그대로
+ 5-1. (Phase 3-4/3-5에서 이미 구현됨 — WordCorrectionManager 재사용, 중복 항목)
  ✅ 5-2. 번역 Glossary 동적 추가/삭제 기능 이식 [이식] (Stage 1+2 완료 — glossary_block+sentence_block+RAG)
 → whisperlive_code/prompt_manager.py 기반(TranslationPromptManager), whisperlivekit/llm_translation/에
   filtering/ 콜로케이션 패턴으로 이식. Qdrant RAG(유사 예시 검색)는 Stage 2 코드 이식 완료
   (whisperlivekit/llm_translation/rag_manager.py, 2026-07-21) — 문장 확정 시에만 주입(미확정 버퍼
-  번역 제외), 배포 PC 실물 데이터 미검증
+  번역 제외), 자산 디렉터리 존재 시에만 배포 PC에서 활성화(개발 PC는 미적용)
   (docs/superpowers/specs/2026-07-16-translation-glossary-design.md §8, docs/DEPLOYMENT_OFFLINE.md §6.3).
- 5-3. 사전 갱신 즉시 반영 확인 (다음 전사/번역부터 새 사전 적용)
+ ✅ 5-3. 사전 갱신 즉시 반영 확인 (다음 전사/번역부터 새 사전 적용)
+→ translator.py가 매 번역 호출마다 사전을 새로 조회 — 재시작 불필요, 즉시 반영 확인됨.
 
 완료 기준
 
-운용 중 사전 수정 후 다음 발화부터 즉시 반영됨
+운용 중 사전 수정 후 다음 발화부터 즉시 반영됨(word correction·glossary 모두 확인)
 Glossary 등록 단어가 번역에 반영됨
 
 
-Phase 6 — 폐쇄망 배포 검증
-목표
+Phase 6 — 폐쇄망 배포 검증 🔄 진행 중 (반입·검증 지속, 6-7 지연시간 실측만 잔여)
 개발 환경(RTX 3080)에서 검증된 코드를 폐쇄망(RTX 5090)으로 이식하고
 실제 마이크 입력으로 전체 파이프라인을 최종 검증한다.
 태스크
 
- 6-1. 폐쇄망용 모델 디렉터리 레이아웃 및 배포 패키징 형태 결정 [설계 세션]
- 6-2. uv로 오프라인 설치용 wheel 패키징
- 6-3. STT 모델(whisper-large-v3-turbo) + OSS 20B LLM 가중치 파일 이동/배포 준비
- 6-4. HF_HUB_OFFLINE=1, TRANSFORMERS_OFFLINE=1 등 오프라인 환경변수 설정 확인
- 6-5. 폐쇄망 RTX 5090 환경으로 코드·모델 이식
- 6-6. 실제 마이크 입력으로 한·영 전사 및 번역 동작 확인
- 6-7. 성능 확인 (지연 시간 측정 — 목표 수치는 실측 후 결정)
+ ✅ 6-1. 폐쇄망용 모델 디렉터리 레이아웃 및 배포 패키징 형태 결정 [설계 세션]
+→ docs/OPEN_QUESTIONS.md §4 해소, 정본 = docs/DEPLOYMENT_OFFLINE.md
+ ✅ 6-2. uv로 오프라인 설치용 wheel 패키징
+→ deploy/wheelhouse/(194개 wheel) 구성 완료
+ ✅ 6-3. STT 모델(whisper-large-v3-turbo) + OSS 20B LLM 가중치 파일 이동/배포 준비
+→ whisperlivekit/model/ 내 whisper-turbo·sortformer 포함, LLM은 배포 PC 사전 설치
+ ✅ 6-4. HF_HUB_OFFLINE=1, TRANSFORMERS_OFFLINE=1 등 오프라인 환경변수 설정 확인
+→ docs/DEPLOYMENT_OFFLINE.md §0 표준 기동 절차로 확립
+ ✅ 6-5. 폐쇄망 RTX 5090 환경으로 코드·모델 이식
+→ wlk_in/SYNC_STATE.txt로 지속 반복 수행 중(최신 동기화 커밋 e5461a9, 2026-07-29). `/deploy-sync`
+  슬래시 커맨드로 master 변경사항을 wlk_in에 동기화 후 사용자가 배포 PC(C:\whist\wlk)에 반영.
+ ✅ 6-6. 실제 마이크 입력으로 한·영 전사 및 번역 동작 확인
+→ 배포 PC 실사용 확인(2026-07-19, wlk_in/SYNC_STATE.txt: 렌더·전사·번역·단어대치 동작 확인됨).
+  실사용 피드백 기반 버그 수정 사례도 존재(Exp-193, RTX 5090 코드스위칭 이슈).
+ ⏳ 6-7. 성능 확인 (지연 시간 측정 — 목표 수치는 실측 후 결정)
+→ 현재 RTX 3080(개발)에서만 측정됨(sbs1 실시간 lag 최대 41s) — RTX 5090(배포) 재측정 필요.
 
 완료 기준
 
-폐쇄망에서 외부 연결 없이 전체 시스템 동작
-실제 마이크 입력으로 한·영 전사·번역이 정상 동작
-지연 시간 측정 결과 기록 (수치 기준은 실측 후 별도 정의)
+폐쇄망에서 외부 연결 없이 전체 시스템 동작 — 6-1~6-6 충족, `/deploy-sync` 워크플로로 지속 검증 중
+실제 마이크 입력으로 한·영 전사·번역이 정상 동작 — 배포 PC 실사용으로 확인됨
+지연 시간 측정 결과 기록 — RTX 5090 실측(6-7)만 남은 유일한 항목
 
 
 추후 결정 항목 (현재 비활성)
 
-녹음 제어 API (시작 / 정지 / 상태 조회)
 디버깅용 로그 파일 저장
 hotwords / initial_prompt 주입 기능
