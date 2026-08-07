@@ -75,11 +75,13 @@ yt-dlp --download-sections "*{START}-{END}" -x --audio-format wav -o "test_data/
 
 ```powershell
 $env:PYTHONIOENCODING = "utf-8"
-uv run --no-sync python scripts/transcribe_groundtruth.py {AUDIO_PATH}
+.venv\Scripts\python.exe scripts/transcribe_groundtruth.py {AUDIO_PATH}
 ```
 
 - 완료 후 생성된 `.txt` 파일 내용을 전체 출력한다.
-- 출력 형식: **빈 줄 = 문장 경계** — ① 화자가 바뀌는 순간 빈 줄(1순위, 필수) ② 한 화자의 긴 발화는 온점 기준 분리, 한 블록 ≤2문장 허용·3문장+ 분리(2순위). (sbs1.txt·bong1.txt 형식과 동일).
+- 스크립트는 화자 라벨 없이 **빈 줄 = 문장 경계**만으로 초안을 생성한다(화자분리 정보 없음). Step 2에서
+  사람이 `[spkN]` 헤더(화자전환 경계, canonical 정답 형식)를 직접 추가해야 한다 — 정답 형식 정본 =
+  [docs/TRANSCRIPTION_REQUIREMENTS.md](../../docs/TRANSCRIPTION_REQUIREMENTS.md) §2.
 
 ### Step 2 — 사람 검토 요청
 
@@ -88,6 +90,7 @@ uv run --no-sync python scripts/transcribe_groundtruth.py {AUDIO_PATH}
 > 전사 결과를 확인해주세요.
 > 음성을 직접 들으면서 `[출력된 txt 경로]` 파일을 수정하세요.
 > - 잘못 전사된 단어 수정
+> - **화자가 바뀌는 지점마다 `[spkN]` 헤더 추가**(canonical 정답 형식 — TRANSCRIPTION_REQUIREMENTS.md §2)
 > - 문장 경계 조정 (필요 시 줄 추가/삭제)
 > - 불필요한 줄 삭제
 >

@@ -38,23 +38,23 @@
 
 ## 현행 측정 regime (2026-06-30 갱신 — 2계층 스크리닝/확정)
 
-- **세션 언어모드 매트릭스(CLAUDE.md §3.2·§3.8)**: 측정 세트는 auto/ko/en 세 언어모드로 나뉜다. `--lan`은 서버 기동당 전역 1값이라 모드가 다른 파일은 **run을 분리**해 측정한다.
-  - **auto 테스트(채택/기각)**: `bong1` + `ytn2` + `sbs1` (`--lan auto`)
-  - **ko 테스트(채택/기각)**: `kor1` + `kor2` + `kor3` (`--lan ko`; 한국어 단독 낭독, Exp-178에서 auto 모드 붕괴가 발견돼 편입)
-  - **held-out**: auto 정량 = `ytn1`(`--lan auto`, ytn2 동일 이벤트 쌍둥이 코드스위칭), en 정량 = `eng1`(`--lan en`, 영어 회귀 감시). **정성 sanity = `kinno`**(`--lan auto`, 2화자; 정답 텍스트 부정확 → **WER/F1 게이팅 제외**, 대규모 누락/환각·거친 화자/문장 분리만).
+- **측정 언어모드 = auto 단일(CLAUDE.md §3.2·§3.8)**: 모든 채택/기각 측정은 `--lan auto`로 서버를 기동한다. kor1~3(한국어 단독)·eng1(영어)도 auto로 측정 — ko/en 세션 고정 기능 자체를 검증할 때만 예외적으로 해당 `--lan`을 쓴다.
+  - **테스트(채택/기각)**: `bong1` + `ytn2` + `sbs1` + `kor1` + `kor2` + `kor3`(전부 `--lan auto`; kor1~3은 Exp-178에서 auto 모드 붕괴가 발견돼 편입).
+  - **held-out**: 정량 = `ytn1`(ytn2 동일 이벤트 쌍둥이 코드스위칭) + `eng1`(영어 회귀 감시), 전부 `--lan auto`. **정성 sanity = `kinno`**(`--lan auto`, 2화자; 정답 텍스트 부정확 → **WER/F1 게이팅 제외**, 대규모 누락/환각·거친 화자/문장 분리만).
   - **① 스크리닝(평소)**: `eval.py --repeat 1` — 빠른 방향 탐색·catastrophic 회귀 감지. 1회 수치는 방향 신호로만 해석한다.
   - **② 채택 확정(머지 직전)**: `eval.py --repeat 3` — N≥3회 **median + min/max/stdev** 함께 본다. 이 단계에서만 **fail-fast 금지**(분산 자체가 데이터).
-  - **ko 모드 신 베이스라인**: kor1~3은 방금 테스트셋에 편입돼 이 표(§ 현재 베이스라인)엔 아직 미포함 — 2-F1 신 베이스라인 재측정과 함께 후속 실행 단계로 남는다. 완전한 ko 세션 거동은 `feat/session-lang-lock` 브랜치 머지 이후 확립.
 - **측정 경로**: 경로 C(VBCable 루프백)만. provenance 게이트 필수 — 매 측정 첫 줄 `[provenance] code=wlk branch=master@… vbcable=ok …` 육안 확인.
 - **측정 기본 설정**: 화자분할 ON (Sortformer + `--compression-ratio-threshold 3.0`). **정답 = `test_data/<name>.txt` 단일 파일 canonical**(`[spkN]` 헤더+화자·문장 전처리 완료; 2026-07-18부로 `_speak,sentence_sperate.txt` 접미사 규약 폐지·`<name>.txt`로 통합, `eval.py` 파서 동기화 완료, master 머지됨).
 - **★ 측정 regime v2 (2지표 분리)**: 지표를 **화자분리 F1**(`[spk]` 전환 경계가 전사 줄분리로 실현되는지)·**문장분리 F1**(동일 화자 온점 경계)로 **분리** 측정·기록. 구 단일 F1(빈 줄 경계)과 **비교 불가**. 신 Exp는 두 F1을 따로 남긴다. 2-F1 metric 코드는 **구현 완료**(TDD, master 머지됨); **2-F1 신 베이스라인 재측정이 다음 실행 단계**. 정본 = [docs/TRANSCRIPTION_REQUIREMENTS.md](docs/TRANSCRIPTION_REQUIREMENTS.md).
 - **채택 우선순위(② 단계, regime v2)**: **화자분리 F1 worst-case 미회귀 → WER max 미회귀 → WER median 개선 → 문장분리 F1**(후순위·Case A 허용). **Case B(단어 중간 분절)는 수치 무관 hard-fail.**
 - **개선 1순위**: `ytn2`(짧은 텀 코드스위칭) + `bong1`(다화자 장시간) 공동 최우선. **데이터 특화 하드코딩 금지 — 개선은 일반화돼야 한다.**
 
-## 현재 베이스라인 (Epoch 5 — turbo, 확정)
+## 현재 베이스라인 (Epoch 5 — turbo, 확정 — ⚠️ E6 재측정 대기)
 
+> **[E5·재검증 대기]**: 이 표는 Exp-161(Epoch 5) 시점 값이다. 이후 Epoch 6(Exp-196~)까지 구조적 변경이 여러 건 머지됐고, Exp-200 bong1 auto median 33.4%는 이미 아래 게이트(≤30.5%)를 초과한 채 사용자 승인으로 채택됐다 — 게이트 자체가 stale 상태다. 새 스크리닝/채택 판단은 이 절대 수치를 확정 사실로 인용하지 말고, EXPERIMENTS_LOG.md의 최신 Exp 결과를 방향 신호로 참고할 것. E6 기준 재측정 후 이 절을 갱신한다.
+>
 > **turbo 기질 baseline (2026-07-06, Exp-161 최신)** — PLC 기본값 None 전환(Exp-160) + `audio_max_len` 30.0→15.0 전환(Exp-161) 이후 수치가 **현재 master 기본 설정 기준**. diar-ON, CRT=3.0, **PLC=None**, **audio_max_len=15.0(기본)**, beams=2.
-> **확정 게이트(max)**: bong1≤30.5% / ytn2≤34.5% / sbs1≤16.1% (Exp-161 N=3로 갱신 — 3파일 모두 개선).
+> **확정 게이트(max, E5 시점)**: bong1≤30.5% / ytn2≤34.5% / sbs1≤16.1% (Exp-161 N=3로 갱신 — 3파일 모두 개선).
 > JSON: `.omc/benchmarks/eval_20260705_2338_audiomax15_N3.json`(테스트 N=3) · `eval_20260706_0002_audiomax15_heldout.json`(held-out)
 
 | 파일 | WER median | WER max | WER min | WER stdev | F1 median(구 regime) | 측정 N |

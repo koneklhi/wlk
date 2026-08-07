@@ -88,9 +88,9 @@ whisperlivekit-server
 > 프리셋으로 한 번에 적용할 수 있다(개별 플래그가 프리셋보다 우선). 미지정 시 기존 마스터와 100% 동일하게
 > 동작(무회귀). 상세는 [OPERATOR_TUNING_GUIDE.md](OPERATOR_TUNING_GUIDE.md) 참조.
 
-> **세션 언어모드(CLAUDE.md §3.2)**: `--lan auto`가 코드스위칭(auto) 세션의 기본값. 한국어/영어 단일 세션을
-> 측정하려면 `--lan ko` / `--lan en`으로 기동한다(eval.py 사용 시 `--lan` 인자로 전달 — 아래 파일 목록의
-> 언어모드 태그와 일치시킬 것). `--lan`은 서버 1회 기동당 전역 1값이므로 언어모드가 다른 파일은 별도 실행으로 측정한다.
+> **세션 언어모드(CLAUDE.md §3.2)**: 배포 UI에서 선택 가능한 기능(auto/ko/en)이지만, **모든 성능 측정은
+> `--lan auto` 고정**이다 — kor1~3(한국어 단독)·eng1(영어)도 auto로 측정한다. 세션 언어모드는 측정 변수가
+> 아니다. ko/en 세션 고정 기능 자체를 검증할 때만 예외적으로 `--lan ko`/`--lan en`을 쓴다.
 
 > ⚠️ **반복 측정 — 2계층**: 실시간 STT는 동일 조건에서도 매 실행마다 성능 편차가 발생한다.
 > **① 평소 스크리닝 = 1회** (`--repeat` 생략) — 방향 탐색·catastrophic 회귀 감지용. 1회 수치는 방향 신호로만 해석한다.
@@ -107,21 +107,21 @@ whisperlivekit-server
   1. **`[spkN]` 헤더 전환 = 화자전환 경계** → **화자분리 F1**(1순위·필수). 화자가 바뀌면 새 `[spkN]` 헤더(사람 단위 — 같은 화자는 한·영 code-switch 가능, bong1=4화자 `spk1`~`spk4`).
   2. **화자 블록 내 줄바꿈 = 온점 문장 경계** → **문장분리 F1**(3순위·nice-to-have). WER 정답은 `[spkN]` 헤더 제거·라벨 미포함 텍스트.
   - `[spkN]` 헤더가 없는 `<name>.txt`(라벨 없는 빈 줄 경계만)는 구형식으로 폴백 파싱된다(문장분리 F1 미산출) — `eval.py`가 같은 `<name>.txt`에 대해 신형식 파싱을 우선 시도하고 실패 시에만 폴백. 과거엔 `_speak,sentence_sperate.txt`라는 별도 접미사 파일명으로 신/구형식을 구분했으나 **폐지되고 `<name>.txt`로 통합**됐다(전 파일 `[spkN]` 헤더 포함 상태). 형식·측정 정본 = [TRANSCRIPTION_REQUIREMENTS.md](TRANSCRIPTION_REQUIREMENTS.md) §2·§3.
-- **파일 목록** (측정 기본 설정: 화자분할 ON — 이 옵션 전체가 이제 `parse_args.py` 기본값이라 추가 인자 없이 `whisperlivekit-server`만 기동해도 동일 설정임). **언어모드** 태그(CLAUDE.md §3.2)는 측정 시 넘길 `--lan` 값을 가리킨다:
-  - `bong1.mp3` / `bong1.txt` — 봉준호 기생충 인터뷰. **영어 2명 + 한국어 2명**, 화자 교대·긴 발화 혼재. 다화자·온점분리 역량의 핵심 테스트 대상. **언어모드: auto**.
+- **파일 목록** (측정 기본 설정: 화자분할 ON — 이 옵션 전체가 이제 `parse_args.py` 기본값이라 추가 인자 없이 `whisperlivekit-server`만 기동해도 동일 설정임). 모든 파일이 **`--lan auto`로 측정**된다(CLAUDE.md §3.2):
+  - `bong1.mp3` / `bong1.txt` — 봉준호 기생충 인터뷰. **영어 2명 + 한국어 2명**, 화자 교대·긴 발화 혼재. 다화자·온점분리 역량의 핵심 테스트 대상.
     **테스트(채택/기각) + 개선 최우선 대상**(다화자·긴 발화). 채택 확정 시 `--repeat 3` 루틴.
     `bong1.txt`는 2026-07-21부로 웃음·박수·환호·잡음·더듬 등 **비언어적 표시**를 포함한다(청취 재검수 결과 반영) —
     형식·WER 제외 처리는 [TRANSCRIPTION_REQUIREMENTS.md](TRANSCRIPTION_REQUIREMENTS.md) §2 참조.
-  - `ytn2.mp3` / `ytn2.txt` — SCM 회의 통역. 영어 발화자 발화 → 한국인 통역, **한 문장씩 화자 교대**(순차통역). EN↔KO 짧은 텀 교차. **언어모드: auto**.
+  - `ytn2.mp3` / `ytn2.txt` — SCM 회의 통역. 영어 발화자 발화 → 한국인 통역, **한 문장씩 화자 교대**(순차통역). EN↔KO 짧은 텀 교차.
     **테스트(채택/기각) + 개선 최우선 대상**(짧은 텀 코드스위칭). 채택 확정 시 `--repeat 3` 루틴.
-  - `sbs1.mp3` / `sbs1.txt` — 뉴스 리포트. **대부분 한국어 → 중간 영어 인용 → 다시 한국어 종료**(사실상 단일 앵커, 언어 전환 경계). **언어모드: auto**(영어 인용 구간이 있어 ko 고정 시 오전사 위험 — auto 유지). **테스트(채택/기각)**.
-  - `ytn1.mp3` / `ytn1.txt` — SCM 회의 통역, ytn2 동일 이벤트 다른 구간. 영어 발화자+한국어 통역, 한 문장씩 화자 교대. **언어모드: auto**.
+  - `sbs1.mp3` / `sbs1.txt` — 뉴스 리포트. **대부분 한국어 → 중간 영어 인용 → 다시 한국어 종료**(사실상 단일 앵커, 언어 전환 경계). **테스트(채택/기각)**.
+  - `ytn1.mp3` / `ytn1.txt` — SCM 회의 통역, ytn2 동일 이벤트 다른 구간. 영어 발화자+한국어 통역, 한 문장씩 화자 교대.
     **held-out 정량**(ytn2 동일 이벤트 쌍둥이 — ytn2 개선이 미학습 데이터에 일반화되는지 코드스위칭 검증용).
-  - `eng1.mp3` / `eng1.txt` — **단일 영어 발화자**만 말하는 상황. script-switch false split 감시용. **언어모드: en**(`--lan en`).
+  - `eng1.mp3` / `eng1.txt` — **단일 영어 발화자**만 말하는 상황. script-switch false split 감시용.
     **held-out 정량**(영어 전용 회귀 감시).
-  - `kor1.wav` / `kor2.wav` / `kor3.wav` — 한국어 단독 낭독체(Exp-178 발굴). auto 모드에서 서두 영어 환각 등으로 붕괴하는 실패모드가 발견되어 **정식 테스트셋(채택/기각)에 편입**됨. **언어모드: ko**(`--lan ko`).
+  - `kor1.wav` / `kor2.wav` / `kor3.wav` — 한국어 단독 낭독체(Exp-178 발굴). auto 모드에서 서두 영어 환각 등으로 붕괴하는 실패모드가 발견되어 **정식 테스트셋(채택/기각)에 편입**됨.
     **테스트(채택/기각)**. 채택 확정 시 `--repeat 3` 루틴.
-  - `kinno.mp3` / `kinno.txt` — ITS 2021 K-혁신기업 행사, **2화자 순차통역**(한국어 MC + 통역사), 한↔영 교차. **언어모드: auto**.
+  - `kinno.mp3` / `kinno.txt` — ITS 2021 K-혁신기업 행사, **2화자 순차통역**(한국어 MC + 통역사), 한↔영 교차.
     **held-out 정성 sanity** — 정답 텍스트의 단어·철자가 부정확할 수 있어 **WER/F1 채택 게이팅에서 제외**. 전반적 화자·문장 분리 + 대규모 누락/환각 유무만 정성 확인.
     **알려진 개선 불가 구간**: `[spk2]`(통역사) 영어 도입부("Good morning, ladies and gentlemen. Welcome to the Dialogue with K-Innovative Companies at ITS 2021.")는 화자 본인의 콩글리시 발음이 원인이라 발음대로 한국어로 오전사되는 것이 정상 — 개선 대상 아님(상세: [TRANSCRIPTION_REQUIREMENTS.md](TRANSCRIPTION_REQUIREMENTS.md) kinno 절).
 - **정답 스크립트**: 위 모든 파일에 `<name>.txt`가 존재(canonical, `[spkN]` 헤더+화자·문장 전처리 완료). 2026-07-18 이전엔 `_speak,sentence_sperate.txt` 접미사 파일로 별도 관리됐으나 폐지·통합됨.

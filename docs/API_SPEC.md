@@ -6,7 +6,7 @@
 > (`/v1/audio/transcriptions`, `/v1/listen` 등)은 이 프론트와 무관하며 상세는
 > [0.Metafile/docs/API.md](../0.Metafile/docs/API.md) 참조.
 >
-> 문서 기준: master `534bad1` 시점(전사 라인 리텐션 = **무제한**, 번역 glossary 관리 API·진행중 번역 구현 완료). 값·기본값은 §6 참조.
+> 문서 기준: 전사 라인 리텐션 = **무제한**, 번역 glossary 관리 API·진행중 번역 구현 완료. 값·기본값은 §6 참조.
 
 ---
 
@@ -27,23 +27,24 @@
 
 ### 1.1 연결 대상 · 배포 방식 (방법 A)
 
-- **개발 중**: 백엔드는 팀 개발 PC에서 구동된다. 프론트는 **`ws://<개발 서버 IP>:8900/asr`**(REST도 동일 호스트)로 붙는다 — 개발자 자신의 `localhost`가 아님에 주의.
-  - **마이크(`getUserMedia`)는 보안 컨텍스트(`https` 또는 `localhost`)에서만 동작**하므로, React 개발 서버는 **개발자 자기 `localhost`에서 실행**한다(예: `http://localhost:5173`). WebSocket/REST 대상만 위 개발 서버 IP를 가리키면 된다.
+- **개발 중**: 백엔드·프론트 모두 같은 개발 PC에서 구동한다(단일 호스트). 백엔드는 `localhost:8900`, Vite dev
+  서버는 `localhost:5173`이며 `/asr`·`/api`·`/health`를 Vite 프록시로 8900에 전달한다(`vite.config.ts`).
+  마이크(`getUserMedia`)는 보안 컨텍스트(`https` 또는 `localhost`)에서만 동작하는데, 둘 다 localhost라 문제 없다.
 - **배포 = 방법 A(단일 프로그램)**: 단일 PC 로컬 전용. wlk 백엔드가 React **빌드 산출물(`dist/`)을 `/`에서 서빙**하도록 통합한다(정적 마운트 + SPA fallback — 기존 wl이 쓰던 방식과 동일). 사용자는 그 PC에서 `localhost:8900`으로 접속 → localhost라 마이크도 http로 정상, **HTTPS 불필요**. **구현 완료** — `whisperlivekit/basic_server.py` + `--frontend-dir` 플래그(기본값 `frontend/static`, 저장소 루트 기준 상대경로). `frontend/static/index.html`이 있으면 그 dist를 서빙하고 `assets`를 마운트, 그 외 경로는 SPA fallback으로 `index.html`을 반환한다. `index.html`이 없으면(개발 PC 등) 기존 내장 데모 UI로 자동 폴백한다. **dist가 Vite `base`(예 `/wlkies`)로 빌드된 경우**, 백엔드가 `index.html`의 자산 참조에서 base를 자동 추출해 그 하위(`/wlkies/assets`, `/wlkies/{spa}`)로 서빙하고 `GET /`는 base로 리다이렉트한다. base는 `--frontend-base`(기본값 `auto` = 자동추출; `''`/`'/'`=루트, `/wlkies` 등으로 명시 오버라이드 가능)로 조정한다. 루트(base `/`) 빌드도 동일 코드로 하위호환된다.
   - **`GET /dev` = 내장 데모 UI 고정 경로**: `GET /`는 dist 유무에 따라 배포 UI와 내장 UI 중 **하나만** 내주므로, dist를 넣는 순간 내장 UI에 접근할 수 없어진다. `/dev`는 `--frontend-dir` 유무와 무관하게 **항상 내장 UI**를 서빙해 두 UI가 같은 서버(포트 8900)에서 경로로만 갈리도록 한다. 프론트 이슈 분리(백엔드 계약이 맞는지 내장 UI로 교차 확인)용이며, SPA fallback은 base(`/wlkies`) 하위에만 걸려 있어 이 경로를 가로채지 않는다.
 - **백엔드 URL 구성(권장 패턴)**: 프론트는 백엔드 주소를 **same-origin 자동 유도(`window.location` 기반)를 기본값**으로 두고, **개발용 env 변수(예 `VITE_WLK_URL`)로만 오버라이드**한다. → 배포(방법 A = same-origin)에선 설정 없이 동작하고, 개발 중엔 env로 개발 서버 IP를 지정한다.
   - 빌드 **base path**는 `/`(루트)든 `/wlkies` 같은 하위 경로든 무방하다 — 백엔드가 `index.html`에서 base를 자동 추출(`--frontend-base auto`)해 그 하위로 자산·SPA를 서빙하고 `GET /`는 base로 리다이렉트하므로 자산 절대경로 URL이 맞춰진다. react-router 등 클라이언트 라우팅을 쓰면 백엔드 SPA fallback이 필요하다(백엔드에 반영).
 
-### 1.2 이번 연동 구현 범위 (UI 지침 — 백엔드 계약과 별개)
+### 1.2 배포 UI 현재 표시 범위 (백엔드 계약과 별개)
 
-> 백엔드는 아래 값을 **모두 계속 제공**한다. 이 표는 **이번에 UI에서 무엇을 구현/표시할지**의 범위이며, 백엔드 계약(스키마)은 바뀌지 않는다.
+> 백엔드는 아래 값을 **모두 계속 제공**한다. 이 표는 **배포 UI가 실제로 무엇을 표시하는지**이며, 백엔드 계약(스키마)은 바뀌지 않는다.
 
-| 항목                                  | 이번 범위                 | 비고                                                      |
+| 항목                                  | 현재 상태                 | 비고                                                      |
 | ------------------------------------- | ------------------------- | --------------------------------------------------------- |
 | 번역 `lines[].translation`            | **표시함**                | 서버 `--llm-translation` **기본 ON**(2026-07-16~)               |
-| 화자분할 `speaker`                    | **수신만, UI 표시 안 함** | 서버 diar ON(값은 옴). 화자 배지·색은 이번엔 미구현(§2.6) |
-| 전사 저장 `POST /api/save-transcript` | **범위 제외**             | 저장 버튼 미구현. §3.2는 참고용                           |
-| `finalize_trigger`                    | **UI에 표시(테스트용)**   | 성능 분석 목적. **최종 배포 시 UI에서 제거 예정**(§2.7)   |
+| 화자분할 `speaker`                    | **수신만, UI 표시 안 함** | 서버 diar ON(값은 옴). 화자 배지·색은 배포 UI에 넣지 않기로 결정됨(§2.6) |
+| 전사 저장 `POST /api/save-transcript` | **UI에서 제거됨**(2026-07-22) | API 계약은 유지, 배포 UI가 호출하지 않음. §3.2는 참고용   |
+| `finalize_trigger`                    | **UI에 표시(테스트용)**   | 성능 분석 목적(§2.7)                                       |
 
 ---
 
@@ -568,6 +569,8 @@ full 모드(기본)에서는 매 스냅샷 `lines[]`를 통째로 다시 그리�
   않는다** — 버퍼는 발화 중 계속 갱신돼 매번 임베딩 인코딩 + 벡터 검색이 돌면 실시간성이 무너지기
   때문이다. 디렉터리가 없거나 `qdrant-client`/`sentence-transformers`가 설치돼 있지 않으면 조용히
   비활성화되고 기존 동작 그대로다(기동 실패하지 않음). **프론트 계약은 무변경** — 번역 품질만 달라진다.
+  **개발 PC는 이 자산 디렉터리를 배치하지 않아 항상 OFF**(배포 PC 전용 기능) — 개발 PC 번역 테스트에서는
+  Qdrant 없이 glossary(Stage 1)만 적용된다.
 
 ---
 

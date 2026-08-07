@@ -45,7 +45,8 @@ description: master 변경사항을 배포 반입 산출물(deploy/, wlk_in/)에
 
 4. **서드파티 의존성 wheelhouse 재빌드가 필요한 경우(`pyproject.toml`/`uv.lock` 변경 시) — 공유 `.venv` 절대 접촉 금지**
    - `uv export` / `uv sync` / `uv venv` / `uv run`을 공유(Junction) `.venv`에 실행하지 않는다(CLAUDE.md uv
-     가드레일 — 위반 시 IDE 언어서버 잠금과 겹쳐 `.venv`가 반쪽 손상되는 실사고가 있었다, §8 트랩 표 참조).
+     가드레일 — 위반 시 IDE 언어서버 잠금과 겹쳐 `.venv`가 반쪽 손상되는 실사고가 있었다,
+     `docs/DEPLOYMENT_OFFLINE.md` §8 트랩 표 참조).
    - 전용 워크트리 + 독립 `.venv`(`docs/DEPLOYMENT_OFFLINE.md` §2.2 공식 레시피)에서 `uv export` →
      `pip download`로 wheelhouse를 재구성한다. whisperlivekit 프로젝트 자체는 wheel로 빌드하지 않으므로
      `uv build --wheel`/`python -m build --wheel` 단계는 필요 없다.

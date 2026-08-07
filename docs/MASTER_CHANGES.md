@@ -40,7 +40,7 @@ upstream 기본값만으로는 반복 아티팩트(`바 바 바`), 언어 고착
 
 > **채택 기준** (CLAUDE.md §4): **1순위 = max(최악 케이스) 미회귀, 2순위 = median 개선**.
 > 수치는 경로 C(VBCable 루프백) **채택 확정(N≥3) 반복 측정 결과** — `median / max / stdev`.
-> 현행 regime: **테스트 = bong1+ytn2+sbs1(diar-ON, Sortformer, CRT=3.0, PLC=None, turbo)**,
+> 현행 regime: **테스트 = bong1+ytn2+sbs1+kor1~3(diar-ON, Sortformer, CRT=3.0, PLC=None, turbo, 전부 `--lan auto`)**,
 > **held-out = ytn1+eng1(단회) + kinno(정성 sanity)**. 중간 채택 이력은 [../EXPERIMENTS.md](../EXPERIMENTS.md) 참조.
 > JSON: 워크트리 `session-start-lang-probe/.omc/benchmarks/eval_confirm_{test3_N3,kor_N3,kinno_N3,heldout}.json`.
 
@@ -55,7 +55,7 @@ upstream 기본값만으로는 반복 아티팩트(`바 바 바`), 언어 고착
 
 \* bong1 max 39.9는 기존 필러/웃음 환각 변동 모드(Exp-159/168/171/174 반복 관측) — 해당 3회차 전부 프로브 발동 0회(코드 경로 master 동일)로 Exp-179 변경과 무관.
 \*\* kinno는 Exp-177(N=3) max 72.0%였던 catastrophic이 본 라운드에서 미재현(단 프로브 발동 0회라 개선 귀속은 불가).
-> 신규 진단 데이터 **kor1~3**(한국어 단독 낭독체, 정식 테스트셋 미편입): kor1 44.4/46.2%(프로브 표적 — OFF 51.5/62.0 대비 개선), kor2 95.8%(§8 철자낭독 결함 지배), kor3 68.9%.
+> **kor1~3**(한국어 단독 낭독체, 정식 테스트셋 편입됨): kor1 44.4/46.2%(프로브 표적 — OFF 51.5/62.0 대비 개선), kor2 95.8%(§8 철자낭독 결함 지배), kor3 68.9%.
 
 **참고: upstream 0.2.20 기본값 (Exp-000 베이스라인, 2026-06-04)**
 
@@ -300,7 +300,7 @@ upstream whisperlivekit에는 `new_speaker()` → `refresh_segment()` 뼈대가 
 
 ## 4. 필터링 / 단어 교정
 
-> **이식 기준**: [../CLAUDE.md](../CLAUDE.md) §3.5/§3.6 — `whisperlive_code/`에서 **그대로 이식**, 임의 개선 금지.
+> **이식 완료**([../CLAUDE.md](../CLAUDE.md) §3.5/§3.6) — 당시 `whisperlive_code/`를 기준으로 이식했다. 현재 `whisperlive_code/`는 성능·기법 비교용 참고 자료일 뿐 신규 이식 대상이 아니다(§1).
 
 | 모듈 | 파일 | 동작 |
 |---|---|---|
@@ -316,7 +316,7 @@ upstream whisperlivekit에는 `new_speaker()` → `refresh_segment()` 뼈대가 
 
 ## 5. 번역 파이프라인
 
-> **이식 기준**: [../CLAUDE.md](../CLAUDE.md) §3.4 — 문장 확정 시 번역 수행, `whisperlive_code/` 구조 그대로.
+> **이식 완료**([../CLAUDE.md](../CLAUDE.md) §3.4) — 문장 확정 시 번역 수행. 당시 `whisperlive_code/` 구조를 기준으로 이식했으며, 현재는 비교 참고 자료일 뿐이다(§1).
 
 | 모듈 | 파일 | 동작 |
 |---|---|---|
@@ -386,15 +386,15 @@ upstream에는 정량 평가 도구가 없었다. 아래 모듈을 새로 추가
 
 ### 중기 (다음 Phase)
 
-- **diarization → finalized 마킹 완전 연결**: ChangeSpeaker 경로는 활성화됐으나 화자분할 기반 finalized 마킹이 아직 완전히 React까지 연결되지 않음. ([SCHEMA_CHANGES.md](SCHEMA_CHANGES.md) §6 참조)
-- **번역 React 연결 완성**: `TranslationManager`는 구현됐으나 번역 결과의 실시간 React 반영 경로가 Phase 4+ 작업으로 남아 있음. ([DEPLOYMENT_OFFLINE.md §5](DEPLOYMENT_OFFLINE.md) 참조)
 - **§3 도메인 서술 백필**: 이 문서의 §3-6b 이후 채택분 중 Exp-158(turbo 기질 전환)·160(PLC 기본 None)·161(audio_max_len 15.0)·167/168/170/171/173/174가 도메인 섹션에 미반영 — §2 수치는 최신이나 서술 백필 필요(이력 자체는 [../EXPERIMENTS.md](../EXPERIMENTS.md)에 완비).
+
+> ROADMAP Phase 4(React UI 연결 + 번역 파이프라인)는 완료됐다(2026-07-21 배포 UI 반입·통합검증, diarization→finalized→번역→React 반영 전 경로 동작 확인). diarization/번역의 React 연결은 더 이상 TODO가 아니다.
 
 ### 장기 / 설계 제약 (§3.8)
 
 - **백엔드 우선 개선**: 추가 후처리 필터보다 VAD 전처리, 오디오 전처리, 디코더 파라미터(beam_size, nonspeech_prob 등) 개선 우선.
-- **범용성 유지**: 특정 테스트 파일(sbs1/ytn1)에 과적합되는 개선 금지. ytn2(held-out)를 정기 검증에서 제외하여 일반화 데이터 가치 보존.
-- **폐쇄망 패키징**: 배포 환경 오프라인 설치 절차 미완. ([docs/OPEN_QUESTIONS.md](OPEN_QUESTIONS.md) 참조)
+- **범용성 유지**: 특정 테스트 파일에 과적합되는 개선 금지. held-out(ytn1+eng1)을 정기 검증에 포함해 일반화 데이터 가치 보존.
+- **폐쇄망 배포**: 패키징(wheel)·모델 이동·오프라인 env·코드 이식·실마이크 검증(ROADMAP 6-1~6-6)은 완료. 남은 항목은 RTX 5090(배포 PC) 실측 지연 시간 측정(6-7)뿐. ([docs/OPEN_QUESTIONS.md](OPEN_QUESTIONS.md) 참조)
 - **하드코딩 제한**: 특정 언어·패턴 특화 하드코딩 신규 추가 금지 (CLAUDE.md §3.8). 기존 Exp-002/028/057 베이스라인 필터는 유지하되 같은 방식 확장 금지.
 
 ---

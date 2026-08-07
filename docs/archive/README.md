@@ -6,6 +6,9 @@
 
 | 파일 | 내용 | 원래 위치 |
 |---|---|---|
+| [GOAL_AUTO_KOREAN_FOLLOWUP.md](GOAL_AUTO_KOREAN_FOLLOWUP.md) | auto 모드 한국어 후속조치 3단계 Goal Prompt (완료·master 머지, Exp-187/188/189) | `docs/goal_prompt/` |
+| [GOAL_KOR1_SILENCEHARD_CASEB.md](GOAL_KOR1_SILENCEHARD_CASEB.md) | kor1 SILENCE_HARD_SECS Case B 수정 Goal Prompt (완료·master 머지, Exp-190) | `docs/goal_prompt/` |
+| [GOAL_UTF8_HELD_EMIT_LOSS.md](GOAL_UTF8_HELD_EMIT_LOSS.md) | held/UTF-8 재조립 방출 손상 Goal Prompt (완료·master 머지, Exp-199/200) | `docs/goal_prompt/` |
 | [EXP_081_083_LOOP.md](EXP_081_083_LOOP.md) | Exp-081~083 자동 실험 루프 Goal Prompt (완료) | `docs/` |
 | [EXP_088_LOOP.md](EXP_088_LOOP.md) | Exp-088 한·영 전환 경계 자동 루프 Goal Prompt (완료) | `docs/` |
 | [2026-06-09_0851_qa_phase4-베이스라인-검증.md](2026-06-09_0851_qa_phase4-베이스라인-검증.md) | Phase 4 베이스라인 검증 QA 세션 기록 | `docs/session-logs/` |

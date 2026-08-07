@@ -1,6 +1,6 @@
 ---
 name: code-guide
-description: WLK 프로젝트 코드 설명 에이전트 - 아키텍처/기능/파일/이식 대상을 실행 흐름 중심으로 설명하고, 자연어 질문으로 특정 기능의 코드 위치를 찾아 설명한다. 호출: /code-guide [arch|feature|file|port|where] [대상]
+description: WLK 프로젝트 코드 설명 에이전트 - 아키텍처/기능/파일을 실행 흐름 중심으로 설명하고, whisperlive_code 대비 현재 구현을 비교하며, 자연어 질문으로 특정 기능의 코드 위치를 찾아 설명한다. 호출: /code-guide [arch|feature|file|compare|where] [대상]
 ---
 
 # WLK 코드 가이드 에이전트
@@ -13,7 +13,7 @@ description: WLK 프로젝트 코드 설명 에이전트 - 아키텍처/기능/�
 /code-guide arch                              # 전체 아키텍처 E2E 흐름
 /code-guide feature <이름>                    # 특정 기능의 코드 흐름
 /code-guide file <경로>                       # 특정 파일 설명
-/code-guide port <모듈명>                     # whisperlive_code 이식 대상 분석
+/code-guide compare <모듈명>                  # whisperlive_code 대비 현재 whisperlivekit 구현 비교(기법 참고용)
 /code-guide where <자연어 설명>               # 특정 기능이 구현된 코드 위치 + 설명
 ```
 
@@ -30,7 +30,7 @@ description: WLK 프로젝트 코드 설명 에이전트 - 아키텍처/기능/�
 - `arch` → 전체 아키텍처 흐름 모드
 - `feature <이름>` → 기능 흐름 모드
 - `file <경로>` → 파일 설명 모드
-- `port <모듈명>` → 이식 대상 분석 모드
+- `compare <모듈명>` → whisperlive_code 대비 비교 모드
 - `where <자연어>` → 코드 위치 탐색 + 설명 모드
 - 모드 없이 호출 시 → 사용법 출력
 
@@ -56,14 +56,16 @@ description: WLK 프로젝트 코드 설명 에이전트 - 아키텍처/기능/�
 
 | feature 이름 | 탐색 파일 |
 |---|---|
-| `translation` | `whisperlive_code/translator.py`, `whisperlive_code/prompt_manager.py` |
+| `translation` | `whisperlivekit/llm_translation/translator.py`, `whisperlivekit/llm_translation/prompt_manager.py`, `whisperlivekit/llm_translation/rag_manager.py` |
 | `vad` | `whisperlivekit/silero_vad_iterator.py` |
 | `sentence-confirm` | `whisperlivekit/local_agreement/` (디렉터리 전체) |
-| `filtering` | `whisperlive_code/filtering____init__.py` |
-| `glossary` | `whisperlive_code/manager.py` |
+| `filtering` | `whisperlivekit/filtering/__init__.py` |
+| `glossary` | `whisperlivekit/filtering/manager.py`(단어교정), `whisperlivekit/llm_translation/prompt_manager.py`(번역 glossary) |
 | `websocket` | `whisperlivekit/basic_server.py` |
 | `audio-pipeline` | `whisperlivekit/audio_processor.py` |
 | 그 외 | 키워드로 코드베이스 전체 grep 후 관련 파일 탐색 |
+
+> 위 파일들은 모두 **현재 구현**(whisperlivekit/)이다. `whisperlive_code/`는 성능·기법 비교용 참고 자료일 뿐 — 신규 개발의 1차 대상이 아니다(CLAUDE.md §1).
 
 ---
 
@@ -75,11 +77,16 @@ description: WLK 프로젝트 코드 설명 에이전트 - 아키텍처/기능/�
 
 ---
 
-#### `port <모듈명>` 모드
+#### `compare <모듈명>` 모드
 
-1. `whisperlive_code/<모듈명>` 읽기
-2. `whisperlivekit/` 코드베이스에서 연결 지점 탐색
-3. 이식 시 어느 파일 어느 위치에 어떻게 통합되어야 하는지 매핑하여 출력
+whisperlive_code는 이제 **성능·기법 비교용 참고 자료**일 뿐 이식 대상이 아니다(CLAUDE.md §1). 이 모드는
+과거 whisperlive가 어떻게 했는지와 현재 whisperlivekit 구현이 어떻게 다른지 대조해, 아이디어를 얻거나
+회귀 여부를 판단하는 데 쓴다 — 코드를 그대로 옮기라는 뜻이 아니다.
+
+1. `whisperlive_code/<모듈명>` 읽기(참고용 레거시 코드)
+2. `whisperlivekit/` 코드베이스에서 대응하는 현재 구현 탐색(위 feature 매핑 표 참고)
+3. 두 구현의 접근 방식 차이(로직·파라미터·임시방편 유무)를 비교해 출력. 그대로 이식할 코드가 아니라
+   **참고할 만한 기법이 있는지**를 판단 기준으로 삼는다.
 
 ---
 
@@ -114,8 +121,8 @@ description: WLK 프로젝트 코드 설명 에이전트 - 아키텍처/기능/�
 ```
 프로젝트: WhisperLiveKit 기반 실시간 STT 시스템 (한국어/영어)
 핵심 구조:
-- whisperlivekit/ : FastAPI + WebSocket + Whisper ASR 파이프라인
-- whisperlive_code/ : 이식 예정 기존 코드 (번역, 필터링, glossary)
+- whisperlivekit/ : FastAPI + WebSocket + Whisper ASR 파이프라인 (번역·필터링·glossary 전부 구현 완료)
+- whisperlive_code/ : 비교 참고용 레거시 코드(이식 금지) — 성능·기법 비교 시에만 참조
 목표: 코드 실행 흐름을 단계별로 파악하여 새 기능 구현 위치 결정
 ```
 
@@ -144,7 +151,7 @@ description: WLK 프로젝트 코드 설명 에이전트 - 아키텍처/기능/�
 - 연결 모듈/기능: 연결 방식 설명
 ```
 
-**규칙 (arch / feature / file / port 모드):**
+**규칙 (arch / feature / file / compare 모드):**
 - 파일 경로는 `[file.py:LINE](상대경로#LINE)` 마크다운 링크로 작성 (VSCode 클릭 이동 가능)
 - 실행 흐름은 최소 5단계 이상 구체적으로 작성
 - 코드 스니펫은 핵심 시그니처만 인용 (블록 전체 인용 금지)
@@ -193,8 +200,10 @@ description: WLK 프로젝트 코드 설명 에이전트 - 아키텍처/기능/�
 | `whisperlivekit/silero_vad_iterator.py` | 음성 활동 감지(VAD) |
 | `whisperlivekit/local_agreement/` | 토큰 확정(Local Agreement) 로직 |
 | `whisperlivekit/parse_args.py` | CLI 인자 파서 |
-| `whisperlive_code/translator.py` | LLM 기반 번역 파이프라인 |
-| `whisperlive_code/prompt_manager.py` | 번역 프롬프트 관리 |
-| `whisperlive_code/manager.py` | Glossary 동적 관리 |
-| `whisperlive_code/filtering____init__.py` | 환각 제거 + 단어 대치 필터 |
+| `whisperlivekit/llm_translation/translator.py` | LLM 기반 번역 파이프라인 |
+| `whisperlivekit/llm_translation/prompt_manager.py` | 번역 Glossary/few-shot 관리 |
+| `whisperlivekit/llm_translation/rag_manager.py` | 번역 Stage 2 Qdrant RAG(배포 PC 전용) |
+| `whisperlivekit/filtering/manager.py` | 단어교정 사전 동적 관리 |
+| `whisperlivekit/filtering/__init__.py` | 환각 제거 + 단어 대치 필터 |
 | `0.Metafile/WLK_INTERNALS.md` | 내부 구조 메모 |
+| `whisperlive_code/` | 비교 참고용 레거시 코드(이식 금지) — `compare` 모드에서만 사용 |

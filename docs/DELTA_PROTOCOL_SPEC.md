@@ -1,9 +1,10 @@
-# 델타 전송 프로토콜 명세 — 프론트엔드 작업 지시서
+# 델타 전송 프로토콜 명세 — 구현 완료, 계약 참조용
 
-> **대상**: 배포 PC React UI 담당 개발자
-> **한 줄 요약**: 장시간 세션에서 전사가 점점 느려지는 문제를 없애는 **선택 기능**이다.
-> 지금 코드를 안 고쳐도 기존 그대로 동작하며, 아래 작업 2개를 하면 전환된다.
-> **정본 계약** = [API_SPEC.md](API_SPEC.md) §2.4.2 · **참조 구현** = `whisperlivekit/web/live_transcription.js`
+> **상태**: 배포 UI(`frontend/app/`)에 구현 완료(`src/utils/deltaProtocol.ts`, 기본값 `mode='delta'` —
+> `src/utils/wsUrl.ts`). 이 문서는 알고리즘 명세·계약 참조용으로 남긴다.
+> **한 줄 요약**: 장시간 세션에서 전사가 점점 느려지는 문제를 없애는 **선택 기능**(`?mode=delta` opt-in).
+> **정본 계약** = [API_SPEC.md](API_SPEC.md) §2.4.2 · **1차 참조 구현** = `frontend/app/src/utils/deltaProtocol.ts` ·
+> **2차 참조(내장 UI)** = `whisperlivekit/web/live_transcription.js`
 
 ---
 
@@ -31,23 +32,21 @@
 
 ---
 
-## 2. 무엇을 해야 하나 — 작업은 2개
+## 2. 구현 방식 — 작업 2개(완료)
 
-### 작업 ① WebSocket URL에 `?mode=delta` 추가
+### ① WebSocket URL `?mode=delta`
 
 ```
 ws://<host>:<port>/asr?mode=delta
 ```
 
-기존 파라미터와 병용한다: `/asr?language=ko&mode=delta`
+기존 파라미터와 병용: `/asr?language=ko&mode=delta`. 배포 UI는 `wsUrl.ts`가 기본값으로 항상 명시 전송한다
+(파라미터를 빼면 서버 기본값 `full`로 동작).
 
-**이것만으로 서버가 델타를 보내기 시작하므로, 작업 ②를 함께 반영해야 한다.**
-(파라미터를 빼면 즉시 기존 동작으로 롤백된다 — 서버 재배포 불필요.)
+### ② 상태 누적 + 재구성
 
-### 작업 ② 상태 누적 + 재구성
-
-지금은 받은 메시지의 `lines`를 그대로 렌더할 것이다. 델타에서는 **클라이언트가 서버-권위 `lines[]` 미러를
-누적 유지**해야 한다. 아래 §4 함수를 그대로 쓰면 된다.
+서버가 보내는 메시지의 `lines`를 그대로 렌더하지 않고, **클라이언트가 서버-권위 `lines[]` 미러를
+누적 유지**한다 — 구현 = `frontend/app/src/utils/deltaProtocol.ts`(§4 알고리즘 그대로).
 
 > 그 외 필드(`Segment` 구조, `speaker`, `translation`, `buffer_*` 표시 규칙 등)는 **하나도 바뀌지 않는다.**
 > 이 문서는 오직 "메시지를 어떻게 상태로 합치는가"만 다룬다.
@@ -102,11 +101,12 @@ ws://<host>:<port>/asr?mode=delta
 
 ---
 
-## 4. 재구성 알고리즘 (복사해 쓸 것)
+## 4. 재구성 알고리즘
 
-참조 구현 원본은 `whisperlivekit/web/live_transcription.js`의 `reconstructLines()`이며,
-소스에 `>>> DELTA_RECONSTRUCTION_BEGIN` / `<<< DELTA_RECONSTRUCTION_END` 마커로 표시해 뒀다.
-**DOM·전역에 의존하지 않는 순수 함수**이므로 그대로 가져다 쓸 수 있다.
+TypeScript 구현 = `frontend/app/src/utils/deltaProtocol.ts`(배포 UI가 실제로 쓰는 코드,
+`deltaProtocol.test.ts`로 회귀 테스트됨). 원조 참조 구현은 `whisperlivekit/web/live_transcription.js`의
+`reconstructLines()`이며, 소스에 `>>> DELTA_RECONSTRUCTION_BEGIN` / `<<< DELTA_RECONSTRUCTION_END` 마커로
+표시돼 있다. **DOM·전역에 의존하지 않는 순수 함수**라 알고리즘 자체는 아래와 동일하게 이식 가능하다.
 
 ```js
 // 이전 lines 배열과 수신 메시지로 새 lines 배열을 만든다.
@@ -197,15 +197,17 @@ React는 `key={line.id}`로 렌더하면 재조정이 알아서 바뀐 항목만
 
 ---
 
-## 7. 검증 체크리스트
+## 7. 검증 체크리스트 (배포 UI 회귀 테스트 커버 — `deltaProtocol.test.ts`)
 
-- [ ] `config` 메시지의 `protocol`이 `"delta"`로 온다
-- [ ] 10분 이상 연속 전사에서 **중복 줄이 없다** (실수 1 검증)
-- [ ] 전사 중 앞부분 줄이 사라지거나 순서가 바뀌지 않는다
-- [ ] `n_lines` 불일치 경고가 뜨지 않는다 (개발 중 `console.warn`으로 찍어두면 좋다)
-- [ ] 침묵 구간(`status: "no_audio_detected"`)에서 누적 상태를 **비우지 않는다** — 비우면 침묵마다 자막이 영구 소실된다
-- [ ] 중지 후 재연결하면 자막이 처음부터 정상 누적된다 (연결 시 누적 배열 초기화 확인)
-- [ ] 장시간 세션에서 화면 밀림이 사라졌다 (본래 목적)
+재구현·수정 시 아래 항목을 확인한다:
+
+- `config` 메시지의 `protocol`이 `"delta"`로 온다
+- 10분 이상 연속 전사에서 **중복 줄이 없다** (실수 1 검증)
+- 전사 중 앞부분 줄이 사라지거나 순서가 바뀌지 않는다
+- `n_lines` 불일치 경고가 뜨지 않는다
+- 침묵 구간(`status: "no_audio_detected"`)에서 누적 상태를 **비우지 않는다** — 비우면 침묵마다 자막이 영구 소실된다
+- 중지 후 재연결하면 자막이 처음부터 정상 누적된다 (연결 시 누적 배열 초기화 확인)
+- 장시간 세션에서 화면 밀림이 사라졌다 (본래 목적)
 
 ---
 
@@ -223,6 +225,6 @@ React는 `key={line.id}`로 렌더하면 재조정이 알아서 바뀐 항목만
 |---|---|
 | [API_SPEC.md](API_SPEC.md) §2.4.2 | 델타 계약 정본 + 전체 메시지 스키마 |
 | [API_SPEC.md](API_SPEC.md) §2.4.3 | `Segment` 필드·`buffer_*` 표시·화자분할 등 전체 렌더 규칙 |
-| [SCHEMA_CHANGES.md](SCHEMA_CHANGES.md) §1.1 | 기존 `whisperlive` SSE 대비 변경 이력 |
-| `whisperlivekit/web/live_transcription.js` | 참조 구현(내장 UI, 실제로 `?mode=delta`로 접속) |
+| `frontend/app/src/utils/deltaProtocol.ts` | **1차 참조 구현**(배포 UI가 실제 사용, 회귀 테스트 포함) |
+| `whisperlivekit/web/live_transcription.js` | 2차 참조 구현(내장 UI, `?mode=delta`로 접속 가능) |
 | `whisperlivekit/diff_protocol.py` | 서버측 구현 — 모듈 docstring에 알고리즘 명세 |

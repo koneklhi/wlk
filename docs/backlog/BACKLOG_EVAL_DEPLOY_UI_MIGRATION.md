@@ -2,7 +2,7 @@
 
 ## 배경
 
-2026-07-22 정책 확정(CLAUDE.md §3.3/§3.7, [docs/OPEN_QUESTIONS.md](../OPEN_QUESTIONS.md) §5): 내장 UI
+2026-07-22 정책 확정(CLAUDE.md §3.7, [docs/OPEN_QUESTIONS.md](../OPEN_QUESTIONS.md) §5): 내장 UI
 (`whisperlivekit/web/`) 사용을 중단하고 배포 UI(React, `frontend/app/`)를 경로 B/C를 포함한 모든 테스트
 경로의 기본 UI로 삼는다.
 

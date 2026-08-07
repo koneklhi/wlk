@@ -4,10 +4,9 @@
 **WER(전사 정확도) + 화자분리 F1 + 문장분리 F1**를 출력한다. 개선·채택 우선순위 = **화자분리 F1 > WER > 문장분리 F1** (요구사항 정본 [docs/TRANSCRIPTION_REQUIREMENTS.md](../../docs/TRANSCRIPTION_REQUIREMENTS.md)). *2지표(화자분리/문장분리) 분리 구현 완료 — 신형식 정답(`[spkN]` 헤더가 있는 `<name>.txt`) 존재 시 `seg_f1`=화자분리 F1, `sentence_f1`=문장분리 F1(모든 블록이 단일 문장이면 `None`)로 함께 산출된다. 아직 이 regime v2 기준 경로 C 베이스라인 실측 전이다.*
 추가로 **언어 불일치율(LMR)**이 함께 출력되나 이는 **WER 하위 진단 지표**이며 채택 게이트가 아니다(아래 §결과 해석 기준).
 서버 기동/종료와 VBCable 장치 설정/복원은 스크립트가 자동으로 처리한다.
-**세션 언어모드 매트릭스**(CLAUDE.md §3.2·§3.8 — `--lan`은 서버 기동당 전역 1값이라 언어모드가 다른 파일은 **run을 분리**):
-- **auto 테스트(채택/기각) = `bong1.wav` + `ytn2.mp3` + `sbs1.mp3`** (`--lan auto`; 화자분할 ON; ytn2·bong1 공동 최우선)
-- **ko 테스트(채택/기각) = `kor1.wav` + `kor2.wav` + `kor3.wav`** (`--lan ko`; 한국어 단독 낭독, Exp-178에서 auto 붕괴가 발견돼 편입)
-- **held-out 정량**: auto = `ytn1.mp3`(`--lan auto`), en = `eng1.mp3`(`--lan en`) — 채택 후보에 한해 **단회** diar-ON, 각각 별도 run
+**측정 언어모드 = auto 단일**(CLAUDE.md §3.2·§3.8 — 모든 채택/기각 측정은 `--lan auto`로 수행. kor1~3·eng1도 auto로 측정한다. ko/en 세션 고정 기능 자체를 검증할 때만 예외적으로 해당 `--lan`을 쓴다):
+- **테스트(채택/기각) = `bong1.wav` + `ytn2.mp3` + `sbs1.mp3` + `kor1.wav` + `kor2.wav` + `kor3.wav`**(전부 `--lan auto`; 화자분할 ON; ytn2·bong1 공동 최우선. kor1~3은 Exp-178에서 auto 붕괴가 발견돼 편입)
+- **held-out 정량 = `ytn1.mp3` + `eng1.mp3`**(전부 `--lan auto`) — 채택 후보에 한해 **단회** diar-ON
 - **held-out 정성 sanity = `kinno.mp3`**(`--lan auto`; 2화자; 정답 텍스트 부정확 → **WER/F1 게이팅 제외**, 대규모 누락/환각·거친 화자/문장 분리만 정성 확인)
 
 측정은 **2계층**: ① 평소 스크리닝 = `--repeat 1`(방향 신호), ② master 채택 직전 확정 = `--repeat 3`(median+분산 판단). `eval.py`의 기본 `--files`는 코드 상 여전히 sbs1/ytn1/eng1이므로 **루틴은 `--files`와 `--lan` 명시 필수**.
@@ -22,7 +21,7 @@
 **목표 필수 기능 예외**: §3.1·§3.2 불변 제약 달성에 필요한 기반 기능이 게이트 탈락 시 자율 기각 금지 — 결과·대안 보고 후 사용자 질의.
 
 **측정 대상 UI 방침**: 경로 C 자동화는 배포 UI(React, `frontend/app/`)를 기본 타깃으로 전환하는 것이 목표다
-(내장 UI 사용 중단 방침 — CLAUDE.md §3.3/§3.7). 단 `scripts/vbcable_test.py`의 Playwright 스크래핑은 아직
+(내장 UI 사용 중단 방침 — CLAUDE.md §3.7). 단 `scripts/vbcable_test.py`의 Playwright 스크래핑은 아직
 내장 UI 전용 DOM(`#startButton` 등)에 하드코딩돼 있어, 로컬에 배포 UI dist(`frontend/static/index.html`)가
 있으면 그 타임아웃으로 측정이 실패한다. **과도기 조치**로 아래 모든 예시에 `--server-frontend-dir
 .omc/eval_empty_frontend`(이미 존재하는 빈 디렉터리)를 넣어 서버가 내장 UI로 폴백하도록 강제한다 — 배포 UI
@@ -45,18 +44,18 @@ $ts = Get-Date -Format "yyyyMMdd_HHmm"
   --output ".omc/benchmarks/eval_$ts.json"
 # ↑ --repeat 생략 = 기본값 1회. 수치는 '방향 신호'로만 해석한다.
 
-# ① 스크리닝(ko 모드) — kor1 + kor2 + kor3, 한국어 세션 개선 시 이 run으로 측정
+# ① 스크리닝(kor1~3 서브셋) — 한국어 세션 개선 시 이 run으로 측정(측정모드는 여전히 auto)
 $ts = Get-Date -Format "yyyyMMdd_HHmm"
 .venv\Scripts\python.exe scripts/eval.py `
   --model-dir whisperlivekit/model/whisper-large-v3-turbo `
   --files test_data/kor1.wav test_data/kor2.wav test_data/kor3.wav `
-  --lan ko `
+  --lan auto `
   --diarization --sortformer-model whisperlivekit/model/sortformer-4spk-v2.nemo `
   --compression-ratio-threshold 3.0 `
   --server-frontend-dir .omc/eval_empty_frontend `
   --output ".omc/benchmarks/eval_$ts.json"
 
-# ② 채택 확정용 (master 머지 직전에만 — N≥3회 반복, median+분산 판단). auto 테스트 예시, ko는 --lan ko + kor1~3로 동일하게 반복
+# ② 채택 확정용 (master 머지 직전에만 — N≥3회 반복, median+분산 판단)
 $ts = Get-Date -Format "yyyyMMdd_HHmm"
 .venv\Scripts\python.exe scripts/eval.py `
   --model-dir whisperlivekit/model/whisper-large-v3-turbo `
@@ -67,22 +66,12 @@ $ts = Get-Date -Format "yyyyMMdd_HHmm"
   --server-frontend-dir .omc/eval_empty_frontend `
   --output ".omc/benchmarks/eval_$ts.json"
 
-# held-out 일반화 검증 — 채택 후보에 한해 ytn1(auto) + eng1(en), 언어모드가 다르므로 run 분리(단회, diar-ON)
+# held-out 일반화 검증 — 채택 후보에 한해 ytn1 + eng1(전부 --lan auto), 단회, diar-ON
 $ts = Get-Date -Format "yyyyMMdd_HHmm"
 .venv\Scripts\python.exe scripts/eval.py `
   --model-dir whisperlivekit/model/whisper-large-v3-turbo `
-  --files test_data/ytn1.mp3 `
+  --files test_data/ytn1.mp3 test_data/eng1.mp3 `
   --lan auto `
-  --diarization --sortformer-model whisperlivekit/model/sortformer-4spk-v2.nemo `
-  --compression-ratio-threshold 3.0 `
-  --server-frontend-dir .omc/eval_empty_frontend `
-  --output ".omc/benchmarks/eval_$ts.json"
-
-$ts = Get-Date -Format "yyyyMMdd_HHmm"
-.venv\Scripts\python.exe scripts/eval.py `
-  --model-dir whisperlivekit/model/whisper-large-v3-turbo `
-  --files test_data/eng1.mp3 `
-  --lan en `
   --diarization --sortformer-model whisperlivekit/model/sortformer-4spk-v2.nemo `
   --compression-ratio-threshold 3.0 `
   --server-frontend-dir .omc/eval_empty_frontend `
@@ -92,7 +81,7 @@ $ts = Get-Date -Format "yyyyMMdd_HHmm"
 
 ## 실행 절차 (Claude가 따를 순서)
 
-0. **측정 대상 세션 언어모드를 먼저 확인**(auto/ko/en) — 개선 대상 파일군에 맞는 `--files`+`--lan` 조합을 위 명령 블록에서 선택한다. 모드가 섞인 파일을 한 run에 넣지 않는다.
+0. **측정은 항상 `--lan auto`** — 개선 대상 파일군(전체 테스트셋/kor 서브셋/held-out)에 맞는 `--files` 조합만 위 명령 블록에서 선택한다. ko/en 세션 고정 기능 자체를 검증할 때만 예외적으로 해당 `--lan`을 쓴다.
 1. `$env:PYTHONIOENCODING = "utf-8"` 설정 후 eval.py 실행 (`--output`으로 JSON 자동 저장됨)
 2. VBCable 자동 설정 여부 로그 확인 (성공/실패/건너뜀)
 3. 저장된 JSON에서 파일별 `wer_median/min/max/stdev`, `seg_f1_median`, `avg_wer_c_median`/`avg_seg_f1_c_median` 추출.

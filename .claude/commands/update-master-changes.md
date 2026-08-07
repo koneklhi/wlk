@@ -15,7 +15,7 @@ master에 채택 실험이 머지된 직후 `docs/MASTER_CHANGES.md`를 갱신�
    - `docs/MASTER_CHANGES.md`를 읽는다.
    - `git log --oneline -10 --first-parent master`로 최근 머지 내역을 확인한다.
    - 가장 최근 머지 커밋(merge(phaseN): Exp-NNN 채택 형식)과 해당 브랜치 diff를 확인한다.
-   - `EXPERIMENTS.md`(Exp-131+) 또는 `PHASE2_EXPERIMENTS.md`(Exp-001~130 아카이브)에서 해당 Exp-N 섹션을 읽어 가설·변경·수치·결론을 파악한다.
+   - `EXPERIMENTS_LOG.md`(Exp-131+, `grep "Exp-NNN"`으로 해당 블록만) 또는 `PHASE2_EXPERIMENTS.md`(Exp-001~130 아카이브)에서 해당 Exp-N 섹션을 읽어 가설·변경·수치·결론을 파악한다.
 
 2. **§2 베이스라인 수치 갱신**
    - 최신 path C N≥3 측정 결과(median/max/stdev/F1)로 표를 교체한다.

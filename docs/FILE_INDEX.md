@@ -16,19 +16,19 @@
 - [0.Metafile/WLK_README.md](../0.Metafile/WLK_README.md) — 상위 라이브러리(WhisperLiveKit) README
 - [0.Metafile/WLK_INTERNALS.md](../0.Metafile/WLK_INTERNALS.md) — 내부 구조 메모
 
-## 기존 whisperlive 코드 (참조 + 일부 이식)
+## 기존 whisperlive 코드 (비교 참고 전용)
 
 [whisperlive_code/](../whisperlive_code/) — 기존 `whisperlive` 시스템에서 우리 요구사항용으로 수정했던 주요 코드.
-**요구사항 이해용**이며, §3.4 / §3.5 / §3.6 / React UI 연결부는 이식한다(흐름 따르되 최소 적응; §3.5/§3.6은 개선 여지 있음 — [CLAUDE.md](../CLAUDE.md) §3 참조).
+**성능·기법 비교용 참고 자료**일 뿐, 이식은 완료됐고 신규 이식 대상이 아니다([CLAUDE.md](../CLAUDE.md) §1 참조).
 
 - [whisperlive_code/server.py](../whisperlive_code/server.py), [whisperlive_code/app.py](../whisperlive_code/app.py),
   [whisperlive_code/main.py](../whisperlive_code/main.py) — 서버/엔트리 구조 참고
 - [whisperlive_code/transcriber.py](../whisperlive_code/transcriber.py), [whisperlive_code/client.py](../whisperlive_code/client.py)
-  — 전사·클라이언트 흐름 참고 (임시방편 로직은 이식하지 않음)
+  — 전사·클라이언트 흐름 참고 (임시방편 로직은 이식하지 않았음)
 - [whisperlive_code/filtering____init__.py](../whisperlive_code/filtering____init__.py),
-  [whisperlive_code/manager.py](../whisperlive_code/manager.py) — 필터링·Glossary 이식 (§3.5/§3.6)
+  [whisperlive_code/manager.py](../whisperlive_code/manager.py) — 필터링·Glossary 참고(현재 구현 = `whisperlivekit/filtering/`)
 - [whisperlive_code/translator.py](../whisperlive_code/translator.py),
-  [whisperlive_code/prompt_manager.py](../whisperlive_code/prompt_manager.py) — 번역 파이프라인 이식 (§3.4)
+  [whisperlive_code/prompt_manager.py](../whisperlive_code/prompt_manager.py) — 번역 파이프라인 참고(현재 구현 = `whisperlivekit/llm_translation/`)
 
 ## Phase 2 — 문장 확정 / 스트리밍 디코더 (STT 품질 개선 작업 영역)
 
@@ -38,14 +38,14 @@
 - [whisperlivekit/silero_vad_iterator.py](../whisperlivekit/silero_vad_iterator.py) — VAD silence 감지
 - [whisperlivekit/timed_objects.py](../whisperlivekit/timed_objects.py) — `ASRToken` / `Silence` / `Segment`(`to_dict` 직렬화)
 
-## Phase 3 — 필터링 / 단어 교정 (이식, [CLAUDE.md](../CLAUDE.md) §3.5/§3.6)
+## Phase 3 — 필터링 / 단어 교정 (완료, [CLAUDE.md](../CLAUDE.md) §3.5/§3.6)
 
 - [whisperlivekit/filtering/__init__.py](../whisperlivekit/filtering/__init__.py) — 환각 문장·단어 제거 로직
 - [whisperlivekit/filtering/manager.py](../whisperlivekit/filtering/manager.py) — `WordCorrectionManager` (단어 교정 사전, SQLite 동적 갱신)
 - [whisperlivekit/filtering/hallucination.json](../whisperlivekit/filtering/hallucination.json),
   [whisperlivekit/filtering/admin_replacement.json](../whisperlivekit/filtering/admin_replacement.json) — 기본 사전
 
-## Phase 4 — 번역 파이프라인 (이식, [CLAUDE.md](../CLAUDE.md) §3.4)
+## Phase 4 — 번역 파이프라인 (완료, [CLAUDE.md](../CLAUDE.md) §3.4)
 
 - [whisperlivekit/llm_translation/translator.py](../whisperlivekit/llm_translation/translator.py) — `LlamaTranslator` / `OllamaTranslator` (서빙 도구 분기)
 - [whisperlivekit/llm_translation/manager.py](../whisperlivekit/llm_translation/manager.py) — `TranslationManager` (확정 세그먼트 비차단 번역 캐시)
@@ -58,6 +58,10 @@
 - [docs/DEPLOYMENT_OFFLINE.md](DEPLOYMENT_OFFLINE.md) — 폐쇄망 오프라인 반입·서버 기동(venv 없이 `C:\Python312` 직접 설치, DLP 회피)·경로 C 자동/경로 B 테스트 + 단어집·번역(기본 ON) 배포 설정 §5
 - [docs/OPEN_QUESTIONS.md](OPEN_QUESTIONS.md) — 설계 결정 이력 (대부분 해소 — 정본 문서 링크)
 - [docs/TESTING.md](TESTING.md) — 실행 명령어·검증 순서·test_data 구조
+- [docs/TRANSCRIPTION_REQUIREMENTS.md](TRANSCRIPTION_REQUIREMENTS.md) — 전사 요구사항·2지표(화자분리/문장분리 F1) 측정 정본
+- [docs/SENTENCE_FINALIZATION_LOGIC.md](SENTENCE_FINALIZATION_LOGIC.md) — 문장 확정 알고리즘·경계 신호 상세
+- [docs/OPERATOR_TUNING_GUIDE.md](OPERATOR_TUNING_GUIDE.md) — 배포 상황별(`--scenario`) 파라미터 튜닝 가이드
+- [frontend/app/README.md](../frontend/app/README.md) — 배포 UI(React) 구조·기능 지침
 
 **유형별 하위 디렉토리** (필수 참조 문서가 아닌 일회성 산출물 — 신규 문서도 이 규칙을 따른다):
 - [docs/research/](research/) — 리서치·설계 조사 결과물(예: [DIARIZATION_SPIKE.md](research/DIARIZATION_SPIKE.md), [CODESWITCH_REALTIME_DESIGN.md](research/CODESWITCH_REALTIME_DESIGN.md), [PHASE3_TRANSLATION_RESEARCH.md](research/PHASE3_TRANSLATION_RESEARCH.md), [PHASE3_WORD_REPLACEMENT_RESEARCH.md](research/PHASE3_WORD_REPLACEMENT_RESEARCH.md))

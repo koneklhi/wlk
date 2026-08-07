@@ -2,8 +2,8 @@
 
 ## 개요
 
-기존 `whisperlive`(SSE) → `whisperlivekit`(WebSocket) 전환에 따른 통신 계약 변경 사항.
-React UI 연결 시 이 문서를 기준으로 수정 범위를 결정한다.
+기존 `whisperlive`(SSE) → `whisperlivekit`(WebSocket) 전환에 따른 통신 계약 변경 이력. React UI(배포 UI,
+`frontend/app/`) 연결은 완료됐다 — 이 문서는 그 변경 이력 참조용이며, 현재 계약 정본은 [API_SPEC.md](API_SPEC.md)다.
 
 ---
 
@@ -152,8 +152,8 @@ ws://host:port/asr?language=<auto|ko|en>
 - 값은 ISO 639-1 코드 `ko`/`en` 또는 `auto`(생략 시 서버 기본값 `--lan`을 따름).
 - 이 필드는 **입력(소스) 언어 지정**이며, §2의 `detected_language`/`lang`(세그먼트별 **감지된** 출력 언어)과는
   방향이 반대인 별개 필드다 — 혼동 금지.
-- 세션 시작 후에는 값을 바꿀 수 없다(재연결 필요). 내장 테스트 UI(`live_transcription.html`)는 이 쿼리를
-  구성하는 언어 셀렉터의 참조 구현 위치가 된다(구현은 `feat/session-lang-lock` 브랜치 담당 — 이 문서는 계약만 기술).
+- 세션 시작 후에는 값을 바꿀 수 없다(재연결 필요). 언어 셀렉터의 참조 구현 위치는 배포 UI
+  (`frontend/app/`, `SttSettingDrawer`) — 이 문서는 계약만 기술한다.
 
 ---
 
@@ -164,11 +164,12 @@ ws://host:port/asr?language=<auto|ko|en>
 - `POST /api/corrections` — 단어 추가 (body: `{"wrong_word": str, "correct_word": str}`)
 - `DELETE /api/corrections/{wrong_word}` — 단어 삭제
 
-### 연기된 엔드포인트 (React 연결 단계에서 구현)
-- `GET /api/recordings/start|stop|status` — WS 자체가 녹음 제어하므로 React 연결 시 추가
+### 폐기된 엔드포인트 (구현 안 함)
+- `GET /api/recordings/start|stop|status` — WS 연결수명주기(연결=시작, 빈 프레임=종료) 자체가 녹음
+  제어를 대체해 별도 REST가 필요 없어짐.
 
-### Phase 5로 연기
-- `GET/POST /api/prompts/*` — 번역 Glossary 동적 관리
+### 구현 완료 (Phase 5)
+- `GET/POST /api/prompts/*` — 번역 Glossary 동적 관리. 상세 = [API_SPEC.md](API_SPEC.md) §3.4.
 
 ---
 
@@ -183,19 +184,15 @@ ws://host:port/asr?language=<auto|ko|en>
 
 ---
 
-## 6. 알려진 제한 사항
+## 6. 해결 이력
 
-### 화자분리 활성 시 finalized/completed 동작
+### 화자분리 활성 시 finalized/completed 동작 (해결 완료)
 
-`--diarization` 플래그를 사용할 때 `Segment.finalized`(및 React 호환 별칭 `completed`)는
-현재 항상 `false`로 반환된다. 화자분리 경로(`get_lines_diarization`)에서는 세그먼트 확정 신호가
-별도 구현돼 있지 않기 때문이다.
-
-**영향:**
-- `completed` 필드가 화자분리 모드에서 신뢰할 수 없음
-- LLM 인라인 번역이 화자분리 모드에서 동작하지 않음 (확정 세그먼트 없음)
+**과거 문제**: `--diarization` 플래그 사용 시 `Segment.finalized`(및 React 호환 별칭 `completed`)가
+항상 `false`로 반환돼 `completed` 필드를 신뢰할 수 없고, 확정 세그먼트가 없어 LLM 인라인 번역이
+화자분리 모드에서 동작하지 않았다.
 
 **해결 (feat/closed-network-deploy에서 구현 완료):** `tokens_alignment.py`
 `get_lines_diarization()` — 화자 전환이 발생한 세그먼트(`segments[:-1]`)에 `finalized=True`
 설정. 마지막(현재 발화 중) 세그먼트는 제외. 이 수정으로 화자분리 ON 상태에서도
-LLM 번역이 동작한다.
+LLM 번역이 정상 동작한다(ROADMAP Phase 4 완료 상태와 일치).
