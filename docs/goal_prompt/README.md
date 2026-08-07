@@ -8,6 +8,7 @@ goal 프롬프트 지침 파일을 보관한다. **완료·머지된 goal은 [do
 
 | 파일 | 내용 | 상태 |
 |---|---|---|
+| [GOAL_PARAM_TUNING_CAMPAIGN.md](GOAL_PARAM_TUNING_CAMPAIGN.md) | **파라미터 튜닝 캠페인 무정지 자율 루프(다중 야간 / 토큰 소진)** — 열려 있는 전 knob(~55 arm)을 6트랙(A VAD·B QualityGate·C 이전문맥·D 버퍼·E 문장확정·F 조합)으로 계통 스윕. 근거 = 2026-08-07 전 9파일 auto N=3 베이스라인 + 서버로그 27개 필터 발동 집계(QG 실단어 억제 ~420회·버퍼폐기 22회) + EXPERIMENTS 전수조사(한쪽 방향만 탐색·`[base전용·재검증]`·기록 0건 knob 식별). Stage 0에서 `eval.py --server-arg` 패스스루·VAD/QG knob CLI 노출·sot_index 버그 수정·`sweep_runner.py` 선행. 세션 간 상태 = 원장 JSON `docs/research/2026-08-07_param-sweep-ledger.json`. master 머지 금지(채택권고까지) | **미실행 — 다음 예정 루프** |
 | [GOAL_HALLUCINATION_REDUCTION_LOOP.md](GOAL_HALLUCINATION_REDUCTION_LOOP.md) | **환각 빈도 저감 무정지 자율 루프(6h/토큰 소진)** — 2026-07-22 로그 분석으로 확정한 환각 3계열(① ko 고정 세션 refresh 폭주 중복 — `backend.py:449-501` 코드 갭 확정 ② 침묵 클로징 "감사합니다" — 타임스탬프 정체 시그니처 ③ 잠금언어 음차 "사태라" — Exp-172 사각지대)을 T1→T5 큐로 순회. master 머지 금지(채택권고까지만), 진행 리포트 = `docs/research/2026-07-22_hallucination-loop-progress.md` | **루프 종료**(2026-07-23, ~5시간17분) — T1/T5 채택권고(머지 대기), T2/T3 계측완료, T4 종결. 결과 = Exp-201~206 |
 | [GOAL_CODESWITCH_BOUNDARY.md](GOAL_CODESWITCH_BOUNDARY.md) | 코드스위칭 경계 3증상 수정 루프 — Stage 0(Exp-172) 완료, Stage 1은 별도 goal(archive의 GOAL_SCRIPT_ANCHOR_REDETECT.md, Exp-175)로 분리 완료, **Stage 2(③ 계측기반 수정)는 미착수** | 부분 완료 — Stage 2 대기 |
 | [GOAL_BOUNDARY_QG_PRESERVE.md](GOAL_BOUNDARY_QG_PRESERVE.md) | 경계 복구 구간 QualityGate 버퍼 폐기 유실(Type B 삼킴) 제거 | 미실행 — 다음 예정 루프(자체 §0에 2026-07-19 시점 stale 경고 있음, 재개 전 baseline 재확인 필요) |
