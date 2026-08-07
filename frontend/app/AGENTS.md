@@ -162,5 +162,6 @@ src/
 - `README.md` — 프로젝트 상세 설명, 컴포넌트 가이드
 - `docs/implementation-plan.md` — 현재 구현 계획
 - `docs/overengineering-audit.md` — 코드 단순화 감사 리포트
-- `../../SPEC.md` — 전체 개선 스펙
-- `../../docs/` — API 스펙 및 통합 문서
+- `../../docs/API_SPEC.md` — 서버 REST/WebSocket 계약 정본
+- `../../docs/DELTA_PROTOCOL_SPEC.md` — 델타 프로토콜 재구성 알고리즘 정본
+- `../../docs/SCHEMA_CHANGES.md` — WebSocket 메시지 스키마 변경 이력
