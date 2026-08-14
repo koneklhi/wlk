@@ -26,8 +26,11 @@ type STTThemeState = {
   imageSizeLogo: number;
   logoSize: 'sm' | 'md' | 'lg' | 'xl';
 
-  // 전사 시각(HH:MM:SS) 표시 여부. 투사 화면에선 방해가 될 수 있어 기본 off.
+  // 전사 시각(HH:MM:SS) 표시 여부.
   showTimestamp: boolean;
+
+  // 문장 확정 원인(finalize_trigger) 배지 표시 여부.
+  showFinalizeTrigger: boolean;
 
   // 액션
   setBackgroundColor: (v: string) => void;
@@ -42,6 +45,7 @@ type STTThemeState = {
   setColorTitleForeground: (v: string) => void;
   setLogoSize: (size: 'sm' | 'md' | 'lg' | 'xl') => void;
   setShowTimestamp: (v: boolean) => void;
+  setShowFinalizeTrigger: (v: boolean) => void;
   reset: () => void;
 };
 
@@ -60,7 +64,8 @@ const DEFAULTS = {
   colorTranslationForeground: '#C88C14',
   colorSystemForeground: '#9cdcfe',
   colorTitleForeground: '#ffffff',
-  showTimestamp: false,
+  showTimestamp: true,
+  showFinalizeTrigger: true,
 };
 
 // ponytail: 4-digit hex (#rgb) → 6-digit (#rrggbb) for <input type="color">
@@ -101,10 +106,21 @@ export const useThemeStore = create<STTThemeState>()(
         }
       },
       setShowTimestamp: (v: boolean) => set(() => ({ showTimestamp: v })),
+      setShowFinalizeTrigger: (v: boolean) => set(() => ({ showFinalizeTrigger: v })),
       reset: () => set(() => ({ ...DEFAULTS })),
     }),
-    // showTimestamp 추가로 키를 올린다 — 기존 v1 저장분에는 이 필드가 없어
-    // persist 병합 시 undefined 가 되고, 그러면 토글이 아무 반응도 하지 않는 것처럼 보인다.
-    { name: 'stt-theme-v2' },
+    {
+      // 키는 올리지 않는다 — 올리면 저장돼 있던 색상·폰트 설정이 통째로 날아간다.
+      // 대신 version + migrate 로 바뀐 기본값만 기존 저장분에 밀어넣는다.
+      name: 'stt-theme-v2',
+      version: 1,
+      // v0 저장분은 showTimestamp:false 를 담고 있어(당시 기본값) DEFAULTS 만 true 로 바꿔도
+      // persist 의 얕은 병합이 저장분으로 덮어써 여전히 꺼진 채로 뜬다. 시각 표시만 1회 끌어올린다.
+      // showFinalizeTrigger 는 저장분에 키 자체가 없어 기본값 true 가 그대로 살아남으므로 손대지 않는다.
+      migrate: (persisted, version) =>
+        version < 1
+          ? ({ ...(persisted as Partial<STTThemeState>), showTimestamp: true } as STTThemeState)
+          : (persisted as STTThemeState),
+    },
   ),
 );

@@ -227,7 +227,9 @@ pnpm build
 
 ### 전사·번역 표시
 - 문장 확정 시 번역 결과 표시, 미확정 구간엔 `SttTranslateLoader`
-- 시각(HH:MM:SS) 표시 토글(기본 off — 투사 화면 방해 방지)
+- 시각(HH:MM:SS) 표시 토글(**기본 on**)
+- 확정 원인(`finalize_trigger`) 배지 표시 토글(**기본 on**) — 확정된 줄마다 색상 pill로
+  침묵/종결/언어전환/화자전환을 표시한다. 라벨·색은 내장 UI(`live_transcription.js` `TRIGGER_LABELS`)와 동일
 - 화자분리 UI 는 배포 UI 에 **탑재돼 있지 않다** — 서버가 화자 번호(`speaker`)를 보내도 화면에 별도 뱃지/색상으로 표시하지 않는다(`transcriptRows.ts` 설계 주석 참조)
 
 ### 관리자 페이지 (`/admin`, `routes/admin.tsx`)
@@ -243,7 +245,11 @@ pnpm build
 - 배경 색상 / 로고(타이틀) 배경 색상 / 로고 폰트 색상
 - 원본·번역·시스템 폰트 크기 및 색상 개별 설정
 - 로고 전체 크기 프리셋(`sm`=50% / `md`=100% / `lg`=150% / `xl`=200%, 타이틀·서브타이틀 폰트 크기·로고 이미지 크기 동시 변경)
-- localStorage persist(key: `stt-theme-v2`), "설정 초기화" 버튼으로 기본값 복원
+- 시각 표시 / 확정 원인 배지 표시 토글(둘 다 기본 on)
+- localStorage persist(key: `stt-theme-v2`, `version: 1`), "설정 초기화" 버튼으로 기본값 복원.
+  **기본값을 바꿀 땐 키를 올리지 말고 `migrate` 를 쓴다** — 키를 올리면 저장된 색상·폰트 설정이
+  통째로 날아간다(v1→v2 때 실제로 그랬다). `version: 1` 마이그레이션이 구 저장분의 `showTimestamp` 를
+  새 기본값(on)으로 1회 끌어올린다
 
 ### 알림
 - react-toastify 기반 토스트 — 세션 오류, 관리자 페이지 CRUD 성공/실패/경고
@@ -259,12 +265,14 @@ pnpm build
 - 세션 제어(시작/일시중단/재개, 종료는 `AlertDialog` 확인 후)
 - 언어 선택(`select`, 세션 시작 전에만 활성)
 - 웨이브폼(`WaveformVisualizer`, 녹음/일시중단 중에만 표시)
-- 테마·폰트·로고 설정, 시각 표시 토글, 기록/설정 초기화
+- 테마·폰트·로고 설정, 시각 표시·확정 원인 표시 토글, 기록/설정 초기화
 - 관리자 페이지(`/admin`) 링크
 
 ### `SttTextViewer`
-전사 행 1개 렌더 — 원문(진하게/연하게는 확정 여부에 따라) + 번역(대기 중이면 `SttTranslateLoader`) + 선택적 시각.
-미확정 buffer 꼬리는 같은 문단 안에 이어 붙인다.
+전사 행 1개 렌더 — (선택적 메타 줄: 시각 + 확정 원인 배지) + 원문(진하게/연하게는 확정 여부에 따라)
++ 번역(대기 중이면 `SttTranslateLoader`). 미확정 buffer 꼬리는 같은 문단 안에 이어 붙인다.
+메타 줄은 두 토글이 모두 꺼지면 렌더 자체를 생략한다(빈 div 를 남기면 flex gap 만 먹어 행 간격이 벌어진다).
+**메타 줄은 반드시 `data-testid="stt-text"` 바깥**이다 — 안에 넣으면 경로 C 전사에 섞인다.
 
 ### `SttThemeProvider` / `useSttTextStyle`
 `theme.store.ts` 값을 CSS 변수(`--stt-*`)로 주입하는 Provider 와, 원문/번역/시스템 텍스트 스타일을 반환하는 훅.
@@ -296,8 +304,10 @@ F1·문장분리 F1을 산출한다. 즉 배포되는 화면이 곧 측정 대�
 | `data-testid="stt-text"` | `SttTextViewer.tsx` 원문 div | **원문만** 읽는다 — 행 전체 innerText 를 쓰면 시각 표시·번역문이 전사에 섞인다 |
 | `data-testid="stt-idle"` / `"stt-backend-error"` | `SttMain.tsx` / `BackendErrorOverlay.tsx` | "전사 0줄"이 하니스 고장인지 백엔드 문제인지 가르는 신호 |
 
-`TranscriptRow.trigger`(`utils/transcriptRows.ts`)는 이 계약을 위해 `Segment.finalize_trigger`를 행까지
-전달만 하는 필드다 — 화면에는 쓰지 않는다.
+`TranscriptRow.trigger`(`utils/transcriptRows.ts`)는 `Segment.finalize_trigger`를 행까지 전달하는 필드다.
+쓰임이 둘이다 — 화면의 확정 원인 배지(설정으로 on/off)와 이 계약의 `data-trigger` 속성. **배지를 꺼도
+`data-trigger`는 그대로 붙으므로 측정은 설정과 무관하게 동작한다.** 배지는 `stt-text` div 바깥에 있어
+`stt-text`의 innerText 를 오염시키지 않는다 — 배지를 옮길 일이 생기면 이 조건을 반드시 지킬 것.
 
 ## 스크립트
 

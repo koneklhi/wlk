@@ -118,6 +118,8 @@ export const SttSettingDrawer = ({
     setLogoSize,
     showTimestamp,
     setShowTimestamp,
+    showFinalizeTrigger,
+    setShowFinalizeTrigger,
   } = useThemeStore();
 
   const handleResetTheme = useCallback(() => {
@@ -258,6 +260,19 @@ export const SttSettingDrawer = ({
                   <select
                     value={showTimestamp ? 'on' : 'off'}
                     onChange={(e) => setShowTimestamp(e.target.value === 'on')}
+                    className={SELECT_CLASS}
+                  >
+                    <option value="off">숨김</option>
+                    <option value="on">표시</option>
+                  </select>
+                </div>
+
+                {/* ── 확정 원인 표시 ── */}
+                <div className="flex justify-between items-center">
+                  <p className="font-semibold text-base flex-grow-0">확정 원인 표시</p>
+                  <select
+                    value={showFinalizeTrigger ? 'on' : 'off'}
+                    onChange={(e) => setShowFinalizeTrigger(e.target.value === 'on')}
                     className={SELECT_CLASS}
                   >
                     <option value="off">숨김</option>
