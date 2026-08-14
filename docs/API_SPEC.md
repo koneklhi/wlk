@@ -44,7 +44,7 @@
 | 번역 `lines[].translation`            | **표시함**                | 서버 `--llm-translation` **기본 ON**(2026-07-16~)               |
 | 화자분할 `speaker`                    | **수신만, UI 표시 안 함** | 서버 diar ON(값은 옴). 화자 배지·색은 배포 UI에 넣지 않기로 결정됨(§2.6) |
 | 전사 저장 `POST /api/save-transcript` | **UI에서 제거됨**(2026-07-22) | API 계약은 유지, 배포 UI가 호출하지 않음. §3.2는 참고용   |
-| `finalize_trigger`                    | **UI에 표시(테스트용)**   | 성능 분석 목적(§2.7)                                       |
+| `finalize_trigger`                    | **UI에 배지로 표시**(기본 ON) | 확정 줄마다 색상 pill(침묵/종결/언어전환/화자전환). 설정 드로어 "확정 원인 표시"로 끌 수 있고, 별도로 `data-trigger` DOM 속성이 경로 C 계측에 쓰인다(§2.7) |
 
 ---
 

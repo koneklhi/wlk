@@ -344,7 +344,7 @@ Whisper가 찍는 마침표(`.`/`。`)를 문장 분할 신호로 쓰되, **진�
 |---|---|
 | `tokens_alignment.py`의 `finalize_trigger` 대입 지점·조건 (확정 로직) | §2, §3 (해당 트리거), §6 |
 | `sentence_boundary.py` 판별기 목록·로직 (KO_FINAL/KO_EXCLUDE/EN_ABBREV·`is_genuine_sentence_end`·`_punct_split_here`) | §3.5, §5 |
-| 새 트리거 종류 추가/제거 (예: `end_of_stream` 도입) | §1 표, §3(신설 절), §6, 그리고 UI 라벨(`live_transcription.js` `TRIGGER_LABELS`)·`docs/SCHEMA_CHANGES.md` |
+| 새 트리거 종류 추가/제거 (예: `end_of_stream` 도입) | §1 표, §3(신설 절), §6, 그리고 UI 라벨 **2곳**(내장 UI `live_transcription.js` `TRIGGER_LABELS` + 배포 UI `SttTextViewer.tsx` `TRIGGER_LABELS`/`TRIGGER_COLORS`)·`docs/SCHEMA_CHANGES.md` |
 | 경계 신호 생성 조건 변경 (Silence 토큰 문턱, LanguageSwitch arm 진입점, 화자경계 로직) | §3 해당 절 |
 | §5 파라미터 상수의 **값** 변경 | §5 표(현재값), 그리고 그 값을 언급한 §3 본문 |
 | §4 메커니즘(grace/재귀속/필터/QualityGate 등)의 경계 영향 방식 변경 | §4 표 |
@@ -352,8 +352,10 @@ Whisper가 찍는 마침표(`.`/`。`)를 문장 분할 신호로 쓰되, **진�
 
 > 검증: 값을 바꾼 뒤 `grep`으로 이 문서에서 옛 수치가 남아있지 않은지 확인.
 > 트리거 라벨을 추가/변경하면 반드시 [live_transcription.js](../whisperlivekit/web/live_transcription.js)의
-> `TRIGGER_LABELS`, [docs/SCHEMA_CHANGES.md](SCHEMA_CHANGES.md), [scripts/eval.py](../scripts/eval.py)의
+> `TRIGGER_LABELS`, [SttTextViewer.tsx](../frontend/app/src/components/SttTextViewer.tsx)의 `TRIGGER_LABELS`·
+> `TRIGGER_COLORS`(배포 UI 배지), [docs/SCHEMA_CHANGES.md](SCHEMA_CHANGES.md), [scripts/eval.py](../scripts/eval.py)의
 > 전사 기록과 **동기화**한다(계측 계약이 한 세트로 움직여야 분석이 깨지지 않는다).
+> 두 UI 의 라벨이 갈리면 같은 전사를 보고도 서로 다른 확정 원인을 읽게 된다.
 
 관련: 계측 필드 스키마 → [docs/SCHEMA_CHANGES.md](SCHEMA_CHANGES.md) ·
 전사 산출물 → [docs/TESTING.md](TESTING.md) · 실험 기록 → [EXPERIMENTS.md](../EXPERIMENTS.md)

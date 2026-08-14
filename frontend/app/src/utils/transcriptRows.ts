@@ -25,8 +25,10 @@ export interface TranscriptRow {
   end?: string;
   finalized: boolean;
   /**
-   * 이 줄이 확정된 계기. 화면에는 쓰지 않고 DOM `data-trigger` 로만 노출한다 —
-   * 경로 C 자동화(`scripts/vbcable_test.py`)가 전사 txt 의 `[문장별 확정 트리거]` 섹션을 만드는 입력이다.
+   * 이 줄이 확정된 계기. 쓰임이 둘이다 — ① 화면의 확정 원인 배지(설정으로 on/off, 기본 on)
+   * ② DOM `data-trigger` 속성. ②는 경로 C 자동화(`scripts/vbcable_test.py`)가 전사 txt 의
+   * `[문장별 확정 트리거]` 섹션을 만드는 입력이므로 배지 표시 여부와 무관하게 항상 붙는다.
+   * 배지는 반드시 `data-testid="stt-text"` 바깥에 그린다(안에 넣으면 전사 텍스트가 오염된다).
    */
   trigger: FinalizeTrigger | null;
   /** 마지막 행에만 — 아직 확정 안 된 buffer 꼬리. */

@@ -28,6 +28,7 @@ const AUTOSCROLL_THRESHOLD_PX = 120;
 function SttMainInner() {
   const systemStyle = useSttTextStyle('system');
   const showTimestamp = useThemeStore((s) => s.showTimestamp);
+  const showFinalizeTrigger = useThemeStore((s) => s.showFinalizeTrigger);
 
   const phase = useSttStore((s) => s.phase);
   const backendStatus = useSttStore((s) => s.backendStatus);
@@ -147,7 +148,12 @@ function SttMainInner() {
               {rows.map((row) => (
                 // key 는 안정 세그먼트 id 기반 — 배열 index 를 쓰면 백엔드가 최근 줄을
                 // 소급 수정할 때 React 가 엉뚱한 DOM 노드를 재사용한다.
-                <SttTextViewer key={row.key} row={row} showTimestamp={showTimestamp} />
+                <SttTextViewer
+                  key={row.key}
+                  row={row}
+                  showTimestamp={showTimestamp}
+                  showFinalizeTrigger={showFinalizeTrigger}
+                />
               ))}
               <div ref={endRef} />
             </div>

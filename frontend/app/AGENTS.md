@@ -46,7 +46,8 @@
 
 ### 상태 관리
 - 전역 상태: Zustand (`src/stores/`)
-- persist 미들웨어로 설정 저장 (key: `stt-theme`, `stt-theme-v2`)
+- persist 미들웨어로 설정 저장 (key: `stt-theme-v2`, `version: 1`) — 기본값을 바꿀 땐 키를 올리지 말고
+  `migrate` 로 해당 필드만 옮긴다(키를 올리면 저장된 색상·폰트 설정이 통째로 날아간다)
 - 로컬 상태: `useState` / `useRef`
 
 ### API 통신
