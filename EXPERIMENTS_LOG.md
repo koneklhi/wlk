@@ -5538,3 +5538,107 @@ dist가 있으면 `GET /`가 `/wlkies/`로 리다이렉트돼 측정이 타임�
   `--browser-ui inline`로 재현 가능). Epoch(코드 세대)와 **별개 축**이다.
 - 베이스라인 표는 **무수정**(동치 판정).
 - `docs/OPEN_QUESTIONS.md` §5 "구현 대기" → **해소**, 백로그 문서는 `docs/archive/`로 이동.
+
+---
+
+## Exp-208 — 언어경계 유령 stub 중복("In.") 근본원인 규명 + resolve 텍스트 커버 가드 (2026-08-14) [E6, 하니스 H2, `fix/boundary-ghost-textcover` → master `765ddd0`]
+
+**측정 언어모드**: `--lan auto` (전 파일). **설정**: diar ON(sortformer), CRT 3.0, beams 2, PLC None.
+
+### 발단
+2026-08-14 전수 스크리닝(`eval_all9_20260814_0844.json`, 하니스 H1) ytn2 전사에서 사용자가 결함 지적:
+`In. ⟨language_switch⟩` 1단어 stub이 확정된 직후 `In support of these ends, ...`가 다시 확정돼 "In"이 중복.
+stub은 spk2(한국어 통역사)·`ko`로 오귀속. 과거 회차에도 동류 재현(ytn2_C_R2 `there.`→"There is more work...",
+kinno `Today.`, kor2 `You.`→"유무인…"[음차 변종]).
+
+### 근본원인 (코드 검증 완료 — 4단계 인과)
+1. **전환 감지 직전 ko 잠금 상태에서 영어 서두가 커밋된다.** `_split_tokens`가 마지막 단어를 디코더 커밋에서
+   빼면서도 `_build_timestamped_words`는 그 단어까지 하류로 방출하고, 방출 토큰은 `detected_language='ko'`로
+   스탬프된다. QualityGate 기본 임계 −2.0은 실제 영어 오디오를 막지 않는다.
+   증거: `[QualityGate] (lang=ko): in support`, `[SwitchTaxMeasure] 3/5 겹침 tail=['했습니다','.','In','support','of']`.
+2. **철회는 정상 발동한다.** 마커 방출 직전 `_retract_stale_language_tokens`가 3단어를 zone2_opposite로 tombstone.
+3. **★직접 원인 — resolve의 복원 판정이 순수 시간 기준이다.** `boundary_reconcile.resolve()`는 컷 T(=관측된
+   신언어 토큰 최소 start) 기준 `T−COVER_TOL(0.5s)` 미만 tombstone을 **전량 복원**한다. 언어전환 트림+오프셋
+   재계산으로 재디코딩 타임스탬프가 재앵커되면, **재디코딩이 같은 텍스트를 문자 그대로 다시 방출했는데도**
+   시간상 "미커버"로 오판돼 복원된다. 복원 로직 자체는 Exp-173 교훈(철회 후 재디코딩 미복구 = 순유실) 방지
+   장치라 제거 불가 — 결함은 **텍스트 동일성을 전혀 보지 않는 것**이다.
+4. **복원된 유령이 곧바로 stub 문장이 된다.** `tokens_alignment.py`의 `hard_boundary` 분기는 조건이
+   `hard_boundary` 하나뿐(길이·단어수·언어 무관)이고 병합 가드가 hard_boundary 세그먼트 병합을 금지한다.
+   온점은 `_append_terminal_punctuation`이 부착, spk 오귀속은 max-overlap 정상 동작(Exp-188 가드는 승자
+   세그먼트가 0.5s 미만일 때만 발동).
+
+**기존 방어막이 전부 미발동한 이유**: ① dedup supersede(Exp-192가 정확히 이 증상을 겨냥해 만든 경로)는
+`committed` 필터가 **new_lang 스탬프 토큰만** 후보로 봐서 ko 스탬프 유령을 구조적으로 제외한다(유닛테스트
+`test_ghost_prefix_supersede_direction_and_id_inheritance`는 유령을 'en'으로 만들어 이 사각지대를 못 봤다).
+② `_filter_cross_batch_repetitions`는 1단어·인접·미정규화(소문자화/구두점 제거 없음) 비교라 구 재방출을
+원리적으로 못 잡고, 유령 마지막 단어==새 배치 첫 단어면 **새 배치 쪽을 깎는** 역효과 경로마저 있다.
+③ `[SwitchTaxMeasure]`는 이 중복을 정확히 탐지하지만 로그만 찍는 관측 전용이다. ④ 1~2단어 stub 억제·병합
+로직은 코드베이스에 부재.
+
+### 변경 (A안 — resolve 텍스트 커버 가드, `boundary_reconcile.py`)
+- `ReconcileWindow.observe()`가 신언어 토큰의 `(start, _dedup_norm(text))`를 수집(창당 `_OBSERVED_TEXT_CAP=64`).
+- `resolve()`는 시간 파티션+단어스냅 직후, 컷 **바로 아래** tombstone이 관측 텍스트와 **정규화 완전일치**
+  (접두어 불허) + `|Δstart| ≤ TEXT_COVER_SLACK_SECS(2.5, 잠정)`면 복원을 취소하고 대체로 흡수. 비일치 즉시 중단.
+- **불변식**: 이동하는 것은 `first_replaced_idx` 단일 임계 인덱스뿐 → "단일 컷포인트·구멍 없음" 유지, Case B 불가.
+  확장이 하위단어 연속 중간이면 기존 단어스냅 재적용으로 단어 전체 흡수.
+- 순수 구두점 tombstone은 look-through(`'.'`만 남는 파편 방지). 관측 토큰 **1:1 소비**(이미 대체 파티션에 든
+  tombstone이 먼저 소비) → 화자가 같은 단어를 실제 두 번 말한 경우 재방출 1개가 둘 다 지우지 못한다.
+- 롤백 플래그 `RECONCILE_TEXT_COVER_GUARD_ENABLED`. 로그 `[TextCover] 복원취소→대체`.
+- 부수(관측 전용): `[SwitchTaxMeasure]` 겹침 비교를 `_dedup_norm`으로 교체(`"In."` vs `" In"` 미포착 해소).
+  `timestamped_words`는 수정하지 않는다 — 필터 승격 아님.
+- 테스트 8건 추가(인시던트 정밀재현·완전일치 한정·slack·1:1 소비·비연속 금지·구두점 look-through·플래그 OFF
+  레거시·단어스냅). 전체 **794 passed / 1 skipped**, ruff 신규 위반 0.
+
+### 측정 (경로 C, H2 하니스, `--repeat 1` 스크리닝)
+JSON: `.omc/benchmarks/eval_20260814_1042_ghost_ytn2.json`(ytn2 단독) · `eval_20260814_1100_ghost_all9.json`(9파일).
+대조군 = Exp-207 `ab_deploy.json`(동일 H2 하니스, master STT 코드 무변경).
+
+| 파일 | WER(수정) | WER(master H2) | Δ | 화자F1(수정) | 화자F1(master H2) | **TextCover 발동** |
+|---|---|---|---|---|---|---|
+| bong1 | 24.7 | 21.4 | +3.3 | 66.7 | 74.3 | **0** |
+| ytn2 | 13.3 | 11.3 | +2.0 | 94.7 | 94.7 | **0** |
+| sbs1 | 11.3 | 10.1 | +1.2 | 50.0 | 50.0 | **0** |
+| kor1 | 24.0 | 14.0 | +10.0 | 0.0* | 0.0* | **0** |
+| kor2 | 16.6 | 19.3 | −2.7 | 100.0* | 100.0* | **0** |
+| kor3 | 31.1 | 32.5 | −1.4 | 0.0* | 100.0* | **0** |
+| ytn1(held-out) | 8.6 | — | — | 94.1 | — | **1** |
+| eng1(held-out) | 6.7 | — | — | 0.0* | — | **0** |
+| kinno(정성) | 30.5 | — | — | 61.5 | — | **0** |
+
+\* 단일화자 정답의 0/100 이분 아티팩트(Exp-186) — 게이팅 제외.
+
+### 판정 — **채택(머지)**. 단 근거는 WER 표가 아니라 **발동 전수 감사**다.
+- **★ 0-firing = 노이즈 대조군**: 9파일 중 **8파일에서 가드 발동 0회** = 그 회차들은 master와 동작이 동일한
+  코드다(다른 변경은 로그 비교 정규화뿐). 따라서 bong1 +3.3·kor1 +10.0·kor3 화자F1 100→0은 **이 변경에
+  귀속 불가한 회차 분산**이며, 동시에 현행 측정 노이즈 폭을 재확인해 준다.
+- **발동 2건 전부 진짜 사건**(정성 확인):
+  - ytn2 `boundary_t=30.91` — `RetractScan scanned=3 removed=3(z2opp)` → `resolve cut=29.97 restored=0 replaced=3`.
+    `[TextCover]` ` In`(dstart −0.90)·` support`(−1.12). **가드가 없었다면 시간 임계 29.47 위로 못 올라간 이 둘이
+    복원돼 `In support.` stub이 남는다** — 이 반사실이 이번 수정의 실증 근거다(전사에는 stub 없이 온전한 문장).
+  - ytn1 `boundary_t=14.05` — ` want`/` I`/` to` 3개 대체 → `I want to first thank Minister Jung...` 온전 확정.
+- **실발화 오억제 0건**: bong1 `main character, main protagonist`·`what was the, what's the metaphor`, ytn2
+  사용자 확인 비유창성(`한국군 사성자 한국군 사령관`, `상당히 상당한 진전이`) 전부 보존. **구조적 안전**: tombstone은
+  prev_lang 토큰, 관측은 new_lang 토큰이라 `네`/`감사합니다` 류 한국어 백채널은 영어 재방출과 일치할 수 없다.
+- 유닛 스위트 전체에 로거 후크를 걸어 감사한 결과 **기존 테스트 발동 0건** — 은닉 거동 변화 없음.
+- **Case B 0건**, 한/영 외 언어 환각 없음.
+
+### ⚠️ 절차 예외 (기록 필수)
+**채택 확정 측정(`--repeat 3`)을 실시하지 않고 사용자 지시로 머지**했다. 사유: 가드 발동이 파일당 0~1회로
+희소해 repeat 3의 대부분이 0-firing(=동일 코드) 회차가 되어 노이즈만 재게 된다. 대신 **발동 전수 감사 +
+반사실 로그 + 유닛 재현**을 채택 근거로 삼았다. 회귀 위험은 발동 집합으로 구조적으로 한정되며, 롤백은
+`RECONCILE_TEXT_COVER_GUARD_ENABLED=False` 한 줄.
+
+### 실측에서 새로 확인된 잔존 결함 (이번 수정 범위 밖 — master에도 존재)
+1. **철회 자체가 안 걸리는 stub**(ytn1 `미국.` — 역방향 스캔이 Silence에서 중단). 새 언어가 "The U.S."로 다르게
+   말하므로 텍스트 가드가 원리적으로 닿지 않는다. 별개 원인(철회 측), 후속 과제.
+2. **구두점-only stub**(ytn1 `,.` — 쉼표 tombstone이 복원되고 `filter_segments`의 구두점-only 드롭도 통과).
+3. **late-cover 경로 미보강**: D2 조기 마감 뒤 `observe_new_token`의 늦은 커버는 여전히 순수 시간(`COVER_TOL`)
+   판정 — 같은 결함의 자매 경로.
+4. **좌표계 버그(B안, 미착수)**: `align_att_base.py`의 `pending_language_switch` 계산이 `cumulative_time_offset`을
+   누락(같은 함수의 dynamic keep 계산은 올바른 3항 공식 사용 — 내부 모순). `boundary_t`가 트림량만큼 과소평가돼
+   `dedup_limit` 초과로 **`dedup_batch`가 전면 no-op**, D1 조기 마감, 철회 하한 무력화, zone2 사실상 dead code.
+   수정 시 dormant 방어선이 일괄 활성화되므로 **별도 브랜치·별도 스크리닝 + epoch 처리 질의** 필요.
+
+### 기록
+- Epoch **미bump**: 조건부 가드이며 파이프라인 구조 변경이 아니다(Exp-170 출력계층 변경 선례와 동일 취급).
+- `docs/SENTENCE_FINALIZATION_LOGIC.md` §3.2(텍스트 커버 가드 규칙)·§5(상수 3행) 갱신 완료.

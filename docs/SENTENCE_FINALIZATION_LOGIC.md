@@ -116,6 +116,18 @@
     대체(영구 tombstone) / `< T−COVER_TOL` 전부 복원(`retracted=False` — 가시 뷰 시간순 재등장). 부분 복원 구멍
     금지 — 컷이 하위단어 연속 중간이면 단어 시작 방향 스냅(Case B 파편 방지). 신언어 무도착 시 **전량 복원**
     (유실 해결 > WER 소폭 허용). 로그 `[Reconcile] arm/resolve`, `[Restore]`, `[Replace]`.
+  - **텍스트 커버 가드**(`RECONCILE_TEXT_COVER_GUARD_ENABLED`, Exp-208): 위 resolve 파티션은 **순수 시간
+    기준**이라, 재디코딩이 **같은 텍스트를 다시 방출했는데도** 재앵커로 타임스탬프가 `COVER_TOL`보다 크게
+    밀리면 그 tombstone을 "미커버"로 오판해 복원한다 — 복원된 유령이 `hard_boundary` 분기를 타고 1단어
+    stub 문장("In." ⟨language_switch⟩)으로 단독 확정되어 중복이 남았다(실측 ytn2·ytn1). 그래서 resolve는
+    시간 파티션+단어스냅 계산 직후, 컷 **바로 아래** tombstone이 관측된 신언어 토큰과 **정규화 완전일치**
+    (접두어 불허)이고 `|Δstart| ≤ TEXT_COVER_SLACK_SECS`면 복원을 취소하고 대체로 흡수한다. 비일치를
+    만나면 즉시 중단하며, 이동하는 것은 `first_replaced_idx` **단일 임계 인덱스뿐**이라 "단일 컷포인트·
+    구멍 없음" 불변식(Case B 파편 방지)이 구조적으로 유지된다. 순수 구두점 tombstone은 look-through(아래
+    단어와 함께만 흡수 — `'.'`만 남는 파편 방지), 관측 토큰은 **1:1 소비**(이미 대체 파티션에 든 tombstone이
+    먼저 소비 → 화자가 같은 단어를 실제로 두 번 말한 경우 재방출 1개가 둘 다 지우지 못한다). 로그
+    `[TextCover] 복원취소→대체`. **미커버 잔존**: D2 조기 마감 뒤 늦은 커버(`observe_new_token`의 resolved
+    분기)는 여전히 순수 시간(`COVER_TOL`) 판정이다.
   - **구역2 확대**(`RECONCILE_SAMESCRIPT_SUBZONE_ENABLED`): `boundary_t−SAMESCRIPT_SUBZONE_SECS(1.2s)` 이내
     같은 스크립트 prev_lang 토큰("미니스터")도 잠정 tombstone — 복원 보장 위에서만 안전한 공격적 철회로
     "미니스터."→"Minister..." 이중언어 중복 확정을 소멸시킨다.
@@ -286,6 +298,9 @@ Whisper가 찍는 마침표(`.`/`。`)를 문장 분할 신호로 쓰되, **진�
 | 언어감지 문턱 | 일반 `2.0`s / eager `1.5`s+p≥0.85 | `align_att_base.py:225-235` | 전환 arm 조건 |
 | `RETRACT_EPS`(Exp-171~, **잠정**) | `0.05`s | `tokens_alignment.py` | 철회 구역1/구역2 경계 지터 여유 — 추가 실측 후 보정 여지 |
 | 철회 스캔 하한(Exp-174 정정) | `retract_floor`(재디코딩 창 시작) 우선, `None`이면 `boundary_t - LANG_SWITCH_KEEP_SECS - 1.0`s 폴백 | `tokens_alignment.py:_retract_stale_language_tokens` | 역방향 스캔 하한 — 재디코딩 불가능한 서두 토큰 철회 방지 |
+| `RECONCILE_TEXT_COVER_GUARD_ENABLED`(Exp-208) | `True` | `boundary_reconcile.py` | resolve 텍스트 커버 가드 롤백 플래그(False=순수 시간 파티션 = 유령 stub 재발) |
+| `TEXT_COVER_SLACK_SECS`(Exp-208, **잠정**) | `2.5`s | `boundary_reconcile.py` | 텍스트 완전일치 시 허용하는 재앵커 이동 상한 — 실측 근거는 `|dstart|` 0.56~1.12s 3건뿐(ytn2 2·ytn1 1). `[TextCover]` dstart 분포 축적 후 보정 |
+| `_OBSERVED_TEXT_CAP`(Exp-208) | `64` | `boundary_reconcile.py` | 창당 관측 텍스트 수집 상한(선형 매칭 방어) |
 | `SCRIPT_ANCHOR_REDETECT_ENABLED`(Exp-175~) | `True` | `backend.py:184` | 스크립트-앵커 재감지 게이트 롤백 플래그 |
 | `_SCRIPT_ANCHOR_N_WORDS`(Exp-175~, **잠정**) | `3`단어 | `backend.py:185` | 반대-스크립트 연속 단어 문턱(Exp-172 실측; N=2 오트리거·N=4 미발동 스윕 확인) |
 | `_SCRIPT_ANCHOR_T_SECS`(Exp-175~, **잠정**) | `1.0`s | `backend.py:186` | 반전 지속 시간 문턱(Exp-172 실측) |
