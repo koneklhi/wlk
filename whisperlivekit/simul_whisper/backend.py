@@ -11,6 +11,7 @@ import numpy as np
 import torch
 
 from whisperlivekit.backend_support import faster_backend_available, mlx_backend_available
+from whisperlivekit.boundary_reconcile import _dedup_norm
 from whisperlivekit.model_paths import detect_model_format, resolve_model_path
 from whisperlivekit.simul_whisper.config import AlignAttConfig
 from whisperlivekit.simul_whisper.simul_whisper import AlignAtt
@@ -926,11 +927,18 @@ class SimulStreamingOnlineProcessor:
             # 언어 전환 경계 마커 삽입 (_apply_detected_language가 진짜 전환 시 arm).
             pending = getattr(self.model.state, "pending_language_switch", None)
             if pending is not None and timestamped_words:
-                # 중복 방출 계측: 전환 직후 첫 배치가 직전 방출 tail(최근 5개)과 겹치는지
+                # 중복 방출 계측: 전환 직후 첫 배치가 직전 방출 tail(최근 5개)과 겹치는지.
+                # 비교 정규화는 _dedup_norm(양끝 구두점 제거 + 소문자화) — _normalize는
+                # NFC+strip뿐이라 `"In."` vs `" In"` 같은 표기차를 겹침으로 못 잡아
+                # 실측 인시던트(유령 "In." 중복)를 "겹침 없음"으로 오계측했다.
+                # (_dedup_norm은 boundary_reconcile에서 재사용 — 그 모듈은 timed_objects만
+                #  import 하므로 순환 참조가 없다.)
+                # 관측 전용 계측이다 — timestamped_words는 여기서 절대 수정하지 않는다.
                 tail = self._recent_emitted_words[-5:]
-                new_words = [self._normalize(t.text) for t in timestamped_words]
+                tail_norm = {n for n in (_dedup_norm(w) for w in tail) if n}
+                new_words = [_dedup_norm(t.text) for t in timestamped_words]
                 new_words = [w for w in new_words if w]
-                overlap = sum(1 for w in new_words if w in tail)
+                overlap = sum(1 for w in new_words if w in tail_norm)
                 if overlap:
                     logger.warning(
                         "[SwitchTaxMeasure] 전환 직후 배치 %d/%d 단어가 직전 tail과 겹침 (tail=%s)",
