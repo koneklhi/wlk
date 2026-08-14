@@ -129,7 +129,13 @@ export const SttSettingDrawer = ({
       {/* sidebar toggle button */}
       {!isOpenSidebar && (
         <div className="fixed h-full right-0 flex items-center pr-2 z-[150]">
-          <Button size="icon" variant="ghost" onClick={toggleSidebar}>
+          <Button
+            size="icon"
+            variant="ghost"
+            onClick={toggleSidebar}
+            aria-label="설정 열기"
+            data-testid="stt-settings-toggle"
+          >
             <X size={18} />
           </Button>
         </div>
@@ -158,7 +164,15 @@ export const SttSettingDrawer = ({
                 {/* ── 상태 ── */}
                 <div className="flex justify-between items-center">
                   <p className="font-semibold text-base">상태</p>
-                  <div className="flex items-center gap-1.5 text-sm font-mono">
+                  {/* data-phase 는 지역화 문구가 아니라 raw enum 이다 — 경로 C 하니스가 이걸로 폴링한다.
+                      문구(phaseLabel)를 바꿔도 자동화가 깨지지 않게 하는 것이 목적이다. */}
+                  <div
+                    className="flex items-center gap-1.5 text-sm font-mono"
+                    data-testid="stt-status"
+                    data-phase={phase}
+                    data-backend={backendStatus}
+                    data-no-audio={noAudio}
+                  >
                     <span
                       className="w-2 h-2 rounded-full shrink-0"
                       style={{ backgroundColor: phaseColor(phase, backendStatus, noAudio) }}
@@ -175,6 +189,7 @@ export const SttSettingDrawer = ({
                       onClick={() => void onStart()}
                       variant="outline"
                       disabled={!canStart || isPaused || isStopping}
+                      data-testid="stt-start"
                     >
                       시작
                     </Button>
@@ -184,12 +199,16 @@ export const SttSettingDrawer = ({
                       onClick={isPaused || isStopping ? () => void onStart() : onPause}
                       variant="outline"
                       disabled={!canPauseOrResume || busy}
+                      data-testid="stt-pause"
+                      data-action={isPaused || isStopping ? 'resume' : 'pause'}
                     >
                       {isPaused || isStopping ? '재개' : '일시 중단'}
                     </Button>
                     <AlertDialog>
                       <AlertDialogTrigger asChild>
-                        <Button variant="outline" disabled={!canStop || busy}>
+                        {/* 경로 C 하니스는 이 버튼을 절대 누르지 않는다 —
+                            onStop(endSession('stop'))이 화면 전사를 즉시 비워 스크래핑 대상이 사라진다. */}
+                        <Button variant="outline" disabled={!canStop || busy} data-testid="stt-stop">
                           종료
                         </Button>
                       </AlertDialogTrigger>
@@ -222,6 +241,7 @@ export const SttSettingDrawer = ({
                     disabled={!canChangeLanguage}
                     onChange={(e) => setLanguage(e.target.value as SourceLanguage)}
                     className={SELECT_CLASS}
+                    data-testid="stt-language"
                     title={canChangeLanguage ? undefined : '언어는 시작 전에만 변경할 수 있습니다'}
                   >
                     {LANGUAGE_OPTIONS.map((o) => (

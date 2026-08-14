@@ -31,8 +31,16 @@ export const SttTextViewer = ({ row, showTimestamp }: SttTextViewerProps) => {
   const hasTranslation = Boolean(translation && translation.length > 0);
   const isProcessing = !row.finalized;
 
+  // data-* 는 화면에 영향을 주지 않는 자동화 계약이다 — 경로 C 하니스(scripts/vbcable_test.py)가
+  // 확정 줄 경계와 확정 계기를 여기서 읽는다. 제거·개명하면 측정이 조용히 깨진다.
   return (
-    <div className="flex flex-col gap-2">
+    <div
+      className="flex flex-col gap-2"
+      data-testid="stt-row"
+      data-trigger={row.trigger ?? ''}
+      data-finalized={row.finalized}
+      data-speaker={row.speaker}
+    >
       {showTimestamp && row.start && (
         <div className="opacity-50 leading-none" style={{ ...sysStyle, fontSize: '0.7em' }}>
           {row.start}
@@ -41,6 +49,7 @@ export const SttTextViewer = ({ row, showTimestamp }: SttTextViewerProps) => {
       )}
 
       <div
+        data-testid="stt-text"
         style={{
           ...orgStyle,
           opacity: isProcessing && !hasTranslation ? 0.4 : 1,

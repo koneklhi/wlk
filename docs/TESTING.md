@@ -37,7 +37,8 @@
   Vite `base`(예 `/wlkies`)로 빌드됐으면 백엔드가 base를 자동 추출해 그 하위로 서빙하고 `GET /`는 base로
   리다이렉트한다(`--frontend-base`, 기본값 `auto`). **내장 UI**
   ([whisperlivekit/web/live_transcription.html](../whisperlivekit/web/live_transcription.html))는 더 이상
-  검증에 사용하지 않는다 — dist가 없을 때만 뜨는 레거시 폴백이며, 경로 C 자동화의 과도기 우회 경로로만 남아있다.
+  검증에 사용하지 않는다 — dist가 없을 때만 뜨는 레거시 폴백이며, 델타 프로토콜 레퍼런스 구현 겸
+  경로 C의 A/B 비교 대조군(`--browser-ui inline`)으로만 남아있다.
 - **dist가 있어도 내장 UI를 쓰려면 `http://localhost:8900/dev`** — 이 경로는 `--frontend-dir` 유무와 무관하게
   항상 내장 UI를 서빙한다. `GET /`는 dist가 있으면 배포 UI(React)로 넘어가므로, 두 UI를 같은 서버에서
   번갈아 확인할 때(배포 UI 이슈가 프론트 문제인지 백엔드 문제인지 가르기) 이 경로를 쓴다.
@@ -45,10 +46,10 @@
 - 서버 기동: `whisperlivekit-server` (모든 인자가 parse_args.py 기본값 — `--lan auto` + simulstreaming. `--periodic-lang-check` 기본 None(비활성 — turbo 기질 Exp-160 채택, PLC=4.0이 ytn2에서 스퓨리어스 전환→환각 유발 확인); 탐색 시 다른 값 명시. 상세는 [OPEN_QUESTIONS.md](OPEN_QUESTIONS.md) 참조)
 - 목적: 실제 마이크 입력에 대한 정성적 평가 (경로 C 정량 평가와 병행)
 - **배포 UI엔 현재 저장 버튼이 없다**(2026-07-22 제거). 과거 내장 UI는 저장 버튼 클릭 시 그 시점까지의 누적 전사를 `--transcript-save-dir`(기본값 `./transcripts`) 폴더에 `.txt`로 저장했다(`POST /api/save-transcript`) — API 계약([API_SPEC.md](API_SPEC.md) §3.2) 자체는 유지되므로 배포 UI에 저장 기능이 다시 붙으면 그대로 재사용 가능하다.
-- **소스 언어 드롭다운 수동 검증(세션 언어 고정, 2026-07-17~)**: 우상단 설정(⚙) 패널의 "Source Language" 드롭다운(`auto`/`ko`/`en`)으로 그 세션의 소스 언어를 지정한다. 녹음 시작 **전에** 선택한다(녹음/처리 중엔 select 비활성 — 언어는 연결 시점에만 적용). 검증 포인트:
-  - `ko`/`en` 선택 시 브라우저 개발자도구 Network에서 WS `/asr` 요청 URL에 `?language=ko`(또는 `en`)가 붙는지, `auto` 선택 시 `language` 파라미터가 생략되는지 확인.
-  - 연결 직후 콘솔의 `Server applied source language: <값>` 로그(= `config` 메시지 `language` 필드)가 선택값과 일치하는지 확인.
-  - 언어 고정 시 한↔영 재감지·`language_switch` 경계가 비활성인지(예: 한국어 고정 세션에서 영어 발화가 억제/재감지 안 됨) 정성 확인. 선택값은 `localStorage`에 저장돼 새로고침 후에도 복원된다.
+- **소스 언어 드롭다운 수동 검증(세션 언어 고정, 2026-07-17~)**: 화면 우측 가장자리의 설정 토글(아이콘 버튼) → 설정 드로어 → **"언어"** select(`AUTO`/`KOR`/`ENG` = 값 `auto`/`ko`/`en`)로 그 세션의 소스 언어를 지정한다. 녹음 시작 **전에** 선택한다(`phase`가 `idle`/`error`일 때만 활성 — 언어는 연결 시점에만 적용). 검증 포인트:
+  - 브라우저 개발자도구 Network에서 WS `/asr` 요청 URL에 `?language=<값>&mode=delta`가 붙는지 확인. **`auto`도 생략되지 않고 명시 전송된다**([utils/wsUrl.ts](../frontend/app/src/utils/wsUrl.ts) — 서버 기본값에 의존하지 않고 클라이언트 의도를 항상 명시한다).
+  - 서버가 실제로 적용한 값은 `config` 메시지의 `language` 필드이며 스토어의 `appliedLanguage`에 들어간다. 요청값과 다르면 콘솔에 경고가 찍힌다(정상 케이스에는 로그가 없다 — 내장 UI의 `Server applied source language:` 로그는 배포 UI에 없다).
+  - 언어 고정 시 한↔영 재감지·`language_switch` 경계가 비활성인지(예: 한국어 고정 세션에서 영어 발화가 억제/재감지 안 됨) 정성 확인.
 
 ### 경로 C — 오디오 루프백 (1차 정량 성능 기준, Phase 2 도입)
 
@@ -57,15 +58,26 @@
   실제 오디오 파이프라인을 거치므로 Phase 2 채택/기각의 **1차 정량 신호**다.
 - 헬퍼: [scripts/vbcable_test.py](../scripts/vbcable_test.py)
 - `scripts/eval.py`는 기본으로 경로 C를 실행해 **WER + 화자분리 F1 + 문장분리 F1**을 산출한다(우선순위 = 화자분리 F1 > WER > 문장분리 F1; 정답 = `<name>.txt` canonical, `[spkN]` 헤더 신형식). *2지표 분리·신형식 파서 구현 완료 — 신형식 정답이 있으면 `seg_f1`=화자분리 F1·`sentence_f1`=문장분리 F1을 산출하고, 없거나 파싱 실패 시 구 regime(빈 줄 경계, `sentence_f1=None`)으로 폴백한다: [TRANSCRIPTION_REQUIREMENTS.md](TRANSCRIPTION_REQUIREMENTS.md) §5.*
-  브라우저 `#linesTranscript`의 `.textcontent`(확정 문장)만 추출하므로 타임스탬프 행이 섞이지 않는다.
-- **방침: 경로 C 자동화도 배포 UI를 기본 타깃으로 전환한다(내장 UI 사용 중단, CLAUDE.md §3.3/§3.7)**. 단
-  `scripts/vbcable_test.py`의 Playwright 스크래핑은 아직 **내장 UI 전용 DOM**(`#startButton` 등)에
-  하드코딩돼 있어, 로컬에 배포 UI dist(`frontend/static/index.html`)가 있으면 그 타임아웃으로 측정이
-  실패한다 — 후속 구현 전까지는 **과도기 조치**로 `--server-frontend-dir <빈 디렉터리>`(예
-  `.omc/eval_empty_frontend`)를 eval.py에 넘겨 내장 UI로 강제 폴백시켜야 측정이 돈다. 구현 계획은
-  [docs/backlog/BACKLOG_EVAL_DEPLOY_UI_MIGRATION.md](backlog/BACKLOG_EVAL_DEPLOY_UI_MIGRATION.md) 참조.
+  배포 UI 전사 행(`[data-testid="stt-row"]`)의 원문 div(`[data-testid="stt-text"]`)만 추출하므로
+  시각 표시 행·번역문이 전사에 섞이지 않는다.
+- **측정 대상 UI = 배포 UI**(React, `/wlkies/`). `scripts/vbcable_test.py`가 배포 UI를 몰고,
+  `--browser-ui inline`을 주면 내장 UI(`/dev`)를 몬다(A/B 비교·회귀 디버깅용). 두 UI는 같은 서버에서
+  경로로만 갈리므로 동일 조건 대조가 가능하다.
+  - **선행 조건: dist가 소스보다 최신이어야 한다.** `cd frontend/app && pnpm build`로 `frontend/static/`을
+    갱신한다. 하니스가 mtime을 비교해 stale이면 측정을 시작하지 않고 즉시 중단한다(소스와 다른 UI를
+    재는 사고 방지). `frontend/static/`은 gitignore 대상이라 **새 워크트리에는 아예 없다** — 빌드하지 않으면
+    서버가 조용히 내장 UI로 폴백하는데, 이것도 하니스가 URL 확인으로 잡아 중단시킨다.
+  - **측정 중에는 `pnpm build`를 절대 실행하지 않는다** — `vite.config.ts`의 `emptyOutDir: true`가
+    서빙 중인 `frontend/static/`을 먼저 비워 진행 중인 측정을 붕괴시킨다(공유 `.venv`에 `uv sync`를
+    돌리지 않는 것과 같은 급의 운영 규칙).
+  - **하니스 고장은 측정치가 아니다**: 드로어 미개방·`recording`/`paused` 미도달·전사 0줄·dist stale은
+    `HarnessError`로 즉시 중단된다(실패 스크린샷 `.omc/server_logs/vbcable_fail_*.png`). 예전처럼
+    WER 100%짜리 "정상 측정치"로 기록되지 않는다. 계속 진행하려면 `--continue-on-harness-error`.
+  - **WS 병행 검증**: 서버가 보낸 확정 세그먼트와 화면에 그려진 전사를 대조해 누락·중복을 경고한다
+    (지표는 어디까지나 DOM 기준 — 진단 신호일 뿐이다). 과거 내장 UI의 렌더 버그가 kor2 WER을 95.1%로
+    부풀린 채 방치된 전례(Exp-181/182)를 조기에 잡기 위한 장치다.
 - **산출물 위치**: 벤치마크 JSON `--output`(관례 `.omc/benchmarks/`) · 전사 `.omc/transcripts/{파일}_{경로}_R{회차}.txt` · **서버 로그** `.omc/server_logs/server_<stem>_<path>_R<rep>_<ts>.log`(회차별 항상 저장 — Exp-153; `[QualityGate]`/`[LangSwitch]`(후자는 `--trace-tokens` 시) 등 필터·전환 계측용). 언어 드리프트 진단용으로 **`[SotLangProbe]`**(SOT 위치 언어/태스크 사후분포 — DEBUG, `--trace-tokens` 시 캡처)와 **`[LangDriftStats]`**(세션 요약 — WARNING)도 같은 로그에 남는다. **둘 다 관측 전용**이라 디코딩 동작을 바꾸지 않는다(추가 forward 0회) — 끄려면 `whisperlivekit/simul_whisper/align_att_base.py`의 모듈 상수 `SOT_LANG_PROBE_ENABLED = False`.
-- **문장별 확정 트리거**: 전사 txt에 `[문장별 확정 트리거]` 섹션(각 문장 뒤 `⟨silence/punctuation/language_switch/speaker_change/-⟩`)이, JSON `files[].hyp_lines`(`[{"text","trigger"}, …]`)가 additive로 추가된다(WER/F1 계산은 불변). 문장 분리 로직 정성 분석용 — 경로 C는 UI DOM `data-trigger` 속성, 경로 A는 `lines[].finalize_trigger`에서 수집.
+- **문장별 확정 트리거**: 전사 txt에 `[문장별 확정 트리거]` 섹션(각 문장 뒤 `⟨silence/punctuation/language_switch/speaker_change/-⟩`)이, JSON `files[].hyp_lines`(`[{"text","trigger"}, …]`)가 additive로 추가된다(WER/F1 계산은 불변). 문장 분리 로직 정성 분석용 — 경로 C는 배포 UI 전사 행의 `data-trigger` 속성([SttTextViewer.tsx](../frontend/app/src/components/SttTextViewer.tsx)), 경로 A는 `lines[].finalize_trigger`에서 수집.
 - **언어 불일치율(LMR) 컬럼**: 콘솔 요약(`언어불일치: X.X% (Y.Y%p)`)·전사 txt 헤더·HTML 리포트(`언어불일치(KO→EN) X.X% (WER Y.Y%p)`)에 컬럼이, JSON `files[]`에 `lmr_ko`/`lmr_en`/`lmr_wer_pp` + 원카운트 `lang_mismatch` + `lang_flip_events`가 additive로 추가된다(WER/F1 계산은 불변). 정답 한국어 단어가 영어로 **치환** 전사된 비율 = 언어잠금 실패 진단용이며 **채택 게이트가 아니다**(정의·해석 = [TRANSCRIPTION_REQUIREMENTS.md](TRANSCRIPTION_REQUIREMENTS.md) §3·§4, 읽는 법 = [.claude/commands/eval.md](../.claude/commands/eval.md) 결과 해석 기준). 필드가 없는 옛 JSON은 `N/A`로 폴백하며, 해당 스크립트 정답 단어가 0개인 경우(eng1의 `lmr_ko`, kor1~3의 `lmr_en`)도 `0.0`이 아니라 `N/A`(측정 불가)다.
 - **LMR 소급 계산**: 이미 측정된 벤치 JSON은 서버 기동·오디오 재생 없이 다시 채점할 수 있다(JSON의 `reference`/`transcription`만으로 결정적 재계산).
   ```powershell
@@ -135,9 +147,10 @@ whisperlivekit-server
   브라우저에서 접속하면 마이크 캡처·실시간 전사·번역까지 한 화면에서 확인 가능. **경로 B 마이크 직접 녹음 +
   번역 파이프라인 최종 검증까지 공통으로 쓰는 기본 UI.**
 - **WhisperLiveKit 내장 웹 UI**
-  ([whisperlivekit/web/live_transcription.html](../whisperlivekit/web/live_transcription.html)): 더 이상
-  검증에 사용하지 않는다 — 배포 UI dist가 없을 때만 뜨는 레거시 폴백이며, 경로 C 자동화(`vbcable_test.py`)가
-  아직 이 UI의 DOM에 의존하는 과도기 동안만 코드로 남아있다.
+  ([whisperlivekit/web/live_transcription.html](../whisperlivekit/web/live_transcription.html)): 상시 검증에는
+  쓰지 않는다 — 배포 UI dist가 없을 때 뜨는 폴백이자 델타 프로토콜 레퍼런스 구현이며, `GET /dev`로 항상
+  접근할 수 있다. 경로 C에서는 `--browser-ui inline` 대조군(배포 UI 이슈가 프런트 문제인지 백엔드 문제인지
+  가르기)으로만 쓴다.
 
 ### 권장 검증 순서
 

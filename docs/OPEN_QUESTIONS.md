@@ -24,12 +24,19 @@
 
 - 정본 = [DEPLOYMENT_OFFLINE.md](DEPLOYMENT_OFFLINE.md)(폐쇄망 반입·모델 경로·wheelhouse 패키징 절차).
 
-## 5. 경로 C 자동화 대상 UI(내장→배포) 전환 — 정책 확정, 구현 대기
+## 5. 경로 C 자동화 대상 UI(내장→배포) 전환 — 해소
 
 - **정책 확정(2026-07-22)**: 내장 UI(`whisperlivekit/web/`) 사용을 중단하고, 배포 UI(React, `frontend/app/`)를
-  경로 B/C를 포함한 모든 테스트·검증 경로의 기본 UI로 삼는다(CLAUDE.md §3.3/§3.7).
-- **구현 공백**: `scripts/vbcable_test.py`의 Playwright 자동화가 아직 내장 UI 전용 DOM(`#startButton` 등)에
-  하드코딩돼 있고, 배포 React UI엔 대응하는 안정적 자동화 훅(`data-testid` 등)이 전혀 없다. §3.7 규약에 따라
-  **React 쪽에 자동화용 속성을 추가할지 여부는 여기서 먼저 논의해 결정한다** — 예: `data-testid="start-button"`,
-  `data-trigger` DOM 노출 등. 아직 미결정.
-- **후속 작업 상세 계획** = [docs/backlog/BACKLOG_EVAL_DEPLOY_UI_MIGRATION.md](backlog/BACKLOG_EVAL_DEPLOY_UI_MIGRATION.md).
+  경로 B/C를 포함한 모든 테스트·검증 경로의 기본 UI로 삼는다(CLAUDE.md §3.7).
+- **구현 완료(2026-08-14)**: `scripts/vbcable_test.py`가 배포 UI(`/wlkies/`)를 몰고, `--browser-ui inline`으로
+  내장 UI(`/dev`)를 A/B 대조군으로 쓴다. `eval.py`·`closed_test.py`가 같은 경로를 공유한다.
+- **미결이었던 "React 자동화 속성 추가 여부" = 추가하기로 결정(사용자 승인)**. 근거와 범위:
+  - 추가한 것: 컨트롤·상태·전사행에 `data-testid`, 상태에 `data-phase`(raw enum), 전사행에
+    `data-trigger`/`data-finalized`/`data-speaker`. 전부 **순수 속성 추가**라 렌더 트리·스타일·동작 무변경.
+  - 대안(텍스트·Tailwind 클래스 셀렉터)은 레이아웃 클래스와 버튼 문구를 암묵적 측정 계약으로 만든다 —
+    디자인 리팩터링 한 번이 측정을 조용히 0줄로 만들 수 있다. `data-phase`는 지역화 문구("인식 중")가
+    아니라 enum(`recording`)을 노출해 문구 변경에 견딘다.
+  - `finalize_trigger`는 이미 서버 계약(`types/stt.ts`)에 있던 필드이며 DOM 노출만 추가했다 —
+    전사 txt의 `[문장별 확정 트리거]` 섹션과 `/eval` 정성 절차를 그대로 유지하기 위함이다.
+- **지표 정본 = 배포 UI DOM**, WS 프레임 캡처는 병행 검증(누락·중복 경고)으로만 쓴다. 화면이 곧 제품이므로
+  "렌더 버그가 지표에 잡히는" 성질은 결함이 아니라 기능이다(Exp-181/182 전례).

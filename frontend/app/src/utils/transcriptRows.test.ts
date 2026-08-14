@@ -165,6 +165,26 @@ describe('buildRows — 특수 화자 값 (기존 UI 형태 유지)', () => {
   });
 });
 
+describe('buildRows — 확정 트리거 전달 (경로 C 자동화 계약)', () => {
+  it('세그먼트의 finalize_trigger 를 행에 실어 보낸다', () => {
+    // 경로 C 하니스가 DOM data-trigger 로 읽어 전사 txt 의 [문장별 확정 트리거] 섹션을 만든다.
+    const rows = buildRows(
+      input({
+        finalizedHistory: historyOf(
+          seg(0, '침묵으로 끊긴 줄', { finalize_trigger: 'silence' }),
+          seg(1, '온점으로 끊긴 줄', { finalize_trigger: 'punctuation' }),
+        ),
+      }),
+    );
+    expect(rows.map((r) => r.trigger)).toEqual(['silence', 'punctuation']);
+  });
+
+  it('trigger 가 없으면 null 이다 (undefined 로 새지 않는다)', () => {
+    const rows = buildRows(input({ finalizedHistory: historyOf(seg(0, '트리거 없음')) }));
+    expect(rows[0].trigger).toBeNull();
+  });
+});
+
 describe('freezeLines — 일시중단 시 세션 동결', () => {
   it('미확정 줄을 확정으로 굳힌다', () => {
     const out = freezeLines([seg(1, '확정본'), seg(2, '진행중', { finalized: false })], VOLATILE);

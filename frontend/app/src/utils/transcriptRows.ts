@@ -11,7 +11,7 @@
  * 별도 표시 없이 일반 전사 줄로 렌더한다.
  */
 import { isFinalized, lineKey } from '@/utils/deltaProtocol';
-import type { Segment, VolatileState } from '@/types/stt';
+import type { FinalizeTrigger, Segment, VolatileState } from '@/types/stt';
 
 export interface TranscriptRow {
   /** React key. 세션 경계 접두사 + 안정 id. 배열 index 를 쓰면 소급 수정 때 오재사용된다. */
@@ -24,6 +24,11 @@ export interface TranscriptRow {
   start?: string;
   end?: string;
   finalized: boolean;
+  /**
+   * 이 줄이 확정된 계기. 화면에는 쓰지 않고 DOM `data-trigger` 로만 노출한다 —
+   * 경로 C 자동화(`scripts/vbcable_test.py`)가 전사 txt 의 `[문장별 확정 트리거]` 섹션을 만드는 입력이다.
+   */
+  trigger: FinalizeTrigger | null;
   /** 마지막 행에만 — 아직 확정 안 된 buffer 꼬리. */
   bufferText?: string;
   /** 마지막 행에만 — 실시간 번역 buffer 꼬리. */
@@ -88,6 +93,7 @@ export function buildRows(inp: RowInput): TranscriptRow[] {
     start: seg.start,
     end: seg.end,
     finalized: isFinalized(seg),
+    trigger: seg.finalize_trigger ?? null,
   }));
 
   const last = rows[rows.length - 1];

@@ -123,7 +123,7 @@ def run_one(audio_path, base_url, *, repeat, wait, warmup, model_dir, diarizatio
                 print(f"[오류] 서버 ready 시간 초과 또는 조기 종료 — 로그: {log_path}", file=sys.stderr)
                 _print_log_tail(log_path)
                 continue
-            result = asyncio.run(eval_path_c(audio_path, base_url, wait))
+            result = asyncio.run(eval_path_c(audio_path, base_url, wait, rep=rep + 1))
             runs.append(result)
             if has_ref:
                 print(f"[closed_test]   → WER {_fmt_pct(result.wer)} | F1 {_fmt_pct(result.seg_f1)}")

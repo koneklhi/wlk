@@ -70,7 +70,7 @@
 
 ## eval 하니스 (경로 C 정량 측정)
 
-- [scripts/eval.py](../scripts/eval.py) — 경로 C/A 측정, WER + 화자분리 F1 + 문장분리 F1 2지표 산출 (`--repeat`, `--paths`)
-- [scripts/vbcable_test.py](../scripts/vbcable_test.py) — VBCable 브라우저 자동화(현재 내장 UI DOM 전용 —
-  배포 UI 전환 작업은 [docs/backlog/BACKLOG_EVAL_DEPLOY_UI_MIGRATION.md](backlog/BACKLOG_EVAL_DEPLOY_UI_MIGRATION.md) 참조)
+- [scripts/eval.py](../scripts/eval.py) — 경로 C/A 측정, WER + 화자분리 F1 + 문장분리 F1 2지표 산출 (`--repeat`, `--paths`, `--browser-ui`)
+- [scripts/vbcable_test.py](../scripts/vbcable_test.py) — VBCable 브라우저 자동화. 기본은 **배포 UI**(`/wlkies/`,
+  `data-testid` 계약), `--ui inline`으로 내장 UI(`/dev`) 대조군. 하니스 고장은 `HarnessError`로 즉시 중단
 - [scripts/audio_device.py](../scripts/audio_device.py) — VBCable 장치 자동 설정/복원

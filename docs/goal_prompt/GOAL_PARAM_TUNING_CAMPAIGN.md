@@ -389,8 +389,10 @@ arm을 비교한다. baseline·margin은 `scripts/sweep_runner.py`의 `BASELINE_
 - **측정 전 확인**: 다른 세션의 VBCable 겹침(포트 8901 점유·python 프로세스), provenance 줄 `vbcable=ok`.
   **arm 식별은 provenance가 아니라 S0-2에서 추가한 server-arg 기록으로 한다**(provenance `beams=`는 cosmetic).
 - **측정 언어모드 = `--lan auto` 단일.** kor1~3·eng1도 auto. 예외 없음.
-- **`--server-frontend-dir .omc/eval_empty_frontend` 필수** — 로컬 React dist가 있으면 Playwright 레거시 UI
-  테스트가 깨진다.
+- **측정 UI = 배포 UI(기본값)**. 워크트리에서 측정하기 전 `cd frontend/app; pnpm build`로 `frontend/static/`을
+  만들어 둔다(gitignore라 새 워크트리엔 없다). dist가 없거나 stale이면 하니스가 즉시 중단한다.
+  **측정 중 `pnpm build` 금지**(`emptyOutDir`가 서빙 중 dist를 비운다). 옛 `--server-frontend-dir
+  .omc/eval_empty_frontend` 우회는 더 이상 쓰지 않는다.
 
 표준 명령(`.claude/commands/eval.md` 정본):
 
@@ -399,7 +401,7 @@ $env:PYTHONIOENCODING = "utf-8"; $ts = Get-Date -Format "yyyyMMdd_HHmm"
 .venv\Scripts\python.exe scripts/eval.py --model-dir whisperlivekit/model/whisper-large-v3-turbo `
   --files test_data/ytn2.mp3 test_data/sbs1.mp3 test_data/kor2.wav test_data/eng1.mp3 --lan auto `
   --diarization --sortformer-model whisperlivekit/model/sortformer-4spk-v2.nemo `
-  --compression-ratio-threshold 3.0 --repeat 1 --server-frontend-dir .omc/eval_empty_frontend `
+  --compression-ratio-threshold 3.0 --repeat 1 `
   --server-arg=--vad-threshold --server-arg=0.25 `
   --output .omc/benchmarks/eval_${ts}_A3-vad025_S1.json
 ```

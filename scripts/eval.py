@@ -38,6 +38,8 @@ _ROOT_DIR = _SCRIPTS_DIR.parent
 sys.path.insert(0, str(_ROOT_DIR))
 sys.path.insert(0, str(_SCRIPTS_DIR))
 
+from vbcable_test import HarnessError  # noqa: E402  (sys.path 설정 이후에만 import 가능)
+
 
 def _probe_provenance(cwd: Path, args) -> dict:
     """서버가 실제 import할 whisperlivekit 경로·git 정보·디코더 설정을 수집한다."""
@@ -469,15 +471,36 @@ async def eval_path_a(audio_file: Path, base_url: str) -> Optional[FileResult]:
     return _build_result(audio_file, transcription, hyp_sentences, "A", hyp_lines=hyp_lines)
 
 
-async def eval_path_c(audio_file: Path, base_url: str, wait_sec: int = 120) -> FileResult:
-    from vbcable_test import run_browser_test
+async def eval_path_c(
+    audio_file: Path,
+    base_url: str,
+    wait_sec: int = 120,
+    ui: str = "deploy",
+    rep: int = 1,
+) -> FileResult:
+    from vbcable_test import HarnessError, run_browser_test
 
-    print(f"  [C] {audio_file.name} ...", flush=True)
+    print(f"  [C] {audio_file.name} (ui={ui}) ...", flush=True)
+    ws_warnings: list[str] = []
+    shot = Path(".omc/server_logs") / f"vbcable_fail_{audio_file.stem}_{ui}_R{rep}.png"
     try:
-        rows = await run_browser_test(audio_file, base_url, wait_sec, None)
+        rows = await run_browser_test(
+            audio_file, base_url, wait_sec, None,
+            ui=ui, warnings_out=ws_warnings, fail_screenshot=shot,
+        )
+    except HarnessError:
+        # 하니스 고장은 전사 결과가 아니다 — 빈 전사(WER 100%)로 삼켜 벤치마크에 기록하면
+        # 잘못된 회귀 판정을 낳는다(CLAUDE.md §4). 호출자가 중단 여부를 결정한다.
+        raise
     except Exception as e:
         print(f"[eval] 경고: {audio_file.name} 브라우저 테스트 실패: {e}", file=sys.stderr)
         rows = []
+    if ws_warnings:
+        print(
+            f"[eval] 주의: {audio_file.name} WS-DOM 불일치 {len(ws_warnings)}건 "
+            "(지표는 DOM 기준 유지, 프런트 렌더 확인 필요)",
+            file=sys.stderr,
+        )
     hyp_sentences = [r["text"] for r in rows]
     hyp_lines = [{"text": r["text"], "trigger": (r.get("trigger") or None)} for r in rows]
     transcription = " ".join(hyp_sentences)
@@ -668,9 +691,24 @@ def main() -> None:
         type=str,
         default=None,
         dest="server_frontend_dir",
-        help="서버에 전달할 --frontend-dir 오버라이드. 로컬에 frontend/static React dist가 있으면 GET /가 그쪽으로 "
-        "리다이렉트돼 eval.py의 Playwright 레거시 UI(#startButton) 테스트가 깨진다 — 빈 디렉터리(예: .omc/eval_empty_frontend)를 "
-        "지정해 레거시 내장 UI로 강제 폴백시킬 때 사용.",
+        help="서버에 전달할 --frontend-dir 오버라이드(패스스루). 배포 UI dist를 기본 경로(frontend/static)가 아닌 "
+        "곳에 둔 환경에서 쓴다. 내장 UI로 몰고 싶을 때는 이 플래그가 아니라 --browser-ui inline을 쓴다 "
+        "(/dev는 dist 유무와 무관하게 항상 내장 UI다).",
+    )
+    parser.add_argument(
+        "--browser-ui",
+        choices=("deploy", "inline"),
+        default="deploy",
+        dest="browser_ui",
+        help="경로 C가 구동할 UI (기본: deploy = 배포 React UI /wlkies/). inline = 내장 데모 UI /dev — "
+        "A/B 비교·회귀 디버깅용. deploy 모드는 frontend/static dist가 소스보다 최신이어야 한다(pnpm build).",
+    )
+    parser.add_argument(
+        "--continue-on-harness-error",
+        action="store_true",
+        dest="continue_on_harness_error",
+        help="하니스 고장(브라우저 자동화 실패·전사 0줄 등)이 나도 다음 회차/파일로 계속 진행한다. "
+        "기본은 즉시 중단 — 하니스 실패를 WER 100%짜리 측정치로 기록하면 잘못된 회귀 판정을 낳는다.",
     )
     parser.add_argument(
         "--expect-code-root",
@@ -809,7 +847,10 @@ def main() -> None:
             if not vbcable_ok:
                 print("[eval] 경고: VBCable 설정 실패. 경로 C를 건너뜁니다.", file=sys.stderr)
             else:
-                print(f"\n[eval] 경로 C 테스트 시작 (파일별 서버 재시작, repeat={args.repeat})...")
+                print(
+                    f"\n[eval] 경로 C 테스트 시작 (파일별 서버 재시작, repeat={args.repeat}, "
+                    f"ui={args.browser_ui})..."
+                )
                 for audio_path in args.files:
                     runs: list = []
                     for rep in range(args.repeat):
@@ -825,7 +866,23 @@ def main() -> None:
                             print("[eval] 서버 준비 완료.")
                             if args.repeat > 1:
                                 print(f"  [C] {audio_path.name} 회차 {rep + 1}/{args.repeat}")
-                            file_result = asyncio.run(eval_path_c(audio_path, base_url, args.wait))
+                            try:
+                                file_result = asyncio.run(
+                                    eval_path_c(
+                                        audio_path, base_url, args.wait,
+                                        ui=args.browser_ui, rep=rep + 1,
+                                    )
+                                )
+                            except HarnessError as e:
+                                print(f"\n[eval] 하니스 고장: {audio_path.name} R{rep + 1} — {e}", file=sys.stderr)
+                                if not args.continue_on_harness_error:
+                                    print(
+                                        "[eval] 측정을 중단합니다. 하니스를 고친 뒤 다시 실행하세요 "
+                                        "(계속 진행하려면 --continue-on-harness-error).",
+                                        file=sys.stderr,
+                                    )
+                                    raise
+                                continue
                             result.files.append(file_result)
                             runs.append(file_result)
                             _save_transcript(args.transcript_dir, file_result, rep + 1)

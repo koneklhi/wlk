@@ -51,7 +51,8 @@
 - **내장 UI** = `whisperlivekit/web/`(백엔드 내장 데모, `GET /dev`에서 서빙) — 델타 프로토콜 레퍼런스 구현. 더 이상 상시 검증에 쓰지 않고, 필요할 때만 호출해 쓴다.
 - 배포 UI 구조·기능 지침 = [frontend/app/README.md](frontend/app/README.md).
 - 추가 기능은 가능한 한 백엔드에서 구현한다. 프론트 변경이 필요하면 서버 계약 문서([docs/API_SPEC.md](docs/API_SPEC.md)·[docs/DELTA_PROTOCOL_SPEC.md](docs/DELTA_PROTOCOL_SPEC.md)·[docs/SCHEMA_CHANGES.md](docs/SCHEMA_CHANGES.md))와 어긋나지 않게 맞춘다.
-- 경로 C 자동화(`scripts/vbcable_test.py`)의 브라우저 스크래핑은 아직 내장 UI DOM에 하드코딩된 과도기 상태다(배포 UI 전환 계획 = [docs/backlog/BACKLOG_EVAL_DEPLOY_UI_MIGRATION.md](docs/backlog/BACKLOG_EVAL_DEPLOY_UI_MIGRATION.md)).
+- **경로 C 자동화(`scripts/vbcable_test.py`)는 배포 UI(`/wlkies/`)를 몬다.** 내장 UI는 `--browser-ui inline`(= `GET /dev`)로 A/B 비교·회귀 디버깅할 때만 쓴다. 측정 전 `frontend/static/` dist가 소스보다 최신이어야 하고(`cd frontend/app && pnpm build`), **측정 중 `pnpm build` 금지**(`emptyOutDir`가 서빙 중 dist를 비운다).
+- **배포 UI의 `data-testid`/`data-trigger`/`data-phase`는 측정 계약이다** — 화면에 영향을 주지 않는 순수 속성이지만 경로 C 하니스가 이것으로 전사·상태를 읽는다. 제거·개명하면 측정이 조용히 깨진다(계약 목록 = [frontend/app/README.md](frontend/app/README.md)).
 
 ### 3.8 STT 개선 방향 제약 (Phase 4+)
 - **ytn2·bong1 공동 최우선**: 한↔영 전환 간격이 짧은 환경(ytn2) 및 다화자·긴 발화 환경(bong1 — 영어 2명+한국어 2명, 봉준호 기생충 인터뷰)이 현재 핵심 개선 대상. **음성 데이터 개선 1순위 = ytn2·bong1**. 목표는 각각 '짧은 텀 코드스위칭 역량'과 '다화자 화자전환 역량'의 **일반화 향상**이며, **데이터 특화 하드코딩(특정 단어·구절 암기) 금지** — 개선은 일반화돼야 한다.
@@ -111,7 +112,7 @@
 | WhisperLiveKit 본체 대규모 변경 | `docs/MASTER_CHANGES.md` — `/update-master-changes` 슬래시 커맨드 실행 |
 | 배포 UI(React) 계약 레이어 변경 (`frontend/app/src/types/stt.ts`·`utils/deltaProtocol.ts`·`utils/wsUrl.ts`·`constants/index.ts`·`api/**`) | `docs/API_SPEC.md`, `docs/DELTA_PROTOCOL_SPEC.md`, `docs/SCHEMA_CHANGES.md` — 서버 계약과 어긋나면 조용히 깨진다(과거 `?language=kor` 무시·복합키 중복·델타 메시지 폐기가 전부 이 부류) |
 | `frontend/app/vite.config.ts` 의 `base` 또는 `build.outDir` | `docs/DEPLOYMENT_OFFLINE.md`, `docs/TESTING.md`, `frontend/app/README.md` — 백엔드 `--frontend-dir`/`--frontend-base` 와 짝이다 |
-| 경로 C 자동화 대상 UI(내장→배포) 전환 관련 코드(`scripts/vbcable_test.py` DOM 스크래핑, `frontend/app` 테스트 훅 등) | `docs/TESTING.md`, `.claude/commands/eval.md`, `docs/DEPLOYMENT_OFFLINE.md` §4.1/§4.4, `docs/FILE_INDEX.md`, `docs/OPEN_QUESTIONS.md`, `docs/backlog/BACKLOG_EVAL_DEPLOY_UI_MIGRATION.md` |
+| 경로 C 자동화 계약 변경 — `scripts/vbcable_test.py` 셀렉터·구동 시퀀스, `frontend/app` 의 `data-testid`/`data-trigger`/`data-phase` 속성 | `docs/TESTING.md` 경로 C, `.claude/commands/eval.md`, `frontend/app/README.md` 자동화 계약 절, `docs/DEPLOYMENT_OFFLINE.md` §4.1/§4.4, `docs/FILE_INDEX.md` — **프런트에서 `data-*` 를 지우면 측정이 조용히 깨진다**(화면엔 아무 변화가 없어 리뷰에서 놓치기 쉽다) |
 
 > 확인 방법: 변경한 플래그·포트·경로 값을 `grep`으로 docs 전체에 검색해 stale 참조가 남아있으면 제거.
 

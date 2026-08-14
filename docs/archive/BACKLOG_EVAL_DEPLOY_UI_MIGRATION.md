@@ -1,5 +1,14 @@
 # 경로 C 자동화 — 내장 UI → 배포 UI 전환 백로그
 
+> **완료(2026-08-14) — 이 문서는 착수 전 분석 기록이다.** 실제 구현 결과는 아래와 다른 부분이 있다:
+> - 작업 2(React 훅 추가 여부)는 **추가하기로 결정**됐다(사용자 승인). 결정 근거 = `docs/OPEN_QUESTIONS.md` §5,
+>   속성 목록 = `frontend/app/README.md` "자동화 계약" 절.
+> - 작업 3의 `--server-frontend-dir`는 **폐지하지 않고 서버 패스스루로 존치**했다. 내장 UI 폴백 목적은
+>   `--browser-ui inline`(= `GET /dev`)이 대신한다.
+> - 백로그에 없던 항목 2건을 함께 처리했다: ① `eval_path_c`가 모든 예외를 삼켜 하니스 고장을 WER 100%
+>   측정치로 기록하던 문제(`HarnessError` 도입) ② dist stale/부재로 소스와 다른 UI를 재는 사고를 막는 가드.
+> - 현재 상태·사용법 정본 = `docs/TESTING.md` 경로 C, `.claude/commands/eval.md`.
+
 ## 배경
 
 2026-07-22 정책 확정(CLAUDE.md §3.7, [docs/OPEN_QUESTIONS.md](../OPEN_QUESTIONS.md) §5): 내장 UI
