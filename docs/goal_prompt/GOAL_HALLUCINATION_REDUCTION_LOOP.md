@@ -98,7 +98,7 @@
 
 - 경로 C만, 측정은 **메인 세션에서 직접**(서브에이전트 위임 금지 — 조기 정지 전력). 측정 중 워크트리 코드 mutation 금지.
 - **측정 전 확인**: 다른 세션 VBCable 사용 겹침(포트 8901 점유·python 프로세스), 결과 provenance 첫 줄 `vbcable=ok` 육안 확인.
-- 표준 명령(`.claude/commands/eval.md` 정본, `--server-frontend-dir` 필수 — 로컬 프론트 빌드 리다이렉트 회피):
+- 표준 명령(`.claude/commands/eval.md` 정본; 측정 UI = 배포 UI 기본값, 사전에 `cd frontend/app; pnpm build` 필요):
 
 ```powershell
 $env:PYTHONIOENCODING = "utf-8"; $ts = Get-Date -Format "yyyyMMdd_HHmm"
@@ -106,7 +106,7 @@ $env:PYTHONIOENCODING = "utf-8"; $ts = Get-Date -Format "yyyyMMdd_HHmm"
 .venv\Scripts\python.exe scripts/eval.py --model-dir whisperlivekit/model/whisper-large-v3-turbo `
   --files test_data/kor1.wav test_data/kor2.wav test_data/kor3.wav --lan ko `
   --diarization --sortformer-model whisperlivekit/model/sortformer-4spk-v2.nemo `
-  --compression-ratio-threshold 3.0 --trace-tokens --server-frontend-dir .omc/eval_empty_frontend `
+  --compression-ratio-threshold 3.0 --trace-tokens `
   --output .omc/benchmarks/eval_${ts}_<라벨>.json
 # auto run (sbs1/bong1/ytn2) — --files/--lan만 교체. 언어모드 섞인 run 금지(run 분리).
 ```

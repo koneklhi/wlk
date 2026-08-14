@@ -20,13 +20,17 @@
 단 VBCable 미설정·무음 캡처 등 *하니스 버그*는 즉시 중단·수정.
 **목표 필수 기능 예외**: §3.1·§3.2 불변 제약 달성에 필요한 기반 기능이 게이트 탈락 시 자율 기각 금지 — 결과·대안 보고 후 사용자 질의.
 
-**측정 대상 UI 방침**: 경로 C 자동화는 배포 UI(React, `frontend/app/`)를 기본 타깃으로 전환하는 것이 목표다
-(내장 UI 사용 중단 방침 — CLAUDE.md §3.7). 단 `scripts/vbcable_test.py`의 Playwright 스크래핑은 아직
-내장 UI 전용 DOM(`#startButton` 등)에 하드코딩돼 있어, 로컬에 배포 UI dist(`frontend/static/index.html`)가
-있으면 그 타임아웃으로 측정이 실패한다. **과도기 조치**로 아래 모든 예시에 `--server-frontend-dir
-.omc/eval_empty_frontend`(이미 존재하는 빈 디렉터리)를 넣어 서버가 내장 UI로 폴백하도록 강제한다 — 배포 UI
-자동화가 구현되면 이 옵션은 제거한다. 후속 구현 계획 =
-[docs/backlog/BACKLOG_EVAL_DEPLOY_UI_MIGRATION.md](../../docs/backlog/BACKLOG_EVAL_DEPLOY_UI_MIGRATION.md).
+**측정 대상 UI = 배포 UI**(React, `frontend/app/` → `frontend/static/`, `/wlkies/`). 경로 C 자동화가
+실제 배포되는 화면을 그대로 몬다(CLAUDE.md §3.7). 내장 UI는 `--browser-ui inline`(= `GET /dev`)로 A/B
+비교·회귀 디버깅할 때만 쓴다.
+
+- **측정 전 dist 확인 필수**: `frontend/static/`이 소스보다 오래됐거나 없으면 하니스가 즉시 중단시킨다.
+  `cd frontend/app; pnpm build`로 갱신한다(`frontend/static/`은 gitignore라 새 워크트리엔 아예 없다).
+- **측정 중 `pnpm build` 금지**: `emptyOutDir: true`가 서빙 중인 dist를 먼저 비워 진행 중인 측정을
+  붕괴시킨다(공유 `.venv`에 `uv sync` 금지와 같은 급).
+- **하니스 고장은 중단된다**: 드로어 미개방·`recording`/`paused` 미도달·전사 0줄은 `HarnessError`로 즉시
+  멈추고 실패 스크린샷을 `.omc/server_logs/vbcable_fail_*.png`에 남긴다(예전처럼 WER 100%로 조용히
+  기록되지 않는다). 강행하려면 `--continue-on-harness-error`.
 
 ## 기본 사용법
 
@@ -40,7 +44,6 @@ $ts = Get-Date -Format "yyyyMMdd_HHmm"
   --lan auto `
   --diarization --sortformer-model whisperlivekit/model/sortformer-4spk-v2.nemo `
   --compression-ratio-threshold 3.0 `
-  --server-frontend-dir .omc/eval_empty_frontend `
   --output ".omc/benchmarks/eval_$ts.json"
 # ↑ --repeat 생략 = 기본값 1회. 수치는 '방향 신호'로만 해석한다.
 
@@ -52,7 +55,6 @@ $ts = Get-Date -Format "yyyyMMdd_HHmm"
   --lan auto `
   --diarization --sortformer-model whisperlivekit/model/sortformer-4spk-v2.nemo `
   --compression-ratio-threshold 3.0 `
-  --server-frontend-dir .omc/eval_empty_frontend `
   --output ".omc/benchmarks/eval_$ts.json"
 
 # ② 채택 확정용 (master 머지 직전에만 — N≥3회 반복, median+분산 판단)
@@ -63,7 +65,6 @@ $ts = Get-Date -Format "yyyyMMdd_HHmm"
   --lan auto `
   --diarization --sortformer-model whisperlivekit/model/sortformer-4spk-v2.nemo `
   --compression-ratio-threshold 3.0 --repeat 3 `
-  --server-frontend-dir .omc/eval_empty_frontend `
   --output ".omc/benchmarks/eval_$ts.json"
 
 # held-out 일반화 검증 — 채택 후보에 한해 ytn1 + eng1(전부 --lan auto), 단회, diar-ON
@@ -74,7 +75,6 @@ $ts = Get-Date -Format "yyyyMMdd_HHmm"
   --lan auto `
   --diarization --sortformer-model whisperlivekit/model/sortformer-4spk-v2.nemo `
   --compression-ratio-threshold 3.0 `
-  --server-frontend-dir .omc/eval_empty_frontend `
   --output ".omc/benchmarks/eval_$ts.json"
 # ↑ held-out은 단회 검증(채택 확정이라도 --repeat 3 불필요)
 ```

@@ -373,11 +373,10 @@ C:\Python312\python.exe scripts/closed_test.py my_audio.wav --no-diarization
   `--compression-ratio-threshold 3.0`, `--periodic-lang-check` None(비활성, Exp-160). (인자로 덮어쓸 수 있음)
 - 결과는 `transcripts/<stem>_<타임스탬프>.txt`에 저장. 정답이 있으면 상단에 WER/F1 median/min/max/stdev 헤더 + 회차별 전사가, 없으면 회차별 전사만 들어간다.
 - **전제**: VBCable 드라이버 + playwright(chromium) + comtypes + ffmpeg 설치(§1·§3). VBCable 설정 실패 시 즉시 중단되고 안내가 출력된다.
-- **UI 방침 주의**: 이 자동측정은 배포 UI를 기본 타깃으로 전환하는 것이 목표지만(CLAUDE.md §3.3/§3.7), 아직
-  `scripts/vbcable_test.py`의 Playwright 스크래핑이 내장 UI 전용 DOM에 하드코딩돼 있다. **§4.4 2단계로
-  React dist(`frontend/static/`)를 이미 배치한 배포 PC에서 이 자동측정을 돌리면 `#startButton` 타임아웃으로
-  조용히 실패할 수 있다** — 과도기 동안은 `--server-frontend-dir <빈 디렉터리>`로 내장 UI를 강제해야 정상
-  측정된다(§7-6 트러블슈팅, [docs/backlog/BACKLOG_EVAL_DEPLOY_UI_MIGRATION.md](backlog/BACKLOG_EVAL_DEPLOY_UI_MIGRATION.md)).
+- **UI 전제**: 이 자동측정은 **배포 UI**(React, `/wlkies/`)를 몬다(CLAUDE.md §3.7). 따라서 §4.4 2단계로
+  React dist를 `frontend/static/`에 **배치해 둔 뒤에** 돌려야 한다 — dist가 없으면 서버가 내장 UI로 폴백하는데,
+  하니스가 URL을 확인해 `HarnessError`로 즉시 중단시킨다(조용히 잘못된 수치를 남기지 않는다).
+  dist를 기본 경로가 아닌 곳에 뒀다면 `--server-frontend-dir`로 서버에 알려준다.
 - 콘솔 출력 예:
   ```
   [closed_test] ▶ sbs1.mp3  (정답 있음 → WER/F1)
@@ -421,9 +420,7 @@ C:\Python312\python.exe -m whisperlivekit.test_client test_data/sbs1.mp3 --live
 
 기능을 한 번에 다 켜지 말고 **전사 → 프론트 연결 → 번역** 순으로 하나씩 늘려가며 확인한다.
 **1·2단계는 playwright/VBCable이 필요 없다**(마이크 직접). 경로 C 자동측정(§4.1)에만 그 둘이 필요하다.
-단 2단계까지 마쳐 React dist가 이미 `frontend/static/`에 있는 상태로 §4.1 자동측정을 돌리면,
-`scripts/vbcable_test.py`가 아직 내장 UI 전용이라 `#startButton` 타임아웃으로 실패할 수 있다(§4.1 "UI
-방침 주의" 참조).
+경로 C는 배포 UI를 몰기 때문에 **2단계(React dist 배치)를 먼저 마쳐야** §4.1 자동측정이 돈다.
 
 #### 1단계 — 배포 UI로 전사 확인 (번역 OFF)
 master 설정으로 서버를 띄우고, 전사·화자분할이 도는지 본다. React dist가 `frontend/static/`에 아직
@@ -436,7 +433,9 @@ C:\Python312\python.exe -m whisperlivekit.basic_server --no-llm-translation
 ```
 → 브라우저 **http://localhost:8900/** 접속 → **배포 UI**(dist 있으면 자동 서빙/리다이렉트) → 마이크 권한
 허용 후 한·영 섞어 발화.
-- **통과 기준**: 발화가 끊김·환각 없이 실시간 전사되고, 화자가 바뀌면 화자 배지(1·2·3…)가 분리된다.
+- **통과 기준**: 발화가 끊김·환각 없이 실시간 전사되고, 화자가 바뀌면 **줄이 분리**된다. (배포 UI는 화자
+  번호를 화면에 표시하지 않는다 — 화자 배지는 내장 UI 기준 서술이었다. 서버가 보내는 화자 번호는
+  전사 행의 `data-speaker` 속성으로만 노출된다.)
 - 음성 파일로 보려면 VBCable 재생장치를 통해 틀거나(경로 C), 빠른 방법은 마이크 앞에서 직접 발화.
 - **배포 UI엔 현재 저장 버튼이 없다**(2026-07-22 제거). 과거 내장 UI는 저장 버튼 클릭 시 그 시점까지의 누적 전사를 서버 로컬 폴더(`--transcript-save-dir`, 기본값 `./transcripts`)에 `.txt`로 저장했다 — API 계약([API_SPEC.md](API_SPEC.md) §3.2 `POST /api/save-transcript`) 자체는 유지된다.
 
@@ -817,7 +816,8 @@ C:\Python312\python.exe -c "import torch, transformers, tokenizers; print(torch.
 | **번역 RAG 조용한 비활성** | 서버는 정상 기동하고 번역도 나오는데 번역 품질이 기존 whisperlive와 똑같다(유사 예시가 안 붙음). RAG에는 CLI 플래그가 없어 "켰는데 안 된다"는 신호 자체가 없음 | 기동 로그(번역 ON일 때만 찍힘)에서 `Translation RAG(Qdrant) disabled`와 그 원인인 `Translation RAG disabled: ...` WARNING을 확인 → ① 자산 디렉터리 2개(`whisperlivekit/llm_translation/local_qdrant_db/`·`bge-m3/`)가 모두 실제로 있는지, ② `C:\Python312\python.exe -c "import qdrant_client, sentence_transformers"`가 통과하는지 확인(§6.3·§2.1) |
 | VBCable 불안정 | 경로 C 무음/100% WER/분산 폭증 | 케이블 상태(코드 아님) — 재부팅/Audiosrv 재시작, `vbcable_test.py --verify` |
 | playwright 미설치 | 경로 C 실패 | chromium 바이너리 복사 + `PLAYWRIGHT_BROWSERS_PATH` |
-| React dist가 `frontend/static`에 있음(§4.4 2단계 완료 후) | 경로 C 자동측정(`closed_test.py`/`eval.py`)이 `#startButton` 타임아웃 실패 | `scripts/vbcable_test.py`가 아직 내장 UI 전용이라 배포 UI로 리다이렉트되면 못 찾는다 — `--server-frontend-dir <빈 디렉터리>`로 내장 UI 과도기 폴백(§4.1). 후속 조치는 [docs/backlog/BACKLOG_EVAL_DEPLOY_UI_MIGRATION.md](backlog/BACKLOG_EVAL_DEPLOY_UI_MIGRATION.md) 참조 |
+| React dist가 `frontend/static`에 **없음**(§4.4 2단계 미완) | 경로 C 자동측정(`closed_test.py`/`eval.py`)이 `HarnessError: 배포 UI 로 넘어가지 않았습니다`로 즉시 중단 | 경로 C는 배포 UI(`/wlkies/`)를 몬다 — dist를 배치하면 해소된다(§4.4 2단계). dist가 기본 경로가 아닌 곳에 있으면 `--server-frontend-dir`로 알려준다. 내장 UI로 측정하려면 `--browser-ui inline` |
+| 배포 UI 자동화 훅 소실 | `HarnessError: 설정 드로어를 열지 못했습니다` 또는 `전사가 0줄입니다` | 프런트 리팩터링으로 `data-testid`가 지워졌을 때 — 계약 목록은 [frontend/app/README.md](../frontend/app/README.md) "자동화 계약" 절. 실패 스크린샷 `.omc/server_logs/vbcable_fail_*.png` 확인 |
 | RTX 5090 커널 | torch가 sm_120 미지원 | cu128 + torch 2.7+ 버전 확인 |
 | 포트 충돌 | 수동 서버=8900, eval/closed_test=8901(기본). 배포 PC 기존 점유와 충돌하면 | `--port`로 변경, 또는 `parse_args.py`/`eval.py SERVER_PORT` 기본값 수정. 동시 기동 시 GPU 2배 점유 주의 |
 | 문서 플래그 오타 | `--avg-logprob-threshold`는 없음 | 실제 플래그는 `--logprob-threshold`([parse_args.py:321](../whisperlivekit/parse_args.py#L321)) |

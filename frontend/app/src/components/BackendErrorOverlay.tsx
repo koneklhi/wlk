@@ -19,7 +19,10 @@ export function BackendErrorOverlay({
   const isServerError = status === 500;
 
   return (
-    <div className="absolute inset-0 z-50 flex items-center justify-center bg-[#050608]/60 backdrop-blur-sm font-mono">
+    <div
+      className="absolute inset-0 z-50 flex items-center justify-center bg-[#050608]/60 backdrop-blur-sm font-mono"
+      data-testid="stt-backend-error"
+    >
       <div className="text-center max-w-sm px-6">
         <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-red-500/10 border border-red-500/20 mb-4">
           {isConnecting ? (

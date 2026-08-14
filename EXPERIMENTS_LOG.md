@@ -5449,3 +5449,88 @@ T5가 0.5s→0.2s로 재설계된 뒤(Exp-204 후속), 결합 워크트리에 �
 **다음 가설(갱신)**: 사용자가 원 진단 세션의 인용 로그 라인을 직접 재확인하거나, 더 많은 반복(N≥10)으로 실제 커밋 사례를 잡아야 계열②의 실재 여부·빈도가 확정된다. 이번 8회 측정 결과만으로는 "완전히 해소됐다"고도 "여전히 심각하다"고도 확언할 수 없다 — **불확실성 자체를 결론으로 남긴다.**
 
 **JSON(대조)**: `.omc/benchmarks/eval_20260723_0209_hallu_pre199_kor3_repeat4.json`. 서버 트레이스 `.omc/server_logs/server_kor3_C_R{1,2,3,4}_20260723_02*.log`(워크트리 `hallu-pre-exp199-check`).
+
+---
+
+## Exp-207 — 경로 C 측정 하니스 UI 전환 (내장 UI → 배포 UI) + 동치성 검증 (2026-08-14) [E6, 코드 세대 무변경 / **하니스 세대 H1→H2**, `feat/eval-deploy-ui`]
+
+**분류**: 측정 계기(instrument) 변경. `whisperlivekit/` STT 코드는 한 줄도 바꾸지 않았다 — **Epoch는 올리지 않는다.**
+
+### 배경
+경로 C 자동측정이 **실제로 배포되지 않는 UI**를 재고 있었다. `scripts/vbcable_test.py`의 Playwright
+스크래핑이 내장 UI 전용 DOM(`#startButton`·`#linesTranscript .textcontent`)에 하드코딩돼 있어, 배포 UI
+dist가 있으면 `GET /`가 `/wlkies/`로 리다이렉트돼 측정이 타임아웃으로 죽었다. 그래서 `/eval` 커맨드 4곳이
+전부 `--server-frontend-dir .omc/eval_empty_frontend`로 **서버를 내장 UI로 강제 폴백**시키고 있었다.
+측정 UI ≠ 배포 UI인 상태에서는 배포본에서만 나는 렌더 문제를 지표가 잡지 못한다(전례 = Exp-181/182:
+내장 UI `finalizedHistory` 키 충돌이 kor2 WER을 95.1%로 부풀린 채 오래 방치).
+
+### 변경
+1. **배포 UI 자동화 훅 추가**(`frontend/app`, 순수 속성 — 렌더 트리·스타일·동작 무변경):
+   컨트롤/상태/전사행에 `data-testid` 8종, 상태에 **raw enum `data-phase`**(지역화 문구 대신),
+   전사행에 `data-trigger`/`data-finalized`/`data-speaker`. `TranscriptRow.trigger` 필드 추가
+   (`Segment.finalize_trigger` 전달만). TDD — 테스트 선작성 후 구현.
+2. **`scripts/vbcable_test.py` 재작성**: `ui="deploy"`(기본, `/wlkies/`) / `ui="inline"`(`/dev`, A/B 대조군).
+   반환 계약 `[{"text","trigger"}]` 불변 → `eval.py`·`closed_test.py` 호출부 무수정.
+   - `HarnessError` 도입 — dist stale/부재·드로어 미개방·`recording`/`paused` 미도달·전사 0줄을 **즉시 중단**
+     (+ 실패 스크린샷). 기존엔 `eval_path_c`가 모든 예외를 삼켜 **하니스 고장이 WER 100%짜리 정상
+     측정치로 벤치마크에 기록**됐다(CLAUDE.md §4 "하니스 버그는 즉시 멈춘다"에 정면 배치).
+   - 강제 `websocket.close()` 폴백 삭제 — 배포 UI 스토어가 `STOP_FLUSH_TIMEOUT_MS=10s`로 자가복구한다.
+   - WS 프레임 병행 캡처 → 서버 확정 텍스트와 화면 전사를 대조해 누락·중복 경고(지표는 DOM 기준 유지).
+3. **`scripts/eval.py`**: `--browser-ui {deploy,inline}`(기본 deploy), `--continue-on-harness-error`,
+   `HarnessError` 전파. `--server-frontend-dir`는 폐지하지 않고 **서버 패스스루로 의미 재정의**.
+
+### 측정 — A/B 동치성 검증 (H1 inline vs H2 deploy)
+6파일 × `--repeat 1` × 양 UI = 12런, `--lan auto`, diar ON(sortformer), CRT 3.0, 근접 시간대 연속 실행.
+`.omc/benchmarks/ab_inline.json` / `ab_deploy.json`.
+
+| file | WER H1(inline) | WER H2(deploy) | Δ | 화자F1 H1 | 화자F1 H2 | 줄수 H1 | 줄수 H2 |
+|---|---|---|---|---|---|---|---|
+| bong1 | 21.4 | 21.4 | +0.0 | 66.7 | 74.3 | 28 | 24 |
+| ytn2 | 20.2 | 11.3 | −8.9 | 73.7 | 94.7 | 11 | 11 |
+| sbs1 | 8.9 | 10.1 | +1.2 | 100.0 | 50.0 | 12 | 12 |
+| kor1 | 26.9 | 14.0 | −12.9 | 0.0* | 0.0* | 12 | 9 |
+| kor2 | 37.9 | 19.3 | −18.6 | 0.0* | 100.0* | 10 | 6 |
+| kor3 | 31.1 | 32.5 | +1.3 | 100.0* | 100.0* | 7 | 7 |
+
+\* 단일화자 정답의 0/100 이분 아티팩트(Exp-186) — 게이팅 제외.
+
+### 판정 — **동치(하니스 귀속 차이 없음)**. 관측된 Δ는 전부 전사 내용 차이로 설명된다.
+- **kor2 −18.6pt / kor1 −12.9pt**: 스크래핑 차이가 아니라 **inline 회차에서 영어 환각이 터진 것**.
+  inline kor2 2~5번 줄이 `"Cypigyoppy" I'm a "Cypigyopy"…` 계열 영어 환각인 반면 deploy 회차는 해당 구간을
+  한국어로 정상 전사했다(`GPGOP 유무인 …`). kor1~3 auto 모드의 알려진 이봉(bimodal) 실패 모드이며
+  kor2 sd 6.7%p 기준 노이즈 범위. **하니스가 아니라 회차 운이다.**
+- **sbs1 화자F1 100→50**: 두 UI 모두 12줄·화자경계 위치 동일. deploy 회차가 1번 줄 서두(`현지시간 5일,`)와
+  7번 줄(`이번 강연의`)을 놓쳐 단어 정렬이 밀리며 경계 투영이 tolerance(1단어)를 벗어난 것. **전사 유실이
+  원인이고 추출 계층 문제가 아니다.**
+- **서두 유실은 계통적이지 않다**: 6파일 첫 줄 대조에서 deploy가 불리한 건 sbs1 1건뿐이고, kor3은 반대로
+  deploy가 앞 어절(`해군은 작전산입`)을 더 잡았다.
+- **중복 줄 0건**(양 UI 6파일 전부) — Exp-181 growing-prefix 시그니처 없음.
+- **WS-DOM 불일치 경고 0건**, **HarnessError 0건**(12런 전부 완주).
+- 줄 수 차이(bong1 28→24, kor1 12→9, kor2 10→6)는 위 환각 에피소드로 문장 수 자체가 달라진 결과다.
+
+**`--repeat 1`이므로 이 수치들은 방향 신호다**(CLAUDE.md §4). 이 검증의 목적은 "H1↔H2에 catastrophic
+차이가 있는가"였고, 답은 **없다**. 정밀 비교가 필요하면 `--browser-ui inline`으로 언제든 H1을 재현할 수 있다.
+
+### 부수 검증
+- `data-trigger` 배선 end-to-end 확인 — deploy 전사 txt의 `[문장별 확정 트리거]` 섹션이 `⟨silence⟩`·
+  `⟨punctuation⟩`·`⟨speaker_change⟩`로 정상 채워짐(inline과 동일 계열).
+- **가드 음성검증**: dist 없는 서버(`--frontend-dir <빈 디렉터리>`)에 `--ui deploy`로 붙이면
+  `HarnessError: 배포 UI 로 넘어가지 않았습니다 (현재 URL: …)`로 즉시 중단. 워크트리에 dist가 없어
+  **조용히 내장 UI로 폴백한 채 "성공한 것처럼" 측정되던 함정**이 이제 시끄럽게 실패한다.
+- `closed_test.py`(폐쇄망 자동측정) 스모크 통과 — 코드 변경 없이 배포 UI 경로를 물려받는다. dist가 배치된
+  배포 PC에서 기존에 깨져 있던 경로(`docs/DEPLOYMENT_OFFLINE.md` §4.1 경고의 실체)가 함께 해소됐다.
+- pytest 786 passed·1 skipped, ruff 신규 오류 0(master 기준선 22건과 동일), 프런트 typecheck/test(37)/build PASS.
+
+### 부산물 (요청 범위 밖이지만 함께 수정)
+- **공유 `frontend/app/node_modules` 손상 복구**: pnpm 링크 레이어가 깨져(`.bin` 소실, 가상 스토어 패키지
+  디렉터리 다수 공란) `pnpm build`/`test`가 아예 불가능한 상태였다. pnpm이 상태 파일 때문에 복구를
+  건너뛰어, `node_modules` 삭제 후 lockfile 기준 재설치로 복구.
+- **`docs/TESTING.md` 경로 B 레시피 오류 2건 정정**: ① `auto`도 `language` 파라미터를 **명시 전송**한다
+  (생략된다고 적혀 있었음, `utils/wsUrl.ts`) ② 언어 선택은 `localStorage`에 저장되지 **않는다**(배포 UI는
+  테마만 persist). 둘 다 내장 UI 시절 서술이 남아 있던 것.
+
+### 기록
+- **하니스 세대 마커 신설**(EXPERIMENTS.md STATE): H2 = 배포 UI(2026-08-14~), H1 = 내장 UI(~2026-08-14,
+  `--browser-ui inline`로 재현 가능). Epoch(코드 세대)와 **별개 축**이다.
+- 베이스라인 표는 **무수정**(동치 판정).
+- `docs/OPEN_QUESTIONS.md` §5 "구현 대기" → **해소**, 백로그 문서는 `docs/archive/`로 이동.

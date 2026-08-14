@@ -130,7 +130,10 @@ function SttMainInner() {
         {backendStatus === 'unhealthy' && !hasTranscript ? (
           <BackendErrorOverlay isConnecting={isConnecting} onClose={() => void checkBackend()} />
         ) : !hasTranscript ? (
-          <div className="w-full h-full flex items-center justify-center flex-grow-0">
+          <div
+            className="w-full h-full flex items-center justify-center flex-grow-0"
+            data-testid="stt-idle"
+          >
             <span style={systemStyle}>{idleMessage(phase)}</span>
           </div>
         ) : (
@@ -140,7 +143,7 @@ function SttMainInner() {
             className="w-full h-full overflow-y-auto pt-8 pb-12 px-16 custom-scrollbar"
             style={isOpenSidebar ? { paddingRight: '512px' } : undefined}
           >
-            <div className="flex flex-col gap-14">
+            <div className="flex flex-col gap-14" data-testid="stt-transcript">
               {rows.map((row) => (
                 // key 는 안정 세그먼트 id 기반 — 배열 index 를 쓰면 백엔드가 최근 줄을
                 // 소급 수정할 때 React 가 엉뚱한 DOM 노드를 재사용한다.

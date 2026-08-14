@@ -278,6 +278,27 @@ pnpm build
 ### `routes/admin.tsx` (AdminPage)
 단어교정(`words`) 탭과 번역교정(`translate_split`, 번역용어+번역예시 2분할) 탭으로 구성. `useItems()` 내부 훅이 각 데이터 소스(`words`/`translate_words`/`translate_sentence`)에 대해 조회/추가/삭제를 처리한다.
 
+## 자동화 계약 (경로 C 측정이 의존한다 — 지우지 말 것)
+
+STT 성능 정량 측정(경로 C, `scripts/vbcable_test.py`)이 **이 앱을 Playwright로 직접 몰아서** WER·화자분리
+F1·문장분리 F1을 산출한다. 즉 배포되는 화면이 곧 측정 대상이다. 아래 `data-*` 속성이 그 접점이며,
+**화면 외관·동작에는 아무 영향이 없다**(그래서 리팩터링 중 무심코 지우기 쉽다 — 지우면 측정이
+조용히 깨진다. 함께 갱신할 문서는 루트 `CLAUDE.md` 연동 갱신 표 참조).
+
+| 속성 | 위치 | 하니스가 쓰는 방식 |
+|---|---|---|
+| `data-testid="stt-settings-toggle"` | `SttSettingDrawer.tsx` 우측 토글 | 컨트롤이 드로어 안에 있으므로 **가장 먼저 눌러 드로어를 연다** |
+| `data-testid="stt-start"` / `"stt-pause"` / `"stt-stop"` | `SttSettingDrawer.tsx` 버튼 | 시작 → (재생) → **일시 중단**. `stt-stop`은 절대 누르지 않는다 — `endSession('stop')`이 화면 전사를 즉시 비운다 |
+| `data-testid="stt-status"` + `data-phase` | `SttSettingDrawer.tsx` 상태 값 | `data-phase`는 지역화 문구가 아니라 raw enum(`recording`/`paused` …). 문구를 바꿔도 자동화가 안 깨지도록 일부러 enum을 노출한다 |
+| `data-testid="stt-language"` | 언어 `<select>` | 동일 class 의 select 가 3개라 이 속성으로만 특정된다 |
+| `data-testid="stt-transcript"` | `SttMain.tsx` 전사 컨테이너 | 스크래핑 루트 |
+| `data-testid="stt-row"` + `data-trigger` | `SttTextViewer.tsx` 행 컨테이너 | 행 하나 = 확정 문장 하나(F1 의 경계 단위). `data-trigger`는 전사 txt의 `[문장별 확정 트리거]` 섹션 입력 |
+| `data-testid="stt-text"` | `SttTextViewer.tsx` 원문 div | **원문만** 읽는다 — 행 전체 innerText 를 쓰면 시각 표시·번역문이 전사에 섞인다 |
+| `data-testid="stt-idle"` / `"stt-backend-error"` | `SttMain.tsx` / `BackendErrorOverlay.tsx` | "전사 0줄"이 하니스 고장인지 백엔드 문제인지 가르는 신호 |
+
+`TranscriptRow.trigger`(`utils/transcriptRows.ts`)는 이 계약을 위해 `Segment.finalize_trigger`를 행까지
+전달만 하는 필드다 — 화면에는 쓰지 않는다.
+
 ## 스크립트
 
 ```bash
