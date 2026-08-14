@@ -5522,9 +5522,13 @@ dist가 있으면 `GET /`가 `/wlkies/`로 리다이렉트돼 측정이 타임�
 - pytest 786 passed·1 skipped, ruff 신규 오류 0(master 기준선 22건과 동일), 프런트 typecheck/test(37)/build PASS.
 
 ### 부산물 (요청 범위 밖이지만 함께 수정)
-- **공유 `frontend/app/node_modules` 손상 복구**: pnpm 링크 레이어가 깨져(`.bin` 소실, 가상 스토어 패키지
-  디렉터리 다수 공란) `pnpm build`/`test`가 아예 불가능한 상태였다. pnpm이 상태 파일 때문에 복구를
+- **공유 `frontend/app/node_modules` 손상 복구**: pnpm 링크 레이어가 깨져 `pnpm build`/`test`가 아예 불가능한
+  상태였다. 실제 증거는 ① `node_modules/.bin` 부재(`vitest` 실행 불가) ② `.modules.yaml` 부재
+  ③ `.pnpm/@tanstack+router-plugin@…/node_modules/@babel/template` junction 대상이 빈 디렉터리라
+  `ERR_MODULE_NOT_FOUND`. pnpm 이 `.pnpm-workspace-state.json` 때문에 "Already up to date"로 복구를
   건너뛰어, `node_modules` 삭제 후 lockfile 기준 재설치로 복구.
+  (진단 중 "가상 스토어 554개 중 239개 공란"이라고 셌던 것은 **오산**이다 — 스코프 디렉터리(`@babel` 등)
+  자체를 패키지로 셌다. 손상 판정은 디렉터리 카운트가 아니라 실제 빌드/테스트 동작으로 해야 한다.)
 - **`docs/TESTING.md` 경로 B 레시피 오류 2건 정정**: ① `auto`도 `language` 파라미터를 **명시 전송**한다
   (생략된다고 적혀 있었음, `utils/wsUrl.ts`) ② 언어 선택은 `localStorage`에 저장되지 **않는다**(배포 UI는
   테마만 persist). 둘 다 내장 UI 시절 서술이 남아 있던 것.
