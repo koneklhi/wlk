@@ -24,6 +24,13 @@
   중간이면 단어 시작 방향으로 스냅(공백 접두/토큰 간 갭 기준). 신언어 토큰이 하나도
   안 왔으면 전량 복원(유실 해결 > WER 소폭 허용).
 
+텍스트 커버 가드(RECONCILE_TEXT_COVER_GUARD_ENABLED): 위 파티션은 **순수 시간 기준**이라,
+재디코딩이 같은 텍스트를 다시 방출했는데도 재앵커로 타임스탬프가 COVER_TOL 넘게 밀리면
+그 tombstone을 "미커버"로 오판해 복원한다(실측 인시던트 — ko 잠금 아래 커밋된 영어 서두
+"In support of"에서 'In'만 복원돼 stub 문장 "In." 중복 확정). 그래서 resolve는 컷 아래
+tombstone이 관측 텍스트와 **정규화 완전일치**하면(±TEXT_COVER_SLACK_SECS) 복원을 취소하고
+대체 파티션으로 흡수한다 — 단일 컷 인덱스만 아래로 확장하므로 구멍 없음 불변식은 유지된다.
+
 구역2 확대(RECONCILE_SAMESCRIPT_SUBZONE_ENABLED): boundary_t−SAMESCRIPT_SUBZONE_SECS
 이내의 같은 스크립트 prev_lang 토큰("미니스터")도 잠정 tombstone 한다 — 복원 보장이
 생겼기 때문에 안전해진 공격적 철회. 커버되면 대체(중복 소멸), 미커버면 복원(무손실).
@@ -45,6 +52,7 @@ logger = logging.getLogger("whisperlivekit.tokens_alignment")
 # ─── 플래그 (모듈 상수 — 런타임 조회, monkeypatch 가능) ─────────────────────────
 RECONCILE_ENABLED: bool = True   # False = 레거시 파괴적 pop 거동 재현(전체 롤백)
 RECONCILE_SAMESCRIPT_SUBZONE_ENABLED: bool = True  # 구역2 확대(같은 스크립트 잠정 철회)만 롤백
+RECONCILE_TEXT_COVER_GUARD_ENABLED: bool = True    # A안(resolve 텍스트 커버 가드)만 롤백
 
 # ─── 상수 (잠정값 — 계측 r1의 Δstart 분포로 보정 후 확정) ───────────────────────
 COVER_TOL: float = 0.5           # 커버 판정 start 근접 허용(τ — 컷 파티션에도 동일 사용)
@@ -54,6 +62,13 @@ SAMESCRIPT_SUBZONE_SECS: float = 1.2   # 구역2 확대 범위(boundary_t 이전
 _WORD_SNAP_GAP_SECS: float = 0.3       # 공백 접두 없는 토큰의 단어 시작 판정 보조 갭
 OWN_TOL: float = 0.4             # 시간 소유권 dedup의 start 근접 허용
 DEDUP_RELEASE_GRACE_SECS: float = 0.5  # 조기 resolve 후 dedup/늦은 커버 유지 유예
+# 텍스트 커버 가드: 텍스트가 정규화 완전일치일 때 허용하는 재앵커 이동 상한.
+# 잠정값 — [TextCover] dstart 실측 분포로 보정한다(COVER_TOL보다 크게 잡는 것이 요점:
+# 텍스트 동일성이라는 훨씬 강한 증거가 있으므로 시간 허용치를 넓혀도 된다).
+# dstart 부호 규약은 [Restore]/[Replace]와 동일한 "tombstone start − 기준 start"이므로,
+# 재앵커가 뒤로 밀린 정상 케이스에서는 음수로 찍힌다(보정 시 |dstart| 분포를 본다).
+TEXT_COVER_SLACK_SECS: float = 2.5
+_OBSERVED_TEXT_CAP: int = 64     # 창당 관측 텍스트 수집 상한(장창 방어 — 매칭은 선형 스캔)
 
 # 존 라벨
 ZONE1 = "zone1"
@@ -111,11 +126,14 @@ class ReconcileWindow:
     entries: List[TombstoneEntry] = field(default_factory=list)
     new_min_start: Optional[float] = None   # 관측된 신언어 토큰 최소 start(컷 T 후보)
     new_high_start: Optional[float] = None  # 관측된 신언어 토큰 start 고수위(D1 진행도)
+    # 관측된 신언어 토큰의 (start, 정규화 텍스트) — resolve의 텍스트 커버 가드 전용.
+    # 순수 구두점 토큰(정규화 후 빈 문자열)은 담지 않는다(매칭 후보가 아니므로).
+    observed_texts: List[tuple] = field(default_factory=list)
     resolved: bool = False
     resolve_reason: Optional[str] = None
 
     def observe(self, token: ASRToken) -> None:
-        """신언어 토큰 관측 — 진행도 갱신 + 커버 마킹."""
+        """신언어 토큰 관측 — 진행도 갱신 + 커버 마킹 + 텍스트 커버 가드용 텍스트 수집."""
         if token.start is None:
             return
         if self.new_min_start is None or token.start < self.new_min_start:
@@ -126,6 +144,9 @@ class ReconcileWindow:
             if not e.covered and e.token.start is not None \
                     and abs(token.start - e.token.start) <= COVER_TOL:
                 e.covered = True
+        nt = _dedup_norm(token.text)
+        if nt and len(self.observed_texts) < _OBSERVED_TEXT_CAP:
+            self.observed_texts.append((token.start, nt))
 
     def d1_reached(self) -> bool:
         return (self.new_high_start is not None
@@ -143,6 +164,24 @@ class ReconcileWindow:
         """
         return self.boundary_t + PASS_EPS + DEDUP_RELEASE_GRACE_SECS
 
+    def _match_observed(self, token: ASRToken, consumed: set) -> Optional[int]:
+        """텍스트 커버 가드의 매칭: 아직 소비되지 않은 관측 토큰 중 첫 일치 인덱스.
+
+        조건 = 정규화 완전일치(접두어·부분일치 불허 — 'In'이 'Increase'를 흡수하면
+        정당 단어가 사라진다) + |Δstart| <= TEXT_COVER_SLACK_SECS. 없으면 None.
+        """
+        if token.start is None:
+            return None
+        ne = _dedup_norm(token.text)
+        if not ne:
+            return None
+        for i, (obs_start, obs_text) in enumerate(self.observed_texts):
+            if i in consumed or obs_text != ne:
+                continue
+            if abs(obs_start - token.start) <= TEXT_COVER_SLACK_SECS:
+                return i
+        return None
+
     def resolve(self, reason: str) -> None:
         """단일 컷포인트 원자성으로 tombstone들을 대체/복원 확정한다.
 
@@ -151,6 +190,9 @@ class ReconcileWindow:
         구멍이 없다. 컷이 하위단어 연속 중간에 떨어지면 단어 시작 방향으로 스냅해
         해당 단어 전체를 대체 쪽에 넣는다(복원 파편 잔존 = Case B 금지).
         신언어 토큰이 하나도 관측되지 않았으면 전량 복원.
+
+        그 위에 텍스트 커버 가드가 컷을 아래로만 단조 확장한다 — 재앵커로 시간이 밀려
+        미커버로 오판된 tombstone이라도 관측 텍스트와 완전일치하면 대체 쪽으로 흡수한다.
         """
         if self.resolved:
             return
@@ -176,6 +218,44 @@ class ReconcileWindow:
                    and not _starts_new_word(entries[first_replaced_idx].token,
                                             entries[first_replaced_idx - 1].token)):
                 first_replaced_idx -= 1
+
+        if RECONCILE_TEXT_COVER_GUARD_ENABLED and cut is not None:
+            # ── 텍스트 커버 가드: 컷을 아래로만 단조 확장 ──
+            # 불변식: 이동하는 것은 first_replaced_idx라는 단일 임계 인덱스뿐이다 →
+            # "단일 컷포인트·구멍 없음"이 구조적으로 유지되고, 비연속(중간 비일치를
+            # 건너뛴) 대체가 만들어질 수 없다(Case B 파편 불가).
+            consumed: set = set()
+            # 이미 대체 파티션에 든 tombstone이 관측 텍스트를 먼저 소비한다 —
+            # 관측 토큰 1개는 tombstone 1개의 대체만 정당화한다(실발화 반복 보호:
+            # 화자가 같은 단어를 두 번 말했으면 재방출 1개가 둘 다 지우면 안 된다).
+            for e in entries[first_replaced_idx:]:
+                m = self._match_observed(e.token, consumed)
+                if m is not None:
+                    consumed.add(m)
+            while first_replaced_idx > 0:
+                j = first_replaced_idx - 1
+                # 순수 구두점 tombstone은 look-through — 그 아래 비-구두점 단어와
+                # 함께만 흡수한다(유령 "In."에서 '.'만 남는 파편 방지).
+                while j > 0 and not _dedup_norm(entries[j].token.text):
+                    j -= 1
+                m = self._match_observed(entries[j].token, consumed)
+                if m is None:
+                    break   # 비일치 → 즉시 중단(그 아래가 일치해도 흡수 금지 = 구멍 금지)
+                consumed.add(m)
+                e = entries[j]
+                obs_start = self.observed_texts[m][0]
+                logger.info(
+                    "[TextCover] 복원취소→대체: %r start=%.2f obs_start=%.2f dstart=%.2f "
+                    "boundary_t=%.2f zone=%s",
+                    e.token.text, e.token.start, obs_start, e.token.start - obs_start,
+                    self.boundary_t, e.zone,
+                )
+                first_replaced_idx = j
+                # 단어 시작 스냅 재적용 — 확장이 하위단어 연속 중간이면 단어 전체를 대체.
+                while (0 < first_replaced_idx < len(entries)
+                       and not _starts_new_word(entries[first_replaced_idx].token,
+                                                entries[first_replaced_idx - 1].token)):
+                    first_replaced_idx -= 1
 
         restored = 0
         replaced = 0

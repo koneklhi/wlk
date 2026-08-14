@@ -6,11 +6,13 @@
 - 커밋3: ReconcileWindow — 복원/대체/마감 3중(D1/D2/D3)/단일 컷포인트 원자성/플래그 OFF 레거시.
 - 커밋4: 시간 소유권 dedup(드롭/supersede/id 승계/정상 반복 보호).
 - 커밋5: 동적 keep 클램프.
+- A안: resolve() 텍스트 커버 가드(재앵커로 밀린 동일 텍스트 재방출의 유령 복원 차단).
 """
 from whisperlivekit import boundary_reconcile
 from whisperlivekit.boundary_reconcile import (
     COVER_TOL,
     RECONCILE_DEADLINE_SECS,
+    TEXT_COVER_SLACK_SECS,
     ReconcileWindow,
     TombstoneEntry,
 )
@@ -595,3 +597,163 @@ def test_dynamic_keep_none_falls_back_to_fixed():
     )
     assert compute_dynamic_keep(20.0, None) == LANG_SWITCH_KEEP_SECS
     assert compute_dynamic_keep(None, 19.0) == LANG_SWITCH_KEEP_SECS
+
+
+# ─── A안: resolve() 텍스트 커버 가드 ──────────────────────────────────────────
+#
+# 인시던트: ko 잠금 상태에서 영어 서두 "In support of"가 ko 스탬프로 커밋·방출된 뒤
+# 전환 마커가 3단어를 zone2_opposite로 철회했는데, 재디코딩이 **같은 텍스트를 다시
+# 방출**했음에도 재앵커로 타임스탬프가 0.5s(COVER_TOL) 넘게 밀려 순수 시간 파티션이
+# 유령 'In'만 "미커버"로 판정·복원 → stub 문장 "In." 중복 확정.
+# 가드는 컷 바로 아래 tombstone이 관측 텍스트와 정규화 완전일치하면 복원을 취소하고
+# 대체 파티션으로 흡수한다(단일 임계 인덱스만 아래로 이동 = 구멍 없음).
+
+
+def _ghost_incident_setup(ta):
+    """인시던트 재현 공통 셋업 — ko 스탬프 유령 3토큰 + 전환 마커 + 재앵커된 en 재방출.
+
+    반환: (유령 토큰 3개, en 재방출 토큰 3개).
+    """
+    ghosts = [
+        _tok(12.60, 12.70, " In", "ko"),
+        _tok(13.05, 13.15, " support", "ko"),
+        _tok(13.25, 13.35, " of", "ko"),
+    ]
+    ta.all_tokens = list(ghosts)
+    # boundary_t=13.4 → 유령 3개 전부 zone2_opposite(경계 이전 + 반대 스크립트).
+    marker = _retract_marker(13.4, new_lang="en", prev_lang="ko", floor=11.0)
+    # 재디코딩 재앵커로 +0.9s 밀린 동일 텍스트 재방출.
+    reemit = [
+        _tok(13.50, 13.60, " In", "en"),
+        _tok(13.90, 14.00, " support", "en"),
+        _tok(14.10, 14.20, " of", "en"),
+    ]
+    ta._insert_with_reattachment([marker] + reemit)
+    return ghosts, reemit
+
+
+def test_ko_stamped_ghost_prefix_replaced_after_shifted_reemission():
+    """인시던트 정밀 재현: 재앵커로 밀린 동일 텍스트 재방출이면 유령 접두어도 대체된다.
+
+    가드가 없으면 컷 T=13.50, 임계=13.00이라 " In"@12.60만 "미커버"로 복원돼
+    stub 문장 "In."이 중복 확정된다(' support'/' of'는 임계 위라 영구 대체 — 실측과
+    정확히 일치). 가드는 관측 텍스트 "in"@13.50과의 정규화 완전일치로 복원을 취소한다.
+    """
+    ta = _make_alignment()
+    ghosts, reemit = _ghost_incident_setup(ta)
+
+    w = ta.reconciler.window
+    assert w.resolved is True and w.resolve_reason == "d1"
+    assert all(g.retracted is True for g in ghosts)   # 3개 전부 영구 tombstone
+    assert all(e.replaced is True for e in w.entries)
+    # 최종 가시 토큰에 유령 잔존 0건 — 재방출본만 남는다.
+    visible = [t for t in ta.all_tokens
+               if not t.is_silence() and not t.is_boundary()
+               and not getattr(t, "retracted", False)]
+    assert all(all(v is not g for g in ghosts) for v in visible)
+    assert [v.text for v in visible] == [" In", " support", " of"]
+    assert visible == reemit
+
+
+def test_text_cover_exact_match_only():
+    """정규화 완전일치만 인정 — 접두어 관계(' 우' vs ' 우선')로는 복원을 취소하지 않는다."""
+    w = ReconcileWindow(boundary_t=13.4, floor=11.0, prev_lang="en", new_lang="ko")
+    short = TombstoneEntry(token=_tok(12.60, 12.70, " 우", "en", retracted=True), zone="zone2_opposite")
+    near = TombstoneEntry(token=_tok(13.05, 13.15, " 사안", "en", retracted=True), zone="zone2_opposite")
+    w.entries = [short, near]
+    w.observe(_tok(13.50, 13.60, " 우선", "ko"))   # 컷 T=13.50, 임계=13.00
+    w.resolve("test")
+    assert short.token.retracted is False and short.replaced is False   # 접두어 → 가드 미발동
+    assert near.token.retracted is True and near.replaced is True
+
+
+def test_text_cover_respects_slack():
+    """텍스트가 같아도 재앵커 이동이 TEXT_COVER_SLACK_SECS를 넘으면 복원을 유지한다."""
+    w = ReconcileWindow(boundary_t=13.4, floor=10.0, prev_lang="ko", new_lang="en")
+    far = TombstoneEntry(token=_tok(10.50, 10.60, " In", "ko", retracted=True), zone="zone2_opposite")
+    near = TombstoneEntry(token=_tok(13.05, 13.15, " support", "ko", retracted=True), zone="zone2_opposite")
+    w.entries = [far, near]
+    obs = _tok(13.50, 13.60, " In", "en")
+    assert obs.start - far.token.start > TEXT_COVER_SLACK_SECS   # 의도 명시
+    w.observe(obs)
+    w.resolve("test")
+    assert far.token.retracted is False and far.replaced is False
+    assert near.token.retracted is True and near.replaced is True
+
+
+def test_text_cover_one_to_one_preserves_genuine_repeat():
+    """관측 토큰 1개는 tombstone 1개의 대체만 정당화한다 — 실발화 반복 보호.
+
+    동일 텍스트 tombstone 2개 + 관측 1개면, 컷에 인접한 1개가 그 관측을 먼저 소비하고
+    더 이른 1개는 매칭할 관측이 남지 않아 복원된다.
+    """
+    w = ReconcileWindow(boundary_t=13.4, floor=11.0, prev_lang="ko", new_lang="en")
+    early = TombstoneEntry(token=_tok(12.00, 12.10, " In", "ko", retracted=True), zone="zone2_opposite")
+    late = TombstoneEntry(token=_tok(13.05, 13.15, " In", "ko", retracted=True), zone="zone2_opposite")
+    w.entries = [early, late]
+    w.observe(_tok(13.50, 13.60, " In", "en"))   # 컷 T=13.50, 임계=13.00
+    w.resolve("test")
+    assert late.token.retracted is True and late.replaced is True
+    assert early.token.retracted is False and early.replaced is False
+
+
+def test_text_cover_contiguous_only_no_hole():
+    """비연속 대체 금지: 컷 아래 첫 비일치에서 즉시 중단 — 그 아래 일치분도 복원 유지.
+
+    [일치A(더 이름), 비일치B(컷에 더 가까움)] 배치에서 A만 골라 대체하면 복원/대체가
+    교차하는 구멍(Case B 파편의 온상)이 생긴다. 단일 임계 인덱스 이동만 허용한다.
+    """
+    w = ReconcileWindow(boundary_t=13.4, floor=11.0, prev_lang="ko", new_lang="en")
+    a = TombstoneEntry(token=_tok(12.00, 12.10, " In", "ko", retracted=True), zone="zone2_opposite")
+    b = TombstoneEntry(token=_tok(12.80, 12.90, " 그런데", "ko", retracted=True), zone="zone2_samescript")
+    c = TombstoneEntry(token=_tok(13.05, 13.15, " of", "ko", retracted=True), zone="zone2_opposite")
+    w.entries = [a, b, c]
+    w.observe(_tok(13.50, 13.60, " In", "en"))   # 컷 T=13.50, 임계=13.00
+    w.resolve("test")
+    assert c.token.retracted is True and c.replaced is True
+    assert b.token.retracted is False    # 비일치 → 중단
+    assert a.token.retracted is False    # 텍스트는 일치하지만 구멍이 되므로 흡수 금지
+
+
+def test_text_cover_punct_lookthrough():
+    """순수 구두점 tombstone은 look-through — 아래 단어와 함께만 흡수된다('.' 잔존 금지)."""
+    w = ReconcileWindow(boundary_t=13.4, floor=11.0, prev_lang="ko", new_lang="en")
+    ghost_in = TombstoneEntry(token=_tok(12.60, 12.70, " In", "ko", retracted=True), zone="zone2_opposite")
+    ghost_dot = TombstoneEntry(token=_tok(12.75, 12.85, ".", "ko", retracted=True), zone="zone2_opposite")
+    late = TombstoneEntry(token=_tok(13.05, 13.15, " support", "ko", retracted=True), zone="zone2_opposite")
+    w.entries = [ghost_in, ghost_dot, late]
+    w.observe(_tok(13.50, 13.60, " In", "en"))   # 컷 T=13.50, 임계=13.00
+    w.resolve("test")
+    assert ghost_in.token.retracted is True
+    assert ghost_dot.token.retracted is True   # 구두점만 남는 파편 금지
+    assert late.token.retracted is True
+
+
+def test_text_cover_flag_off_legacy(monkeypatch):
+    """RECONCILE_TEXT_COVER_GUARD_ENABLED=False면 기존 순수 시간 복원 거동을 그대로 재현한다.
+
+    (= 인시던트 재현: 유령 ' In'이 복원돼 재방출본과 중복된다.)
+    """
+    monkeypatch.setattr(boundary_reconcile, "RECONCILE_TEXT_COVER_GUARD_ENABLED", False)
+    ta = _make_alignment()
+    ghosts, _ = _ghost_incident_setup(ta)
+    assert ghosts[0].retracted is False    # 순수 시간 파티션 → 복원(유령 잔존)
+    assert ghosts[1].retracted is True and ghosts[2].retracted is True
+    assert _visible_texts(ta) == [" In", " In", " support", " of"]   # 중복
+
+
+def test_text_cover_word_snap_no_case_b():
+    """가드 확장이 하위단어 연속 중간에 걸리면 단어 시작까지 함께 대체된다(복원 파편 0).
+
+    " 올렸"(11.50)+"습니다"(11.75, 공백 접두 없음·갭 0.15s)는 한 단어다. 관측 "습니다"가
+    "습니다" tombstone을 흡수할 때 " 올렸"만 복원으로 남으면 Case B 파편이 된다.
+    """
+    w = ReconcileWindow(boundary_t=13.4, floor=11.0, prev_lang="ko", new_lang="en")
+    part1 = TombstoneEntry(token=_tok(11.50, 11.60, " 올렸", "ko", retracted=True), zone="zone2_samescript")
+    part2 = TombstoneEntry(token=_tok(11.75, 11.85, "습니다", "ko", retracted=True), zone="zone2_samescript")
+    tail = TombstoneEntry(token=_tok(13.10, 13.20, " 지금", "ko", retracted=True), zone="zone1")
+    w.entries = [part1, part2, tail]
+    w.observe(_tok(13.60, 13.70, "습니다", "en"))   # 컷 T=13.60, 임계=13.10
+    w.resolve("test")
+    assert [e.replaced for e in (part1, part2, tail)] == [True, True, True]
+    assert sum(1 for e in w.entries if not e.replaced) == 0   # 복원 파편 0건
