@@ -5628,9 +5628,35 @@ JSON: `.omc/benchmarks/eval_20260814_1042_ghost_ytn2.json`(ytn2 단독) · `eval
 반사실 로그 + 유닛 재현**을 채택 근거로 삼았다. 회귀 위험은 발동 집합으로 구조적으로 한정되며, 롤백은
 `RECONCILE_TEXT_COVER_GUARD_ENABLED=False` 한 줄.
 
+### ★ 머지 후 검증(master `4373765`, ytn2+ytn1 단회)에서 확인 — **이 수정은 부분해다**
+`.omc/benchmarks/eval_20260814_1130_master_postmerge.json`. 가드 발동 **0건**(ytn2/ytn1 모두)인데
+**ytn2에 동일 계열 중복이 재발**했다: `12. there. ⟨language_switch⟩` → `13. There is more work to be done...`.
+
+로그가 원인 경로를 정확히 특정한다(boundary_t=99.07, prev_lang=ko):
+```
+[SwitchTaxMeasure] 전환 직후 배치 2/2 단어가 직전 tail과 겹침 (tail=['합','의를','했습니다','there','is'])
+[Retract] 철회: ' is' start=98.40 zone=zone2_opposite
+[RetractScan] boundary_t=99.07 scanned=1 removed=1 stopped_by=lower_bound   ← ' there'에 도달하지 못함
+[Reconcile] arm floor=97.22 tombstones=1 → resolve cut=98.58 restored=0 replaced=1
+```
+즉 유령 `' there'`는 **철회 하한(`retract_floor`=97.22) 아래**에 있어 스캔이 그 앞에서 멈췄고, tombstone이
+아예 만들어지지 않아 **resolve(=이번 가드)까지 도달하지 못했다**. 반면 개선된 `[SwitchTaxMeasure]` 프로브는
+같은 배치를 `2/2 겹침`으로 정확히 탐지했다 — **재방출이 실재함이 확정**인데 철회 측이 못 잡은 것이다.
+
+**정리 — "In." 계열 중복에는 최소 2개 경로가 있다.**
+| 경로 | 상태 | 조건 |
+|---|---|---|
+| ① 철회됨 → resolve가 시간 기준으로 **오복원** | **Exp-208로 해결** | 유령이 재디코딩 창(`retract_floor`) 안 |
+| ② 철회 스캔이 **하한/Silence에 막혀 tombstone 미생성** | **미해결** | 유령이 창 밖(ytn2 `there`, ytn1 `미국.`) |
+
+②의 하한은 Exp-174가 서두유실(bong1 "You don't understand" 4단어)을 막으려 도입한 정당한 가드다. 다만
+**텍스트가 완전일치로 재방출된 경우엔 그 하한의 전제("재디코딩으로 재현 불가")가 사실이 아니다** — Exp-208과
+동일한 원리("텍스트 동일성은 시간보다 강한 증거")를 **철회 측에도** 적용하는 것이 후속 과제 1순위다.
+`dedup_batch`(supersede) 경로는 좌표계 버그로 전면 no-op이라 백스톱이 되지 못한다(아래 4번).
+
 ### 실측에서 새로 확인된 잔존 결함 (이번 수정 범위 밖 — master에도 존재)
-1. **철회 자체가 안 걸리는 stub**(ytn1 `미국.` — 역방향 스캔이 Silence에서 중단). 새 언어가 "The U.S."로 다르게
-   말하므로 텍스트 가드가 원리적으로 닿지 않는다. 별개 원인(철회 측), 후속 과제.
+1. **철회 자체가 안 걸리는 stub**(위 경로 ② — ytn2 `there.`, ytn1 `미국.`). 하한(`retract_floor`) 또는 Silence에서
+   스캔 중단. **후속 과제 1순위.**
 2. **구두점-only stub**(ytn1 `,.` — 쉼표 tombstone이 복원되고 `filter_segments`의 구두점-only 드롭도 통과).
 3. **late-cover 경로 미보강**: D2 조기 마감 뒤 `observe_new_token`의 늦은 커버는 여전히 순수 시간(`COVER_TOL`)
    판정 — 같은 결함의 자매 경로.
