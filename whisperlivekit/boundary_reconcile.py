@@ -114,6 +114,11 @@ class TombstoneEntry:
     zone: str
     covered: bool = False   # 신언어 토큰이 start 근접(COVER_TOL)으로 이 구간을 커버했는가
     replaced: bool = False  # resolve 결과 — True면 영구 tombstone, False면 복원됨
+    # 직전 구언어 텍스트 토큰과의 시간 간격(초). 호출부(tokens_alignment)가 철회 시점에
+    # 채운다 — ReconcileWindow는 all_tokens에 접근할 수 없기 때문이다. -1.0 = 미상.
+    # 용도: "진짜 구언어 꼬리(앞 발화와 연속) vs 신언어 오디오의 구언어 렌더링(뚝 떨어짐)"을
+    # 가르는 2차 판별자 후보. 현재는 **로깅 전용**이며 판정에 관여하지 않는다.
+    gap_prev: float = -1.0
 
 
 @dataclass
@@ -268,16 +273,16 @@ class ReconcileWindow:
                 e.token.retracted = False
                 restored += 1
                 logger.info(
-                    "[Restore] 복원: %r start=%.2f dstart=%s boundary_t=%.2f zone=%s",
-                    e.token.text, e.token.start or -1.0, dstart, self.boundary_t, e.zone,
+                    "[Restore] 복원: %r start=%.2f dstart=%s boundary_t=%.2f zone=%s gap_prev=%.2f",
+                    e.token.text, e.token.start or -1.0, dstart, self.boundary_t, e.zone, e.gap_prev,
                 )
             else:
                 e.replaced = True
                 e.token.retracted = True  # 영구 tombstone
                 replaced += 1
                 logger.info(
-                    "[Replace] 대체: %r start=%.2f dstart=%s boundary_t=%.2f zone=%s",
-                    e.token.text, e.token.start or -1.0, dstart, self.boundary_t, e.zone,
+                    "[Replace] 대체: %r start=%.2f dstart=%s boundary_t=%.2f zone=%s gap_prev=%.2f",
+                    e.token.text, e.token.start or -1.0, dstart, self.boundary_t, e.zone, e.gap_prev,
                 )
         logger.info(
             "[Reconcile] resolve reason=%s boundary_t=%.2f cut=%s covered=%d restored=%d replaced=%d",

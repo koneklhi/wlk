@@ -1,3 +1,4 @@
+import copy
 import logging
 import re
 from time import time
@@ -10,6 +11,7 @@ from whisperlivekit.boundary_reconcile import (
     ZONE2_SAMESCRIPT,
     BoundaryReconciler,
     TombstoneEntry,
+    _dedup_norm,
 )
 from whisperlivekit.sentence_boundary import is_genuine_sentence_end, last_word, should_split_after_silence
 from whisperlivekit.simul_whisper.align_att_base import LANG_SWITCH_KEEP_SECS
@@ -58,6 +60,38 @@ TAIL_REATTACH_MAX_LOOKBACK_SECS: float = 1.5
 # 용도가 달라 재사용하지 않고 별도 상수로 둔다. RETRACT_EPS/하한(LANG_SWITCH_KEEP_SECS 기반)은
 # Stage 0 실측(별도 진행 중, 아직 완료 안 됨)으로 추후 보정될 잠정값이다.
 RETRACT_EPS: float = 0.05
+
+# [SkipProbe] 관측 전용 상수 (거동 무변경 — 로깅 범위만 제한한다).
+# 철회 스캔이 lower_bound/silence에서 멈춘 뒤, 그 아래를 이 범위까지만 들여다보고 로깅한다.
+# 경로 A(유령 미철회, 실측 84%)의 look-below 폭을 데이터로 정하기 위한 계측이며,
+# 상한을 두는 이유는 장창에서 로그가 폭주하지 않게 하기 위함이다.
+_SKIP_PROBE_MAX: int = 5              # 경계 1개당 로깅할 최대 후보 수
+_SKIP_PROBE_WINDOW_SECS: float = 4.0  # boundary_t 기준 이보다 오래된 토큰은 보지 않는다
+
+# ─── 언어경계 stub 붕괴(collapse) — Exp-209 ─────────────────────────────────
+# ytn1 20회 실측에서 언어전환 경계마다 1~2단어짜리 줄이 상시로 생겼다(17/20 회차).
+# 정답 대비 전수 분류 결과 성격이 셋으로 갈렸다:
+#   DUP    — 직전 줄과 텍스트가 겹치는 재방출 중복 (드롭이 정답)
+#   HALLUC — 구언어 모드가 신언어 오디오를 렌더링한 환각 (드롭이 정답)
+#   LEGIT  — 정답에 있는 정상 단어가 오분할된 것 (드롭하면 단어 유실 — 병합이 정답)
+# 정답은 런타임에 없으므로 HALLUC/LEGIT는 구분할 수 없다. 따라서 **드롭은 텍스트
+# 동일성으로 증명되는 DUP에만** 적용하고 나머지는 후방 병합한다(Exp-208와 같은 원리:
+# "텍스트 동일성은 시간보다 강한 증거"). 병합만 해도 거짓 줄바꿈이 사라져 화자분리
+# F1(§4 1순위 게이트) 오염이 제거되고, LEGIT 단어는 그대로 보존된다.
+#
+# 왜 출력층인가: DUP 12건의 중복 방향이 **전수 PREV(직전 줄)** 였고 NEXT는 0건이다.
+# boundary_reconcile의 텍스트 커버 가드는 tombstone을 *신언어* 관측 토큰과 대조하므로
+# PREV 쪽 중복은 구조적으로 못 잡는다 — 두 이웃을 함께 볼 수 있는 건 세그먼트 조립 이후뿐.
+BOUNDARY_STUB_COLLAPSE_ENABLED: bool = True   # 롤백 스위치
+BOUNDARY_STUB_MAX_WORDS: int = 2              # 이 이하 어절 수만 stub 후보
+# 기능어만 겹치는 것은 중복의 증거가 아니다 — 단순 단어겹침으로 판정하면 'the' 하나 때문에
+# 중복이 아닌 텍스트를 삭제한다(실측 R18 'The President:.'). 내용어 겹침만 DUP로 본다.
+_STUB_STOPWORDS = frozenset({
+    "the", "a", "an", "and", "or", "of", "to", "in", "on", "at", "for", "with", "from",
+    "by", "is", "are", "was", "were", "be", "been", "i", "we", "you", "it", "he", "she",
+    "they", "this", "that", "these", "those", "my", "our", "your", "their", "its", "his",
+    "her", "as", "so", "but", "if", "then", "u", "s", "t",
+})
 
 # 반대-스크립트 판정 정규식. backend.py의 _is_script_mismatch_filler(P2 게이트)가 쓰는
 # 것과 동일한 패턴을 재사용한다(신규 언어별 하드코딩 금지, §3.8). 단 그쪽은 반복형 필러
@@ -274,6 +308,7 @@ class TokensAlignment:
         zone_counts = {ZONE1: 0, ZONE2_OPPOSITE: 0, ZONE2_SAMESCRIPT: 0}
         entries: List[TombstoneEntry] = []
         stopped_by = "start_of_buffer"
+        stopped_at_idx: Optional[int] = None
         while j >= 0:
             token = self.all_tokens[j]
             if getattr(token, "retracted", False):
@@ -283,9 +318,11 @@ class TokensAlignment:
                 continue
             if token.is_silence() or token.is_boundary():
                 stopped_by = "silence" if token.is_silence() else "boundary"
+                stopped_at_idx = j
                 break
             if token.start < lower_bound:
                 stopped_by = "lower_bound"
+                stopped_at_idx = j
                 break
             scanned += 1
             if token.detected_language == prev_lang:
@@ -301,13 +338,21 @@ class TokensAlignment:
                     # 못 덮으면 resolve에서 복원되므로 순유실이 없다.
                     zone = ZONE2_SAMESCRIPT
                 if zone is not None:
+                    # gap_prev = 직전 텍스트 토큰과의 간격. 판정에는 쓰지 않고 resolve의
+                    # [Restore]/[Replace] 로그로 흘려보내 2차 판별자 분포를 수집한다.
+                    prev_tok = self._prev_text_token(j)
+                    gap_prev = (
+                        token.start - prev_tok.start
+                        if prev_tok is not None and prev_tok.start is not None
+                        else -1.0
+                    )
                     logger.info(
-                        "[Retract] 철회: %r start=%.2f prev_lang=%s zone=%s",
-                        token.text, token.start, prev_lang, zone,
+                        "[Retract] 철회: %r start=%.2f prev_lang=%s zone=%s gap_prev=%.2f",
+                        token.text, token.start, prev_lang, zone, gap_prev,
                     )
                     if reconcile_on:
                         token.retracted = True
-                        entries.append(TombstoneEntry(token=token, zone=zone))
+                        entries.append(TombstoneEntry(token=token, zone=zone, gap_prev=gap_prev))
                     else:
                         self.all_tokens.pop(j)  # 레거시 파괴적 철회(롤백 거동)
                     zone_counts[zone] += 1
@@ -325,6 +370,9 @@ class TokensAlignment:
             boundary_t, prev_lang, scanned, removed, stopped_by,
             zone_counts[ZONE1], zone_counts[ZONE2_OPPOSITE], zone_counts[ZONE2_SAMESCRIPT],
         )
+        self._log_skipped_retract_candidates(
+            stopped_by, stopped_at_idx, boundary_t, prev_lang, lower_bound,
+        )
         if reconcile_on:
             # 재조정 창 arm — 철회 0건이어도 창은 연다(시간 소유권 dedup이 경계 구간
             # 재방출 중복을 잡으려면 창 컨텍스트가 필요). 활성 창이 있으면 arm이
@@ -333,6 +381,156 @@ class TokensAlignment:
                 boundary_t=boundary_t, floor=lower_bound,
                 prev_lang=prev_lang, new_lang=new_lang, entries=entries,
             )
+
+    def _log_skipped_retract_candidates(
+        self,
+        stopped_by: str,
+        stopped_at_idx: Optional[int],
+        boundary_t: float,
+        prev_lang: Optional[str],
+        lower_bound: float,
+    ) -> None:
+        """관측 전용 — 철회 스캔이 중단된 지점 아래의 prev_lang 후보를 로깅한다(거동 무변경).
+
+        경로 A(유령이 아예 철회되지 않음, 실측 84%)의 원인은 이 스캔이 lower_bound/silence에서
+        멈춰 유령에 도달조차 못 하는 것이다. look-below 폭(BELOW_FLOOR_LOOKBACK_SECS)을 데이터로
+        정하려면 "중단 지점 바로 아래에 어떤 prev_lang 토큰이, 하한에서 얼마나 떨어져 있었나"가
+        필요하다. gap_prev(직전 구언어 토큰과의 간격)는 §7.2 2차 판별자 후보의 분포 수집용이다.
+        """
+        if stopped_at_idx is None or prev_lang is None:
+            return
+        if not logger.isEnabledFor(logging.INFO):
+            return
+        emitted = 0
+        j = stopped_at_idx
+        while j >= 0 and emitted < _SKIP_PROBE_MAX:
+            token = self.all_tokens[j]
+            if getattr(token, "retracted", False):
+                j -= 1
+                continue
+            if token.is_silence() or token.is_boundary():
+                # 중단 사유가 silence였다면 그 침묵 자체는 건너뛰고 그 아래를 계속 본다.
+                if emitted == 0 and stopped_by == "silence" and j == stopped_at_idx:
+                    j -= 1
+                    continue
+                break
+            if token.start is None or boundary_t - token.start > _SKIP_PROBE_WINDOW_SECS:
+                break
+            if token.detected_language == prev_lang:
+                prev_tok = self._prev_text_token(j)
+                gap_prev = (
+                    token.start - prev_tok.start
+                    if prev_tok is not None and prev_tok.start is not None
+                    else -1.0
+                )
+                logger.info(
+                    "[SkipProbe] stopped_by=%s text=%r start=%.2f below_floor=%.2f "
+                    "gap_prev=%.2f opposite=%s boundary_t=%.2f prev_lang=%s",
+                    stopped_by, token.text, token.start, lower_bound - token.start,
+                    gap_prev, _is_opposite_script(token.text, prev_lang), boundary_t, prev_lang,
+                )
+                emitted += 1
+            j -= 1
+
+    # ─── 언어경계 stub 붕괴 (Exp-209) ──────────────────────────────────────
+
+    @staticmethod
+    def _stub_words(text: Optional[str]) -> List[str]:
+        """어절 단위로 잘라 정규화(_dedup_norm 재사용: strip → 양끝 구두점 → 소문자)."""
+        return [w for w in (_dedup_norm(p) for p in (text or "").split()) if w]
+
+    @classmethod
+    def _is_boundary_stub(cls, seg: Any) -> bool:
+        """언어전환으로 닫힌 짧은 stub 세그먼트인가.
+
+        trigger를 조건에 넣는 이유: trigger가 붙었다 = 이미 닫힌 줄이다. 아직 자라는 중인
+        마지막 세그먼트를 stub으로 오인해 병합하면 진행 중 발화를 훼손한다.
+        """
+        if seg is None or seg.is_silence() or not (seg.text or "").strip():
+            return False
+        if getattr(seg, "finalize_trigger", None) != "language_switch":
+            return False
+        return len((seg.text or "").split()) <= BOUNDARY_STUB_MAX_WORDS
+
+    @classmethod
+    def _stub_is_duplicate(cls, stub: Any, prev: Any) -> bool:
+        """stub의 **내용어**가 직전 세그먼트에 등장하면 재방출 중복으로 본다."""
+        content = [w for w in cls._stub_words(stub.text)
+                   if w not in _STUB_STOPWORDS and len(w) >= 2]
+        if not content:
+            return False   # 기능어·구두점뿐 — 중복 증거 없음 → 병합 쪽으로
+        prev_words = set(cls._stub_words(prev.text))
+        return any(w in prev_words for w in content)
+
+    def _collapse_boundary_stubs(self, segments: List[Segment]) -> List[Segment]:
+        """언어전환 경계에서 생긴 1~2어절 stub 줄을 없앤다 (DUP는 드롭, 나머지는 후방 병합).
+
+        불변식:
+        - **화자가 다르면 무조건 미개입** — 진짜 화자전환 경계(§3.3 최우선 요구)를 지운 적이
+          없어야 한다. 화자분리 F1이 §4 1순위 게이트다.
+        - 직전 텍스트 세그먼트가 없으면 미개입(서두 보호).
+        - 병합은 분할의 역연산이라 Case B(단어 중간 분절)를 만들 수 없다.
+        - 멱등 — 매 틱 호출되므로 두 번 적용해도 결과가 같아야 한다(병합 후 길이가 늘어
+          _is_boundary_stub이 False가 되므로 자연히 성립).
+        """
+        if not BOUNDARY_STUB_COLLAPSE_ENABLED or not segments:
+            return segments
+
+        out: List[Segment] = []
+        for seg in segments:
+            if not self._is_boundary_stub(seg):
+                out.append(seg)
+                continue
+
+            # 직전 텍스트 세그먼트 탐색 — 사이에 낀 침묵은 통과하되 제거하지 않는다
+            # (침묵 세그먼트는 프런트의 공백 표시 계약이라 임의로 지우면 렌더가 바뀐다).
+            prev_idx = next(
+                (i for i in range(len(out) - 1, -1, -1)
+                 if not out[i].is_silence() and (out[i].text or "").strip()),
+                None,
+            )
+            prev = out[prev_idx] if prev_idx is not None else None
+            if prev is None or prev.speaker != seg.speaker:
+                out.append(seg)
+                continue
+
+            if self._stub_is_duplicate(seg, prev):
+                # 매 틱 재실행되므로 debug — [TriggerAssign]과 동일 선례.
+                logger.debug(
+                    "[StubCollapse] drop(dup): %r prev_tail=%r speaker=%s",
+                    seg.text, (prev.text or "")[-40:], seg.speaker,
+                )
+                continue
+
+            logger.debug(
+                "[StubCollapse] merge: %r → prev_tail=%r speaker=%s",
+                seg.text, (prev.text or "")[-40:], seg.speaker,
+            )
+            # 입력 세그먼트를 **절대 mutate 하지 않는다** — 비-diar 경로의 segments는
+            # self.validated_segments의 얕은 복사라 원본을 건드리면 영속 상태가 오염되고,
+            # stub은 매 틱 다시 조립돼 들어오므로 텍스트가 무한 증식한다.
+            # (diar 경로는 매 틱 새 객체라 무해하지만, 두 경로가 같은 함수를 쓰므로
+            #  더 엄격한 쪽에 맞춘다.) 복사본을 만들어 out의 해당 자리만 교체한다.
+            merged = copy.copy(prev)
+            merged.text = (prev.text or "") + seg.text
+            if seg.end is not None:
+                merged.end = seg.end if prev.end is None else max(prev.end, seg.end)
+            # 그 줄을 실제로 닫은 계기는 stub 쪽 경계다 — trigger를 승계한다.
+            merged.finalize_trigger = seg.finalize_trigger
+            if getattr(seg, "hard_boundary", False):
+                merged.hard_boundary = True
+            out[prev_idx] = merged
+        return out
+
+    def _prev_text_token(self, idx: int) -> Optional[ASRToken]:
+        """idx 바로 앞의 텍스트 토큰(침묵·경계 제외). 없으면 None."""
+        k = idx - 1
+        while k >= 0:
+            t = self.all_tokens[k]
+            if not t.is_silence() and not t.is_boundary():
+                return t
+            k -= 1
+        return None
 
     def _prune(self) -> None:
         """Drop tokens/segments older than ``_retention_seconds`` from the latest token."""
@@ -1079,6 +1277,10 @@ class TokensAlignment:
             segments = list(self.validated_segments)
             if self.current_line_tokens:
                 segments.append(Segment.from_tokens(self.current_line_tokens))
+
+        # 언어경계 stub 붕괴 (Exp-209) — diar/비-diar 공통 합류점에서 한 번만 적용한다.
+        # 번역 부착보다 **앞**에 두는 이유: 곧 드롭할 stub을 번역해 LLM 호출을 낭비하지 않기 위함.
+        segments = self._collapse_boundary_stubs(segments)
 
         # 침묵 직후 확정 유예: 유보 꼬리가 아직 도착하지 않았을 수 있으므로
         # 유예 창(FINALIZE_GRACE_SECS) 안에서는 직전 텍스트 세그먼트 확정을 보류한다.
