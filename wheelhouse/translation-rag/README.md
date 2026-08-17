@@ -60,7 +60,7 @@ C:\Python312\python.exe -c "import torch, transformers, tokenizers; print(torch.
 
 ## 4. 활성 확인
 
-자산 디렉터리 2개(`whisperlivekit/llm_translation/local_qdrant_db/`, `.../bge-m3/`)를 제자리에 둔 뒤
+자산 디렉터리 2개(`whisperlivekit/llm_translation/local_stt_shot/`, `.../Embedding_model/`)를 제자리에 둔 뒤
 서버를 기동하면 로그에 다음이 찍힌다(번역이 켜져 있을 때):
 
 ```

@@ -405,8 +405,8 @@ def test_hardcoded_asset_paths_are_colocated_in_package():
     """자산 경로는 llm_translation 패키지 디렉터리 하위로 고정(glossary JSON/DB와 같은 위치)."""
     package_dir = Path(llm_translation_module.__file__).resolve().parent
 
-    assert Path(llm_translation_module.RAG_QDRANT_DB_PATH) == package_dir / "local_qdrant_db"
-    assert Path(llm_translation_module.RAG_EMBEDDING_MODEL_PATH) == package_dir / "bge-m3"
+    assert Path(llm_translation_module.RAG_QDRANT_DB_PATH) == package_dir / "local_stt_shot"
+    assert Path(llm_translation_module.RAG_EMBEDDING_MODEL_PATH) == package_dir / "Embedding_model"
     assert llm_translation_module.RAG_COLLECTION_NAME == "official_translation"
     assert llm_translation_module.RAG_TOP_K == 3
 

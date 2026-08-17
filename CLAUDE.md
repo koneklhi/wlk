@@ -38,7 +38,7 @@
 ### 3.4 번역 트리거
 - 문장이 **확정된 시점**에 그 문장을 LLM으로 번역해 UI에 출력한다(미확정 buffer는 미리보기 번역만).
 - **용어집(glossary) = 개발·배포 모두 적용**: 번역 용어집(예 `공군`:`ROKAF`)을 부분일치로 프롬프트에 주입한다. `prompt_manager`(정적 사전 `admin_translation_glossary.json` + 사용자 SQLite), 런타임 편집 = `/api/prompts`. Qdrant 없이 동작.
-- **의미검색 RAG(Qdrant) = 배포 PC 전용**: 과거 번역 예시를 임베딩 검색해 프롬프트에 덧붙이는 Stage 2 레이어(`rag_manager`, bge-m3). 자산 디렉터리(`whisperlivekit/llm_translation/local_qdrant_db/`·`bge-m3/`) 존재 여부로만 켜진다(CLI 플래그·env 없음). 이 자산은 배포 PC에만 두므로 **개발 PC 번역 테스트에서는 실행하지 않는다**(자산 부재 → 자동 비활성). 상용화 시에만 적용.
+- **의미검색 RAG(Qdrant) = 배포 PC 전용**: 과거 번역 예시를 임베딩 검색해 프롬프트에 덧붙이는 Stage 2 레이어(`rag_manager`, bge-m3). 자산 디렉터리(`whisperlivekit/llm_translation/local_stt_shot/`·`Embedding_model/`) 존재 여부로만 켜진다(CLI 플래그·env 없음). 이 자산은 배포 PC에만 두므로 **개발 PC 번역 테스트에서는 실행하지 않는다**(자산 부재 → 자동 비활성). 상용화 시에만 적용.
 
 ### 3.5 필터링 / 단어 교정
 - 전사 직후 ① 환각 문장·단어 제거(필터) ② 사전 기반 단어 대치(예 `6군`→`육군`)를 수행한다. 사전은 런타임 편집 가능(§3.6).

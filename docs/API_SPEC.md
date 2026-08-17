@@ -563,7 +563,7 @@ full 모드(기본)에서는 매 스냅샷 `lines[]`를 통째로 다시 그리�
   주입된다(`glossary_block`) — 예시 문장(`sentence_block`)도 함께 주입. `/api/prompts`로 추가한
   항목은 **다음 번역 요청부터 즉시 반영**된다.
 - **Qdrant RAG 유사 예시 (Stage 2) — 확정 문장에만 적용**: `whisperlivekit/llm_translation/` 아래
-  `local_qdrant_db/`와 `bge-m3/` 디렉터리가 **둘 다 존재하면**(CLI 플래그 없음 — 경로는 코드 고정)
+  `local_stt_shot/`와 `Embedding_model/` 디렉터리가 **둘 다 존재하면**(CLI 플래그 없음 — 경로는 코드 고정)
   번역 프롬프트에 기존 공식 번역 유사 예시 블록(`### SIMILAR EXAMPLES (RAG)`)이 추가로 주입된다.
   **주입 대상은 `lines[].translation`(확정 문장) 뿐이며 `buffer_translation`(진행 중 번역)은 받지
   않는다** — 버퍼는 발화 중 계속 갱신돼 매번 임베딩 인코딩 + 벡터 검색이 돌면 실시간성이 무너지기

@@ -57,7 +57,7 @@ C:\Python312\python.exe -m whisperlivekit.basic_server
 | 5 | **의존성 + 설치도구** | `deploy/` 전체 — `wheelhouse/`(서드파티 의존성 패키지), `uv-installer/`(uv, 선택 — plain pip 설치엔 불필요), `python-installer/`(Python 3.12), `deploy_source.zip`, `requirements-deploy.txt` (§2에서 생성) | 오프라인 pip 설치용. **배포 PC Python은 반드시 3.12** — wheelhouse가 dev(3.12) 태그로 고정됨(§2.2·§3.0). whisperlivekit 프로젝트 자체는 wheel로 만들지 않는다 — raw 소스(①)만으로 실행 |
 | 6 | **playwright 브라우저** | `%USERPROFILE%\AppData\Local\ms-playwright\` (chromium) | 경로 C 자동화에 필요 |
 | 7 | **시스템 바이너리** | `ffmpeg.exe`(PATH 등록), VBCable 드라이버 설치본 | ffmpeg=WebM/mp3 디코딩, VBCable=경로 C 루프백 |
-| 8 | **번역 RAG 자산**(선택) | `whisperlivekit/llm_translation/local_qdrant_db/`, `whisperlivekit/llm_translation/bge-m3/` | **배포 PC에 기존 whisperlive 것이 기보유**(`src/realtime_asr/filtering/` 하위) → 별도 반입 불필요. 단 `.gitignore` 비추적이라 `git archive` zip에 안 들어간다 — **새 폴더에 압축 해제해 트리를 재구축하면 수동으로 다시 배치**해야 RAG가 켜진다(§6.3) |
+| 8 | **번역 RAG 자산**(선택) | `whisperlivekit/llm_translation/local_stt_shot/`, `whisperlivekit/llm_translation/Embedding_model/` | **배포 PC에 기존 whisperlive 것이 기보유**(`src/realtime_asr/filtering/` 하위, 디렉터리명은 legacy와 다르므로 배치 시 리네임 필요 — §6.3) → 별도 반입 불필요. 단 `.gitignore` 비추적이라 `git archive` zip에 안 들어간다 — **새 폴더에 압축 해제해 트리를 재구축하면 수동으로 다시 배치**해야 RAG가 켜진다(§6.3) |
 
 > `whisperlivekit/model/whisper-large-v3/`(turbo 아님) 폴더와 그 안의 `.cache/huggingface/download/*.lock` 잔재는
 > **배포에 불필요**하다. 용량 절약 차 제외해도 된다(실제 사용 모델은 turbo).
@@ -680,12 +680,12 @@ C:\Python312\python.exe -m whisperlivekit.basic_server `
 
 | 상수 | 고정 경로 | 배포 시 해야 할 일 |
 |---|---|---|
-| `RAG_QDRANT_DB_PATH` | `whisperlivekit/llm_translation/local_qdrant_db/` | 기존 whisperlive의 `src/realtime_asr/filtering/local_qdrant_db/` 디렉터리를 **통째로 복사** |
-| `RAG_EMBEDDING_MODEL_PATH` | `whisperlivekit/llm_translation/bge-m3/` | 기존 whisperlive의 `src/realtime_asr/filtering/bge-m3/` 디렉터리를 **통째로 복사** |
+| `RAG_QDRANT_DB_PATH` | `whisperlivekit/llm_translation/local_stt_shot/` | 기존 whisperlive의 `src/realtime_asr/filtering/local_qdrant_db/` 디렉터리를 복사한 뒤 **`local_stt_shot`으로 리네임** |
+| `RAG_EMBEDDING_MODEL_PATH` | `whisperlivekit/llm_translation/Embedding_model/` | 기존 whisperlive의 `src/realtime_asr/filtering/bge-m3/` 디렉터리를 복사한 뒤 **`Embedding_model`로 리네임** |
 | `RAG_COLLECTION_NAME` | `official_translation` | 기존 whisperlive 컬렉션명과 동일 — 다르면 상수 수정 |
 | `RAG_TOP_K` | `3` | 유사 예시 검색 개수 — 기존과 동일 |
 
-> 두 자산 디렉터리는 `.gitignore`에 등록돼 있어(bge-m3는 수 GB) 저장소에 커밋되지 않는다. 곧
+> 두 자산 디렉터리는 `.gitignore`에 등록돼 있어(Embedding_model은 수 GB) 저장소에 커밋되지 않는다. 곧
 > **소스 트리 갱신 시 함께 오지 않는다**는 뜻이므로, 마스터 반입으로 `whisperlivekit/`를 덮어쓸 때
 > 이 두 디렉터리를 지우거나 덮지 않도록 주의한다(지웠다면 다시 복사하면 그만 — 코드 수정은 불필요).
 > 같은 이유로 §1.1 `git archive` zip에도 들어가지 않으므로, zip을 **새 폴더에 풀어 트리를 재구축**하는

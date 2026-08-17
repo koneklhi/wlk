@@ -8,12 +8,14 @@ _LLM_TRANSLATION_DIR = Path(__file__).resolve().parent
 # Stage 2 RAG 실물 자산 경로 — CLI 플래그가 아니라 코드에 고정한다.
 # 폐쇄망 배포 PC의 기존 whisperlive는 이 자산을 src/realtime_asr/filtering/{local_qdrant_db,bge-m3}에
 # 두었고, wlk는 llm_translation 콜로케이션 규약(admin_translation_glossary.json·
-# user_translation_glossary.db와 같은 디렉터리)에 맞춰 아래 경로에 둔다.
+# user_translation_glossary.db와 같은 디렉터리)에 맞춰 아래 경로에 둔다. wlk 쪽 디렉터리명은
+# legacy와 달리 local_stt_shot·Embedding_model이므로, 배포 반입 시 legacy 자산을 그대로
+# 복사하지 말고 이 이름으로 리네임해서 배치해야 한다.
 #
 # 두 디렉터리가 실제로 존재하면 RAG가 켜지고, 없으면(개발 PC 기본) TranslationRagManager
 # 생성자가 조용히 비활성화한다 — 코드·설정 변경 없이 파일 존재 여부만으로 갈린다.
-RAG_QDRANT_DB_PATH = str(_LLM_TRANSLATION_DIR / "local_qdrant_db")
-RAG_EMBEDDING_MODEL_PATH = str(_LLM_TRANSLATION_DIR / "bge-m3")
+RAG_QDRANT_DB_PATH = str(_LLM_TRANSLATION_DIR / "local_stt_shot")
+RAG_EMBEDDING_MODEL_PATH = str(_LLM_TRANSLATION_DIR / "Embedding_model")
 RAG_COLLECTION_NAME = "official_translation"
 RAG_TOP_K = 3
 
