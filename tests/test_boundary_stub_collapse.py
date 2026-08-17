@@ -274,3 +274,38 @@ def test_collapse_runs_before_translation_attachment():
     ta.get_lines_diarization = lambda audio_time=None, flush=False: (segs, "")
     ta.get_lines(diarization=True, translation=True, audio_time=20.0)
     assert "First." not in translated
+
+
+# ── 입력 비-mutation 불변식 (비-diar 경로 영속 세그먼트 보호) ────────────────
+
+def test_merge_does_not_mutate_input_segments():
+    """입력 세그먼트를 절대 mutate 하지 않는다.
+
+    비-diar 경로의 segments 는 self.validated_segments 의 **얕은 복사**라 원본 객체를
+    건드리면 영속 상태가 오염된다. stub 은 매 틱 다시 조립돼 들어오므로 mutate 방식이면
+    텍스트가 무한 증식한다(실제로 이 버그를 넣었다가 잡았다).
+    """
+    ta = _make_alignment()
+    prev = _seg("...the Republic of.", 40.0, 49.0, 2, "silence", "en")
+    stub = _seg("Korea.", 49.2, 49.4, 2, "language_switch", "en", hard=True)
+    original_text, original_end = prev.text, prev.end
+
+    out = ta._collapse_boundary_stubs([prev, stub])
+
+    assert prev.text == original_text     # 원본 불변
+    assert prev.end == original_end
+    assert out[0] is not prev             # 복사본으로 교체됨
+    assert "Korea." in out[0].text
+
+
+def test_repeated_collapse_on_persistent_list_does_not_grow_text():
+    """영속 리스트를 매 틱 재적용해도 텍스트가 누적되지 않는다(무한 증식 회귀 방지)."""
+    ta = _make_alignment()
+    persistent = [
+        _seg("...the Republic of.", 40.0, 49.0, 2, "silence", "en"),
+        _seg("Korea.", 49.2, 49.4, 2, "language_switch", "en", hard=True),
+    ]
+    results = [ta._collapse_boundary_stubs(list(persistent)) for _ in range(5)]
+    texts = [r[0].text for r in results]
+    assert len(set(texts)) == 1, f"틱마다 텍스트가 달라짐(누적): {texts}"
+    assert texts[0].count("Korea.") == 1

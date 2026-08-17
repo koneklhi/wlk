@@ -1,3 +1,4 @@
+import copy
 import logging
 import re
 from time import time
@@ -483,29 +484,42 @@ class TokensAlignment:
 
             # 직전 텍스트 세그먼트 탐색 — 사이에 낀 침묵은 통과하되 제거하지 않는다
             # (침묵 세그먼트는 프런트의 공백 표시 계약이라 임의로 지우면 렌더가 바뀐다).
-            prev = next((s for s in reversed(out) if not s.is_silence() and (s.text or "").strip()), None)
+            prev_idx = next(
+                (i for i in range(len(out) - 1, -1, -1)
+                 if not out[i].is_silence() and (out[i].text or "").strip()),
+                None,
+            )
+            prev = out[prev_idx] if prev_idx is not None else None
             if prev is None or prev.speaker != seg.speaker:
                 out.append(seg)
                 continue
 
             if self._stub_is_duplicate(seg, prev):
-                logger.info(
+                # 매 틱 재실행되므로 debug — [TriggerAssign]과 동일 선례.
+                logger.debug(
                     "[StubCollapse] drop(dup): %r prev_tail=%r speaker=%s",
                     seg.text, (prev.text or "")[-40:], seg.speaker,
                 )
                 continue
 
-            logger.info(
+            logger.debug(
                 "[StubCollapse] merge: %r → prev_tail=%r speaker=%s",
                 seg.text, (prev.text or "")[-40:], seg.speaker,
             )
-            prev.text = (prev.text or "") + seg.text
+            # 입력 세그먼트를 **절대 mutate 하지 않는다** — 비-diar 경로의 segments는
+            # self.validated_segments의 얕은 복사라 원본을 건드리면 영속 상태가 오염되고,
+            # stub은 매 틱 다시 조립돼 들어오므로 텍스트가 무한 증식한다.
+            # (diar 경로는 매 틱 새 객체라 무해하지만, 두 경로가 같은 함수를 쓰므로
+            #  더 엄격한 쪽에 맞춘다.) 복사본을 만들어 out의 해당 자리만 교체한다.
+            merged = copy.copy(prev)
+            merged.text = (prev.text or "") + seg.text
             if seg.end is not None:
-                prev.end = seg.end if prev.end is None else max(prev.end, seg.end)
+                merged.end = seg.end if prev.end is None else max(prev.end, seg.end)
             # 그 줄을 실제로 닫은 계기는 stub 쪽 경계다 — trigger를 승계한다.
-            prev.finalize_trigger = seg.finalize_trigger
+            merged.finalize_trigger = seg.finalize_trigger
             if getattr(seg, "hard_boundary", False):
-                prev.hard_boundary = True
+                merged.hard_boundary = True
+            out[prev_idx] = merged
         return out
 
     def _prev_text_token(self, idx: int) -> Optional[ASRToken]:
