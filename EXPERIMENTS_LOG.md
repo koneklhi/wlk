@@ -5668,3 +5668,149 @@ JSON: `.omc/benchmarks/eval_20260814_1042_ghost_ytn2.json`(ytn2 단독) · `eval
 ### 기록
 - Epoch **미bump**: 조건부 가드이며 파이프라인 구조 변경이 아니다(Exp-170 출력계층 변경 선례와 동일 취급).
 - `docs/SENTENCE_FINALIZATION_LOGIC.md` §3.2(텍스트 커버 가드 규칙)·§5(상수 3행) 갱신 완료.
+
+---
+
+## Exp-209 — 언어경계 유령 stub("Han."·"감사합니다.") 경로② 정체 규명 + 출력층 병합 (2026-08-17) [E6, 미머지, `fix/boundary-ghost-samescript`]
+
+**측정 언어모드**: `--lan auto` (전 파일). **설정**: diar ON(sortformer), CRT 3.0, beams 2, PLC None.
+
+### 발단
+사용자가 ytn1 경로 C 주행 중 화면에서 잘못 전사된 1단어 줄 2건을 캡처: `감사합니다.`(화자전환 배지)·`Han.`(언어전환
+배지). 둘 다 끝 타임스탬프가 안 보였다 — 조사 결과 토큰 `end`가 항상 `start+0.1`(고정) 이라 1토큰 줄은 구조적으로
+끝 시각이 절대 안 찍히는 것이며 환각의 신호가 아님(1단어 줄엔 ytn1 정답 첫 줄 `안녕하십니까.` 등 정상 단어도
+포함되므로 길이/타임스탬프 기준 삭제는 기각). `Han.`은 사용자 추측대로 모델이 "한미동"을 영어 음차(`Han-mi-dong`)로
+오디코딩한 것으로 로그 확인.
+
+### 근본원인 — Exp-208의 "경로②"는 하나가 아니라 둘이었다
+ytn1 `--repeat 20 --trace-tokens` 전수 주행(재현 18/20회, 90%) 결과, Exp-208이 "미해결"로 남긴 경로②
+(철회 스캔이 유령에 못 미쳐 tombstone 자체가 안 생김)를 재현 37건 로그로 전수 분류하니 실제로는 **서로 다른
+코드 지점의 두 결함**이었다:
+
+| 경로 | 조건 | 비중(N=37) | 대표 사례 |
+|---|---|---|---|
+| A — 철회 스캔이 유령에 도달 못 함 | `[RetractScan] … stopped_by=lower_bound`/`silence` | **84%(31건)** | `Korea.`·`Han.`·`First, today` |
+| B — 철회는 성공했으나 resolve가 되살림 | `[Reconcile] … covered=0 restored=1` | 14%(5건) | `감사합니다.` |
+
+경로 B는 Exp-174가 "철회 후 재디코딩 미복구=순유실"을 막으려 넣은 안전장치(안 덮이면 복원)가 "진짜 단어인데
+실수로 철회"와 "애초에 환각이라 철회가 맞았던 것"을 구분 못 해 생긴다. **경로 A만 고치면 효과 0**이다 —
+스캔을 확장해 만든 tombstone도 곧바로 경로 B의 resolve에 들어가 복원되기 때문(순서: B 먼저 → A).
+
+### ★ 정정 — 재현 37건은 단일 결함이 아니라 세 종류였다
+플래그된 stub을 정답 대비 위치 인식 재분류(`scratchpad/verify_ghosts2.py`, 직전 줄 꼬리로 정답 위치 앵커링)한
+결과: **DUP 32%(진짜 중복, 드롭 대상) / HALLUC 46%(순수 환각, 드롭 대상) / LEGIT 22%(정상 단어, 병합 필수)**.
+1차 분류(위치 비인식)는 LEGIT을 38%로 오판했었다(예: `Korea.`를 유령으로 오분류 — 정답 "...the Republic of
+korea."의 정확한 전사였음, 원인은 별개 결함인 `en_next_capitalized` 문장분할 오탐 →
+`docs/backlog/BACKLOG_EN_SENTENCE_SPLIT_CAPITALIZED.md`로 분리). 런타임엔 정답이 없어 DUP/HALLUC/LEGIT을
+직접 못 가르지만, **DUP만은 인접 줄과의 텍스트 겹침으로 런타임 검출 가능**(Exp-208 텍스트 동일성 원리 재사용).
+LEGIT 판별(직전 줄 문법적 미완결 여부)은 미검증 가설이라 채택하지 않음 — 대신 **"드롭은 DUP 확정 시에만,
+나머지 전부는 후방 병합"**으로 설계해 LEGIT을 원천 보호(오분류해도 최악이 "병합"이라 단어 유실 불가).
+
+### 변경 (옵션 B — 병합 + DUP만 드롭, `whisperlivekit/tokens_alignment.py`)
+- 상수: `BOUNDARY_STUB_COLLAPSE_ENABLED=True`(tokens_alignment.py:85), `BOUNDARY_STUB_MAX_WORDS=2`(:86).
+- `_is_boundary_stub`(:443) — `finalize_trigger=="language_switch"` and 단어수 ≤2.
+- `_stub_is_duplicate`(:456) — stub 내용어(불용어 제외)가 직전 세그먼트에 이미 등장하는지.
+- `_collapse_boundary_stubs`(:465) — 직전 텍스트 세그먼트와 화자 동일 + 위 두 조건 만족 시: DUP면 드롭,
+  아니면 직전 세그먼트로 후방 병합(`text` 이어붙임 + `end` 확장 + `finalize_trigger` 승계). 화자 다르거나
+  직전 세그먼트 없으면(서두) 미개입.
+- 호출 지점: `get_lines()`(:1239)의 diar/non-diar 단일 합류점, 번역 부착 **이전**(:1283).
+- 계측(거동 무변경): `[SkipProbe]`(:406, 철회 스캔이 건너뛴 후보 로깅) + `boundary_reconcile.py`의
+  `TombstoneEntry.gap_prev`(:121)·`[Restore]`/`[Replace]` 로그에 `gap_prev` 추가(:276,284).
+- **버그 수정(자체 발견)**: 최초 구현이 `prev.text += ...`로 **영속 세그먼트 객체를 직접 mutate** —
+  non-diar 경로는 `get_lines()`가 매 틱 같은 객체 리스트를 재순회하므로 stub이 계속 재매칭돼 텍스트가
+  무한 증식했다. `copy.copy(prev)` 후 `out[prev_idx]=merged`로 교체하는 방식으로 수정(diar 경로는 매 틱
+  신규 객체라 영향 없었음 — 측정 유효성 손상 없음).
+
+### 테스트
+유닛 19건 신설(`tests/test_boundary_stub_collapse.py`) — DUP 드롭(EN/KO)·불용어만 겹칠 때 병합(드롭 아님)·
+LEGIT(`Korea.`류) 병합·HALLUC 병합·`end` 확장·트리거 승계·멱등·화자 다르면 미개입·서두(직전 세그먼트 없음)
+미개입·`get_lines()` 배선·드롭된 stub엔 번역 미부착·**입력 비mutate**·**영속 리스트 반복호출해도 텍스트
+안 늘어남**. 전체 **813 passed / 1 skipped**, ruff clean.
+
+### 측정 1 — held-out ytn1 짝지음 검증 (N=20, 동일 워크트리/dist/조건)
+JSON 미보존(스크래치 스크립트 산출, `.omc/probe_run`·`.omc/fix_run`, 둘 다 untracked).
+
+| | 기준선 | 수정후 |
+|---|---|---|
+| 유령 발생 회차 | 17/20 | **4/20** |
+| 총 stub | 23건 | **4건**(−83%) |
+| 정상 단어 유실(drop 전수 감사) | — | **0건** |
+| 화자F1 worst | 60.0 | **63.2** |
+| WER max | 41.1 | **37.4** |
+| 문장F1 worst | 22.2 | **33.3** |
+| 화자F1 stdev | 10.8 | 7.8 |
+
+세 지표 평균차 전부 순열검정 노이즈와 구분 불가(WER p=0.475, 화자F1 p=0.998, 문장F1 p=0.989) — 표에 없는
+평균은 이동하지 않았고 worst-case·분산만 개선됐다는 뜻. 잔존 4건은 대부분 첫 1~2줄(직전 세그먼트 없음 —
+서두 보호 가드가 의도대로 미개입).
+
+### 측정 2 — 테스트셋 스크리닝 (`--repeat 1`, 6파일, 시간 제약으로 채택 확정 생략 — 사용자 지시)
+JSON: `.omc/benchmarks/eval_20260817_1904_screening.json`. 첫 시도(`eval_20260817_1838_screening.json`)는
+6파일 전부 WER 100%(전사 0줄)로 **폐기** — 원인은 `page.click(stt-pause)` 30초 타임아웃(Playwright 콜로그가
+`waiting for locator(...)` 한 줄뿐 = 30초 내내 DOM 매치 0건, 요소가 안 보인 게 아니라 아예 없었음). 프런트
+소스(`SttSettingDrawer.tsx`·`stt-sidebar-store.ts`·`SttMain.tsx`) 전수 확인 결과 드로어를 자동으로 닫는 코드
+경로가 존재하지 않아(`closeSidebar()`조차 어디서도 안 불림) 결정론적 코드 원인은 못 찾음 — 동일 데스크톱의
+무관한 Chrome 창 잔존 등 외부 간섭으로 추정. 코드 변경 없이 즉시 재시도해 6파일 전부 정상 완주.
+
+| 파일 | WER | 화자F1 | 문장F1 | Exp-208 baseline WER(N=1, E6) |
+|---|---|---|---|---|
+| bong1 | 30.4 | 60.6 | 22.2 | 24.7 |
+| ytn2 | 12.3 | 94.7 | N/A | 13.3 |
+| sbs1 | 10.7 | 100.0 | 88.9 | 11.3 |
+| kor1 | 14.0 | 100.0* | 92.3 | — |
+| kor2 | 17.9 | 100.0* | 100.0 | — |
+| kor3 | 36.4 | 0.0* | 83.3 | — |
+
+\* kor1~3 화자F1은 단일화자 정답의 0/100 이분 아티팩트(Exp-186) — 게이팅 제외.
+
+### 분석 (전사 내용 정성 대조)
+
+**bong1**: **환각 폭주** — 전사 `"Thank you. Thank you. Thank you. Thank you."` / 정답엔 `"This man."` 1회뿐.
+turbo의 기존 문서화된 필러 폭주 실패모드(Exp-158/159/168/169)와 정성 일치 — `language_switch` 트리거
+2단어 이하 조건에 안 걸려 이번 변경 적용 대상이 아님. `It.` / `'s Matt this man Thank you.` 축약형 분리도
+같은 폭주 구간 내부(Case B 형태소 중간분절과는 다른 성격 — `It`은 완결 단어).
+
+**ytn2**: 주요 실패 없음. 과거 `Han.`류 언어경계 고아 stub 재현 안 됨(hyp_lines 11줄 전부 완결 문장).
+
+**sbs1**: 주요 실패 없음. `From a satellite image, the Republic of Korea looks like an island...`가 한
+줄로 정상 병합 — 과거 `Korea.` 단독 stub 패턴 재현 안 됨(단, 이건 §6.9.2 문장분할 결함 쪽 우연일 수도 있어
+이번 변경 귀속으로 단정 안 함).
+
+**kor1/kor2/kor3**: 언어전환이 거의 없는 낭독 파일이라(`en_ref_words`=0~3) 이번 변경의 적용 대상 자체가
+희소. kor3 WER 36.4%는 **단어 유실** — `...전투비행 대대를 개편하고 전.`과 `전환과 연계하여...` 사이에서
+정답 `"...복합전투부대를 편성하겠습니다. 해병대는 준 4군 체제로의"` 한 구절이 통째로 누락(Whisper 디코딩단
+콘텐츠 누락, 언어경계 stub과 무관).
+
+**이번 변경 영향**: 스크리닝 6파일 전사 어디에도 `[StubCollapse]` 대상 패턴(언어경계 1~2단어 고아 stub)이
+남아있지 않음 — ytn1 짝지음 검증(17/20→4/20)과 정성적으로 일치. bong1 WER 상승(필러폭주)·kor3 WER(콘텐츠
+누락)은 둘 다 기존에 문서화된 별개 실패모드로, 이번 변경과 무관.
+
+### 채택 판정
+**스크리닝 통과 — catastrophic 회귀 없음.** bong1 +5.7pp(24.7→30.4)는 문서화된 회차 분산(±30~120%p) 이내이고
+원인도 별개 실패모드로 특정됨. ytn2·sbs1은 베이스라인보다 소폭 개선. Case B(단어 중간분절) 0건.
+
+**단, CLAUDE.md §4 표준 채택 게이트는 미완료다** — 시간 제약으로 `--repeat 3` 채택 확정 측정을 생략(사용자
+지시, "screening으로 한번씩만"). held-out(ytn1 재측정·eng1)·kinno 정성 sanity도 미실시. 따라서 이번 결론은
+**"머지해도 안전하다"가 아니라 "스크리닝 단계에서 막힐 이유가 없다"**로 좁게 해석할 것 — Exp-205 선례와
+동일하게 **채택/기각 확정 판정은 보류**.
+
+### ⚠️ 절차 예외 (기록 필수) — 사용자 지시로 채택·머지
+스크리닝만 통과한 상태에서 **사용자가 시간 제약을 인지한 채 명시적으로 채택·머지를 지시**했다(Exp-208과
+동일 패턴 — 발동/재현이 희소해 `--repeat 3`을 늘려도 대부분 0-firing 노이즈만 재게 되는 상황은 아니지만,
+이번엔 순수 시간 부족이 사유). ytn1 짝지음 N=20(정상 단어 유실 0건, worst-case 전부 개선)과 정답 대비
+사전검증(N=37, LEGIT 드롭 0건)이 채택 근거를 대신한다. **`--repeat 3` 채택 확정·held-out(ytn1/eng1) 단회·
+kinno 정성 sanity는 머지 후에도 미실시 상태로 남는다** — 회귀가 뒤늦게 발견되면 롤백 스위치는
+`BOUNDARY_STUB_COLLAPSE_ENABLED=False` 한 줄(`tokens_alignment.py`).
+
+### 다음 가설
+1. 시간 허용 시 `--repeat 3` 채택 확정 + held-out(ytn1·eng1) 단회 + kinno 정성 sanity → 머지 여부 최종 확정.
+2. `docs/SENTENCE_FINALIZATION_LOGIC.md` §3.2·§5, `docs/backlog/README.md` 연동 갱신은 이번 세션엔 미착수 —
+   머지 전 필수(CLAUDE.md 연동표).
+3. §6.9.2에서 분리한 `en_next_capitalized` 문장분할 오탐(`Korea.`류)은 별도 과제(백로그 문서화 완료),
+   재조정 계층이 아니라 `sentence_boundary.py` 쪽이라 이번 브랜치와 분리 유지.
+4. §6.4에서 관측된 bong1 "자기 컨텍스트 재환각"(확정 문장을 컨텍스트로 문 채 패러프레이즈 중복 생성)은
+   유령 stub과 다른 메커니즘 — 별도 후속 조사 필요, 이번 결론에 섞지 않음.
+
+### 기록
+- Epoch **미bump**: 출력층 후처리(get_lines 단일 합류점)이며 디코더/VAD 파이프라인 구조 변경이 아님. 또한
+  아직 master에 미머지.

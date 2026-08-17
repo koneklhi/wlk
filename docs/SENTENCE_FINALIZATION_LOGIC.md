@@ -128,6 +128,22 @@
     먼저 소비 → 화자가 같은 단어를 실제로 두 번 말한 경우 재방출 1개가 둘 다 지우지 못한다). 로그
     `[TextCover] 복원취소→대체`. **미커버 잔존**: D2 조기 마감 뒤 늦은 커버(`observe_new_token`의 resolved
     분기)는 여전히 순수 시간(`COVER_TOL`) 판정이다.
+  - **출력층 stub 병합**(`BOUNDARY_STUB_COLLAPSE_ENABLED`, Exp-209, `tokens_alignment.py _collapse_boundary_stubs`):
+    Exp-208 텍스트 커버 가드는 tombstone 자체가 만들어진 경우만 구제한다. 전수 재현(N=37, ytn1)에서 84%는
+    철회 역방향 스캔이 `stopped_by=lower_bound`/`silence`로 유령에 **도달조차 못 해** tombstone이 안 생기는
+    별개 경로("경로 A" — `Han.`·`Korea.`류), 14%는 tombstone까지 됐는데 대응 신언어 텍스트가 없어(`covered=0`)
+    Exp-174 안전장치가 되살리는 경로("경로 B" — `감사합니다.`류)로 확인됐다. 재조정 계층에서 두 경로를
+    구분해 고치는 대신, `get_lines()` 합류점(번역 부착 **이전**)에서 사후 병합으로 대응한다: 직전 텍스트
+    세그먼트와 **화자가 같고** `finalize_trigger=="language_switch"`이며 `BOUNDARY_STUB_MAX_WORDS`(2)
+    이하인 세그먼트만 대상으로, 내용어(불용어 제외)가 직전 세그먼트에 이미 등장하면 **드롭**(진짜 중복),
+    아니면 직전 세그먼트로 **후방 병합**(`text` 이어붙임 + `end` 확장 + `finalize_trigger` 승계). 화자가
+    다르거나 직전 세그먼트가 없으면(서두) 미개입. 병합은 분할의 역연산이라 Case B(단어 중간 분절)를 구조상
+    만들 수 없고, 정답이 있는 정상 단어(예 `Korea.`)를 드롭이 아니라 병합으로 흡수해 오분류해도 단어 유실이
+    없다(정답 대비 사전검증 N=37, LEGIT 8건 전부 병합행 — 드롭 0건). 실측(ytn1 N=20 짝지음): 유령 발생
+    17/20→4/20, worst-case 전부 개선(화자F1 60.0→63.2·WER max 41.1→37.4). 잔존 4건은 대부분 직전 세그먼트가
+    없는 서두 케이스(의도된 미개입). 롤백 플래그 `BOUNDARY_STUB_COLLAPSE_ENABLED`, 로그 `[StubCollapse]
+    drop(dup)`/`[StubCollapse] merge`. **채택 확정(`--repeat 3`)·held-out 측정은 시간 제약으로 미실시**
+    (스크리닝만 통과 확인 후 사용자 지시로 머지 — Exp-209 참조).
   - **구역2 확대**(`RECONCILE_SAMESCRIPT_SUBZONE_ENABLED`): `boundary_t−SAMESCRIPT_SUBZONE_SECS(1.2s)` 이내
     같은 스크립트 prev_lang 토큰("미니스터")도 잠정 tombstone — 복원 보장 위에서만 안전한 공격적 철회로
     "미니스터."→"Minister..." 이중언어 중복 확정을 소멸시킨다.
@@ -301,6 +317,8 @@ Whisper가 찍는 마침표(`.`/`。`)를 문장 분할 신호로 쓰되, **진�
 | `RECONCILE_TEXT_COVER_GUARD_ENABLED`(Exp-208) | `True` | `boundary_reconcile.py` | resolve 텍스트 커버 가드 롤백 플래그(False=순수 시간 파티션 = 유령 stub 재발) |
 | `TEXT_COVER_SLACK_SECS`(Exp-208, **잠정**) | `2.5`s | `boundary_reconcile.py` | 텍스트 완전일치 시 허용하는 재앵커 이동 상한 — 실측 근거는 `|dstart|` 0.56~1.12s 3건뿐(ytn2 2·ytn1 1). `[TextCover]` dstart 분포 축적 후 보정 |
 | `_OBSERVED_TEXT_CAP`(Exp-208) | `64` | `boundary_reconcile.py` | 창당 관측 텍스트 수집 상한(선형 매칭 방어) |
+| `BOUNDARY_STUB_COLLAPSE_ENABLED`(Exp-209) | `True` | `tokens_alignment.py` | 출력층 stub 병합 롤백 플래그(False=`Han.`류 언어경계 고아 stub 재발) |
+| `BOUNDARY_STUB_MAX_WORDS`(Exp-209) | `2`단어 | `tokens_alignment.py` | 이 이하 어절 수만 stub 병합/드롭 후보(정답 대비 사전검증 N=37 기준) |
 | `SCRIPT_ANCHOR_REDETECT_ENABLED`(Exp-175~) | `True` | `backend.py:184` | 스크립트-앵커 재감지 게이트 롤백 플래그 |
 | `_SCRIPT_ANCHOR_N_WORDS`(Exp-175~, **잠정**) | `3`단어 | `backend.py:185` | 반대-스크립트 연속 단어 문턱(Exp-172 실측; N=2 오트리거·N=4 미발동 스윕 확인) |
 | `_SCRIPT_ANCHOR_T_SECS`(Exp-175~, **잠정**) | `1.0`s | `backend.py:186` | 반전 지속 시간 문턱(Exp-172 실측) |

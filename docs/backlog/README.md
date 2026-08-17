@@ -8,6 +8,7 @@
 | 파일 | 내용 |
 |---|---|
 | [BACKLOG_CODESWITCH_FOLLOWUP.md](BACKLOG_CODESWITCH_FOLLOWUP.md) | 코드스위칭 후속 개선 백로그(GOAL_SCRIPT_ANCHOR_REDETECT §3.5 탐사 산출물) — 미방출형 서두유실·locked-lang 음차 환각·세션초입 buffer 유실·bong1 필러/웃음 환각·문장 중복 재방출 우선순위 카탈로그 |
+| [BACKLOG_EN_SENTENCE_SPLIT_CAPITALIZED.md](BACKLOG_EN_SENTENCE_SPLIT_CAPITALIZED.md) | 영어 문장분할 오탐(`en_next_capitalized`) — 닫히는 어절이 기능어(`of`)여도 다음 어절이 대문자면 분할해 정상 단어가 독립 줄이 됨(ytn1 `Korea.`). 한국어 경로와 달리 **닫히는 쪽을 검사하지 않는** 비대칭이 원인. 2026-08-17 유령 stub 조사 중 별개 결함으로 분리 |
 
 > 완료분은 [docs/archive/](../archive/)로 옮긴다. 경로 C 자동화의 배포 UI 전환은 2026-08-14 구현 완료 →
 > [docs/archive/BACKLOG_EVAL_DEPLOY_UI_MIGRATION.md](../archive/BACKLOG_EVAL_DEPLOY_UI_MIGRATION.md).
