@@ -1,36 +1,31 @@
 파일: test_data\kinno.mp3
 경로: C | 회차: R3 | 정답형식: 신형식
-WER: 72.0% | 화자분리F1: 51.4% | 문장분리F1: 18.2%
+WER: 27.6% | 화자분리F1: 78.6% | 문장분리F1: 42.9%
+언어불일치(KO→EN): 0.0% (WER 2.8%p)
 
 [전사]
-제22회 중소기업기술혁신대전 K혁신기업과의 대회 본행사 진행을 맡은 저는 아나운서 손진희. 저는 장택 저는 장택수 통역사입니다. 굿모닝 레이디즈 앤 젠트맨 웰컴 투 더 다이어로그 웨트 K 컴퍼니스 앤 ITS 2020 MC 손진희, I am interpreter 장택수. Thank you very much. Thank you. Thank you very much for joining us. Thank very much. Thank you, and thank. Thank you very much today In today's event, we'll be conducted in Korean and English. 그럼 이제 K혁신기업 기업과의 대화 본 행사를 시작하도록 하겠습니다. So now let's begin today's event. Thank. 먼저 어제 26일이었던 이곳 특설 무대 위에서 K혁신기업 11개의 기업이 쇼케이스를 진행했습니다. 혁신 기술을 기반으로 해서 다양한 신제품과 신기술을 소개해 주셨는데요. Yesterday afternoon at this special stage, 11K Innovative SMEs showcased their innovative products and technologies. K-혁신 기업을 비롯해서 전문가 심사위험과 국내외 미디어 관계자분들과 함께 이야기를 나누는 시간을 가져보도록 하겠습니다. talk with 11 innovative companies and judges and media professionals Thank you very much for joining us today. We will continue to join us today on our website, but we will be able to watch it on our website. We will also be able to watch it online, and we will also be able to see it on our website as well. We will be able to look at it on our website, and we will continue to watch it again. Thank you very much for your attention and support. Under the quarantine measures, today's event is streamed through online and you can get access through ITS official website and also online streaming. 네 먼저 어제 멋진 발표를 해주셨고 또 11개 핵심 기업이 오늘 발표자분들이 이곳에 자리해 주셨습니다. 함께 만나볼까요. So today we have a representative from 11 innovative companies. So today we have representatives So today we have representatives
+제22회 중소기업기술혁신대전 K혁신기업과의 대회 본행사 진행을 맡은 저는 아나운서 손진희. 저는 장택수 통역사입니다. 굿모닝 레이디즈 앤 젠틀맨. 웰컴 투 더 다얼록 웨트 K 이노베이립 저희는 원활한 행사의 진행을 위해서 마스크를 벗고 진행을 하도록 하겠습니다. 오늘 진행은 저와 함께 옆에 계신 통역사분과 함께 영어와 한국어 순차 통역으로 진행될 예정. Today's event will be conducted in Korean and English. 그럼 이제 K혁신기업 기업과의 대화 본 행사를 시작하도록 하겠습니다. So now let's begin today's event. So now let's begin, today's event. 먼저 어제 26일이었던 이곳 특설 무대 위에서 K-혁신 기업 11개의 기업이 쇼케이스를 진행했습니다. 혁신 기술을 기반으로 해서 다양한 신제품과 신기술을 소개해 주셨는데요. Yesterday afternoon at this special stage, 11K Innovative SMEs showcased their innovative products and technologies. 오늘은 어제 발표를 진행해 주셨던 11개의 K혁신 기업을 비롯해서 전문가 심사위원과 국내외 미디어 관계자분들과 함께 이야기를 나누는 시간을 가져보도록 하겠습니다. Today we will have a special talk with 11K Innovative Companies and Judges and Media Professionals. Today. 오늘은 어제와 마찬가지로 코로나로 인해서 정부 안전 방역 지침을 따라 하므로 여러분들 이곳에 모시지는 못했습니다. 다만 ITS 홈페이지를 통해서 온라인으로 시청을 할 수 있는데요. 또 비롯해서 다양한 행사도 있고 또 다시 보기도 계속 진행된다고 하니까요. 많은 관심과 성원 부탁드리겠습니다. Under the quarantine measures, today's event is streamed through online and you can get access through ITS official website and online streaming. 네 먼저 어제 멋진 발표를 해주셨고 또 11개 핵심 기업이 오늘 발표자분들이 이곳에 자리해 주셨습니다. 함께 만나볼까요. So today we have representatives from 11 innovative companies,
 
 [문장별 확정 트리거]
-1. 제22회 중소기업기술혁신대전 K혁신기업과의 대회 본행사 진행을 맡은 저는 아나운서 손진희. 저는 장택 저는 장택수 통역사입니다.  ⟨speaker_change⟩
-2. 굿모닝 레이디즈 앤 젠트맨 웰컴 투 더 다이어로그 웨트 K 컴퍼니스 앤 ITS 2020 MC 손진희, I am interpreter 장택수.  ⟨language_switch⟩
-3. Thank you very much.  ⟨punctuation⟩
-4. Thank you.  ⟨punctuation⟩
-5. Thank you very much for joining us. Thank very much.  ⟨punctuation⟩
-6. Thank you, and thank.  ⟨speaker_change⟩
-7. Thank you very much today In today's event, we'll be conducted in Korean and English.  ⟨language_switch⟩
-8. 그럼 이제 K혁신기업 기업과의 대화 본 행사를 시작하도록 하겠습니다.  ⟨language_switch⟩
-9. So now let's begin today's event.  ⟨punctuation⟩
-10. Thank.  ⟨language_switch⟩
-11. 먼저 어제 26일이었던 이곳 특설 무대 위에서 K혁신기업 11개의 기업이 쇼케이스를 진행했습니다.  ⟨punctuation⟩
-12. 혁신 기술을 기반으로 해서 다양한 신제품과 신기술을 소개해 주셨는데요.  ⟨language_switch⟩
-13. Yesterday afternoon at this special stage, 11K Innovative SMEs showcased their innovative products and technologies.  ⟨language_switch⟩
-14. K-혁신 기업을 비롯해서 전문가 심사위험과 국내외 미디어 관계자분들과 함께 이야기를 나누는 시간을 가져보도록 하겠습니다.  ⟨language_switch⟩
-15. talk with 11 innovative companies and judges and media professionals Thank you very much for joining us today.  ⟨speaker_change⟩
-16. We will continue to join us today on our website, but we will be able to watch it on our website.  ⟨punctuation⟩
-17. We will also be able to watch it online, and we will also be able to see it on our website as well.  ⟨punctuation⟩
-18. We will be able to look at it on our website, and we will continue to watch it again.  ⟨punctuation⟩
-19. Thank you very much for your attention and support.  ⟨speaker_change⟩
-20. Under the quarantine measures, today's event is streamed through online and you can get access through ITS official website and also online streaming.  ⟨language_switch⟩
-21. 네 먼저 어제 멋진 발표를 해주셨고 또 11개 핵심 기업이 오늘 발표자분들이 이곳에 자리해 주셨습니다.  ⟨punctuation⟩
-22. 함께 만나볼까요.  ⟨language_switch⟩
-23. So today we have a representative from 11 innovative companies.  ⟨speaker_change⟩
-24. So today we have representatives  ⟨-⟩
-25. So today we have representatives  ⟨-⟩
+1. 제22회 중소기업기술혁신대전 K혁신기업과의 대회 본행사 진행을 맡은 저는 아나운서 손진희. 저는 장택수 통역사입니다.  ⟨speaker_change⟩
+2. 굿모닝 레이디즈 앤 젠틀맨. 웰컴 투 더 다얼록 웨트 K 이노베이립 저희는 원활한 행사의 진행을 위해서 마스크를 벗고 진행을 하도록 하겠습니다.  ⟨speaker_change⟩
+3. 오늘 진행은 저와 함께 옆에 계신 통역사분과 함께 영어와 한국어 순차 통역으로 진행될 예정.  ⟨language_switch⟩
+4. Today's event will be conducted in Korean and English.  ⟨language_switch⟩
+5. 그럼 이제 K혁신기업 기업과의 대화 본 행사를 시작하도록 하겠습니다.  ⟨language_switch⟩
+6. So now let's begin today's event.  ⟨punctuation⟩
+7. So now let's begin, today's event.  ⟨language_switch⟩
+8. 먼저 어제 26일이었던 이곳 특설 무대 위에서 K-혁신 기업 11개의 기업이 쇼케이스를 진행했습니다.  ⟨punctuation⟩
+9. 혁신 기술을 기반으로 해서 다양한 신제품과 신기술을 소개해 주셨는데요.  ⟨language_switch⟩
+10. Yesterday afternoon at this special stage, 11K Innovative SMEs showcased their innovative products and technologies.  ⟨language_switch⟩
+11. 오늘은 어제 발표를 진행해 주셨던 11개의 K혁신 기업을 비롯해서 전문가 심사위원과 국내외 미디어 관계자분들과 함께 이야기를 나누는 시간을 가져보도록 하겠습니다.  ⟨language_switch⟩
+12. Today we will have a special talk with 11K Innovative Companies and Judges and Media Professionals.  ⟨punctuation⟩
+13. Today.  ⟨language_switch⟩
+14. 오늘은 어제와 마찬가지로 코로나로 인해서 정부 안전 방역 지침을 따라 하므로 여러분들 이곳에 모시지는 못했습니다.  ⟨punctuation⟩
+15. 다만 ITS 홈페이지를 통해서 온라인으로 시청을 할 수 있는데요. 또 비롯해서 다양한 행사도 있고 또 다시 보기도 계속 진행된다고 하니까요. 많은 관심과 성원 부탁드리겠습니다.  ⟨speaker_change⟩
+16. Under the quarantine measures, today's event is streamed through online and you can get access through ITS official website and online streaming.  ⟨language_switch⟩
+17. 네 먼저 어제 멋진 발표를 해주셨고 또 11개 핵심 기업이 오늘 발표자분들이 이곳에 자리해 주셨습니다.  ⟨punctuation⟩
+18. 함께 만나볼까요.  ⟨language_switch⟩
+19. So today we have representatives from 11 innovative companies,  ⟨-⟩
 
 [정답]
 제 22회 중소기업기술혁신대전 K-혁신기업과의 대회 본 행사 진행을 맡은 저는 아나운서 손진희. 저는 장택수 통역사입니다. Good morning, ladies and gentlemen. Welcome to the Dialogue with K-Innovative Companies at ITS 2021. She is today's MC 손진희. I am interpreter 장택수. 저희는 원활한 행사의 진행을 위해서 마스크를 벗고 진행을 하도록 하겠습니다. 오늘 진행은 저와 함께 옆에 계신 통역사분과 함께 영어와 한국어 순차 통역으로 진행될 예정입니다. Today's event will be conducted in korean and english. 그럼 이제 K 혁신기업 기업과의 대화 본 행사를 시작하도록 하겠습니다. So now let's begin today's event 먼저 어제 26일이었던 이곳 특설무대위에서 K 혁신기업 11개의 기업이 쇼케이스를 진행했습니다. 혁신기술을 기반으로 해서 다양한 신제품과 신기술을 소개해 주셨는데요. Yesterday afternoon at this special stages, eleven k-innovated SMEs show case their innovated product at technologies. 오늘은 어제 발표를 진행해 주셨던 11개의 K-혁신 기업을 비롯해서 전문가 심사위원과 국내외 미디어 관계자분들과 함께 이야기를 나누는 시간을 가져보도록 하겠습니다. Today we'll have it special talk with eleven K-inonovated companies and judges and media professionals. 오늘은 어제와 마찬가지로 코로나로 인해서 정부 안전 방역 지침을 따라야 하므로 여러분을 이곳에 모시지는 못했습니다. 다만 ITS 홈페이지를 통해서 온라인으로 시청을 할 수 있는데요. 또 비롯해서 다양한 행사도 있고 또 다시 보기도 계속 진행된다고 하니까요. 많은 관심과 성원 부탁드리겠습니다. Under the quarantine measures, today's event is streamed through online and you can get access through ITS official website and also online streaming. 먼저 어제 멋진 발표를 해주셨고 또 11개 핵심 기업이 오늘 발표자분들이 이곳에 자리해 주셨습니다. 함께 만나볼까요? So today we have all presentative from eleven innovated companies.

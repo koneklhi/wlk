@@ -21,6 +21,8 @@
 [whisperlive_code/](../whisperlive_code/) — 기존 `whisperlive` 시스템에서 우리 요구사항용으로 수정했던 주요 코드.
 **성능·기법 비교용 참고 자료**일 뿐, 이식은 완료됐고 신규 이식 대상이 아니다([CLAUDE.md](../CLAUDE.md) §1 참조).
 
+- **[docs/LEGACY_WHISPERLIVE_READING_GUIDE.md](LEGACY_WHISPERLIVE_READING_GUIDE.md) — 읽는 순서·초점 가이드
+  (인수인계용). 3프로세스 구조 → 슬라이딩 재디코딩 → 확정 4갈래 → 번역까지 데이터 흐름 + 현행 대조표. 코드 분석 전에 먼저 읽는다**
 - [whisperlive_code/server.py](../whisperlive_code/server.py), [whisperlive_code/app.py](../whisperlive_code/app.py),
   [whisperlive_code/main.py](../whisperlive_code/main.py) — 서버/엔트리 구조 참고
 - [whisperlive_code/transcriber.py](../whisperlive_code/transcriber.py), [whisperlive_code/client.py](../whisperlive_code/client.py)

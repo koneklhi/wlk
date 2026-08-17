@@ -140,6 +140,7 @@ nllb-200-distilled-600M-ctranslate2/*
 # eval 결과 JSON — 매 실행마다 내용·절대경로가 변해 PC 간 충돌 유발. 큐레이션 이력은 EXPERIMENTS.md(활성)/PHASE2_EXPERIMENTS.md(아카이브)에 보존.
 .omc/benchmarks/*.json
 .omc/session-logs/
+.omc/server_logs/
 .worktrees/
 
 # superpowers SDD 플러그인 작업 상태 (로컬 전용, 매 실행마다 생성)
