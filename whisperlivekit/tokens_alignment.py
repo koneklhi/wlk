@@ -10,6 +10,7 @@ from whisperlivekit.boundary_reconcile import (
     ZONE2_SAMESCRIPT,
     BoundaryReconciler,
     TombstoneEntry,
+    _dedup_norm,
 )
 from whisperlivekit.sentence_boundary import is_genuine_sentence_end, last_word, should_split_after_silence
 from whisperlivekit.simul_whisper.align_att_base import LANG_SWITCH_KEEP_SECS
@@ -65,6 +66,31 @@ RETRACT_EPS: float = 0.05
 # 상한을 두는 이유는 장창에서 로그가 폭주하지 않게 하기 위함이다.
 _SKIP_PROBE_MAX: int = 5              # 경계 1개당 로깅할 최대 후보 수
 _SKIP_PROBE_WINDOW_SECS: float = 4.0  # boundary_t 기준 이보다 오래된 토큰은 보지 않는다
+
+# ─── 언어경계 stub 붕괴(collapse) — Exp-209 ─────────────────────────────────
+# ytn1 20회 실측에서 언어전환 경계마다 1~2단어짜리 줄이 상시로 생겼다(17/20 회차).
+# 정답 대비 전수 분류 결과 성격이 셋으로 갈렸다:
+#   DUP    — 직전 줄과 텍스트가 겹치는 재방출 중복 (드롭이 정답)
+#   HALLUC — 구언어 모드가 신언어 오디오를 렌더링한 환각 (드롭이 정답)
+#   LEGIT  — 정답에 있는 정상 단어가 오분할된 것 (드롭하면 단어 유실 — 병합이 정답)
+# 정답은 런타임에 없으므로 HALLUC/LEGIT는 구분할 수 없다. 따라서 **드롭은 텍스트
+# 동일성으로 증명되는 DUP에만** 적용하고 나머지는 후방 병합한다(Exp-208와 같은 원리:
+# "텍스트 동일성은 시간보다 강한 증거"). 병합만 해도 거짓 줄바꿈이 사라져 화자분리
+# F1(§4 1순위 게이트) 오염이 제거되고, LEGIT 단어는 그대로 보존된다.
+#
+# 왜 출력층인가: DUP 12건의 중복 방향이 **전수 PREV(직전 줄)** 였고 NEXT는 0건이다.
+# boundary_reconcile의 텍스트 커버 가드는 tombstone을 *신언어* 관측 토큰과 대조하므로
+# PREV 쪽 중복은 구조적으로 못 잡는다 — 두 이웃을 함께 볼 수 있는 건 세그먼트 조립 이후뿐.
+BOUNDARY_STUB_COLLAPSE_ENABLED: bool = True   # 롤백 스위치
+BOUNDARY_STUB_MAX_WORDS: int = 2              # 이 이하 어절 수만 stub 후보
+# 기능어만 겹치는 것은 중복의 증거가 아니다 — 단순 단어겹침으로 판정하면 'the' 하나 때문에
+# 중복이 아닌 텍스트를 삭제한다(실측 R18 'The President:.'). 내용어 겹침만 DUP로 본다.
+_STUB_STOPWORDS = frozenset({
+    "the", "a", "an", "and", "or", "of", "to", "in", "on", "at", "for", "with", "from",
+    "by", "is", "are", "was", "were", "be", "been", "i", "we", "you", "it", "he", "she",
+    "they", "this", "that", "these", "those", "my", "our", "your", "their", "its", "his",
+    "her", "as", "so", "but", "if", "then", "u", "s", "t",
+})
 
 # 반대-스크립트 판정 정규식. backend.py의 _is_script_mismatch_filler(P2 게이트)가 쓰는
 # 것과 동일한 패턴을 재사용한다(신규 언어별 하드코딩 금지, §3.8). 단 그쪽은 반복형 필러
@@ -404,6 +430,83 @@ class TokensAlignment:
                 )
                 emitted += 1
             j -= 1
+
+    # ─── 언어경계 stub 붕괴 (Exp-209) ──────────────────────────────────────
+
+    @staticmethod
+    def _stub_words(text: Optional[str]) -> List[str]:
+        """어절 단위로 잘라 정규화(_dedup_norm 재사용: strip → 양끝 구두점 → 소문자)."""
+        return [w for w in (_dedup_norm(p) for p in (text or "").split()) if w]
+
+    @classmethod
+    def _is_boundary_stub(cls, seg: Any) -> bool:
+        """언어전환으로 닫힌 짧은 stub 세그먼트인가.
+
+        trigger를 조건에 넣는 이유: trigger가 붙었다 = 이미 닫힌 줄이다. 아직 자라는 중인
+        마지막 세그먼트를 stub으로 오인해 병합하면 진행 중 발화를 훼손한다.
+        """
+        if seg is None or seg.is_silence() or not (seg.text or "").strip():
+            return False
+        if getattr(seg, "finalize_trigger", None) != "language_switch":
+            return False
+        return len((seg.text or "").split()) <= BOUNDARY_STUB_MAX_WORDS
+
+    @classmethod
+    def _stub_is_duplicate(cls, stub: Any, prev: Any) -> bool:
+        """stub의 **내용어**가 직전 세그먼트에 등장하면 재방출 중복으로 본다."""
+        content = [w for w in cls._stub_words(stub.text)
+                   if w not in _STUB_STOPWORDS and len(w) >= 2]
+        if not content:
+            return False   # 기능어·구두점뿐 — 중복 증거 없음 → 병합 쪽으로
+        prev_words = set(cls._stub_words(prev.text))
+        return any(w in prev_words for w in content)
+
+    def _collapse_boundary_stubs(self, segments: List[Segment]) -> List[Segment]:
+        """언어전환 경계에서 생긴 1~2어절 stub 줄을 없앤다 (DUP는 드롭, 나머지는 후방 병합).
+
+        불변식:
+        - **화자가 다르면 무조건 미개입** — 진짜 화자전환 경계(§3.3 최우선 요구)를 지운 적이
+          없어야 한다. 화자분리 F1이 §4 1순위 게이트다.
+        - 직전 텍스트 세그먼트가 없으면 미개입(서두 보호).
+        - 병합은 분할의 역연산이라 Case B(단어 중간 분절)를 만들 수 없다.
+        - 멱등 — 매 틱 호출되므로 두 번 적용해도 결과가 같아야 한다(병합 후 길이가 늘어
+          _is_boundary_stub이 False가 되므로 자연히 성립).
+        """
+        if not BOUNDARY_STUB_COLLAPSE_ENABLED or not segments:
+            return segments
+
+        out: List[Segment] = []
+        for seg in segments:
+            if not self._is_boundary_stub(seg):
+                out.append(seg)
+                continue
+
+            # 직전 텍스트 세그먼트 탐색 — 사이에 낀 침묵은 통과하되 제거하지 않는다
+            # (침묵 세그먼트는 프런트의 공백 표시 계약이라 임의로 지우면 렌더가 바뀐다).
+            prev = next((s for s in reversed(out) if not s.is_silence() and (s.text or "").strip()), None)
+            if prev is None or prev.speaker != seg.speaker:
+                out.append(seg)
+                continue
+
+            if self._stub_is_duplicate(seg, prev):
+                logger.info(
+                    "[StubCollapse] drop(dup): %r prev_tail=%r speaker=%s",
+                    seg.text, (prev.text or "")[-40:], seg.speaker,
+                )
+                continue
+
+            logger.info(
+                "[StubCollapse] merge: %r → prev_tail=%r speaker=%s",
+                seg.text, (prev.text or "")[-40:], seg.speaker,
+            )
+            prev.text = (prev.text or "") + seg.text
+            if seg.end is not None:
+                prev.end = seg.end if prev.end is None else max(prev.end, seg.end)
+            # 그 줄을 실제로 닫은 계기는 stub 쪽 경계다 — trigger를 승계한다.
+            prev.finalize_trigger = seg.finalize_trigger
+            if getattr(seg, "hard_boundary", False):
+                prev.hard_boundary = True
+        return out
 
     def _prev_text_token(self, idx: int) -> Optional[ASRToken]:
         """idx 바로 앞의 텍스트 토큰(침묵·경계 제외). 없으면 None."""
@@ -1160,6 +1263,10 @@ class TokensAlignment:
             segments = list(self.validated_segments)
             if self.current_line_tokens:
                 segments.append(Segment.from_tokens(self.current_line_tokens))
+
+        # 언어경계 stub 붕괴 (Exp-209) — diar/비-diar 공통 합류점에서 한 번만 적용한다.
+        # 번역 부착보다 **앞**에 두는 이유: 곧 드롭할 stub을 번역해 LLM 호출을 낭비하지 않기 위함.
+        segments = self._collapse_boundary_stubs(segments)
 
         # 침묵 직후 확정 유예: 유보 꼬리가 아직 도착하지 않았을 수 있으므로
         # 유예 창(FINALIZE_GRACE_SECS) 안에서는 직전 텍스트 세그먼트 확정을 보류한다.
