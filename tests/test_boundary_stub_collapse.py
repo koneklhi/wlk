@@ -239,3 +239,38 @@ def test_rollback_flag_disables_collapse(monkeypatch):
     ]
     out = ta._collapse_boundary_stubs(segs)
     assert _texts(out) == _texts(segs)
+
+
+# ── 배선(wiring) 검증 — get_lines() 경유로 실제 적용되는지 ──────────────────
+
+def test_collapse_is_wired_into_get_lines_diarization():
+    """유닛 15개는 메서드를 직접 호출한다 — 훅이 실제로 살아있는지는 별개 문제다.
+
+    get_lines(diarization=True) 를 통과시켜 조립 결과에 collapse 가 반영되는지 확인한다.
+    (측정에서 0건이 나왔을 때 '발동 안 함'인지 '대상 없음'인지 가르는 근거이기도 하다.)
+    """
+    ta = _make_alignment()
+    segs = [
+        _seg("I want to first thank Minister Jung.", 10.0, 13.0, 1, "punctuation", "en"),
+        _seg("First.", 13.0, 13.1, 1, "language_switch", "en", hard=True),
+        _seg("우선 오늘 안보협의회 회의를 주관해 주신", 13.2, 17.0, 1, None, "ko"),
+    ]
+    ta.get_lines_diarization = lambda audio_time=None, flush=False: (segs, "")
+    lines, _buf, _tr = ta.get_lines(diarization=True, audio_time=20.0)
+    texts = [s.text for s in lines if not s.is_silence()]
+    assert "First." not in texts          # 훅이 살아있으면 stub 이 사라진다
+    assert any(t.startswith("I want to first thank") for t in texts)
+
+
+def test_collapse_runs_before_translation_attachment():
+    """드롭할 stub 에 번역을 붙이지 않는다(LLM 호출 낭비 방지)."""
+    ta = _make_alignment()
+    translated = []
+    ta.add_translation = lambda seg: translated.append(seg.text)
+    segs = [
+        _seg("I want to first thank Minister Jung.", 10.0, 13.0, 1, "punctuation", "en"),
+        _seg("First.", 13.0, 13.1, 1, "language_switch", "en", hard=True),
+    ]
+    ta.get_lines_diarization = lambda audio_time=None, flush=False: (segs, "")
+    ta.get_lines(diarization=True, translation=True, audio_time=20.0)
+    assert "First." not in translated
