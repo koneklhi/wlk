@@ -59,6 +59,13 @@ TAIL_REATTACH_MAX_LOOKBACK_SECS: float = 1.5
 # Stage 0 실측(별도 진행 중, 아직 완료 안 됨)으로 추후 보정될 잠정값이다.
 RETRACT_EPS: float = 0.05
 
+# [SkipProbe] 관측 전용 상수 (거동 무변경 — 로깅 범위만 제한한다).
+# 철회 스캔이 lower_bound/silence에서 멈춘 뒤, 그 아래를 이 범위까지만 들여다보고 로깅한다.
+# 경로 A(유령 미철회, 실측 84%)의 look-below 폭을 데이터로 정하기 위한 계측이며,
+# 상한을 두는 이유는 장창에서 로그가 폭주하지 않게 하기 위함이다.
+_SKIP_PROBE_MAX: int = 5              # 경계 1개당 로깅할 최대 후보 수
+_SKIP_PROBE_WINDOW_SECS: float = 4.0  # boundary_t 기준 이보다 오래된 토큰은 보지 않는다
+
 # 반대-스크립트 판정 정규식. backend.py의 _is_script_mismatch_filler(P2 게이트)가 쓰는
 # 것과 동일한 패턴을 재사용한다(신규 언어별 하드코딩 금지, §3.8). 단 그쪽은 반복형 필러
 # 텍스트 전체(TTR·최소단어수 게이트 포함)를 판정하는 반면, 여기는 철회 대상 토큰 하나의
@@ -274,6 +281,7 @@ class TokensAlignment:
         zone_counts = {ZONE1: 0, ZONE2_OPPOSITE: 0, ZONE2_SAMESCRIPT: 0}
         entries: List[TombstoneEntry] = []
         stopped_by = "start_of_buffer"
+        stopped_at_idx: Optional[int] = None
         while j >= 0:
             token = self.all_tokens[j]
             if getattr(token, "retracted", False):
@@ -283,9 +291,11 @@ class TokensAlignment:
                 continue
             if token.is_silence() or token.is_boundary():
                 stopped_by = "silence" if token.is_silence() else "boundary"
+                stopped_at_idx = j
                 break
             if token.start < lower_bound:
                 stopped_by = "lower_bound"
+                stopped_at_idx = j
                 break
             scanned += 1
             if token.detected_language == prev_lang:
@@ -301,13 +311,21 @@ class TokensAlignment:
                     # 못 덮으면 resolve에서 복원되므로 순유실이 없다.
                     zone = ZONE2_SAMESCRIPT
                 if zone is not None:
+                    # gap_prev = 직전 텍스트 토큰과의 간격. 판정에는 쓰지 않고 resolve의
+                    # [Restore]/[Replace] 로그로 흘려보내 2차 판별자 분포를 수집한다.
+                    prev_tok = self._prev_text_token(j)
+                    gap_prev = (
+                        token.start - prev_tok.start
+                        if prev_tok is not None and prev_tok.start is not None
+                        else -1.0
+                    )
                     logger.info(
-                        "[Retract] 철회: %r start=%.2f prev_lang=%s zone=%s",
-                        token.text, token.start, prev_lang, zone,
+                        "[Retract] 철회: %r start=%.2f prev_lang=%s zone=%s gap_prev=%.2f",
+                        token.text, token.start, prev_lang, zone, gap_prev,
                     )
                     if reconcile_on:
                         token.retracted = True
-                        entries.append(TombstoneEntry(token=token, zone=zone))
+                        entries.append(TombstoneEntry(token=token, zone=zone, gap_prev=gap_prev))
                     else:
                         self.all_tokens.pop(j)  # 레거시 파괴적 철회(롤백 거동)
                     zone_counts[zone] += 1
@@ -325,6 +343,9 @@ class TokensAlignment:
             boundary_t, prev_lang, scanned, removed, stopped_by,
             zone_counts[ZONE1], zone_counts[ZONE2_OPPOSITE], zone_counts[ZONE2_SAMESCRIPT],
         )
+        self._log_skipped_retract_candidates(
+            stopped_by, stopped_at_idx, boundary_t, prev_lang, lower_bound,
+        )
         if reconcile_on:
             # 재조정 창 arm — 철회 0건이어도 창은 연다(시간 소유권 dedup이 경계 구간
             # 재방출 중복을 잡으려면 창 컨텍스트가 필요). 활성 창이 있으면 arm이
@@ -333,6 +354,66 @@ class TokensAlignment:
                 boundary_t=boundary_t, floor=lower_bound,
                 prev_lang=prev_lang, new_lang=new_lang, entries=entries,
             )
+
+    def _log_skipped_retract_candidates(
+        self,
+        stopped_by: str,
+        stopped_at_idx: Optional[int],
+        boundary_t: float,
+        prev_lang: Optional[str],
+        lower_bound: float,
+    ) -> None:
+        """관측 전용 — 철회 스캔이 중단된 지점 아래의 prev_lang 후보를 로깅한다(거동 무변경).
+
+        경로 A(유령이 아예 철회되지 않음, 실측 84%)의 원인은 이 스캔이 lower_bound/silence에서
+        멈춰 유령에 도달조차 못 하는 것이다. look-below 폭(BELOW_FLOOR_LOOKBACK_SECS)을 데이터로
+        정하려면 "중단 지점 바로 아래에 어떤 prev_lang 토큰이, 하한에서 얼마나 떨어져 있었나"가
+        필요하다. gap_prev(직전 구언어 토큰과의 간격)는 §7.2 2차 판별자 후보의 분포 수집용이다.
+        """
+        if stopped_at_idx is None or prev_lang is None:
+            return
+        if not logger.isEnabledFor(logging.INFO):
+            return
+        emitted = 0
+        j = stopped_at_idx
+        while j >= 0 and emitted < _SKIP_PROBE_MAX:
+            token = self.all_tokens[j]
+            if getattr(token, "retracted", False):
+                j -= 1
+                continue
+            if token.is_silence() or token.is_boundary():
+                # 중단 사유가 silence였다면 그 침묵 자체는 건너뛰고 그 아래를 계속 본다.
+                if emitted == 0 and stopped_by == "silence" and j == stopped_at_idx:
+                    j -= 1
+                    continue
+                break
+            if token.start is None or boundary_t - token.start > _SKIP_PROBE_WINDOW_SECS:
+                break
+            if token.detected_language == prev_lang:
+                prev_tok = self._prev_text_token(j)
+                gap_prev = (
+                    token.start - prev_tok.start
+                    if prev_tok is not None and prev_tok.start is not None
+                    else -1.0
+                )
+                logger.info(
+                    "[SkipProbe] stopped_by=%s text=%r start=%.2f below_floor=%.2f "
+                    "gap_prev=%.2f opposite=%s boundary_t=%.2f prev_lang=%s",
+                    stopped_by, token.text, token.start, lower_bound - token.start,
+                    gap_prev, _is_opposite_script(token.text, prev_lang), boundary_t, prev_lang,
+                )
+                emitted += 1
+            j -= 1
+
+    def _prev_text_token(self, idx: int) -> Optional[ASRToken]:
+        """idx 바로 앞의 텍스트 토큰(침묵·경계 제외). 없으면 None."""
+        k = idx - 1
+        while k >= 0:
+            t = self.all_tokens[k]
+            if not t.is_silence() and not t.is_boundary():
+                return t
+            k -= 1
+        return None
 
     def _prune(self) -> None:
         """Drop tokens/segments older than ``_retention_seconds`` from the latest token."""
