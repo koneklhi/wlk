@@ -41,6 +41,13 @@ class DecoderState:
     pending_prev_language: Optional[str] = None
     pending_retract_floor: Optional[float] = None
     lang_before_reset: Optional[str] = None
+    # 경계 보호 보존형 refresh(align_att_base BOUNDARY_QG_PRESERVE_*)용.
+    # last_boundary_event_at = 마지막 언어/화자 전환의 절대 스트림 시각. 기본 0.0이라
+    # 세션 초입 BOUNDARY_PROTECT_SECS 구간이 자동으로 보호창에 들어간다 — 콜드스타트
+    # 언어감지 데드락(Exp-178 ①)에서도 서두 오디오가 폐기되지 않게 하는 의도된 기본값이다.
+    last_boundary_event_at: float = 0.0
+    # 이 경계에서 보존 refresh를 이미 1회 썼는지(경계 스탬프 시 False로 리셋).
+    qg_preserve_used: bool = False
     # backend.py SimulStreamingOnlineProcessor._last_emit_end의 미러(Exp-192 동적 keep).
     # 소유자는 backend(setter에서 세팅) — 모델 계층(_apply_detected_language)이
     # 언어전환 트림 keep 가변화에 읽기 전용으로 참조한다.

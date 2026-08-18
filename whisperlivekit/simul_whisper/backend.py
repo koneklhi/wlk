@@ -448,6 +448,12 @@ class SimulStreamingOnlineProcessor:
         # global_time_offset은 아직 change_speaker.start로 갱신되기 전(§2 아래)이므로
         # 현재 버퍼 시작의 절대 시각 그대로다 — 화자전환 절대시각과의 차이가 버퍼상대 오프셋.
         lang_locked = self.model.cfg.language != "auto"
+        # 경계 보호창 arm — 화자전환 직후 구간의 QG streak이 새 화자 서두 오디오를 폐기하지
+        # 않고 보존하도록 한다(align_att_base BOUNDARY_QG_PRESERVE_*). self.end는 오디오
+        # 스트림의 절대 현재 위치라 refresh/트림 전후로도 일관된 자다. 동일언어 스킵 경로
+        # (아래 1-b)를 포함해 모든 화자전환에서 스탬프해야 스킵 구간이 보호 사각지대가 되지
+        # 않는다 — 스킵은 버퍼·언어를 안 바꿀 뿐 경계인 것은 마찬가지다.
+        self.model.mark_boundary_event(at=self.end)
         boundary_offset = change_speaker.start - self.model.global_time_offset
         # 쿨다운으로 재감지를 건너뛴 경우의 직전 결과. eager와 분리해 둔다 — eager에 그대로
         # 실으면 아래 _apply_detected_language까지 타서 Exp-189가 억제하려던 flip-flop 구간의
