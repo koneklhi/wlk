@@ -1247,7 +1247,10 @@ class AlignAttBase(ABC):
             return False
         buffered = self.segments_len()
         if buffered <= 0:
-            return False  # 보존할 오디오 자체가 없음
+            # 보존할 오디오 자체가 없음(직전 refresh 직후 등). 발동 감사에서 이 경로가
+            # 무로그로 빠지면 "streak 수 − 보존 수"가 설명되지 않으므로 명시적으로 남긴다.
+            logger.info("[QGPreserve] 버퍼 비어 있음 — 보존 대상 없음(기존 경로)")
+            return False
         if getattr(self.state, "qg_preserve_used", False):
             # 같은 경계에서 이미 한 번 보존했는데 또 garbage → 재디코딩으로도 못 푸는
             # 구간이다. 무한 재디코딩 루프를 막기 위해 기존 폐기로 폴백한다.
