@@ -65,6 +65,7 @@ frontend/app/
     │   ├── SttTextViewer.tsx        # 전사 행 1개 렌더 (원문+번역+선택적 시각)
     │   ├── SttTranslateLoader.tsx   # 번역 대기 로더
     │   ├── SttThemeProvider.tsx     # 테마 CSS 변수 주입 + useSttTextStyle 훅
+    │   ├── SttSliderField.tsx       # 설정 드로어용 수치 행 (슬라이더 + 숫자 입력 겸용)
     │   ├── WaveformVisualizer.tsx   # canvas 기반 실시간 파형 (useWaveform 사용)
     │   ├── BackendErrorOverlay.tsx  # 헬스체크 실패 시 오버레이
     │   └── ui/                      # shadcn 스타일 UI 프리미티브
@@ -246,6 +247,21 @@ pnpm build
 - 원본·번역·시스템 폰트 크기 및 색상 개별 설정
 - 로고 전체 크기 프리셋(`sm`=50% / `md`=100% / `lg`=150% / `xl`=200%, 타이틀·서브타이틀 폰트 크기·로고 이미지 크기 동시 변경)
 - 시각 표시 / 확정 원인 배지 표시 토글(둘 다 기본 on)
+- **화면 레이아웃 5종**(전부 `SttSliderField` — 슬라이더와 숫자 입력이 같은 값을 본다).
+  배포 현장마다 화면 크기·시청 거리가 달라 운용자가 현장에서 가독성을 맞추기 위한 것이다:
+
+  | 설정 | store 필드 | CSS 변수 | 기본값 | 범위(step) | 적용 지점 |
+  |---|---|---|---|---|---|
+  | 화면 좌우 여백 | `screenPaddingXPercent` | `--stt-padding-x` | `5`% | 0–30 (0.5) | `SttMain` 스크롤 컨테이너 좌우 padding |
+  | 문단 간격 | `blockGapPx` | `--stt-block-gap` | `56`px | 0–200 (2) | `SttMain` 블록(행)↔블록 gap |
+  | 문장 간격 | `lineSpacingRatio` | `--stt-line-height` · `--stt-sentence-gap` | `1.75`배 | 1.0–3.0 (0.05) | 줄간격(`useSttTextStyle`) **과** 블록 내부 gap(`SttTextViewer`) |
+  | 번역 중 투명도 | `processingOpacity` | `--stt-processing-opacity` | `0.4` | 0.1–1.0 (0.05) | 미확정 원문 div + `SttTranslateLoader` |
+  | 하단 여백 | `bottomPaddingPercent` | `--stt-bottom-pad` | `20`% | 0–60 (1) | `SttMain` sentinel **위**의 spacer 높이(`vh`) |
+
+  - 문장 간격은 **배율 하나**로 줄간격과 원문↔번역 간격을 함께 움직인다. 후자는
+    `(배율−1) × 원본폰트크기 × 0.5`로 파생한다(기본값 검산 `(1.75−1)×24×0.5 = 9px` ≈ 종전 `gap-2`).
+  - 하단 여백은 `vh` 다 — CSS 백분율 padding 은 높이가 아니라 **너비** 기준이라 "화면 높이 %"를
+    담지 못한다. 또 컨테이너 `padding-bottom` 이 아니라 **spacer div** 여야 한다(`SttMain` 참조).
 - localStorage persist(key: `stt-theme-v2`, `version: 1`), "설정 초기화" 버튼으로 기본값 복원.
   **기본값을 바꿀 땐 키를 올리지 말고 `migrate` 를 쓴다** — 키를 올리면 저장된 색상·폰트 설정이
   통째로 날아간다(v1→v2 때 실제로 그랬다). `version: 1` 마이그레이션이 구 저장분의 `showTimestamp` 를
@@ -260,12 +276,19 @@ pnpm build
 메인 화면. 헤더(로고+타이틀), 전사 영역, 설정 드로어로 구성. 세션 제어 로직은 갖지 않고 `useSttSession()`/`useTranscriptRows()` 를
 구독해 렌더만 한다. 자동 스크롤(바닥 근접 시에만 따라감), 헬스 폴링(15초), 세션 오류 토스트를 담당.
 
+전사 목록 아래에는 **하단 여백 spacer → sentinel(`endRef`)** 순서로 두 div 가 있고, 둘 다
+`data-testid="stt-transcript"` **바깥**이다. 순서·위치 둘 다 의미가 있다:
+- 자동 스크롤이 sentinel 바닥을 뷰포트 바닥에 맞추므로, 하단 여백을 컨테이너 `padding-bottom` 으로
+  주면 그 여백은 sentinel 아래(화면 밖)에 남아 최신 전사가 여전히 화면 맨 아래에 붙는다.
+  spacer 를 sentinel **위**에 둬야 스크롤이 여백을 화면 안으로 끌어올려 최신 전사를 위로 민다.
+- `stt-transcript` **안**에 넣으면 블록 간격(`--stt-block-gap`)이 spacer 앞에 한 번 더 붙는다.
+
 ### `SttSettingDrawer`
 오른쪽에서 슬라이드되는 설정 패널(Framer Motion). 버튼 활성/비활성은 세션 `phase` 에서 파생한다.
 - 세션 제어(시작/일시중단/재개, 종료는 `AlertDialog` 확인 후)
 - 언어 선택(`select`, 세션 시작 전에만 활성)
 - 웨이브폼(`WaveformVisualizer`, 녹음/일시중단 중에만 표시)
-- 테마·폰트·로고 설정, 시각 표시·확정 원인 표시 토글, 기록/설정 초기화
+- 테마·폰트·로고 설정, 화면 레이아웃 5종(`SttSliderField`), 시각 표시·확정 원인 표시 토글, 기록/설정 초기화
 - 관리자 페이지(`/admin`) 링크
 
 ### `SttTextViewer`
@@ -276,6 +299,15 @@ pnpm build
 
 ### `SttThemeProvider` / `useSttTextStyle`
 `theme.store.ts` 값을 CSS 변수(`--stt-*`)로 주입하는 Provider 와, 원문/번역/시스템 텍스트 스타일을 반환하는 훅.
+색상·폰트뿐 아니라 **레이아웃 값도 여기서 CSS 변수로 나간다**(위 테마/설정 표) — 소비하는 쪽
+(`SttMain`·`SttTextViewer`·`SttTranslateLoader`)은 store 를 직접 구독하지 않고 변수만 읽는다.
+
+### `SttSliderField`
+설정 드로어의 수치 입력 행. `[라벨] [range] [number] [단위]` 한 줄이며 range/number 가 같은 store
+값을 본다. range 는 네이티브 `<input type="range">` 다 — **폐쇄망 패키징에 새 npm 의존성(radix
+slider)을 얹지 않기 위해서**이고, 겉모습은 `styles.css` 의 `.stt-range` 가 맞춘다. 숫자 칸은
+타이핑 중간 상태를 위해 문자열 draft 를 두고, 파싱되는 값만 `min`~`max` 로 clamp 해 커밋한다
+(blur 시 store 값으로 재동기화).
 
 ### `WaveformVisualizer` + `useWaveform`
 `AnalyserNode` 를 `requestAnimationFrame` 으로 canvas 에 직접 그린다. `ResizeObserver` 로 컨테이너 크기 변화를 canvas 물리 크기(DPR 포함)에 동기화.

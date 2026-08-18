@@ -1,13 +1,17 @@
 # 배포 UI — 화면 레이아웃 설정 5종 추가
 
-> **상태: 착수 대기 (구현 0건).** 2026-08-17 설계·사용자 확정 완료, 코드는 한 줄도 쓰지 않았다.
-> 진행 중이던 STT 성능 개선/측정 작업이 끝난 뒤 이어서 진행한다.
+> **상태: 구현 완료 (2026-08-18).** 브랜치 `feat/ui-layout-settings`(워크트리
+> `worktrees/ui-layout-settings`), 분기 기준 `master` @ `8af6205`. 구현 1~8 전부 반영했고
+> `pnpm lint`(신규 오류 0 — 기존 5건은 master에도 동일하게 있음)·`pnpm build` 통과.
 >
-> - **설계 기준 코드**: `master` @ `d353a5a` (2026-08-14). 아래 인용한 **행 번호는 이 커밋 기준**이므로,
->   재개 시 master가 앞서 있으면 행 번호가 아니라 **코드 내용으로 위치를 다시 찾을 것**.
-> - **선행 조건**: 경로 C 측정이 돌고 있지 않을 것. 이 작업은 `pnpm build`를 수반하는데
->   `emptyOutDir`가 서빙 중인 `frontend/static/` dist를 비운다(CLAUDE.md §3.7).
-> - **재개 첫 걸음**: "작업 방식" 절의 워크트리 생성 → `pnpm install` → "구현" 1번부터 순서대로.
+> 계획 대비 달라진 점 2가지:
+> - `docs/FILE_INDEX.md`는 **갱신하지 않았다** — 이 문서는 프런트 개별 컴포넌트를 색인하지 않고
+>   `frontend/app/README.md`로만 연결한다(신규 파일 행을 넣을 자리가 없음). README에는 반영했다.
+> - `useSttTextStyle`의 `lineHeight` 하드코딩은 3곳 중 `system` 분기만 들여쓰기가 달라
+>   1차 치환에서 누락됐다가 별도로 고쳤다 — 3곳 모두 `var(--stt-line-height)`다.
+>
+> 남은 것 = 아래 "검증" A(육안, 백엔드+마이크 필요)와 C(선택, 경로 C 스크래핑 계약 회귀).
+> B(lint·build)는 완료.
 
 ## Context
 
@@ -105,7 +109,11 @@ localStorage(`stt-theme-v2`)에 이 키들이 없으면 초기 상태의 `DEFAUL
   className="w-full h-full overflow-y-auto pt-8 custom-scrollbar"   // pb-12 px-16 제거
   style={{
     paddingLeft: 'var(--stt-padding-x)',
-    // 드로어가 열리면 오른쪽은 512px 밀어내기가 여백을 '대체'한다(합산 아님) — 기존 동작 유지
+    // ⚠️ 아래 '대체' 방식은 최초 설계이며 **폐기됐다**(2026-08-18 수정). 실제 구현은 '합산'이다:
+    //   paddingRight: isOpenSidebar ? 'calc(512px + var(--stt-padding-x))' : 'var(--stt-padding-x)'
+    // 이유: 슬라이더를 조작하려면 드로어를 열어야 하므로 사용자가 보는 건 항상 이 분기인데,
+    // '대체'면 오른쪽이 512px에 고정된 채 왼쪽만 자라 여백이 한쪽에만 먹는 것처럼 보였다.
+    // 되돌리지 말 것 — 회귀가 아니라 사용자 확인을 거친 의도된 수정이다.
     paddingRight: isOpenSidebar ? '512px' : 'var(--stt-padding-x)',
   }}
 >

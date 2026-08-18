@@ -94,3 +94,36 @@
   background-color: rgba(200, 200, 200, 1);
   border-radius: 40px;
 }
+
+/* 설정 드로어의 수치 슬라이더 (SttSliderField). 네이티브 range 의 기본 모습은 다크 드로어와
+   어울리지 않아 트랙/썸을 직접 그린다 — radix slider 의존성을 추가하지 않기 위한 선택이다. */
+.stt-range {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 4px;
+  border-radius: 2px;
+  background: hsl(var(--muted));
+  outline: none;
+  cursor: pointer;
+}
+.stt-range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: hsl(var(--foreground));
+  cursor: pointer;
+}
+.stt-range::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border: none;
+  border-radius: 50%;
+  background: hsl(var(--foreground));
+  cursor: pointer;
+}
+.stt-range:focus-visible {
+  outline: 2px solid hsl(var(--ring));
+  outline-offset: 2px;
+}

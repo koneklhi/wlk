@@ -19,6 +19,7 @@ import {
 } from '@/components/ui/alert-dialog';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { SttSliderField } from '@/components/SttSliderField';
 import { WaveformVisualizer } from '@/components/WaveformVisualizer';
 import { APP_VERSION, BASE_PATH } from '@/constants';
 import { useTranscriptRows } from '@/hooks/useTranscriptRows';
@@ -120,6 +121,16 @@ export const SttSettingDrawer = ({
     setShowTimestamp,
     showFinalizeTrigger,
     setShowFinalizeTrigger,
+    screenPaddingXPercent,
+    setScreenPaddingXPercent,
+    blockGapPx,
+    setBlockGapPx,
+    lineSpacingRatio,
+    setLineSpacingRatio,
+    processingOpacity,
+    setProcessingOpacity,
+    bottomPaddingPercent,
+    setBottomPaddingPercent,
   } = useThemeStore();
 
   const handleResetTheme = useCallback(() => {
@@ -318,6 +329,52 @@ export const SttSettingDrawer = ({
                     onChange={(e) => setFontSizeSystem(parseInt(e.target.value) || 0)}
                   />
                 </div>
+
+                {/* ── 화면 레이아웃 ── */}
+                <SttSliderField
+                  label="화면 좌우 여백"
+                  value={screenPaddingXPercent}
+                  onChange={setScreenPaddingXPercent}
+                  min={0}
+                  max={30}
+                  step={0.5}
+                  suffix="%"
+                />
+                <SttSliderField
+                  label="문단 간격"
+                  value={blockGapPx}
+                  onChange={setBlockGapPx}
+                  min={0}
+                  max={200}
+                  step={2}
+                  suffix="px"
+                />
+                <SttSliderField
+                  label="문장 간격"
+                  value={lineSpacingRatio}
+                  onChange={setLineSpacingRatio}
+                  min={1}
+                  max={3}
+                  step={0.05}
+                  suffix="배"
+                />
+                <SttSliderField
+                  label="번역 중 투명도"
+                  value={processingOpacity}
+                  onChange={setProcessingOpacity}
+                  min={0.1}
+                  max={1}
+                  step={0.05}
+                />
+                <SttSliderField
+                  label="하단 여백"
+                  value={bottomPaddingPercent}
+                  onChange={setBottomPaddingPercent}
+                  min={0}
+                  max={60}
+                  step={1}
+                  suffix="%"
+                />
 
                 {/* ── 원본 폰트 색상 ── */}
                 <div className="flex justify-between items-center">

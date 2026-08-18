@@ -141,10 +141,24 @@ function SttMainInner() {
           <div
             ref={scrollBoxRef}
             onScroll={handleScroll}
-            className="w-full h-full overflow-y-auto pt-8 pb-12 px-16 custom-scrollbar"
-            style={isOpenSidebar ? { paddingRight: '512px' } : undefined}
+            className="w-full h-full overflow-y-auto pt-8 custom-scrollbar"
+            style={{
+              paddingLeft: 'var(--stt-padding-x)',
+              // 드로어(fixed 오버레이, 500px)가 열려 있으면 그 폭만큼 **더** 밀어낸다 —
+              // 좌우 여백은 항상 양쪽에 같은 값으로 걸리고, 512px 는 드로어에 가려지는 만큼을
+              // 보정하는 오프셋일 뿐이다. 여백이 512px 에 '대체'되면(예전 구현) 드로어를 연 동안
+              // 왼쪽만 자라 좌우 비대칭으로 보인다 — 슬라이더를 조작하려면 드로어를 열어야 하므로
+              // 사용자가 보는 건 항상 이 분기다.
+              paddingRight: isOpenSidebar
+                ? 'calc(512px + var(--stt-padding-x))'
+                : 'var(--stt-padding-x)',
+            }}
           >
-            <div className="flex flex-col gap-14" data-testid="stt-transcript">
+            <div
+              className="flex flex-col"
+              style={{ gap: 'var(--stt-block-gap)' }}
+              data-testid="stt-transcript"
+            >
               {rows.map((row) => (
                 // key 는 안정 세그먼트 id 기반 — 배열 index 를 쓰면 백엔드가 최근 줄을
                 // 소급 수정할 때 React 가 엉뚱한 DOM 노드를 재사용한다.
@@ -155,8 +169,14 @@ function SttMainInner() {
                   showFinalizeTrigger={showFinalizeTrigger}
                 />
               ))}
-              <div ref={endRef} />
             </div>
+            {/* 하단 여백은 컨테이너 padding-bottom 이 아니라 sentinel **위**의 spacer 여야 한다 —
+                자동 스크롤이 sentinel 바닥을 뷰포트 바닥에 맞추므로, padding 은 화면 밖에 남아
+                최신 전사가 여전히 화면 맨 아래에 붙는다. spacer 는 스크롤이 화면 안으로 끌어올려
+                최신 전사를 그만큼 위로 밀어준다. `stt-transcript` 바깥에 두는 이유는 안에 넣으면
+                블록 간격(--stt-block-gap)이 spacer 앞에 한 번 더 붙기 때문. */}
+            <div style={{ height: 'var(--stt-bottom-pad)' }} aria-hidden />
+            <div ref={endRef} />
           </div>
         )}
       </div>
