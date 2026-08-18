@@ -68,6 +68,23 @@ LANG_DETECT_GENERAL_SECS = 2.0
 # 실단어가 하나도 없는 억제는 버퍼 폐기(단어 유실) 위험을 감수할 만한 garbage가 아니다.
 _PUNCT_ONLY_CHARS = frozenset({'.', '?', '!', '。', '！', '？', ',', ';', ':'})
 
+# ── 경계 보호 보존형 refresh (Exp-177 Type B 삼킴 제거) ────────────────────────
+# QG streak refresh의 목적은 "환각 루프를 끊는 것"이지 "오디오를 버리는 것"이 아니다.
+# 그런데 언어/화자 전환 직후엔 구언어 토크나이저가 새 언어 오디오를 garbage로 읽어 억제가
+# 쉽게 3연속 성립하고, 그때 폐기되는 버퍼가 곧 **새 문장의 서두 오디오**라 비가역 유실이
+# 된다(재디코딩으로 복구 불가). 문맥 없이 재시작한 디코더가 그 자리를 환각으로 채우므로
+# "첫 어절 유실"과 "환각 폭주"는 같은 사건의 앞뒷면이다.
+# 대책: 경계 보호창 이내의 **첫** streak 도달에서만 오디오를 보존하고 디코더 상태(토큰·
+# 컨텍스트·attend)만 리셋해, 뒤이어 도착하는 오디오와 함께 서두를 재디코딩할 기회를 남긴다.
+# 같은 경계에서 재차 도달하면 기존 폐기로 폴백 → 환각 루프 안전망(Exp-028/154 계열) 유지.
+# 보호창 밖·재시도 소진 시 동작은 현행과 100% 동일하므로 비회귀가 구조적으로 보장된다.
+BOUNDARY_QG_PRESERVE_ENABLED = True  # False = 완전 기존 동작 — 짝지음 A/B 롤백 플래그
+BOUNDARY_PROTECT_SECS = 5.0          # 경계 이벤트로부터 이 시간 이내의 streak만 보호
+# 보존 직후 언어 재프로브 창(초) 상한 — garbage 원인이 "오디오 난이도"가 아니라 "언어 오판"일
+# 때를 커버한다. detect_current_language는 이미 @torch.no_grad라 신규 forward 경로가 아니다.
+BOUNDARY_QG_REPROBE_WINDOW = 2.5
+BOUNDARY_QG_REPROBE_MIN_PROB = 0.85
+
 # ── SOT 위치 사후분포 계측 (계측 전용 — 디코딩 행동 변경 0) ─────────────────────
 # infer()의 첫 forward는 new_segment일 때 전체 토큰 시퀀스를 넣으므로 logits shape이
 # [beam, T, V]다. 위치 sot_pos(= <|sot|> 토큰 위치)의 logits는 "다음 토큰 = 언어 토큰"
@@ -250,6 +267,30 @@ class AlignAttBase(ABC):
     def segments_len(self):
         return sum(s.shape[0] for s in self.state.segments) / 16000
 
+    def _current_stream_time(self) -> float:
+        """현재 버퍼 끝의 절대 스트림 시각(초).
+
+        global + cumulative + 버퍼길이 = 트림/refresh에 불변인 스트림 시계다.
+        `_trim_segments_to_recent`는 잘라낸 만큼 cumulative에 누적하고, `refresh_segment`는
+        `global += cumulative + discarded` 후 cumulative를 0으로 되돌리므로 두 경로 모두
+        이 합을 보존한다 — 경계 이벤트 시각과 streak 도달 시각을 같은 자로 재려면 이 시계를
+        써야 한다(버퍼 상대 길이 단독은 트림마다 리셋돼 간격이 무의미해진다).
+        """
+        return (self.state.global_time_offset
+                + self.state.cumulative_time_offset
+                + self.segments_len())
+
+    def mark_boundary_event(self, at: Optional[float] = None):
+        """언어/화자 전환 경계 발생을 스탬프하고 보존 예산을 되살린다.
+
+        at: 호출부가 스트림 절대시각을 이미 알고 있으면(backend의 self.end) 그 값을 쓴다.
+        미지정 시 현재 버퍼 끝 시각으로 스탬프한다.
+        """
+        self.state.last_boundary_event_at = (
+            at if at is not None else self._current_stream_time()
+        )
+        self.state.qg_preserve_used = False
+
     def _apply_minseglen(self):
         segments_len = self.segments_len()
         if segments_len < self.cfg.audio_min_len:
@@ -333,6 +374,8 @@ class AlignAttBase(ABC):
             # 대상으로 한다 — 트림이 잘라낸 서두 토큰은 재디코딩으로 재현될 수 없어(① 서두유실)
             # 철회하면 순유실이 된다. pending_language_switch(버퍼 END) − segments_len() = 버퍼 START.
             self.state.pending_retract_floor = self.state.pending_language_switch - self.segments_len()
+            # 경계 보호창 arm — 이 직후 구간의 QG streak은 서두 오디오를 폐기하지 않고 보존한다.
+            self.mark_boundary_event()
 
         logger.info("[LangSwitch] 토크나이저 적용: %s (prev=%s, switch=%s, skip_trim=%s)",
                     lang, prev_lang, is_switch, skip_trim)
@@ -1188,8 +1231,66 @@ class AlignAttBase(ABC):
                 "[QualityGate] %d consecutive suppressions — refresh_segment (lang=%s)",
                 streak, self.state.detected_language,
             )
+            if self._try_preserving_refresh():
+                self.state.quality_suppress_streak = 0
+                return
             self.refresh_segment(complete=True)
             self.state.quality_suppress_streak = 0
+
+    def _try_preserving_refresh(self) -> bool:
+        """경계 보호창 내 첫 streak이면 오디오를 보존한 채 상태만 리셋. 처리했으면 True.
+
+        False를 반환하면 호출부가 기존 폐기(complete=True) 경로를 그대로 탄다 — 보호창 밖·
+        재시도 소진·버퍼 없음·플래그 OFF가 전부 여기에 해당해 비회귀가 보장된다.
+        """
+        if not BOUNDARY_QG_PRESERVE_ENABLED:
+            return False
+        buffered = self.segments_len()
+        if buffered <= 0:
+            return False  # 보존할 오디오 자체가 없음
+        if getattr(self.state, "qg_preserve_used", False):
+            # 같은 경계에서 이미 한 번 보존했는데 또 garbage → 재디코딩으로도 못 푸는
+            # 구간이다. 무한 재디코딩 루프를 막기 위해 기존 폐기로 폴백한다.
+            logger.warning("[QGPreserve] 보존 재시도 소진 — 기존 폐기로 폴백 (buffered=%.2fs)", buffered)
+            return False
+        boundary_at = getattr(self.state, "last_boundary_event_at", 0.0)
+        now = self._current_stream_time()
+        since = now - boundary_at
+        if since > BOUNDARY_PROTECT_SECS:
+            logger.info(
+                "[QGPreserve] 보호창 밖(Δt=%.2fs > %.2fs) — 기존 폐기 유지",
+                since, BOUNDARY_PROTECT_SECS,
+            )
+            return False
+
+        # 오디오 전량 보존 + 디코더 상태만 리셋. keep_secs=버퍼 전체 길이라 refresh_segment의
+        # 유지 루프가 모든 세그먼트를 남긴다(신규 폐기 경로를 만들지 않고 기존 함수 재사용).
+        self.refresh_segment(complete=False, keep_secs=buffered)
+        self.state.qg_preserve_used = True
+        logger.warning(
+            "[QGPreserve] 경계 보호 보존 refresh — Δt=%.2fs lang=%s preserved=%.2fs",
+            since, self.state.detected_language, self.segments_len(),
+        )
+        self._reprobe_language_after_preserve()
+        return True
+
+    def _reprobe_language_after_preserve(self):
+        """보존 직후 언어 1회 재확인 — garbage 원인이 언어 오판일 때를 교정한다.
+
+        같은 언어(또는 확신 미달)면 no-op이라 회귀 위험이 없다.
+        """
+        window = min(self.segments_len(), BOUNDARY_QG_REPROBE_WINDOW)
+        if window <= 0:
+            return
+        lang = self.detect_current_language(
+            window_secs=window, min_prob=BOUNDARY_QG_REPROBE_MIN_PROB,
+        )
+        if lang and lang != self.state.detected_language:
+            logger.warning(
+                "[QGPreserve] 재프로브 언어 교정: %s → %s",
+                self.state.detected_language, lang,
+            )
+            self._apply_detected_language(lang)
 
     # === Abstract methods — subclass must implement ===
 

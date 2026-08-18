@@ -110,14 +110,28 @@ def test_b1_punct_at_end_splits():
 # ─── B2: QG 온점-only 억제 refresh streak 미산입 ──────────────────────────────
 
 def _make_fake_decoder(decode_str: str, reset_after: int = 3):
+    """B2 스텁 — 경계 보호창 **밖**(스탬프 0.0, 현재 시각 1000s)으로 고정한다.
+
+    보존형 refresh(BOUNDARY_QG_PRESERVE, tests/test_boundary_qg_preserve.py)는 경계 직후
+    구간에서만 개입하므로, 여기서는 그 창을 벗어나게 두어 B2가 검증하려던 **기존 폐기
+    동작**을 그대로 측정한다. 보호창 안쪽 거동은 전용 테스트 파일이 담당한다.
+    """
     fs = SimpleNamespace(
         tokenizer=SimpleNamespace(decode=lambda h: decode_str),
-        state=SimpleNamespace(quality_suppress_streak=0, detected_language=None),
+        state=SimpleNamespace(
+            quality_suppress_streak=0,
+            detected_language=None,
+            last_boundary_event_at=0.0,
+            qg_preserve_used=False,
+        ),
         cfg=SimpleNamespace(quality_gate_reset_after=reset_after),
     )
     fs._clean_cache = lambda: None
     fs.refresh_segment = MagicMock()
-    fs._is_punct_only = types.MethodType(AlignAttBase._is_punct_only, fs)
+    fs.segments_len = lambda: 1.5
+    fs._current_stream_time = lambda: 1000.0  # 경계로부터 한참 뒤 = 보호창 밖
+    for name in ("_is_punct_only", "_try_preserving_refresh"):
+        setattr(fs, name, types.MethodType(getattr(AlignAttBase, name), fs))
     return fs
 
 
