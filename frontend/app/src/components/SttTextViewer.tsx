@@ -37,9 +37,16 @@ interface SttTextViewerProps {
   showTimestamp: boolean;
   /** 확정 원인 배지 표시 여부. 설정 드로어에서 끈다. */
   showFinalizeTrigger: boolean;
+  /** 블록 번호(#N) 표시 여부. 설정 드로어에서 끈다. */
+  showBlockNo: boolean;
 }
 
-export const SttTextViewer = ({ row, showTimestamp, showFinalizeTrigger }: SttTextViewerProps) => {
+export const SttTextViewer = ({
+  row,
+  showTimestamp,
+  showFinalizeTrigger,
+  showBlockNo,
+}: SttTextViewerProps) => {
   const orgStyle = useSttTextStyle('original');
   const transStyle = useSttTextStyle('translation');
   const sysStyle = useSttTextStyle('system');
@@ -59,6 +66,9 @@ export const SttTextViewer = ({ row, showTimestamp, showFinalizeTrigger }: SttTe
   const timestampVisible = showTimestamp && Boolean(row.start);
   const triggerLabel = row.trigger ? TRIGGER_LABELS[row.trigger] : undefined;
   const triggerVisible = showFinalizeTrigger && Boolean(triggerLabel);
+  // 번호는 시각·배지와 독립적으로 켜진다 — 둘 다 꺼도 관리자 페이지에서 블록을 지목할 수
+  // 있어야 하므로, 번호만 켜진 경우에도 메타 줄을 렌더한다.
+  const blockNoVisible = showBlockNo && row.blockNo !== undefined;
 
   // data-* 는 화면에 영향을 주지 않는 자동화 계약이다 — 경로 C 하니스(scripts/vbcable_test.py)가
   // 확정 줄 경계와 확정 계기를 여기서 읽는다. 제거·개명하면 측정이 조용히 깨진다.
@@ -74,9 +84,16 @@ export const SttTextViewer = ({ row, showTimestamp, showFinalizeTrigger }: SttTe
       data-trigger={row.trigger ?? ''}
       data-finalized={row.finalized}
       data-speaker={row.speaker}
+      data-block-no={row.blockNo ?? ''}
     >
-      {(timestampVisible || triggerVisible) && (
+      {(blockNoVisible || timestampVisible || triggerVisible) && (
         <div className="flex items-center gap-2 leading-none">
+          {blockNoVisible && (
+            // 실시간 전사를 방해하지 않도록 시각과 같은 톤·크기로 작게 둔다.
+            <span className="opacity-40" style={{ ...sysStyle, fontSize: '0.7em' }}>
+              #{row.blockNo}
+            </span>
+          )}
           {timestampVisible && (
             <span className="opacity-50" style={{ ...sysStyle, fontSize: '0.7em' }}>
               {row.start}

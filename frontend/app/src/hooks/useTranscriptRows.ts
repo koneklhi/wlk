@@ -8,7 +8,31 @@
  */
 import { useMemo } from 'react';
 import { useSttStore } from '@/stores/stt.store';
-import { buildRows, type TranscriptRow } from '@/utils/transcriptRows';
+import { buildRows, type RowInput, type TranscriptRow } from '@/utils/transcriptRows';
+
+/**
+ * store 스냅샷 → buildRows 입력. 훅(구독 경로)과 브리지(getState 경로)가 **같은 매핑**을 쓰도록
+ * 한 곳에 둔다 — 갈라지면 관리자 페이지가 화면과 다른 블록 목록을 보게 된다.
+ */
+export function toRowInput(s: {
+  committedLines: RowInput['committedLines'];
+  finalizedHistory: RowInput['finalizedHistory'];
+  serverLines: RowInput['serverLines'];
+  volatile: RowInput['volatile'];
+  isFinalizing: boolean;
+  suppressedBlockNos: ReadonlySet<number>;
+  translationOverrides: RowInput['translationOverrides'];
+}): RowInput {
+  return {
+    committedLines: s.committedLines,
+    finalizedHistory: s.finalizedHistory,
+    serverLines: s.serverLines,
+    volatile: s.volatile,
+    isFinalizing: s.isFinalizing,
+    suppressedBlockNos: s.suppressedBlockNos,
+    translationOverrides: s.translationOverrides,
+  };
+}
 
 export function useTranscriptRows(): TranscriptRow[] {
   const committedLines = useSttStore((s) => s.committedLines);
@@ -16,9 +40,30 @@ export function useTranscriptRows(): TranscriptRow[] {
   const serverLines = useSttStore((s) => s.serverLines);
   const volatile = useSttStore((s) => s.volatile);
   const isFinalizing = useSttStore((s) => s.isFinalizing);
+  const suppressedBlockNos = useSttStore((s) => s.suppressedBlockNos);
+  const translationOverrides = useSttStore((s) => s.translationOverrides);
 
   return useMemo(
-    () => buildRows({ committedLines, finalizedHistory, serverLines, volatile, isFinalizing }),
-    [committedLines, finalizedHistory, serverLines, volatile, isFinalizing],
+    () =>
+      buildRows(
+        toRowInput({
+          committedLines,
+          finalizedHistory,
+          serverLines,
+          volatile,
+          isFinalizing,
+          suppressedBlockNos,
+          translationOverrides,
+        }),
+      ),
+    [
+      committedLines,
+      finalizedHistory,
+      serverLines,
+      volatile,
+      isFinalizing,
+      suppressedBlockNos,
+      translationOverrides,
+    ],
   );
 }

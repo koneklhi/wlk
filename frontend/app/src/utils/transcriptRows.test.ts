@@ -7,6 +7,7 @@
 import { describe, expect, it } from 'vitest';
 import { buildRows, freezeLines, type RowInput } from './transcriptRows';
 import { lineKey } from './deltaProtocol';
+import type { ClientSegment } from './blockNumbers';
 import type { Segment, VolatileState } from '@/types/stt';
 
 const VOLATILE: VolatileState = {
@@ -228,5 +229,127 @@ describe('freezeLines — 일시중단 시 세션 동결', () => {
 
   it('아무것도 없으면 빈 배열', () => {
     expect(freezeLines([], VOLATILE)).toEqual([]);
+  });
+});
+
+// ── 블록 관리(관리자 페이지) ──────────────────────────────────────────────────
+
+/** blockNo 가 심어진 줄. 실제로는 assignBlockNos 가 심는다. */
+function cseg(id: number, text: string, blockNo: number, extra: Partial<Segment> = {}): ClientSegment {
+  return { ...seg(id, text, extra), blockNo };
+}
+
+describe('buildRows — 블록 번호', () => {
+  it('blockNo 를 행까지 전달한다', () => {
+    const rows = buildRows(input({ finalizedHistory: historyOf(cseg(0.1, '가', 7)) }));
+    expect(rows[0].blockNo).toBe(7);
+  });
+
+  it('번호가 없는 줄은 blockNo 가 undefined 다', () => {
+    const rows = buildRows(input({ finalizedHistory: historyOf(seg(0.1, '가')) }));
+    expect(rows[0].blockNo).toBeUndefined();
+  });
+});
+
+describe('buildRows — 삭제(suppressed)', () => {
+  const three = () =>
+    input({ finalizedHistory: historyOf(cseg(0.1, '가', 1), cseg(1.2, '나', 2), cseg(2.3, '다', 3)) });
+
+  it('빈 Set 이면 출력이 그대로다', () => {
+    expect(buildRows({ ...three(), suppressedBlockNos: new Set() })).toEqual(buildRows(three()));
+  });
+
+  it('숨긴 블록만 사라지고 나머지 순서·key 는 그대로다', () => {
+    const rows = buildRows({ ...three(), suppressedBlockNos: new Set([2]) });
+    expect(rows.map((r) => r.text)).toEqual(['가', '다']);
+    expect(rows.map((r) => r.key)).toEqual([`s:${lineKey(seg(0.1, '가'))}`, `s:${lineKey(seg(2.3, '다'))}`]);
+  });
+
+  it('실행취소(해제)하면 원래 자리로 돌아온다', () => {
+    const deleted = buildRows({ ...three(), suppressedBlockNos: new Set([2]) });
+    const restored = buildRows({ ...three(), suppressedBlockNos: new Set() });
+    expect(deleted.map((r) => r.text)).toEqual(['가', '다']);
+    expect(restored.map((r) => r.text)).toEqual(['가', '나', '다']);
+  });
+
+  it('이전 세션(committedLines) 블록도 번호로 지워진다 — id 가 겹쳐도 무관', () => {
+    // 새 세션은 id 가 0 부터 다시 매겨진다. 번호는 세션을 넘어 유일하므로 오삭제가 없다.
+    const rows = buildRows(
+      input({
+        committedLines: [cseg(0.1, '옛 문장', 1)],
+        finalizedHistory: historyOf(cseg(0.1, '새 문장', 2)),
+        suppressedBlockNos: new Set([1]),
+      }),
+    );
+    expect(rows.map((r) => r.text)).toEqual(['새 문장']);
+  });
+
+  it('마지막 행을 지워도 buffer 꼬리가 앞 행으로 새지 않는다', () => {
+    // 숨김을 앞에서 걸렀다면 '가' 뒤에 미확정 발화가 붙어버린다.
+    const rows = buildRows(
+      input({
+        finalizedHistory: historyOf(cseg(0.1, '가', 1)),
+        serverLines: [cseg(1.2, '나', 2, { finalized: false })],
+        volatile: { ...VOLATILE, buffer_transcription: ' 이어지는 말' },
+        suppressedBlockNos: new Set([2]),
+      }),
+    );
+    expect(rows.map((r) => r.text)).toEqual(['가']);
+    expect(rows[0].bufferText).toBeUndefined();
+  });
+
+  it('isFinalizing 에서도 지운 행의 꼬리가 앞 행 본문에 정착하지 않는다', () => {
+    const rows = buildRows(
+      input({
+        finalizedHistory: historyOf(cseg(0.1, '가', 1)),
+        serverLines: [cseg(1.2, '나', 2, { finalized: false })],
+        volatile: { ...VOLATILE, buffer_transcription: ' 꼬리' },
+        isFinalizing: true,
+        suppressedBlockNos: new Set([2]),
+      }),
+    );
+    expect(rows.map((r) => r.text)).toEqual(['가']);
+  });
+});
+
+describe('buildRows — 재번역 override', () => {
+  const withOverride = (over: { sourceText: string; translation: string }) =>
+    buildRows(
+      input({
+        finalizedHistory: historyOf(cseg(0.1, '안녕하세요', 1, { translation: '서버 번역' })),
+        translationOverrides: new Map([[1, over]]),
+      }),
+    );
+
+  it('원문이 일치하면 서버 번역을 이긴다', () => {
+    expect(withOverride({ sourceText: '안녕하세요', translation: '관리자 번역' })[0].translation).toBe(
+      '관리자 번역',
+    );
+  });
+
+  it('원문이 달라지면(단어교정 적용) override 를 폐기하고 서버 번역으로 돌아간다', () => {
+    expect(withOverride({ sourceText: '옛 원문', translation: '관리자 번역' })[0].translation).toBe(
+      '서버 번역',
+    );
+  });
+
+  it('번역이 없던 블록에도 붙는다', () => {
+    const rows = buildRows(
+      input({
+        finalizedHistory: historyOf(cseg(0.1, '안녕하세요', 1)),
+        translationOverrides: new Map([[1, { sourceText: '안녕하세요', translation: '복구된 번역' }]]),
+      }),
+    );
+    expect(rows[0].translation).toBe('복구된 번역');
+  });
+
+  it('번호가 없는 줄은 override 대상이 아니다', () => {
+    const rows = buildRows(
+      input({
+        finalizedHistory: historyOf(seg(0.1, '안녕하세요', { translation: '서버 번역' })),
+        translationOverrides: new Map([[1, { sourceText: '안녕하세요', translation: '관리자 번역' }]]),
+      }),
+    );
+    expect(rows[0].translation).toBe('서버 번역');
   });
 });

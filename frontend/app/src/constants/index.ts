@@ -21,6 +21,9 @@ export const Api = {
   PROMPTS: '/api/prompts',
   PROMPTS_ADD: '/api/prompts/add-item',
   PROMPTS_DELETE: '/api/prompts/delete-item',
+
+  /** 블록 재번역(1회성, 세션 무관). 응답이 LLM 왕복이라 기본 5초 timeout 으로는 부족하다. */
+  RETRANSLATE: '/api/retranslate',
 } as const;
 
 /** 라우팅 prefix. vite.config.ts 의 `base` 와 반드시 일치해야 한다. */

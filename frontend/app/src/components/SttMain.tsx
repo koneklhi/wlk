@@ -15,6 +15,7 @@ import { SttTextViewer } from '@/components/SttTextViewer';
 import { STTThemeProvider, useSttTextStyle } from '@/components/SttThemeProvider';
 import { useSttSession } from '@/hooks/useSttSession';
 import { useTranscriptRows } from '@/hooks/useTranscriptRows';
+import { useBlockCommandBridge } from '@/hooks/useBlockCommandBridge';
 import useSettingSidebarStore from '@/stores/stt-sidebar-store';
 import { useSttStore } from '@/stores/stt.store';
 import { useThemeStore } from '@/stores/theme.store';
@@ -29,6 +30,7 @@ function SttMainInner() {
   const systemStyle = useSttTextStyle('system');
   const showTimestamp = useThemeStore((s) => s.showTimestamp);
   const showFinalizeTrigger = useThemeStore((s) => s.showFinalizeTrigger);
+  const showBlockNo = useThemeStore((s) => s.showBlockNo);
 
   const phase = useSttStore((s) => s.phase);
   const backendStatus = useSttStore((s) => s.backendStatus);
@@ -37,6 +39,9 @@ function SttMainInner() {
   const errorSeq = useSttStore((s) => s.errorSeq);
 
   const rows = useTranscriptRows();
+  const suppressedCount = useSttStore((s) => s.suppressedBlockNos.size);
+  // 관리자 창의 블록 명령 수신부. 실시간 화면에서 한 번만 마운트한다.
+  useBlockCommandBridge();
   const session = useSttSession();
 
   const isOpenSidebar = useSettingSidebarStore((s) => s.isOpenSidebar);
@@ -80,7 +85,10 @@ function SttMainInner() {
     return () => clearInterval(t);
   }, [checkBackend]);
 
-  const hasTranscript = rows.length > 0;
+  // 관리자 페이지에서 블록을 전부 지우면 rows 가 비지만 시작 안내로 되돌아가면 안 된다 —
+  // 녹음 중에 "음성 인식을 시작하면..." 이 뜨면 고장으로 보인다. 지운 이력이 있다는 것 자체가
+  // 전사가 존재했다는 증거이므로 전사 영역을 유지한다(세션 종료·초기화 시 함께 리셋된다).
+  const hasTranscript = rows.length > 0 || suppressedCount > 0;
   const isConnecting = phase === 'connecting';
 
   return (
@@ -167,6 +175,7 @@ function SttMainInner() {
                   row={row}
                   showTimestamp={showTimestamp}
                   showFinalizeTrigger={showFinalizeTrigger}
+                  showBlockNo={showBlockNo}
                 />
               ))}
             </div>

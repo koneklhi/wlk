@@ -19,6 +19,7 @@ import {
   getCorrections,
   getPrompts,
 } from '@/api/corrections';
+import { BlockControlPanel } from '@/components/BlockControlPanel';
 import { Input } from '@/components/ui/input';
 import { cn } from '@/utils';
 
@@ -409,7 +410,10 @@ function Section({ type, Icon, className }: { type: ItemKind; Icon: LucideIcon; 
 
 /**
  * 한 페이지에 세 사전을 모두 펼친다 — 탭 없음.
- * 좌: 단어교정(전사 후처리 대치) / 우: 번역용어(위) + 번역예시(아래).
+ * 좌: 블록 관리(위) + 단어교정(아래) / 우: 번역용어(위) + 번역예시(아래).
+ *
+ * 블록 관리만 성격이 다르다 — 사전이 아니라 **실시간 화면 조작**이라 서버가 아닌 다른 창에
+ * 명령을 보낸다(BlockControlPanel 참조). 높이는 내용만큼만 쓰도록 shrink-0 으로 둔다.
  *
  * 페이지 전체 스크롤이 아니라 **패널별 내부 스크롤**이다(`SectionUI` 의 목록 div 가
  * `flex-1 min-h-0 overflow-y-auto`). 그래서 바깥 컨테이너는 높이를 고정해 주고
@@ -429,7 +433,11 @@ function AdminPage() {
 
       {/* Content — 좌: 단어교정 / 우: 번역용어 + 번역예시 */}
       <div className="flex-1 min-h-0 flex flex-row gap-6 px-8 py-6">
-        <Section type="words" Icon={BookOpen} className="flex-1 min-w-0 min-h-0" />
+        <div className="flex-1 min-w-0 flex flex-col gap-6">
+          <BlockControlPanel className="shrink-0" />
+          <div className="h-px shrink-0 bg-white/[0.06]" />
+          <Section type="words" Icon={BookOpen} className="flex-1 min-h-0" />
+        </div>
 
         <div className="w-px shrink-0 bg-white/[0.06]" />
 

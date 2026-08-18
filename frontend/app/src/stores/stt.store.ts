@@ -21,6 +21,7 @@ import {
   reconstructLines,
   sameSegment,
 } from '@/utils/deltaProtocol';
+import { assignBlockNos, isVisible, type ClientSegment } from '@/utils/blockNumbers';
 import { freezeLines } from '@/utils/transcriptRows';
 import { buildWsUrl } from '@/utils/wsUrl';
 import { getHealth } from '@/api/health';
@@ -47,9 +48,33 @@ export const MAX_AUTO_RESUME = 3;
 /** 이 횟수를 넘게 desync 하면 프로토콜 버그로 보고 자동 재동기를 멈춘다. */
 const MAX_DESYNC = 3;
 
+/**
+ * 블록 관리 상태 초기화 묶음 — 화면이 비워지는 모든 지점에서 함께 리셋해야 한다.
+ * 빠뜨리면 빈 화면에서 블록 번호가 #438 부터 시작하고, 이전 세션의 삭제 표시가 새 세션의
+ * 엉뚱한 블록을 지운다(번호는 세션을 넘어 이어지므로 값이 겹칠 수 있다).
+ */
+const BLOCK_STATE_RESET = {
+  nextBlockNo: 1,
+  suppressedBlockNos: new Set<number>(),
+  translationOverrides: new Map<number, TranslationOverride>(),
+  lastDeleted: null,
+} as const;
+
 export interface PendingResume {
   reason: 'disconnect' | 'desync';
   attempt: number;
+}
+
+/**
+ * 관리자 페이지가 재번역한 결과. 서버 `TranslationManager` 캐시와 무관한 1회성 번역이라
+ * 서버는 다음 tick 에도 옛 번역을 계속 실어보낸다 — 화면에서는 이쪽이 이긴다.
+ *
+ * `sourceText` 는 무효화 기준이다. 단어교정 사전이 바뀌어 원문이 달라지면 이 번역은
+ * 더 이상 그 문장의 번역이 아니므로 조용히 폐기된다.
+ */
+export interface TranslationOverride {
+  sourceText: string;
+  translation: string;
 }
 
 interface SttStore {
@@ -71,12 +96,25 @@ interface SttStore {
 
   // ── 전사 상태 ──
   /** 서버-권위 lines[] 미러. 새 연결마다 반드시 비운다. */
-  serverLines: Segment[];
+  serverLines: ClientSegment[];
   /** 현 세션 확정 이력. key = String(id). */
-  finalizedHistory: Map<string, Segment>;
+  finalizedHistory: Map<string, ClientSegment>;
   /** 이전 세션들에서 동결된 확정 줄. */
-  committedLines: Segment[];
+  committedLines: ClientSegment[];
   volatile: VolatileState;
+
+  // ── 블록 관리(관리자 페이지) ──
+  /** 다음에 발급할 블록 번호. 일시중단→재개를 넘어 이어진다(화면 전체에서 유일). */
+  nextBlockNo: number;
+  /**
+   * 화면에서 숨긴 블록 번호. **컬렉션에서 지우지 않고 렌더 단계에서만 거른다** —
+   * 그래야 실행취소가 Set 원소 하나를 빼는 것으로 끝나고 원래 자리로 정확히 복귀한다.
+   */
+  suppressedBlockNos: Set<number>;
+  /** 관리자 페이지 재번역 결과. key = 블록 번호. */
+  translationOverrides: Map<number, TranslationOverride>;
+  /** 실행취소 대상. 최근 1건만 보관한다. */
+  lastDeleted: number | null;
 
   // ── 복구/진단 ──
   pendingResume: PendingResume | null;
@@ -102,6 +140,12 @@ interface SttStore {
   endSession: (intent: 'pause' | 'stop') => void;
   /** 전사 기록 전체 삭제 → idle. */
   resetTranscript: () => void;
+  /** 블록을 화면에서 숨긴다(실행취소 가능). 이미 숨긴 번호는 무시한다. */
+  deleteBlock: (blockNo: number) => void;
+  /** 최근 삭제 1건 복원. 복원할 게 없으면 무시한다. */
+  undoDelete: () => void;
+  /** 관리자 페이지 재번역 결과를 반영한다. */
+  applyTranslationOverride: (blockNo: number, sourceText: string, translation: string) => void;
   failSession: (reason: unknown) => void;
   checkBackend: () => Promise<void>;
 
@@ -135,6 +179,8 @@ export const useSttStore = create<SttStore>()((set, get) => ({
   finalizedHistory: new Map(),
   committedLines: [],
   volatile: { ...EMPTY_VOLATILE },
+
+  ...BLOCK_STATE_RESET,
 
   pendingResume: null,
   lastSeq: 0,
@@ -174,6 +220,9 @@ export const useSttStore = create<SttStore>()((set, get) => ({
       // 같은 Map 에 두면 옛 줄을 덮어쓴다.
       committedLines: resume ? [...s.committedLines, ...s.finalizedHistory.values()] : [],
       finalizedHistory: new Map(),
+      // 재개는 화면을 이어가므로 번호도 이어간다. 새로 시작(resume=false)은 화면을 비우므로
+      // 번호·삭제 표시·재번역 결과를 전부 버린다.
+      ...(resume ? {} : BLOCK_STATE_RESET),
       // 새 연결 = 서버측 새 DiffTracker(seq 1 부터 snapshot). 안 비우면 이전 세션 줄이
       // 꼬리 교체에 섞여 들어간다.
       serverLines: [],
@@ -270,6 +319,7 @@ export const useSttStore = create<SttStore>()((set, get) => ({
         finalizedHistory: new Map(),
         committedLines: [],
         volatile: { ...EMPTY_VOLATILE },
+        ...BLOCK_STATE_RESET,
         isFinalizing: false,
         pendingResume: null,
         lastSeq: 0,
@@ -301,12 +351,36 @@ export const useSttStore = create<SttStore>()((set, get) => ({
       finalizedHistory: new Map(),
       committedLines: [],
       volatile: { ...EMPTY_VOLATILE },
+      ...BLOCK_STATE_RESET,
       isFinalizing: false,
       pendingResume: null,
       lastSeq: 0,
       desyncCount: 0,
       lastError: null,
     });
+  },
+
+  // ── 블록 관리 (관리자 페이지 명령) ────────────────────────────────────────
+  deleteBlock: (blockNo) => {
+    const s = get();
+    if (s.suppressedBlockNos.has(blockNo)) return;
+    const next = new Set(s.suppressedBlockNos);
+    next.add(blockNo);
+    set({ suppressedBlockNos: next, lastDeleted: blockNo });
+  },
+
+  undoDelete: () => {
+    const s = get();
+    if (s.lastDeleted === null) return;
+    const next = new Set(s.suppressedBlockNos);
+    next.delete(s.lastDeleted);
+    set({ suppressedBlockNos: next, lastDeleted: null });
+  },
+
+  applyTranslationOverride: (blockNo, sourceText, translation) => {
+    const next = new Map(get().translationOverrides);
+    next.set(blockNo, { sourceText, translation });
+    set({ translationOverrides: next });
   },
 
   failSession: (reason) => {
@@ -464,8 +538,12 @@ type GetFn = () => SttStore;
  * finalizedHistory 는 **실제로 바뀐 게 있을 때만** 새 Map 을 만든다 — 참조가 매 메시지(50ms)
  * 바뀌면 화면 파생 useMemo 가 전부 무효화되어 델타의 렌더 이득이 사라진다.
  */
-function applyState(set: SetFn, get: GetFn, lines: Segment[], v: VolatileState, seq: number): void {
+function applyState(set: SetFn, get: GetFn, incoming: Segment[], v: VolatileState, seq: number): void {
   const s = get();
+
+  // 번호 승계 소스는 **직전 serverLines** 다(blockNumbers.ts 규약 ②). set() 보다 먼저 읽어야
+  // 하는데, zustand set 은 동기라 이 시점의 s.serverLines 는 아직 이전 배열이다.
+  const { lines, nextNo } = assignBlockNos(s.serverLines, incoming, s.nextBlockNo);
 
   let history = s.finalizedHistory;
   let dirty = false;
@@ -483,6 +561,7 @@ function applyState(set: SetFn, get: GetFn, lines: Segment[], v: VolatileState, 
 
   set({
     serverLines: lines,
+    nextBlockNo: nextNo,
     finalizedHistory: dirty ? history : s.finalizedHistory,
     // status:'no_audio_detected' 는 침묵 중 정상적으로 반복된다.
     // 여기서 누적 상태를 비우면 침묵마다 자막이 영구 소실된다 — volatile 만 갈아끼운다.
@@ -517,9 +596,14 @@ function absorbTail(set: SetFn, get: GetFn): void {
   const frozen = freezeLines(s.serverLines, s.volatile);
   if (frozen.length === 0) return;
 
+  // 캐리어 줄(id === null)은 assignBlockNos 의 발급 대상이 아니다 — 여기서 주지 않으면
+  // 번호 없는 블록이 화면에 남아 관리자 페이지에서 지목할 수 없다.
+  let nextBlockNo = s.nextBlockNo;
   const history = new Map(s.finalizedHistory);
   frozen.forEach((ln, i) => {
-    history.set(ln.id === null ? `carrier:${i}` : lineKey(ln), ln);
+    const numbered =
+      ln.blockNo === undefined && isVisible(ln) ? { ...ln, blockNo: nextBlockNo++ } : ln;
+    history.set(ln.id === null ? `carrier:${i}` : lineKey(ln), numbered);
   });
-  set({ finalizedHistory: history });
+  set({ finalizedHistory: history, nextBlockNo });
 }
