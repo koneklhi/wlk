@@ -11,7 +11,8 @@
  * 별도 표시 없이 일반 전사 줄로 렌더한다.
  */
 import { isFinalized, lineKey } from '@/utils/deltaProtocol';
-import type { FinalizeTrigger, Segment, VolatileState } from '@/types/stt';
+import { isVisible, type ClientSegment } from '@/utils/blockNumbers';
+import type { FinalizeTrigger, VolatileState } from '@/types/stt';
 
 export interface TranscriptRow {
   /** React key. 세션 경계 접두사 + 안정 id. 배열 index 를 쓰면 소급 수정 때 오재사용된다. */
@@ -35,32 +36,41 @@ export interface TranscriptRow {
   bufferText?: string;
   /** 마지막 행에만 — 실시간 번역 buffer 꼬리. */
   bufferTranslation?: string;
+  /** 화면 표시용 블록 번호. 관리자 페이지가 이 번호로 블록을 지목한다(blockNumbers.ts). */
+  blockNo?: number;
 }
 
 export interface RowInput {
   /** 이전 세션(일시중단/재연결 이전)에서 동결된 확정 줄. */
-  committedLines: readonly Segment[];
+  committedLines: readonly ClientSegment[];
   /** 현 세션 확정 이력. key = String(id). */
-  finalizedHistory: ReadonlyMap<string, Segment>;
+  finalizedHistory: ReadonlyMap<string, ClientSegment>;
   /** 서버-권위 lines[] 미러 (확정·미확정 모두). */
-  serverLines: readonly Segment[];
+  serverLines: readonly ClientSegment[];
   volatile: VolatileState;
   /** ready_to_stop 이후 최종 렌더 — buffer 를 꼬리가 아니라 본문에 정착시킨다. */
   isFinalizing: boolean;
-}
-
-/** 화면에 내보낼 줄인가. 침묵 구간과 빈 줄은 제외한다(기존 UI 동작 유지). */
-function isVisible(seg: Segment): boolean {
-  return seg.speaker !== -2 && Boolean(seg.text);
+  /** 관리자 페이지가 숨긴 블록 번호. 생략하면 아무것도 숨기지 않는다. */
+  suppressedBlockNos?: ReadonlySet<number>;
+  /** 관리자 페이지 재번역 결과. key = 블록 번호. */
+  translationOverrides?: ReadonlyMap<number, { sourceText: string; translation: string }>;
 }
 
 export function buildRows(inp: RowInput): TranscriptRow[] {
-  const { committedLines, finalizedHistory, serverLines, volatile: v, isFinalizing } = inp;
+  const {
+    committedLines,
+    finalizedHistory,
+    serverLines,
+    volatile: v,
+    isFinalizing,
+    suppressedBlockNos,
+    translationOverrides,
+  } = inp;
 
   const interim = serverLines.filter((l) => !isFinalized(l) && isVisible(l));
   const interimIds = new Set(interim.map(lineKey));
 
-  const merged: Array<{ seg: Segment; era: 'past' | 'now' }> = [
+  const merged: Array<{ seg: ClientSegment; era: 'past' | 'now' }> = [
     // 이전 세션 확정분. 새 세션은 id 가 0부터 다시 매겨지므로 **interim 필터를 적용하면 안 된다** —
     // 우연히 같은 id 를 가진 옛 줄이 통째로 숨겨진다.
     ...committedLines.filter(isVisible).map((seg) => ({ seg, era: 'past' as const })),
@@ -75,7 +85,7 @@ export function buildRows(inp: RowInput): TranscriptRow[] {
   // 아직 확정 줄이 없는데 buffer 만 있는 초기 구간 — 빈 캐리어 행을 만들어 buffer 를 보여준다.
   // 없으면 녹음 시작 후 첫 몇 초 동안 화면이 완전히 비어 고장난 것처럼 보인다.
   const hasBuffer = Boolean(v.buffer_transcription || v.buffer_diarization);
-  const carrier: Array<{ seg: Segment; era: 'past' | 'now' }> =
+  const carrier: Array<{ seg: ClientSegment; era: 'past' | 'now' }> =
     merged.length === 0 && hasBuffer
       ? [
           {
@@ -91,7 +101,10 @@ export function buildRows(inp: RowInput): TranscriptRow[] {
     id: seg.id ?? null,
     speaker: seg.speaker ?? 1,
     text: seg.text ?? '',
-    translation: seg.translation || undefined,
+    blockNo: seg.blockNo,
+    // 관리자 페이지 재번역 결과가 서버 번역을 이긴다. 단 그 사이 단어교정으로 원문이 바뀌었으면
+    // 더 이상 이 문장의 번역이 아니므로 폐기하고 서버 번역으로 돌아간다.
+    translation: pickTranslation(seg, translationOverrides),
     start: seg.start,
     end: seg.end,
     finalized: isFinalized(seg),
@@ -112,7 +125,25 @@ export function buildRows(inp: RowInput): TranscriptRow[] {
       if (v.buffer_translation) last.bufferTranslation = v.buffer_translation;
     }
   }
-  return rows;
+
+  // 숨김 처리는 **맨 마지막**이다. 앞에서 걸러 정렬하거나 제거하면 세 가지가 깨진다:
+  //   ① buffer 꼬리가 붙는 "마지막 행"이 달라져 실시간 발화가 엉뚱한 블록에 붙는다
+  //   ② 숨긴 게 없을 때의 출력이 기존과 달라져 경로 C 측정(stt-row DOM 순서 스크래핑)이 흔들린다
+  //   ③ 실행취소 시 복원 위치를 따로 계산해야 한다 — 여기서 거르면 자리가 그대로 남는다
+  if (!suppressedBlockNos || suppressedBlockNos.size === 0) return rows;
+  return rows.filter((r) => r.blockNo === undefined || !suppressedBlockNos.has(r.blockNo));
+}
+
+/** 재번역 override 가 유효하면 그것을, 아니면 서버 번역을 돌려준다. */
+function pickTranslation(
+  seg: ClientSegment,
+  overrides: RowInput['translationOverrides'],
+): string | undefined {
+  if (overrides && seg.blockNo !== undefined) {
+    const ov = overrides.get(seg.blockNo);
+    if (ov && ov.sourceText === (seg.text ?? '')) return ov.translation || undefined;
+  }
+  return seg.translation || undefined;
 }
 
 /**
@@ -124,10 +155,10 @@ export function buildRows(inp: RowInput): TranscriptRow[] {
  * 있었으므로), 확정 줄이 있어도 마지막 buffer 꼬리는 매번 날아갔다.
  */
 export function freezeLines(
-  serverLines: readonly Segment[],
+  serverLines: readonly ClientSegment[],
   v: VolatileState,
-): Segment[] {
-  const frozen: Segment[] = serverLines
+): ClientSegment[] {
+  const frozen: ClientSegment[] = serverLines
     .filter(isVisible)
     .map((seg) => ({ ...seg, finalized: true }));
 

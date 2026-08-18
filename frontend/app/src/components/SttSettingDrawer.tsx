@@ -121,6 +121,8 @@ export const SttSettingDrawer = ({
     setShowTimestamp,
     showFinalizeTrigger,
     setShowFinalizeTrigger,
+    showBlockNo,
+    setShowBlockNo,
     screenPaddingXPercent,
     setScreenPaddingXPercent,
     blockGapPx,
@@ -284,6 +286,19 @@ export const SttSettingDrawer = ({
                   <select
                     value={showFinalizeTrigger ? 'on' : 'off'}
                     onChange={(e) => setShowFinalizeTrigger(e.target.value === 'on')}
+                    className={SELECT_CLASS}
+                  >
+                    <option value="off">숨김</option>
+                    <option value="on">표시</option>
+                  </select>
+                </div>
+
+                {/* ── 블록 번호 표시 ── */}
+                <div className="flex justify-between items-center">
+                  <p className="font-semibold text-base flex-grow-0">블록 번호 표시</p>
+                  <select
+                    value={showBlockNo ? 'on' : 'off'}
+                    onChange={(e) => setShowBlockNo(e.target.value === 'on')}
                     className={SELECT_CLASS}
                   >
                     <option value="off">숨김</option>

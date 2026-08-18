@@ -49,10 +49,11 @@ frontend/app/
     ├── routes/                  # TanStack Router 파일 기반 라우트
     │   ├── __root.tsx           # 루트 라우트 (Outlet 만)
     │   ├── index.tsx            # "/" — <SttMain/> 렌더
-    │   └── admin.tsx            # "/admin" — 단어교정 + 번역용어 + 번역예시 관리
+    │   └── admin.tsx            # "/admin" — 블록 관리 + 단어교정 + 번역용어 + 번역예시
     │
     ├── api/                     # REST API 클라이언트
     │   ├── corrections.ts       # 단어교정 사전 + 번역 사전(glossary/예시) CRUD
+    │   ├── retranslate.ts       # 블록 재번역 (POST /api/retranslate, timeout 60초)
     │   └── health.ts            # 백엔드 헬스체크 (GET /health)
     │
     ├── assets/
@@ -61,6 +62,7 @@ frontend/app/
     │
     ├── components/
     │   ├── SttMain.tsx              # 메인 화면 (헤더/전사영역/설정드로어), 세션 렌더만 담당
+    │   ├── BlockControlPanel.tsx    # 관리자 페이지 — 블록 삭제/재번역 (BroadcastChannel 명령)
     │   ├── SttSettingDrawer.tsx     # 오른쪽 슬라이드 설정 드로어
     │   ├── SttTextViewer.tsx        # 전사 행 1개 렌더 (원문+번역+선택적 시각)
     │   ├── SttTranslateLoader.tsx   # 번역 대기 로더
@@ -75,12 +77,13 @@ frontend/app/
     │       └── select.tsx
     │
     ├── constants/
-    │   └── index.ts              # Api.{HEALTH,CORRECTIONS,PROMPTS,PROMPTS_ADD,PROMPTS_DELETE}, BASE_PATH, APP_VERSION
+    │   └── index.ts              # Api.{HEALTH,CORRECTIONS,PROMPTS,PROMPTS_ADD,PROMPTS_DELETE,RETRANSLATE}, BASE_PATH, APP_VERSION
     │
     ├── hooks/
     │   ├── useSttSession.ts      # 세션 오케스트레이션 — 소켓·마이크 라이프사이클이 만나는 유일한 곳
     │   ├── useAudioRecorder.ts(+.test.ts) # 마이크 캡처 + WebM 인코딩 (MediaRecorder)
-    │   ├── useTranscriptRows.ts  # store 슬라이스 → 화면 행 배열 파생 (useMemo)
+    │   ├── useTranscriptRows.ts  # store 슬라이스 → 화면 행 배열 파생 (useMemo) + toRowInput
+    │   ├── useBlockCommandBridge.ts # 관리자 창 명령 수신부 (실시간 화면에서 1회 마운트)
     │   └── useWaveform.ts        # AnalyserNode → requestAnimationFrame → canvas 직접 그리기
     │
     ├── stores/
@@ -93,9 +96,11 @@ frontend/app/
     │
     └── utils/
         ├── deltaProtocol.ts(+.test.ts)     # 델타 프로토콜 메시지 판별 + lines 재구성 (순수 함수)
+        ├── blockNumbers.ts(+.test.ts)      # 블록 번호 발급·승계 (순수 함수)
+        ├── blockCommands.ts(+.test.ts)     # 관리자 창 ↔ 화면 창 명령 브리지 + 판정 (순수 함수)
         ├── transcriptRows.ts(+.test.ts)    # 서버 상태 → 화면 행 목록 파생 (순수 함수)
         ├── wsUrl.ts               # WebSocket URL 조립 (origin 기반 절대 URL)
-        ├── fetchJson.ts           # JSON API 요청 헬퍼 (5초 timeout)
+        ├── fetchJson.ts           # JSON API 요청 헬퍼 (기본 5초 timeout, 인자로 조정)
         └── index.ts               # cn() 유틸 (clsx + tailwind-merge)
 ```
 
@@ -232,10 +237,43 @@ pnpm build
 - 확정 원인(`finalize_trigger`) 배지 표시 토글(**기본 on**) — 확정된 줄마다 색상 pill로
   침묵/종결/언어전환/화자전환을 표시한다. 라벨·색은 내장 UI(`live_transcription.js` `TRIGGER_LABELS`)와 동일
 - 화자분리 UI 는 배포 UI 에 **탑재돼 있지 않다** — 서버가 화자 번호(`speaker`)를 보내도 화면에 별도 뱃지/색상으로 표시하지 않는다(`transcriptRows.ts` 설계 주석 참조)
+- **블록 번호(`#N`) 표시 토글(기본 on)** — 메타 줄 맨 앞에 작게 붙는다. 관리자 페이지가 이 번호로
+  블록을 지목한다(아래 "블록 관리" 절)
+
+### 블록 관리 — 삭제 / 재번역 (`BlockControlPanel`, `blockNumbers.ts`, `blockCommands.ts`)
+
+환각만 담긴 블록이 통째로 확정되거나 번역이 비는 일이 있어, 운용 중에 그 블록만 골라 지우거나
+다시 번역한다. 관리자 창(`/admin`)에서 **실시간 화면에 보이는 `#번호`를 입력** → 대상 미리보기 확인
+→ 삭제 / 다시 번역. 삭제는 **최근 1건 실행취소**가 가능하다.
+
+**왜 서버가 아니라 다른 창에 명령을 보내는가.** 단어교정 사전은 서버가 가진 전역 데이터라 서버 한 곳만
+고치면 모든 화면에 퍼진다(매 tick 전 구간 재적용). 반면 "지금 화면의 7번 블록"은 **화면 상태**다 —
+서버에는 진행 중 세션을 찾아갈 경로가 없고(세션 레지스트리 부재), 일시중단→재개하면 새 세션이라
+서버의 줄 번호와 화면의 번호가 어긋난다. 그래서 번호 해석은 화면 창이 하고, 관리자 창은 명령만 보낸다.
+
+- **전제: 같은 브라우저의 다른 창**(다른 모니터). BroadcastChannel 은 창·모니터가 달라도 같은 origin 이면
+  통하지만, **다른 PC·다른 브라우저에서는 통하지 않는다**. 미지원 브라우저면 패널이 비활성으로 뜬다
+- **번호는 고정·결번**(`blockNumbers.ts`) — 발급 순서를 유지하고 삭제해도 뒤 블록을 당기지 않는다.
+  한 번 읽은 번호가 계속 유효해야 연속 삭제가 안전하고, 결번 자체가 "여기 지웠다"는 표시가 된다.
+  번호는 세그먼트를 따라다니므로 일시중단→재개를 넘어서도 유지된다(`id`→번호 영구 Map 은 금지 —
+  새 세션은 `id` 가 0부터 다시 매겨져 즉시 오배정된다)
+- **삭제는 컬렉션에서 지우지 않고 렌더 단계에서만 거른다**(`buildRows` 마지막의 `suppressedBlockNos` 필터).
+  그래서 실행취소가 `Set` 원소 하나를 빼는 것으로 끝나고 **원래 자리로 정확히 복귀**한다.
+  필터를 앞으로 옮기거나 정렬을 넣으면 ① buffer 꼬리가 엉뚱한 블록에 붙고 ② 아무것도 안 지웠을 때의
+  출력이 달라져 경로 C 측정(`stt-row` DOM 순서 스크래핑)이 조용히 흔들린다
+- **화면 창이 2개면 조작을 막는다** — 창마다 독립 WebSocket 세션이라 **번호 체계가 서로 다르다**.
+  조회(비파괴)를 먼저 보내 수집 창(700ms) 동안 응답한 `clientId` 를 세고, 0개·2개 이상이면 안내 후 중단한다.
+  파괴적 명령은 그렇게 확인된 `clientId` 앞으로만 보낸다
+- **미확정 블록은 삭제할 수 없다** — 확정되며 두 세그먼트로 갈라지면 뒤 조각이 새 번호를 받아 부활한다
+- **재번역 REST(`POST /api/retranslate`)는 관리자 창이 직접 호출한다**(조회 때 원문을 이미 받았다).
+  브리지에 LLM 왕복만큼의 긴 대기가 생기지 않고, 화면 창이 중간에 닫혀도 부작용이 없다.
+  결과는 화면 창의 `translationOverrides` 에 들어가 서버 번역을 이긴다 — 단어교정으로 원문이 바뀌면
+  자동 폐기된다. 번역 백엔드가 `temperature: 0` 이라 **용어집을 바꾸지 않으면 결과가 같을 수 있고**,
+  그 경우 토스트로 명시한다(정본 = `docs/API_SPEC.md` §3.6)
 
 ### 관리자 페이지 (`/admin`, `routes/admin.tsx`)
-- **탭 없는 1페이지 좌우 2분할** — 좌: 단어교정 사전(전사 후처리 오인식→정답 매핑),
-  우: 번역 용어(glossary, 위) + 번역 예시(sentence, 아래). 세 목록이 항상 동시에 보인다
+- **탭 없는 1페이지 좌우 2분할** — 좌: 블록 관리(위) + 단어교정 사전(전사 후처리 오인식→정답 매핑, 아래),
+  우: 번역 용어(glossary, 위) + 번역 예시(sentence, 아래)
 - 페이지 전체 스크롤이 아니라 **패널별 내부 스크롤**이다(각 목록이 자기 영역 안에서만 스크롤)
 - **정적 JSON 기본값은 화면에 보이지 않는다** — 목록에 뜨는 건 사용자가 이 화면에서 직접 넣은
   DB 항목뿐이다. 배포 전 관리자가 미리 채우는 base JSON(`admin_replacement.json`,
@@ -263,7 +301,7 @@ pnpm build
 - 배경 색상 / 로고(타이틀) 배경 색상 / 로고 폰트 색상
 - 원본·번역·시스템 폰트 크기 및 색상 개별 설정
 - 로고 전체 크기 프리셋(`sm`=50% / `md`=100% / `lg`=150% / `xl`=200%, 타이틀·서브타이틀 폰트 크기·로고 이미지 크기 동시 변경)
-- 시각 표시 / 확정 원인 배지 표시 토글(둘 다 기본 on)
+- 시각 표시 / 확정 원인 배지 표시 / 블록 번호 표시 토글(전부 기본 on)
 - **화면 레이아웃 5종**(전부 `SttSliderField` — 슬라이더와 숫자 입력이 같은 값을 본다).
   배포 현장마다 화면 크기·시청 거리가 달라 운용자가 현장에서 가독성을 맞추기 위한 것이다:
 
@@ -311,7 +349,9 @@ pnpm build
 ### `SttTextViewer`
 전사 행 1개 렌더 — (선택적 메타 줄: 시각 + 확정 원인 배지) + 원문(진하게/연하게는 확정 여부에 따라)
 + 번역(대기 중이면 `SttTranslateLoader`). 미확정 buffer 꼬리는 같은 문단 안에 이어 붙인다.
-메타 줄은 두 토글이 모두 꺼지면 렌더 자체를 생략한다(빈 div 를 남기면 flex gap 만 먹어 행 간격이 벌어진다).
+메타 줄은 **세 토글(블록 번호·시각·확정 원인)이 모두 꺼지면** 렌더 자체를 생략한다(빈 div 를 남기면
+flex gap 만 먹어 행 간격이 벌어진다). 블록 번호는 나머지 둘과 독립적으로 켜진다 — 시각·배지를 다 꺼도
+관리자 페이지에서 블록을 지목할 수 있어야 하기 때문이다.
 **메타 줄은 반드시 `data-testid="stt-text"` 바깥**이다 — 안에 넣으면 경로 C 전사에 섞인다.
 
 ### `SttThemeProvider` / `useSttTextStyle`
@@ -332,8 +372,13 @@ slider)을 얹지 않기 위해서**이고, 겉모습은 `styles.css` 의 `.stt-
 ### `BackendErrorOverlay`
 헬스체크 실패 시 표시되는 전체 화면 오버레이. 연결 시도 중/서버 오류(500)/네트워크 불가 상태를 구분해 안내.
 
+### `BlockControlPanel` (관리자 페이지 좌측 상단)
+실시간 전사 블록을 **번호로 지목해** 삭제하거나 다시 번역한다. 서버가 아니라 **다른 창**에 명령을
+보내는 유일한 컴포넌트다 — 자세한 배경은 아래 "블록 관리" 절 참조.
+
 ### `routes/admin.tsx` (AdminPage)
-데이터 소스 3종(`words`/`translate_words`/`translate_sentence`)을 한 화면에 펼친다 — 탭이 없다.
+좌측 상단에 `BlockControlPanel`, 그 아래 단어교정. 우측은 번역용어 + 번역예시 — 탭이 없다.
+데이터 소스 3종(`words`/`translate_words`/`translate_sentence`)은 아래 `Section` 이 맡는다.
 `Section` 컴포넌트 하나가 소스 하나를 맡아 `useItems()`(조회/추가/삭제) + 검색어 + 추가 다이얼로그
 상태를 자기 안에 들고, 배치(폭·높이)는 `className` 으로 부모(`AdminPage`)가 정한다.
 
@@ -363,6 +408,7 @@ F1·문장분리 F1을 산출한다. 즉 배포되는 화면이 곧 측정 대�
 | `data-testid="stt-language"` | 언어 `<select>` | 동일 class 의 select 가 3개라 이 속성으로만 특정된다 |
 | `data-testid="stt-transcript"` | `SttMain.tsx` 전사 컨테이너 | 스크래핑 루트 |
 | `data-testid="stt-row"` + `data-trigger` | `SttTextViewer.tsx` 행 컨테이너 | 행 하나 = 확정 문장 하나(F1 의 경계 단위). `data-trigger`는 전사 txt의 `[문장별 확정 트리거]` 섹션 입력 |
+| `data-block-no` | `SttTextViewer.tsx` 행 컨테이너 | 하니스는 쓰지 않는다(디버깅용). 화면의 `#N` 배지와 같은 값 — 관리자 페이지가 이 번호로 블록을 지목한다 |
 | `data-testid="stt-text"` | `SttTextViewer.tsx` 원문 div | **원문만** 읽는다 — 행 전체 innerText 를 쓰면 시각 표시·번역문이 전사에 섞인다 |
 | `data-testid="stt-idle"` / `"stt-backend-error"` | `SttMain.tsx` / `BackendErrorOverlay.tsx` | "전사 0줄"이 하니스 고장인지 백엔드 문제인지 가르는 신호 |
 

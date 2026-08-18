@@ -20,6 +20,7 @@ from starlette.staticfiles import StaticFiles
 from whisperlivekit import AudioProcessor, TranscriptionEngine, get_inline_ui_html, parse_args
 from whisperlivekit.filtering import get_word_manager
 from whisperlivekit.llm_translation import get_prompt_manager
+from whisperlivekit.llm_translation.oneshot import RetranslateError, close_oneshot_translator, retranslate_once
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logging.getLogger().setLevel(logging.WARNING)
@@ -151,11 +152,21 @@ class SaveTranscriptRequest(BaseModel):
     lines: List[TranscriptLine]
 
 
+class RetranslateRequest(BaseModel):
+    text: str
+    # 틀려도 translate_sentence가 문자 구성 기반으로 보정한다(resolve_src_lang) — 클라이언트가
+    # 정확한 언어를 몰라도 되도록 기본값을 둔다.
+    src_lang: str = "ko"
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global transcription_engine
     transcription_engine = TranscriptionEngine(config=config)
     yield
+    # 1회성 번역기(관리자 페이지 재번역)의 httpx 세션 정리. 세션별 translator는
+    # audio_processor가 각자 닫는다.
+    await close_oneshot_translator()
 
 app = FastAPI(lifespan=lifespan)
 app.add_middleware(
@@ -579,6 +590,30 @@ async def delete_prompt_item(request: PromptItemRequest):
     if success:
         return {"status": "success"}
     return {"status": "warning", "message": "Item not found or cannot delete default glossary item"}
+
+
+# ---------------------------------------------------------------------------
+# Block Retranslate API  (/api/retranslate) — 관리자 페이지의 블록 재번역
+# ---------------------------------------------------------------------------
+
+@app.post("/api/retranslate")
+async def retranslate(request: RetranslateRequest):
+    """텍스트 1건을 **지금의 용어집으로** 다시 번역한다. 세션과 무관한 1회성 호출.
+
+    실시간 파이프라인의 소급 재번역(--retro-retranslate-lines, 기본 최근 20줄)이 닿지 않는
+    구간 — 창 밖 오래된 문장, 일시중단 이전 세션 — 을 개별로 되살리는 용도다.
+    (정본 = docs/API_SPEC.md §3.6)
+
+    응답의 `translation`이 빈 문자열이면 에코 폐기다. 클라이언트는 화면 번역을 덮어쓰지 말고
+    실패로 안내해야 한다 — 덮어쓰면 번역이 사라진 것처럼 보인다.
+    """
+    try:
+        translation = await retranslate_once(config, request.text, request.src_lang)
+    except RetranslateError as e:
+        raise HTTPException(status_code=e.status, detail=e.message) from None
+    if not translation:
+        return {"status": "warning", "translation": "", "message": "번역 결과를 얻지 못했습니다."}
+    return {"status": "success", "translation": translation}
 
 
 # ---------------------------------------------------------------------------

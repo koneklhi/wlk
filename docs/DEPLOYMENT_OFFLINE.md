@@ -514,6 +514,12 @@ knob별 방향(↑/↓ 효과)·상황별 매트릭스·프리셋 수치 전체�
 제한하고 동시 실행에도 상한을 둔다(**최초** 번역은 이 창과 무관하게 항상 수행 — 정상 실시간 경로 무영향).
 전사 텍스트 대치는 LLM을 쓰지 않으므로 이 값과 무관하게 세션 전 구간에 소급된다. 상세 = [API_SPEC.md §3.5](API_SPEC.md).
 
+**블록 재번역 `POST /api/retranslate`(관리자 페이지 '다시 번역')도 같은 LLM 서버를 쓴다.** 소급 창 밖의
+오래된 문장이나 일시중단 이전 구간을 한 문장씩 되살리는 용도이며, 세션과 무관한 1회성 호출이다.
+따라서 **번역 서버가 떠 있지 않으면 이 버튼은 502로 실패**하고(`--no-llm-translation`이면 503),
+60초 안에 응답이 없으면 504가 된다 — 운용자가 이 오류를 만나면 §5.5 스모크로 LLM 서버부터 확인한다.
+상세 = [API_SPEC.md §3.6](API_SPEC.md).
+
 ### 5.2 [수정 완료] config.py LLM 4필드 누락 — master 머지됨
 - **버그(과거)**: `parse_args.py`는 `--llm-translation`/`--translation-serve`/`--translation-endpoint`/`--translation-model`을 파싱하지만([parse_args.py:375-404](../whisperlivekit/parse_args.py#L375-L404)), `WhisperLiveKitConfig`에 해당 4필드가 없어 `from_namespace`가 버렸다 → `TranslationManager`가 생성되지 않아 **번역이 절대 안 켜졌다**(코드로 4단 체인 확인).
 - **수정(완료)**: `config.py`에 4필드 추가(`llm_translation`/`translation_serve`/`translation_endpoint`/`translation_model`, [config.py:85-89](../whisperlivekit/config.py#L85-L89)). master에 머지 완료.
