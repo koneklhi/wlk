@@ -5997,3 +5997,99 @@ held-out ytn1 화자F1 +5.1·LMR -6.6pp, sbs1 화자F1 worst +40.0. 오류 총�
 - 부수: 이 세션 중 공유 .venv가 git worktree remove의 Junction 관통 삭제로 2회 파괴됨(우발적,
   코드와 무관) — 원인 규명 후 .claude/hooks/block-unsafe-worktree-remove.ps1 신설 + CLAUDE.md §4
   워크트리 제거 규약 추가로 재발 방지(별도 커밋 eaa1654, Exp 번호 미부여 — 인프라 변경).
+
+---
+
+## Exp-211 — BOUNDARY_PROTECT_SECS 5.0→6.0 확대 — 스크리닝 기각 (2026-08-18) [E7, 기각, `exp/boundary-protect-6s`]
+
+**측정 언어모드**: `--lan auto` (전 파일, CLAUDE.md §3.2).
+
+### 발단
+Exp-210 "다음 가설" #2 후속 검증. ytn2 보호창 밖 폴백 13건 중 5건이 Δt=5.04~5.70s로 5.0s 문턱을
+근소 초과해 구제 대상에서 빠져 있었다 — 창을 6.0s로 넓히면 이 5건이 구제되는지 확인한다.
+
+### 가설
+`BOUNDARY_PROTECT_SECS`를 5.0→6.0으로 늘리면 ytn2의 해당 5건이 보존 대상에 들어와 서두 유실이
+추가로 줄어들 것이다. 위험: 5~6초 구간의 실패가 언어전환과 무관한 진짜 잡음이면 보존이 오히려
+환각을 늘릴 수 있다(Exp-210 §ON3가 유사 완화 시도에서 역측정으로 반증된 전례).
+
+### 변경 내용
+- `whisperlivekit/simul_whisper/align_att_base.py:82` — `BOUNDARY_PROTECT_SECS = 5.0` → `6.0`
+  (상수 1개만 변경, 나머지 로직 무변경). 최종 기각으로 `git checkout`하여 master와 동일하게 원복.
+
+### 테스트 설정 및 명령
+같은 세션·같은 워크트리(`exp/boundary-protect-6s`)에서 A(5.0, 베이스라인)/B(6.0, 후보) 짝지음
+스크리닝(`--repeat 1`, bong1+ytn2+sbs1+ytn1, `--lan auto`, diar-ON, CRT=3.0). 순서: A 먼저, 이어서
+B(이미 완료한 6.0 단독 스크리닝 결과 재사용).
+
+```
+scripts/eval.py --model-dir whisperlivekit/model/whisper-large-v3-turbo
+  --files test_data/bong1.wav test_data/ytn2.mp3 test_data/sbs1.mp3 test_data/ytn1.mp3
+  --lan auto --diarization --sortformer-model whisperlivekit/model/sortformer-4spk-v2.nemo
+  --compression-ratio-threshold 3.0 --output ".omc/benchmarks/eval_protect{5s_paired_A,6s_screen}.json"
+```
+
+하니스 이슈 2건을 먼저 해결: ① 워크트리에 `whisper-large-v3-turbo/model.safetensors`(gitignore 실제
+가중치)가 하드링크 누락돼 서버가 `FileNotFoundError`로 즉사(returncode=3) → 하드링크 추가. ②
+`frontend/static`을 main 저장소로 junction했으나 main의 `vite.config.ts` mtime이 dist보다 최신이라
+하니스가 stale로 판정·중단 → junction 해제 후 워크트리 자체 `pnpm install`+`pnpm build`로 독립 dist
+구성(main 저장소 손상 없음, 확인 완료).
+
+### 정량 결과 (N=1 짝지음, A=5.0s vs B=6.0s)
+
+| 파일 | WER A→B | 화자F1 A→B | LMR A→B |
+|---|---|---|---|
+| bong1(§3.8 최우선) | 22.9→39.2%(+16.3pp 악화) | 68.4→66.7(-1.7) | 7.6%→17.4%(+2.4→4.8%p) |
+| ytn2 | 15.3→17.7%(+2.4pp 악화) | 100.0→84.2(-15.8) | 0→0 |
+| sbs1 | 9.5→20.2%(+10.7pp 악화) | 80.0→57.1(-22.9) | 0→2.2%(+1.8%p) |
+| ytn1(held-out) | 10.4→8.6%(-1.8pp 개선) | 94.1→88.9(-5.2) | 0→0 |
+
+### 분석 (서버 로그 `[QGPreserve]` 대조 — 메커니즘 vs 귀속)
+
+**ytn2(가설 표적)**: A는 Δt=14.69s(6.0s보다도 훨씬 밖)에서 유일한 폴백 1건. B는 정확히 목표
+구간인 **Δt=5.44s·5.59s** 2건이 보존으로 전환됨(둘 다 `ko→ko`, 5.04~5.70s 예측 그대로 적중) —
+**가설의 메커니즘 자체는 실증됐다**. 다만 화자F1이 100→84.2로 하락해 순효과는 음의 방향.
+
+**bong1**: A는 보존 1건(Δt=1.44s, en→en). B는 3건 — 그중 Δt=5.83s(en→ko, 6.0s 창에서만 가능한
+신규 언어교정)는 표면적으로 유익해 보이나, WER은 22.9→39.2%로 크게 악화되고 LMR도 7.6→17.4%로
+튀었다. 신규 개입은 1건뿐이라 이 정도 규모 악화를 그 1건에 귀속하기 어렵다.
+
+**sbs1**: A/B 둘 다 보존 성공은 1건으로 거의 동일(Δt=3.71s vs 3.52s). B에서만 "보존 재시도 소진"
+(같은 경계에서 재차 garbage → 기존 폐기 폴백) 2건이 추가로 발생했는데, 이는 `BOUNDARY_PROTECT_SECS`
+값과 무관하게 항상 존재하는 경로(qg_preserve_used 소진)라 6.0s 확대가 직접 유발한 게 아니다.
+
+**ytn1**: A/B 둘 다 Δt=0.96s en→ko 보존 1건으로 사실상 동일 — WER 소폭 개선(10.4→8.6%)은 확대와
+무관해 보인다.
+
+**종합**: 파일당 개입 횟수가 0~3건에 불과해(Exp-210의 ytn2 N=6 재확인에서 "개입 자체가 streak
+18회 중 6회뿐이라 순효과가 노이즈에 묻힌다"고 확인된 것과 동일 패턴), 관측된 WER 변화가 6.0s
+확대의 인과 효과인지 스트리밍 디코딩 고유의 회차간 타이밍 확률성(garbage streak이 정확히 몇 초
+지점에서 발생하는지 자체가 매회 달라짐 — ytn2 A/B의 폴백 위치가 14.69s vs 5.44s로 완전히 다른
+것이 방증)인지 N=1로는 분리 불가능하다.
+
+### 채택 조건 판정
+스크리닝(N=1) 단계 — CLAUDE.md §4에 따라 이 수치만으로 세부 채택/기각 결론을 내리지 않는다. 다만
+"유망한 후보를 N=3 확정측정으로 승격"하는 스크리닝의 목적 기준으로 볼 때, 짝지음 4파일 중 3파일이
+악화 방향이고 그중 bong1(§3.8 최우선)이 큰 폭으로 악화돼 **N=3 투자를 정당화할 만큼 유망하지
+않다** — 스크리닝 단계에서 기각.
+
+### 결론
+**기각(스크리닝 단계)**. `BOUNDARY_PROTECT_SECS`는 5.0 유지(코드 원복, master와 diff 없음). 가설의
+표적 메커니즘(Δt=5.04~5.70s 구간 보존)은 로그로 명확히 확인됐으나, 파일당 개입 빈도가 너무 낮아
+그로 인한 순효과를 이 규모의 측정으로는 노이즈와 구분할 수 없다. Exp-210 결론(폐기가 유실+환각을
+함께 만든다)을 뒤집는 증거는 아니며, 단지 "보호창을 더 넓히는 것"이 그 자체로 추가 개선인지가
+불확실하다는 것이 이번 실험의 결론이다.
+
+### 다음 가설
+1. 이 파라미터를 더 파고들려면 ytn2 단독 N=6+ 반복(Exp-210의 ytn2 N=6 재확인과 동일 패턴)으로
+   개입 빈도를 늘려 귀속을 명확히 해야 한다 — 그전엔 우선순위 낮음.
+2. Exp-210 "다음 가설"의 나머지 항목(kor1~3 스크리닝, bong1 은닉 번역 잔존, frame_threshold
+   조합)이 이 파라미터 튜닝보다 우선순위가 높을 수 있다.
+
+### 기록
+- Epoch 변화 없음(파라미터 값 실험 — 세대 경계 규칙상 실패모드를 바꾸는 구조 변경이 아님).
+- 벤치마크: `.omc/benchmarks/eval_protect6s_screen.json`(B, N=1)·`eval_protect5s_paired_A.json`
+  (A, N=1) — 둘 다 `worktrees/boundary-protect-6s/.omc/benchmarks/`, 워크트리 untracked.
+- 부수: 워크트리 초기 셋업에서 `whisper-large-v3-turbo/model.safetensors` 하드링크 누락(returncode=3)
+  과 `frontend/static` junction의 mtime-stale 하니스 오류를 만나 해결(위 "테스트 설정" 참조) — 둘 다
+  이번 결과 자체와는 무관한 워크트리 셋업 이슈.
