@@ -1,0 +1,23 @@
+파일: test_data\ytn2.mp3
+경로: C | 회차: R3 | 정답형식: 신형식
+WER: 15.8% | 화자분리F1: 94.7% | 문장분리F1: N/A
+언어불일치(KO→EN): 0.0% (WER 0.0%p)
+
+[전사]
+First among those where our efforts to maintain a robust combined defense posture and to strengthen coordination towards achieving the final fully verified denuclearization of North Korea. In the. 논의한 사안 중에서는 우선 왕성한 연합 방위태세를 유지하기 위한 노력을 경제하자는 것과 북한의 최종적 그리고 완전히 검증된 비핵화를 달성하기 위해 협조를 강화하자는 취지의 논의를 했습니다. 네. In support of these ends, we remain resolute in our enforcement of the United Nations Security Council resolutions. 이런 목표들을 달성하기 위해서 우리는 유엔 안보리 결의를 집행하는 것과 관련해 저희 변환 없는 입장을 고소하고 있습니다. Minister Jiang and I reviewed progress on the operational control transition and are in agreement with the Military Committee meetings assessment of the future combined Forces Commands initial operational capability. 정경두 국방장관과 전 정경두 국방장관과 저는 전작권 전환과 관련한 진척을 검토를 했고 MCM 군사위원회에서 미래연합사령부의 기본운동 능력 검증평가 결과에 대해 합의점에 이르었습니다. Overall, we agree that substantive progress has been made towards the conditions-based transfer of operational control to a ROC commander. Let's. 그와 관련해서 한국군 사성장, 한국군 사령관 이와 관련해서 한국군 사령관으로 조건을 기초로 한 전작권 전환을 하는 방향으로 상당하 상당한 진전이 있었음에 합의를 했습니다. There is more work to be done, however, and we remain committed to close coordination on this topic. 하지만 아직 해야 할 일이 많이 남아있고 이와 관련해서 계속 긴밀한 협조를 해나가기로 했습니다
+
+[문장별 확정 트리거]
+1. First among those where our efforts to maintain a robust combined defense posture and to strengthen coordination towards achieving the final fully verified denuclearization of North Korea. In the.  ⟨language_switch⟩
+2. 논의한 사안 중에서는 우선 왕성한 연합 방위태세를 유지하기 위한 노력을 경제하자는 것과 북한의 최종적 그리고 완전히 검증된 비핵화를 달성하기 위해 협조를 강화하자는 취지의 논의를 했습니다.  ⟨punctuation⟩
+3. 네.  ⟨punctuation⟩
+4. In support of these ends, we remain resolute in our enforcement of the United Nations Security Council resolutions.  ⟨language_switch⟩
+5. 이런 목표들을 달성하기 위해서 우리는 유엔 안보리 결의를 집행하는 것과 관련해 저희 변환 없는 입장을 고소하고 있습니다.  ⟨speaker_change⟩
+6. Minister Jiang and I reviewed progress on the operational control transition and are in agreement with the Military Committee meetings assessment of the future combined Forces Commands initial operational capability.  ⟨language_switch⟩
+7. 정경두 국방장관과 전 정경두 국방장관과 저는 전작권 전환과 관련한 진척을 검토를 했고 MCM 군사위원회에서 미래연합사령부의 기본운동 능력 검증평가 결과에 대해 합의점에 이르었습니다.  ⟨language_switch⟩
+8. Overall, we agree that substantive progress has been made towards the conditions-based transfer of operational control to a ROC commander. Let's.  ⟨speaker_change⟩
+9. 그와 관련해서 한국군 사성장, 한국군 사령관 이와 관련해서 한국군 사령관으로 조건을 기초로 한 전작권 전환을 하는 방향으로 상당하 상당한 진전이 있었음에 합의를 했습니다.  ⟨speaker_change⟩
+10. There is more work to be done, however, and we remain committed to close coordination on this topic.  ⟨language_switch⟩
+11. 하지만 아직 해야 할 일이 많이 남아있고 이와 관련해서 계속 긴밀한 협조를 해나가기로 했습니다  ⟨-⟩
+
+[정답]
+First among those were our efforts to maintain a robust, combined defense posture, and to strengthen coordination towards achieving the final, fully verified denuclearization of North Korea. 논의한 사안 중에서는 우선 왕성한 연합방위태세를 유지하기 위한 노력을 경주하자는 것과 북한의 최종적 그리고 완전히 검증된 비핵화를 달성하기 위해 협조를 강화하자는 취지의 논의를 했습니다. In support of these ends, we remain resolute in our enforcement of the United Nations Security Council resolutions. 이런 목표들을 달성하기 위해서 우리는 UN안보리 결의를 집행하는 것과 관련해 저희 변함 없는 입장을 고수하고 있습니다. Minister Jung and I reviewed progress on the operational control transition and are in agreement with the Military Committee Meeting's assessment of the future Combined Forces Command's initial operational capability. 정경두 국방장관과 저는 전작권 전환과 관련한 진척을 검토를 했고 MCM 군사위원회에서 미래연합사령부의 기본운영능력 검증 평가 결과에 대해 합의점에 이르렀습니다. Overall, we agree that substantive progress has been made towards the conditions-based transfer of operational control to a ROK commander. 이와 관련해서 한국군 사령관으로 조건을 기초로 한 전작권 전환을 하는 방향으로 상당한 진전이 있었음에 합의를 했습니다. There is more work to be done, however, and we remain committed to close coordination on this topic. 하지만 아직 해야 할 일이 많이 남아있고 이와 관련해서 계속 긴밀한 협조를 해 나가기로 했습니다.

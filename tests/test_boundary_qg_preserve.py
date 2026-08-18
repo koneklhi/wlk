@@ -33,7 +33,7 @@ def _make_fake_decoder(
     last_boundary_event_at: float = 10.0,
     qg_preserve_used: bool = False,
     detected_language: str = "en",
-    reprobe_result: object = "en",
+    reprobe_result: object = "ko",  # 기본은 '언어가 틀렸다' 경로 = 보존이 일어나는 조건
 ):
     """QG streak 경로만 태우는 최소 디코더 스텁."""
     fs = SimpleNamespace(
@@ -165,14 +165,30 @@ def test_probe_runs_before_refresh():
     """프로브는 refresh 전에 원본 버퍼로 돌아야 한다(refresh 후엔 상태가 리셋됨)."""
     order = []
     fs = _make_fake_decoder(stream_time=11.0, last_boundary_event_at=10.0)
-    fs.detect_current_language = MagicMock(side_effect=lambda **kw: order.append("probe") or "en")
+    fs.detect_current_language = MagicMock(side_effect=lambda **kw: order.append("probe") or "ko")
     fs.refresh_segment = MagicMock(side_effect=lambda **kw: order.append("refresh"))
     _drive_streak(fs)
     assert order == ["probe", "refresh"], f"호출 순서가 잘못됨: {order}"
 
 
-def test_probe_confirming_same_language_preserves():
-    """프로브가 현재 언어를 확인해주면 보존하되 토크나이저는 건드리지 않는다."""
+def test_same_language_confirmation_falls_back_to_discard():
+    """언어가 이미 옳았는데 garbage 3연속 → 언어 문제가 아니므로 기존 폐기로 폴백.
+
+    보존해도 같은 오디오를 다시 헤매며 환각만 늘린다(ON2 실측: 보존 17건 중 ko→ko 7건,
+    같은 조건에서 삽입 오류 bong1 +4·ytn1 +2).
+    """
+    fs = _make_fake_decoder(
+        stream_time=11.0, last_boundary_event_at=10.0,
+        detected_language="ko", reprobe_result="ko",
+    )
+    _drive_streak(fs)
+    fs.refresh_segment.assert_called_once_with(complete=True)
+    assert fs.state.qg_preserve_used is False, "폴백은 보존 예산을 소진하지 않아야 한다"
+
+
+def test_same_language_preserved_when_opted_in(monkeypatch):
+    """플래그를 켜면 동일언어 확인도 보존한다(ON2 동작 복원용 롤백 스위치)."""
+    monkeypatch.setattr(aab, "BOUNDARY_QG_PRESERVE_ON_SAME_LANG", True)
     fs = _make_fake_decoder(
         stream_time=11.0, last_boundary_event_at=10.0,
         detected_language="ko", reprobe_result="ko",
@@ -180,6 +196,17 @@ def test_probe_confirming_same_language_preserves():
     _drive_streak(fs)
     assert fs.refresh_segment.call_args.kwargs.get("complete") is False
     fs._apply_detected_language.assert_not_called()
+
+
+def test_language_undetermined_still_preserves():
+    """언어 미확정(None) 상태에서 확정되면 보존한다 — 콜드스타트 유실 복구 경로."""
+    fs = _make_fake_decoder(
+        stream_time=2.0, last_boundary_event_at=0.0,
+        detected_language=None, reprobe_result="ko",
+    )
+    _drive_streak(fs)
+    assert fs.refresh_segment.call_args.kwargs.get("complete") is False
+    fs._apply_detected_language.assert_called_once_with("ko", skip_trim=True)
 
 
 def test_probe_correcting_language_applies_without_trim():
