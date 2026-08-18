@@ -33,7 +33,7 @@ def _make_fake_decoder(
     last_boundary_event_at: float = 10.0,
     qg_preserve_used: bool = False,
     detected_language: str = "en",
-    reprobe_result=None,
+    reprobe_result: object = "en",
 ):
     """QG streak 경로만 태우는 최소 디코더 스텁."""
     fs = SimpleNamespace(
@@ -53,7 +53,7 @@ def _make_fake_decoder(
     fs.detect_current_language = MagicMock(return_value=reprobe_result)
     fs._apply_detected_language = MagicMock()
     # 검증 대상 실로직은 실제 구현을 바인딩한다(스텁으로 대체하지 않는다).
-    for name in ("_is_punct_only", "_try_preserving_refresh", "_reprobe_language_after_preserve"):
+    for name in ("_is_punct_only", "_try_preserving_refresh", "_probe_language_for_preserve"):
         setattr(fs, name, types.MethodType(getattr(AlignAttBase, name), fs))
     return fs
 
@@ -142,41 +142,59 @@ def test_streak_below_threshold_does_not_refresh():
     assert fs.state.quality_suppress_streak == 2
 
 
-# ─── P1b: 보존 직후 언어 재프로브 ─────────────────────────────────────────────
+# ─── P1b: 언어 확신 게이트 (보존 전 프로브) ───────────────────────────────────
+#
+# bong1 짝지음 N=3에서 규명된 실패모드 대응: 오디오를 보존해도 **언어 잠금이 틀린 채**
+# 재디코딩되면 한국어 구간이 통째로 영어로 번역돼 나온다(은닉 번역, LMR +22.8pp).
+# 기존 폐기는 단어를 죽이는 대신 그 오언어 출력도 함께 버리고 있었다. 따라서 보존은
+# "이 오디오를 어떤 언어로 읽어야 하는지 아는" 경우로 한정한다.
 
 
-def test_reprobe_corrects_language_on_preserve():
-    """보존 시 재프로브가 다른 언어를 확신하면 토크나이저를 교정한다."""
-    fs = _make_fake_decoder(
-        stream_time=11.0, last_boundary_event_at=10.0,
-        detected_language="en", reprobe_result="ko",
-    )
-    _drive_streak(fs)
-    fs._apply_detected_language.assert_called_once_with("ko")
-
-
-def test_reprobe_same_language_is_noop():
-    """재프로브 결과가 현재 언어와 같으면 아무것도 하지 않는다."""
-    fs = _make_fake_decoder(
-        stream_time=11.0, last_boundary_event_at=10.0,
-        detected_language="ko", reprobe_result="ko",
-    )
-    _drive_streak(fs)
-    fs._apply_detected_language.assert_not_called()
-
-
-def test_reprobe_failure_is_noop():
-    """재프로브가 확신 못 하면(None) 기존 언어를 유지한다."""
+def test_preserve_requires_confident_language():
+    """언어 프로브가 확신하지 못하면(None) 보존하지 않고 기존 폐기로 폴백한다."""
     fs = _make_fake_decoder(
         stream_time=11.0, last_boundary_event_at=10.0,
         detected_language="en", reprobe_result=None,
     )
     _drive_streak(fs)
+    fs.refresh_segment.assert_called_once_with(complete=True)
+    assert fs.state.qg_preserve_used is False, "폴백은 보존 예산을 소진하지 않아야 한다"
+
+
+def test_probe_runs_before_refresh():
+    """프로브는 refresh 전에 원본 버퍼로 돌아야 한다(refresh 후엔 상태가 리셋됨)."""
+    order = []
+    fs = _make_fake_decoder(stream_time=11.0, last_boundary_event_at=10.0)
+    fs.detect_current_language = MagicMock(side_effect=lambda **kw: order.append("probe") or "en")
+    fs.refresh_segment = MagicMock(side_effect=lambda **kw: order.append("refresh"))
+    _drive_streak(fs)
+    assert order == ["probe", "refresh"], f"호출 순서가 잘못됨: {order}"
+
+
+def test_probe_confirming_same_language_preserves():
+    """프로브가 현재 언어를 확인해주면 보존하되 토크나이저는 건드리지 않는다."""
+    fs = _make_fake_decoder(
+        stream_time=11.0, last_boundary_event_at=10.0,
+        detected_language="ko", reprobe_result="ko",
+    )
+    _drive_streak(fs)
+    assert fs.refresh_segment.call_args.kwargs.get("complete") is False
     fs._apply_detected_language.assert_not_called()
 
 
-def test_reprobe_not_called_on_discard_path():
-    """폐기 경로에서는 재프로브를 돌리지 않는다(신규 forward 비용 회피)."""
+def test_probe_correcting_language_applies_without_trim():
+    """다른 언어를 확신하면 교정하되 skip_trim=True — 방금 보존한 오디오를 다시 자르면 안 된다."""
+    fs = _make_fake_decoder(
+        stream_time=11.0, last_boundary_event_at=10.0,
+        detected_language="en", reprobe_result="ko",
+    )
+    _drive_streak(fs)
+    assert fs.refresh_segment.call_args.kwargs.get("complete") is False
+    fs._apply_detected_language.assert_called_once_with("ko", skip_trim=True)
+
+
+def test_probe_not_called_on_discard_path():
+    """보호창 밖 등 폐기 경로에서는 프로브를 돌리지 않는다(신규 forward 비용 회피)."""
     fs = _make_fake_decoder(stream_time=100.0, last_boundary_event_at=10.0, reprobe_result="ko")
     _drive_streak(fs)
     fs.detect_current_language.assert_not_called()

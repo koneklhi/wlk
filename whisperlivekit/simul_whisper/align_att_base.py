@@ -1270,34 +1270,47 @@ class AlignAttBase(ABC):
             )
             return False
 
+        # 언어 확신 게이트 — refresh 전에(원본 버퍼로) 프로브한다.
+        # 오디오를 살려두는 것은 "그 오디오를 옳은 언어로 다시 읽을 수 있을 때"만 이득이다.
+        # 언어 잠금이 틀린 채 보존하면 재디코딩이 한국어 구간을 영어로 번역해 뱉는다
+        # (은닉 번역 — bong1 짝지음 N=3에서 LMR +22.8pp로 실측). 기존 폐기는 단어를
+        # 죽이는 대신 그 오언어 출력도 함께 버리고 있었으므로, 확신이 없으면 폐기가 낫다.
+        probed = self._probe_language_for_preserve()
+        if probed is None:
+            logger.warning(
+                "[QGPreserve] 언어 확신 실패(p<%.2f) — 기존 폐기로 폴백 (buffered=%.2fs)",
+                BOUNDARY_QG_REPROBE_MIN_PROB, buffered,
+            )
+            return False
+
         # 오디오 전량 보존 + 디코더 상태만 리셋. keep_secs=버퍼 전체 길이라 refresh_segment의
         # 유지 루프가 모든 세그먼트를 남긴다(신규 폐기 경로를 만들지 않고 기존 함수 재사용).
         self.refresh_segment(complete=False, keep_secs=buffered)
         self.state.qg_preserve_used = True
         logger.warning(
-            "[QGPreserve] 경계 보호 보존 refresh — Δt=%.2fs lang=%s preserved=%.2fs",
-            since, self.state.detected_language, self.segments_len(),
+            "[QGPreserve] 경계 보호 보존 refresh — Δt=%.2fs lang=%s→%s preserved=%.2fs",
+            since, self.state.detected_language, probed, self.segments_len(),
         )
-        self._reprobe_language_after_preserve()
+        if probed != self.state.detected_language:
+            # skip_trim=True 필수 — 기본 경로는 _trim_segments_to_recent로 버퍼를 keep_secs
+            # (2.5~5.0s)까지 잘라내는데, 그러면 방금 보존하기로 결정한 서두 오디오를 곧바로
+            # 되버리는 자기모순이 된다. 경계 arm(LanguageSwitch 마커)도 생략한다 — 이건
+            # 발화 경계가 아니라 QG 복구 중 토크나이저 교정이다.
+            self._apply_detected_language(probed, skip_trim=True)
         return True
 
-    def _reprobe_language_after_preserve(self):
-        """보존 직후 언어 1회 재확인 — garbage 원인이 언어 오판일 때를 교정한다.
+    def _probe_language_for_preserve(self):
+        """보존 직전 언어 확신 프로브. 확신 시 언어 코드, 실패 시 None.
 
-        같은 언어(또는 확신 미달)면 no-op이라 회귀 위험이 없다.
+        detect_current_language는 이미 @torch.no_grad라 신규 forward 경로가 아니다
+        (turbo 인코더 grad 추적 성능 절벽 회피 — Exp-158).
         """
         window = min(self.segments_len(), BOUNDARY_QG_REPROBE_WINDOW)
         if window <= 0:
-            return
-        lang = self.detect_current_language(
+            return None
+        return self.detect_current_language(
             window_secs=window, min_prob=BOUNDARY_QG_REPROBE_MIN_PROB,
         )
-        if lang and lang != self.state.detected_language:
-            logger.warning(
-                "[QGPreserve] 재프로브 언어 교정: %s → %s",
-                self.state.detected_language, lang,
-            )
-            self._apply_detected_language(lang)
 
     # === Abstract methods — subclass must implement ===
 
