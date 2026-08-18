@@ -440,9 +440,14 @@ full 모드(기본)에서는 매 스냅샷 `lines[]`를 통째로 다시 그리�
 { "6군": "육군", "공군참모총장": "공참총장" }
 ```
 
-> **서버 내장 기본 사전(base JSON) + 사용자가 추가한 항목(SQLite)을 병합해** 반환한다
-> (`word_manager.combined_replacements`). 관리 UI는 이 GET 결과만 표시하면 base 사전 항목도
-> 함께 보인다. 동일 `wrong_word`가 base와 사용자 DB 양쪽에 있으면 사용자 DB 값이 우선한다.
+> **사용자가 추가한 항목(SQLite)만** 반환한다(`word_manager.user_replacements`). 서버 내장
+> 기본 사전(base JSON = `admin_replacement.json`)은 **응답에서 제외**한다 — base는 배포 전
+> 관리자가 미리 채워 넣는 값이고, 관리 UI는 배포 후 현장 사용자가 직접 넣는 항목을 위한
+> 화면이기 때문이다(§3.4 `glossary_block`과 동일한 정책).
+>
+> **숨긴다는 건 표시만이다** — base 항목은 실제 전사 후처리 치환에 그대로 적용된다. 치환 경로는
+> 여전히 base+사용자 병합본(`word_manager.combined_replacements`)을 쓰며, 동일 `wrong_word`가
+> 양쪽에 있으면 사용자 DB 값이 우선한다.
 
 #### `POST /api/corrections`
 
@@ -462,6 +467,9 @@ full 모드(기본)에서는 매 스냅샷 `lines[]`를 통째로 다시 그리�
 
 경로 파라미터 `wrong_word`로 항목 삭제. **base JSON 전용 항목**(사용자 DB엔 없고 base JSON에만 있는 단어)은
 삭제할 수 없다 — 삭제 대신 경고를 반환한다(`/api/prompts/delete-item`의 기본 glossary 항목 보호와 동일 패턴).
+base 항목은 위 GET에 애초에 안 잡히므로 **관리 UI에서는 이 경로에 도달할 수 없다** — API를 직접 호출하는
+경우를 막는 방어 로직이다. 사용자가 base와 같은 `wrong_word`를 POST로 추가(override)한 뒤 삭제하면
+DB 행만 지워져 `success`가 되고, 그 항목은 GET 결과에서 사라지되 치환은 base 값으로 되돌아간다.
 
 **응답 200 (일반 삭제 성공 · 존재하지 않는 단어 삭제 포함)**
 

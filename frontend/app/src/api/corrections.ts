@@ -8,8 +8,9 @@ import { fetchJson } from '@/utils/fetchJson';
 
 /**
  * GET /api/corrections 응답은 **평평한 dict** `{ "<wrong_word>": "<correct_word>" }` 다
- * (filtering/manager.py `word_manager.combined_replacements`). 기본 내장 사전(base JSON) +
- * 사용자 추가분(DB)이 병합되어 반환된다.
+ * (filtering/manager.py `word_manager.user_replacements`). **사용자가 추가한 DB 항목만**
+ * 반환된다 — 서버 내장 기본 사전(base JSON)은 관리자 페이지에 노출하지 않는다.
+ * 숨겨진 base 항목도 실제 전사 후처리 치환에는 그대로 적용된다.
  */
 export type CorrectionsMap = Record<string, string>;
 
