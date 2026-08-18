@@ -9,7 +9,7 @@
  */
 import { createFileRoute } from '@tanstack/react-router';
 import { BookOpen, Loader2, Languages, MessageSquare, Plus, Trash2, ArrowRight, type LucideIcon } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { toast } from 'react-toastify';
 import {
   addCorrection,
@@ -105,8 +105,11 @@ function useItems(type: ItemKind) {
       }
       toast.success(`[${src} → ${dst}] 등록 성공`);
       load();
-    } catch {
+    } catch (e) {
       toast.error(`${SECTION_LABELS[type].title} 추가 중 문제가 발생했습니다.`);
+      // 재던진다 — 등록 창이 열린 채로 유지되므로 호출측(AddDialog)이 성공/실패를 구분해
+      // 실패했을 때 입력값을 지우지 않아야 한다.
+      throw e;
     }
   }, [type, load]);
 
@@ -140,41 +143,79 @@ function useItems(type: ItemKind) {
 
 /* ═══════ Add Dialog ═══════ */
 
+/**
+ * 등록 창. **연속 입력**을 전제로 만든다 — 열면 첫 칸(`srcLabel`)에 커서가 잡히고,
+ * 등록해도 창이 닫히지 않고 두 칸만 비워진 뒤 커서가 다시 첫 칸으로 돌아온다.
+ * 그래서 항목 여러 개를 마우스 없이 이어서 넣을 수 있다.
+ * 닫기는 ESC · 취소 · X · 바깥 클릭 네 경로 모두 `close()` 하나를 거친다.
+ */
 function AddDialog({ open, type, onClose, onConfirm }: {
   open: boolean;
   type: ItemKind;
   onClose: () => void;
-  onConfirm: (src: string, dst: string) => void;
+  onConfirm: (src: string, dst: string) => Promise<void>;
 }) {
   const [src, setSrc] = useState('');
   const [dst, setDst] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const srcRef = useRef<HTMLInputElement>(null);
   const labels = SECTION_LABELS[type];
 
+  /** 닫기 경로 공용 — 다음에 열 때 항상 빈 칸이도록 정리하고 닫는다. */
+  const close = useCallback(() => {
+    setSrc('');
+    setDst('');
+    setError(null);
+    onClose();
+  }, [onClose]);
+
   const handleSubmit = async () => {
-    if (!src.trim() || !dst.trim()) return;
+    if (saving || !src.trim() || !dst.trim()) return;  // Enter 연타·더블클릭 가드
     setError(null);
     setSaving(true);
     try {
       await onConfirm(src.trim(), dst.trim());
+      // 창은 그대로 두고 곧바로 다음 항목을 칠 수 있게 한다.
       setSrc('');
       setDst('');
-      onClose();
+      srcRef.current?.focus();  // 마우스로 '등록'을 눌렀다면 포커스가 버튼에 가 있다
     } catch {
-      /* error is handled by onConfirm (useItems.addItem) with toast */
+      /* 실패 안내는 onConfirm(useItems.addItem)이 toast 로 띄운다. 입력값은 지우지 않는다. */
       setError('추가하지 못했습니다.');
     } finally {
       setSaving(false);
     }
   };
 
+  /** Enter = 등록. 한글 조합 중(IME 미확정)의 Enter 는 조합을 끝내는 키라 흘려보낸다. */
+  const handleKeyDown = (e: ReactKeyboardEvent<HTMLInputElement>) => {
+    if (e.key !== 'Enter' || e.nativeEvent.isComposing) return;
+    e.preventDefault();
+    void handleSubmit();
+  };
+
+  // 열릴 때마다 첫 칸에 커서를 잡아준다(닫혀 있으면 DOM 자체가 없으므로 열리는 렌더의 커밋 직후 실행).
+  useEffect(() => {
+    if (open) srcRef.current?.focus();
+  }, [open]);
+
+  // ESC 로 닫기. 포커스가 입력칸·버튼 어디에 있든 받아야 해서 window 에 건다.
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && !e.isComposing) close();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [open, close]);
+
   if (!open) return null;
 
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
-      onClick={onClose}
+      onClick={close}
     >
       <div
         className="bg-[#141414] border border-white/[0.08] w-[400px]"
@@ -182,7 +223,7 @@ function AddDialog({ open, type, onClose, onConfirm }: {
       >
         <div className="flex items-center justify-between px-5 py-3 border-b border-white/[0.06]">
           <span className="text-sm font-bold tracking-wide uppercase text-white/70">{labels.title} — 등록</span>
-          <button onClick={onClose} className="w-6 h-6 flex items-center justify-center hover:bg-white/5 text-white/30 hover:text-white/60 transition-colors">
+          <button onClick={close} className="w-6 h-6 flex items-center justify-center hover:bg-white/5 text-white/30 hover:text-white/60 transition-colors">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6L6 18M6 6l12 12" /></svg>
           </button>
         </div>
@@ -190,18 +231,29 @@ function AddDialog({ open, type, onClose, onConfirm }: {
         <div className="p-6 space-y-3">
           <div>
             <label className="text-xs text-white/40 mb-1 block">{labels.srcLabel}</label>
-            <Input value={src} onChange={(e) => setSrc(e.target.value)} className="bg-[#080808] border-white/[0.06] text-sm" />
+            <Input
+              ref={srcRef}
+              value={src}
+              onChange={(e) => setSrc(e.target.value)}
+              onKeyDown={handleKeyDown}
+              className="bg-[#080808] border-white/[0.06] text-sm"
+            />
           </div>
           <div>
             <label className="text-xs text-white/40 mb-1 block">{labels.dstLabel}</label>
-            <Input value={dst} onChange={(e) => setDst(e.target.value)} className="bg-[#080808] border-white/[0.06] text-sm" />
+            <Input
+              value={dst}
+              onChange={(e) => setDst(e.target.value)}
+              onKeyDown={handleKeyDown}
+              className="bg-[#080808] border-white/[0.06] text-sm"
+            />
           </div>
           {error && <p className="text-red-400 text-xs">{error}</p>}
         </div>
 
         <div className="flex justify-end gap-2 px-5 py-3 border-t border-white/[0.06]">
           <button
-            onClick={() => { onClose(); setError(null); setSrc(''); setDst(''); }}
+            onClick={close}
             className="h-8 px-4 text-sm border border-white/10 text-white/50 hover:bg-white/5 transition-colors"
           >
             취소
@@ -272,6 +324,9 @@ function SectionUI({
     [items, search],
   );
 
+  // AddDialog 의 ESC 리스너 의존성이라 안정적이어야 한다 — 인라인 함수면 타이핑 한 글자마다 재구독된다.
+  const closeAdd = useCallback(() => setAddOpen(false), [setAddOpen]);
+
   if (notSupported) {
     return (
       <div className={cn(className, "rounded border border-dashed border-white/[0.06] p-10 text-center")}>
@@ -324,7 +379,7 @@ function SectionUI({
 
       {error && <p className="text-xs text-red-400">{error}</p>}
 
-      <AddDialog open={addOpen} type={type} onClose={() => setAddOpen(false)} onConfirm={addItem} />
+      <AddDialog open={addOpen} type={type} onClose={closeAdd} onConfirm={addItem} />
     </div>
   );
 }
