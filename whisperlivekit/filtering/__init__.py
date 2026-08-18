@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+import copy
 import json
 import logging
 import re
@@ -51,6 +52,45 @@ def get_word_manager() -> WordCorrectionManager:
     return _word_manager
 
 
+# 컴파일된 치환 정규식 캐시. 키는 combined_replacements **객체 자신**(is 비교)이다 —
+# WordCorrectionManager.refresh_replacements()가 갱신 때마다 새 dict를 만들어 대입하므로,
+# 사전이 바뀌면 identity가 달라져 자동으로 재컴파일된다(값 비교 불필요·stale 불가).
+_pattern_cache: tuple = (None, None)
+
+
+def _current_replacements():
+    """현재 단어 교정 사전과 컴파일된 정규식을 반환. 없으면 (None, None).
+
+    사전은 프로세스 전역 싱글턴이라, REST(/api/corrections)로 갱신하면 **다음 호출부터**
+    새 사전이 잡힌다 — 녹음(세션) 진행 중 등록한 단어가 즉시 반영되는 근거다.
+    """
+    global _pattern_cache
+    replacements = get_word_manager().combined_replacements
+    if not replacements:
+        return None, None
+    cached_replacements, cached_pattern = _pattern_cache
+    if cached_replacements is replacements:
+        return replacements, cached_pattern
+    pattern = re.compile("|".join(re.escape(k) for k in replacements.keys()))
+    _pattern_cache = (replacements, pattern)
+    return replacements, pattern
+
+
+def apply_word_corrections(text: str) -> str:
+    """단어 교정 사전을 문자열 하나에 적용한다.
+
+    확정 세그먼트(filter_segments)와 **미확정 버퍼**(results_formatter의 buffer_transcription/
+    buffer_diarization) 양쪽이 같은 사전을 쓰도록 뽑아낸 공개 헬퍼다. 버퍼에도 적용해야
+    "지금 전사 중인 문장"에 대치가 실시간으로 보인다.
+    """
+    if not text:
+        return text
+    replacements, pattern = _current_replacements()
+    if pattern is None:
+        return text
+    return pattern.sub(lambda m: replacements[m.group(0)], text)
+
+
 # ─── 환각 토큰 목록 (최초 1회 로드) ─────────────────────────────────────────
 
 def _load_hallucination_json() -> list:
@@ -92,12 +132,8 @@ def filter_hallucination(raw_transcript: list) -> list:
         if txt and txt not in {".", "?"} and set(txt) != {"."}:
             filtered.append(seg)
 
-    word_manager = get_word_manager()
-    replacements = word_manager.combined_replacements
-    if replacements:
-        pattern = re.compile("|".join(re.escape(k) for k in replacements.keys()))
-        for seg in filtered:
-            seg[2] = pattern.sub(lambda m: replacements[m.group(0)], seg[2])
+    for seg in filtered:
+        seg[2] = apply_word_corrections(seg[2])
 
     return [tuple(seg) for seg in filtered]
 
@@ -107,13 +143,16 @@ def filter_segments(segments: list) -> list:
 
     results_formatter() 에서 get_lines() 직후 호출용.
     침묵 세그먼트(is_silence())는 그대로 통과시킨다.
+
+    **원본 세그먼트를 변형하지 않는다** — 텍스트가 바뀌는 세그먼트는 사본을 만들어 반환한다.
+    비-diar 경로(get_lines의 `segments = list(self.validated_segments)`)는 세그먼트 객체가
+    tick 을 넘어 살아남기 때문에, 원본을 in-place 로 고치면 ① 치환 결과가 다시 패턴에 걸릴 때
+    매 tick 누적되고("6군"→"제6군단"→"제제6군단단") ② 관리자 페이지에서 사전 항목을 지워도
+    원문으로 돌아오지 않는다. 매 tick 원문에서 다시 계산하게 해 두 문제를 함께 막는다.
+    (diar 경로는 어차피 매 tick 토큰에서 세그먼트를 새로 만들므로 동작 변화가 없다.)
     """
     if not segments:
         return segments
-
-    word_manager = get_word_manager()
-    replacements = word_manager.combined_replacements
-    pattern = re.compile("|".join(re.escape(k) for k in replacements.keys())) if replacements else None
 
     result = []
     for seg in segments:
@@ -154,16 +193,20 @@ def filter_segments(segments: list) -> list:
         if not bare or set(bare) <= {".", "?", "!", "。", "！", "？"}:
             continue
 
-        if pattern:
-            corrected = pattern.sub(lambda m: replacements[m.group(0)], text)
-            if corrected != text:
-                logger.debug(
-                    "[WordCorrection] 원문=%.200s 치환문=%.200s",
-                    text, corrected,
-                )
-            text = corrected
+        corrected = apply_word_corrections(text)
+        if corrected != text:
+            logger.debug(
+                "[WordCorrection] 원문=%.200s 치환문=%.200s",
+                text, corrected,
+            )
+        text = corrected
 
-        seg.text = text
-        result.append(seg)
+        if text == seg.text:
+            result.append(seg)
+            continue
+
+        out = copy.copy(seg)
+        out.text = text
+        result.append(out)
 
     return result

@@ -508,6 +508,12 @@ knob별 방향(↑/↓ 효과)·상황별 매트릭스·프리셋 수치 전체�
 현재 이식된 번역기(`LlamaTranslator`)는 **프로토콜상 gpt-oss-20b와 호환**된다(`/v1/completions` + harmony 프롬프트 + 완성형 응답 파싱이 원본 whisperlive와 동일, [translator.py:58-93](../whisperlivekit/llm_translation/translator.py#L58-L93)).
 확정 문장 번역(`lines[].translation`)뿐 아니라 **중간(미확정) 번역(`buffer_translation`, `TranslationManager.apply_interim_translation()`)도 동일한 `TranslationManager`/`--translation-serve`·`--translation-endpoint`·`--translation-model` 설정으로 동작**한다 — 별도 설정 없이 아래 기본값 그대로 중간 번역도 gpt-oss-20b로 붙는다.
 
+**소급 재번역 상한 `--retro-retranslate-lines`(기본 20, `0`이면 비활성)**: 녹음 중 관리자 페이지에서
+대치어/번역용어를 등록하면 이미 확정된 문장이 재번역 대상이 되는데, 배포 PC의 llama.cpp는 단일 서버라
+과거 전량을 한 번에 던지면 진행 중인 실시간 번역이 밀린다. 그래서 **재**번역만 최근 N개 확정 문장으로
+제한하고 동시 실행에도 상한을 둔다(**최초** 번역은 이 창과 무관하게 항상 수행 — 정상 실시간 경로 무영향).
+전사 텍스트 대치는 LLM을 쓰지 않으므로 이 값과 무관하게 세션 전 구간에 소급된다. 상세 = [API_SPEC.md §3.5](API_SPEC.md).
+
 ### 5.2 [수정 완료] config.py LLM 4필드 누락 — master 머지됨
 - **버그(과거)**: `parse_args.py`는 `--llm-translation`/`--translation-serve`/`--translation-endpoint`/`--translation-model`을 파싱하지만([parse_args.py:375-404](../whisperlivekit/parse_args.py#L375-L404)), `WhisperLiveKitConfig`에 해당 4필드가 없어 `from_namespace`가 버렸다 → `TranslationManager`가 생성되지 않아 **번역이 절대 안 켜졌다**(코드로 4단 체인 확인).
 - **수정(완료)**: `config.py`에 4필드 추가(`llm_translation`/`translation_serve`/`translation_endpoint`/`translation_model`, [config.py:85-89](../whisperlivekit/config.py#L85-L89)). master에 머지 완료.
@@ -660,7 +666,10 @@ C:\Python312\python.exe -m whisperlivekit.basic_server `
 싱글턴 팩토리 + `translator.py`의 `build_system_blocks()` 연결까지 완료돼 있다(`whisperlivekit/filtering/`과
 동일한 콜로케이션 패턴). `/api/prompts`(`GET` 조회, `POST /api/prompts/add-item` 추가, `POST
 /api/prompts/delete-item` 삭제)로 운용 중 동적 추가/삭제가 가능하고, 변경은 **다음 번역 요청부터 즉시
-반영**된다(API 계약 상세는 [API_SPEC.md §3.4](API_SPEC.md) 참조).
+반영**된다. 녹음(전사 세션) 진행 중에 등록하면 **최근 확정 문장 N개는 소급 재번역**된다
+(`--retro-retranslate-lines`, 기본 20 / `0`이면 비활성 — 단일 llama.cpp 서버 폭주 방지). 단어 교정
+사전(`/api/corrections`)의 전사 텍스트 대치는 이 값과 무관하게 **세션 전 구간에 소급**된다.
+(API 계약 상세는 [API_SPEC.md §3.4·§3.5](API_SPEC.md) 참조).
 
 | 파일 | dev 위치 | 배포 시 해야 할 일 |
 |---|---|---|
@@ -797,7 +806,7 @@ C:\Python312\python.exe -c "import torch, transformers, tokenizers; print(torch.
 5. **번역**(§4.4 3단계 / §5): `start_oss.bat` 후 번역 + 화자분할 동시 ON 기동 → 한↔영 1문장 스모크(동시 사용 가능, §5.4).
 6. **경로 C 정량**(§4.1): `C:\Python312\python.exe scripts/closed_test.py test_data/sbs1.mp3` → WER/F1이 [EXPERIMENTS.md](../EXPERIMENTS.md) "현재 베이스라인"(turbo, diar-ON, Exp-161 기준: sbs1 ≈ WER 14.9%/F1 16.7% — F1은 diar-ON 문장경계 과분할로 낮게 나오는 게 정상, WER이 1차 지표) 근처인지. (playwright/VBCable 필요) — ⚠️ [MASTER_CHANGES §2](MASTER_CHANGES.md)의 수치(sbs1 19.6%/76.2%)는 Exp-105(2026-06-22, diar-OFF·base 기질) 기준으로 **stale** — 참조하지 말 것.
 7. **단어 교정**(§6.2): `admin_replacement.json`/`hallucination.json`을 배포본으로 채운 뒤 해당 단어가 교정되는지 확인.
-8. **번역 glossary**(§6.3): `curl http://localhost:8900/api/prompts`가 404가 아니라 200 JSON을 반환하는지, `/api/prompts/add-item`으로 추가한 용어가 다음 번역 요청부터 실제 반영되는지 확인.
+8. **번역 glossary**(§6.3): `curl http://localhost:8900/api/prompts`가 404가 아니라 200 JSON을 반환하는지, `/api/prompts/add-item`으로 추가한 용어가 다음 번역 요청부터 실제 반영되는지 확인. **녹음 중** 등록해 최근 확정 문장이 소급 재번역되는지, `/api/corrections` 등록 시 이미 화면에 뜬 과거 문장의 텍스트가 소급 교정되는지도 함께 확인(API_SPEC §3.5).
 
 ---
 

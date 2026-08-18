@@ -310,7 +310,11 @@ upstream whisperlivekit에는 `new_speaker()` → `refresh_segment()` 뼈대가 
 | 기본 사전 파일 | [`filtering/hallucination.json`](../whisperlivekit/filtering/hallucination.json), [`filtering/admin_replacement.json`](../whisperlivekit/filtering/admin_replacement.json) | 환각 목록 / 기본 단어 교정 테이블 |
 
 **동적 Glossary 갱신**: `WordCorrectionManager`는 SQLite를 폴링해 운용 중 사전 추가/삭제가 가능하다.
-변경 즉시 다음 전사부터 반영된다.
+변경은 즉시 다음 전사부터 반영되고, **녹음 중이면 이미 확정된 과거 문장에도 소급 적용**된다 —
+`results_formatter()`가 매 tick 세션 전체 `lines[]`에 `filter_segments()`를 다시 걸기 때문이다.
+`filter_segments()`는 원본 세그먼트를 변형하지 않고 사본에 반영하므로 치환이 tick마다 누적되지 않고,
+사전 항목을 지우면 원문으로 원복된다. 번역 소급(재번역)은 최근 N개 확정 문장으로 제한된다
+(`--retro-retranslate-lines`, 기본 20) — 상세 = [API_SPEC.md §3.5](API_SPEC.md).
 
 ---
 

@@ -39,9 +39,13 @@ if config.trace_tokens:
     # 동일 사유로 이 목록에 포함해야 logger.debug가 root(WARNING)에 막히지 않는다.
     logging.getLogger("whisperlivekit.sentence_boundary").setLevel(logging.DEBUG)
     logging.getLogger("whisperlivekit.filtering").setLevel(logging.DEBUG)
+    # llm_translation.manager([TranslationRetro])도 동일 사유 — 소급 재번역 예약은 logger.info라
+    # 이 목록에 없으면 root(WARNING)에 막혀 "발동 안 함"으로 오독된다(실측 중 발견).
+    logging.getLogger("whisperlivekit.llm_translation.manager").setLevel(logging.DEBUG)
     logger.info(
         "[TraceTokens] DEBUG 레벨 로깅 활성화 "
-        "(backend + align_att_base + tokens_alignment + sentence_boundary + filtering)"
+        "(backend + align_att_base + tokens_alignment + sentence_boundary + filtering "
+        "+ llm_translation.manager)"
     )
 transcription_engine = None
 

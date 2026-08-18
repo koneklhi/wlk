@@ -107,6 +107,10 @@ class WhisperLiveKitConfig:
     translation_serve: str = "llama"
     translation_endpoint: str = "http://localhost:2010"
     translation_model: str = "gpt-oss-20b"
+    # 녹음 중 관리자 페이지에서 대치어/번역용어를 등록했을 때 소급 **재**번역할 최근 확정 문장 수.
+    # None = llm_translation.manager.RETRO_SCOPE_LINES 폴백, 0 = 소급 재번역 비활성(텍스트 대치만).
+    # 전사 텍스트 대치는 이 값과 무관하게 항상 세션 전 구간에 적용된다.
+    retro_retranslate_lines: Optional[int] = None
     # Stage 2 Qdrant RAG(유사 예시 검색)는 설정 필드가 없다 — 자산 경로가
     # whisperlivekit/llm_translation/__init__.py에 고정돼 있고, 그 디렉터리 존재 여부로만 켜지고 꺼진다.
 
