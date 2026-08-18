@@ -1249,7 +1249,10 @@ class AlignAttBase(ABC):
         if buffered <= 0:
             # 보존할 오디오 자체가 없음(직전 refresh 직후 등). 발동 감사에서 이 경로가
             # 무로그로 빠지면 "streak 수 − 보존 수"가 설명되지 않으므로 명시적으로 남긴다.
-            logger.info("[QGPreserve] 버퍼 비어 있음 — 보존 대상 없음(기존 경로)")
+            # warning 레벨 필수: 서버 root 로거가 WARNING이라 info는 --trace-tokens 없이는
+            # 조용히 사라진다(basic_server.py의 trace_tokens 분기 참조 — 같은 함정으로
+            # Exp-171 [RetractScan]이 0건으로 오인될 뻔했다).
+            logger.warning("[QGPreserve] 버퍼 비어 있음 — 보존 대상 없음(기존 폐기 경로)")
             return False
         if getattr(self.state, "qg_preserve_used", False):
             # 같은 경계에서 이미 한 번 보존했는데 또 garbage → 재디코딩으로도 못 푸는
@@ -1260,7 +1263,8 @@ class AlignAttBase(ABC):
         now = self._current_stream_time()
         since = now - boundary_at
         if since > BOUNDARY_PROTECT_SECS:
-            logger.info(
+            # warning 레벨 필수 — 위 빈-버퍼 분기 주석 참조(root 로거 WARNING).
+            logger.warning(
                 "[QGPreserve] 보호창 밖(Δt=%.2fs > %.2fs) — 기존 폐기 유지",
                 since, BOUNDARY_PROTECT_SECS,
             )
