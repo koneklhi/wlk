@@ -22,6 +22,11 @@ class TranslationPromptManager:
     def __init__(self, base_json_path: str, db_path: str):
         self.db_path = db_path
 
+        # 용어집 변경 세대 카운터. 진행 중인 세션의 TranslationManager가 매 tick 이 값을 읽어
+        # 용어집이 바뀐 것을 알아챈다 — 번역 캐시 키는 (start, text)뿐이라, 전사 텍스트가 그대로인
+        # 용어집 변경은 이 신호가 없으면 영원히 캐시 히트가 되어 소급 재번역이 불가능하다.
+        self.revision: int = 0
+
         self.headers = {
             "glossary_block": "GLOSSARY(Term:Translation)",
             "sentence_block": "### EXAMPLES",
@@ -105,11 +110,13 @@ class TranslationPromptManager:
         if block_key == "glossary_block":
             self.user_settings["glossary_block"][origin.strip()] = translation.strip()
             self._save_to_db("glossary_block")
+            self.revision += 1
         elif block_key == "sentence_block":
             if self.user_settings["sentence_block"] is None:
                 self.user_settings["sentence_block"] = self.defaults["sentence_block"].copy()
             self.user_settings["sentence_block"][origin.strip()] = translation.strip()
             self._save_to_db("sentence_block")
+            self.revision += 1
         return True
 
     def remove_item(self, block_key: str, origin: str) -> bool:
@@ -118,6 +125,7 @@ class TranslationPromptManager:
             if target_key in self.user_settings["glossary_block"]:
                 del self.user_settings["glossary_block"][target_key]
                 self._save_to_db("glossary_block")
+                self.revision += 1
                 return True
             return False
         elif block_key == "sentence_block":
@@ -126,6 +134,7 @@ class TranslationPromptManager:
             if target_key in self.user_settings["sentence_block"]:
                 del self.user_settings["sentence_block"][target_key]
                 self._save_to_db("sentence_block")
+                self.revision += 1
                 return True
         return False
 

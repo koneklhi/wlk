@@ -13,7 +13,7 @@ from whisperlivekit.core import (
     online_translation_factory,
 )
 from whisperlivekit.ffmpeg_manager import FFmpegManager, FFmpegState
-from whisperlivekit.filtering import filter_segments
+from whisperlivekit.filtering import apply_word_corrections, filter_segments
 from whisperlivekit.llm_translation.manager import TranslationManager
 from whisperlivekit.llm_translation.translator import create_translator
 from whisperlivekit.metrics_collector import SessionMetrics
@@ -174,7 +174,10 @@ class AudioProcessor:
                 model_name=self.args.translation_model,
                 endpoint=self.args.translation_endpoint,
             )
-            self.llm_translation_manager = TranslationManager(_translator)
+            self.llm_translation_manager = TranslationManager(
+                _translator,
+                retro_scope=getattr(self.args, "retro_retranslate_lines", None),
+            )
 
     async def _push_silence_event(self) -> None:
         if self.transcription_queue:
@@ -581,10 +584,15 @@ class AudioProcessor:
                     flush=_flush,
                 )
                 lines = filter_segments(lines)
+                # 미확정 버퍼에도 단어 교정을 적용한다 — 확정 전 "지금 전사 중인" 문장에서도
+                # 대치가 실시간으로 보이게 하기 위함(확정 세그먼트는 filter_segments가 처리).
+                buffer_diarization_text = apply_word_corrections(buffer_diarization_text)
                 _append_terminal_punctuation(lines)
                 state = await self.get_current_state()
 
-                buffer_transcription_text = state.buffer_transcription.text if state.buffer_transcription else ''
+                buffer_transcription_text = apply_word_corrections(
+                    state.buffer_transcription.text if state.buffer_transcription else ''
+                )
 
                 if self.llm_translation_manager is not None:
                     self.llm_translation_manager.apply_translations(lines)

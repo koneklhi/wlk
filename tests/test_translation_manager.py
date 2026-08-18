@@ -429,3 +429,153 @@ def test_interim_last_dispatch_ts_survives_line_transition():
     mock_ensure.assert_not_called()
     assert manager._interim_line_id == 2.0  # 줄 전환은 반영됨
     assert manager._interim_last_dispatch_ts == 10.0  # 발동 시각은 유지됨
+
+
+# ─── 녹음 중 대치어/번역용어 등록에 대한 소급 재번역 ──────────────────────────
+#
+# 규칙(manager.apply_translations 참조):
+#   - **최초** 번역은 소급 창과 무관하게 항상 수행한다(실시간 정상 경로 무회귀).
+#   - **재**번역(대치어로 텍스트가 바뀜 / 용어집 변경)은 최근 _retro_scope개로 제한한다.
+#   - 새 번역이 도착하기 전까지는 직전 번역을 유지한다(빈칸 깜빡임 방지).
+
+def _make_segs(n: int, prefix: str = "문장"):
+    return [make_text_seg(f"{prefix}{i}.", start=float(i), end=float(i) + 0.5) for i in range(n)]
+
+
+def _prefill_cache(manager, segs, value_fn=lambda s: f"T-{s.text}"):
+    """이미 번역이 끝난 상태를 만든다(캐시 + _last_translation_by_id 채움)."""
+    for seg in segs:
+        manager._cache[manager._cache_key(seg)] = value_fn(seg)
+    manager.apply_translations(segs)          # 캐시 히트 경로 — dispatch 없음
+    assert not manager._in_flight
+
+
+def test_first_translation_dispatches_even_outside_retro_window():
+    """최초 번역은 소급 창 밖이어도 반드시 수행된다(정상 실시간 경로 무회귀)."""
+    import unittest.mock as mock_module
+
+    manager = TranslationManager(make_translator_mock(), retro_scope=1)
+    segs = _make_segs(3)
+
+    with mock_module.patch("asyncio.ensure_future", side_effect=make_closing_ensure_future()):
+        manager.apply_translations(segs)
+
+    assert len(manager._in_flight) == 3
+
+
+def test_text_change_retranslates_only_inside_retro_window():
+    """대치어로 텍스트가 바뀌어도 재번역은 최근 N개 확정 문장으로 제한된다."""
+    import unittest.mock as mock_module
+
+    manager = TranslationManager(make_translator_mock(), retro_scope=1)
+    segs = _make_segs(3)
+    _prefill_cache(manager, segs)
+
+    old_first, old_last = segs[0].translation, segs[2].translation
+    segs[0].text = "문장0정정."       # 창 밖 — 텍스트만 교정되고 재번역은 생략
+    segs[2].text = "문장2정정."       # 창 안 — 재번역
+
+    with mock_module.patch("asyncio.ensure_future", side_effect=make_closing_ensure_future()):
+        manager.apply_translations(segs)
+
+    assert manager._cache_key(segs[2]) in manager._in_flight
+    assert manager._cache_key(segs[0]) not in manager._in_flight
+    # 새 번역 도착 전까지 직전 번역을 유지한다(빈칸 깜빡임 방지)
+    assert segs[0].translation == old_first
+    assert segs[2].translation == old_last
+
+
+def test_glossary_revision_bump_marks_recent_lines_stale():
+    """번역용어 등록(revision 증가) 시 텍스트가 그대로여도 최근 N개가 재번역된다."""
+    import unittest.mock as mock_module
+    from types import SimpleNamespace
+
+    import whisperlivekit.llm_translation.manager as mgr_module
+
+    manager = TranslationManager(make_translator_mock(), retro_scope=2)
+    segs = _make_segs(4)
+    _prefill_cache(manager, segs)
+
+    stub = SimpleNamespace(revision=manager._glossary_revision + 1)
+    with mock_module.patch.object(mgr_module, "get_prompt_manager", lambda: stub):
+        with mock_module.patch("asyncio.ensure_future", side_effect=make_closing_ensure_future()):
+            manager.apply_translations(segs)
+
+    assert len(manager._in_flight) == 2, "최근 2개만 재번역 대상이어야 한다"
+    assert manager._cache_key(segs[2]) in manager._in_flight
+    assert manager._cache_key(segs[3]) in manager._in_flight
+    # 재번역 중에도 기존 번역이 계속 보인다
+    assert all(seg.translation == f"T-{seg.text}" for seg in segs)
+
+
+def test_glossary_revision_bump_is_noop_when_unchanged():
+    """용어집이 그대로면 재번역이 일어나지 않는다(매 tick 폭주 방지)."""
+    manager = TranslationManager(make_translator_mock(), retro_scope=5)
+    segs = _make_segs(3)
+    _prefill_cache(manager, segs)
+
+    for _ in range(3):
+        manager.apply_translations(segs)
+
+    assert not manager._in_flight
+    assert not manager._stale
+
+
+def test_retro_scope_zero_disables_retranslation():
+    """--retro-retranslate-lines 0 이면 소급 재번역을 아예 하지 않는다."""
+    import unittest.mock as mock_module
+    from types import SimpleNamespace
+
+    import whisperlivekit.llm_translation.manager as mgr_module
+
+    manager = TranslationManager(make_translator_mock(), retro_scope=0)
+    segs = _make_segs(3)
+    _prefill_cache(manager, segs)
+
+    segs[2].text = "문장2정정."
+    stub = SimpleNamespace(revision=manager._glossary_revision + 1)
+    with mock_module.patch.object(mgr_module, "get_prompt_manager", lambda: stub):
+        with mock_module.patch("asyncio.ensure_future", side_effect=make_closing_ensure_future()):
+            manager.apply_translations(segs)
+
+    assert not manager._in_flight
+    assert segs[2].translation == "T-문장2.", "직전 번역은 그대로 유지된다"
+
+
+@pytest.mark.anyio
+async def test_final_translation_concurrency_is_capped():
+    """확정 번역 동시 실행이 상한을 넘지 않는다(단일 LLM 서버 폭주 방지)."""
+    import asyncio
+
+    from whisperlivekit.llm_translation.manager import _MAX_CONCURRENT_FINAL
+
+    seen = {"cur": 0, "max": 0}
+    release = asyncio.Event()
+
+    class GatedTranslator:
+        async def translate_sentence(self, text, src_lang, use_rag=False, retry_on_echo=True):
+            seen["cur"] += 1
+            seen["max"] = max(seen["max"], seen["cur"])
+            await release.wait()
+            seen["cur"] -= 1
+            return f"T-{text}"
+
+    manager = TranslationManager(GatedTranslator(), retro_scope=50)
+    segs = _make_segs(6)
+
+    manager.apply_translations(segs)
+    assert len(manager._in_flight) == 6, "6개 모두 스케줄돼야 한다(상한은 실행 동시성만 제한)"
+
+    for _ in range(10):
+        await asyncio.sleep(0)
+    assert seen["max"] <= _MAX_CONCURRENT_FINAL
+
+    release.set()
+    for _ in range(500):
+        if not manager._in_flight:
+            break
+        await asyncio.sleep(0.01)
+
+    assert not manager._in_flight
+    assert seen["max"] <= _MAX_CONCURRENT_FINAL
+    assert all(manager._cache[manager._cache_key(seg)] == f"T-{seg.text}" for seg in segs)

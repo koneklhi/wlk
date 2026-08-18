@@ -1,7 +1,9 @@
 import asyncio
 import logging
 import time
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional
+
+from whisperlivekit.llm_translation import get_prompt_manager
 
 if TYPE_CHECKING:
     from whisperlivekit.llm_translation.translator import TranslatorBase
@@ -20,15 +22,31 @@ _INTERIM_MIN_INTERVAL_S = 0.5   # 직전 interim 번역 발동 후 이 간격(�
 _INTERIM_MIN_DELTA_CHARS = 12   # 버퍼가 직전 번역 소스 대비 이만큼 자라지 않았으면 보류 — 잔단어 성장마다
                                 # ("미래의"→"미래의 합동"→"미래의 합동작전") 재번역하는 낭비를 방지한다.
 
+RETRO_SCOPE_LINES = 20   # 소급 **재**번역 대상 = 최근 확정 문장 N개. 0이면 소급 재번역 비활성.
+                         # 녹음 중 대치어/번역용어를 등록하면 과거 문장이 한꺼번에 재번역 대상이 되는데,
+                         # 배포 LLM은 단일 서버라 전량을 한 번에 던지면 진행 중인 실시간 번역이 밀린다.
+                         # **최초** 번역은 이 창과 무관하게 항상 수행된다(정상 경로 무변경).
+_MAX_CONCURRENT_FINAL = 2  # 확정 번역 동시 실행 상한. 미확정 미리보기(interim) 경로는 이 상한 밖 —
+                           # 실시간성이 우선이고, 그쪽은 자체 in-flight 가드 하나로 이미 직렬화된다.
+
 
 class TranslationManager:
     """확정 세그먼트 LLM 번역 캐시 및 비차단 스케줄러."""
 
-    def __init__(self, translator: "TranslatorBase"):
+    def __init__(self, translator: "TranslatorBase", retro_scope: Optional[int] = None):
         self.translator = translator
         self._cache: dict[tuple, str] = {}        # (start_rounded, text) -> 번역 결과
         self._in_flight: set[tuple] = set()       # 번역 중인 키 집합
         self._attempts: dict[tuple, int] = {}     # 확정 번역 실패 시도 횟수 (키별) — 상한 도달 시 "" 정착
+        # 미지정(None)이면 모듈 상수로 폴백 — CLI 미지정 시 무회귀(Phase A 인자 관례).
+        self._retro_scope: int = max(0, int(RETRO_SCOPE_LINES if retro_scope is None else retro_scope))
+        self._sem = asyncio.Semaphore(_MAX_CONCURRENT_FINAL)   # 확정 번역 동시 실행 상한
+        self._glossary_revision: int = self._current_glossary_revision()
+        self._stale: set[tuple] = set()           # 용어집 변경으로 재번역이 필요한 키. 값은 캐시에 남겨둔 채
+                                                  # 재번역만 다시 태운다 — 새 번역 도착 전 빈칸 깜빡임 방지.
+        self._last_translation_by_id: dict[float, str] = {}   # 세그먼트 id -> 마지막으로 화면에 나간 번역.
+                                                  # 대치어로 텍스트가 바뀌어 캐시 키가 갈아엎어졌을 때
+                                                  # 빈칸 대신 직전 번역을 유지하는 데 쓴다.
         self._interim_source: str = ""            # 마지막 번역 요청한 버퍼 텍스트
         self._interim_result: str = ""            # 마지막 완료된 번역 결과
         self._interim_in_flight: bool = False      # 번역 중 여부
@@ -36,9 +54,27 @@ class TranslationManager:
         self._interim_last_dispatch_ts: float = 0.0  # 마지막 interim 번역 발동 시각(monotonic) — 시간 디바운스용
 
     def _cache_key(self, seg) -> tuple:
-        """캐시 키: (시작시간 반올림, 텍스트)."""
+        """캐시 키: (시작시간 반올림, 텍스트).
+
+        텍스트가 키에 들어 있으므로 **단어 대치 사전 변경으로 seg.text가 바뀌면 캐시가 자동으로
+        미스**가 되어 재번역된다. 반대로 번역 용어집만 바뀐 경우는 텍스트가 그대로라 영원히
+        캐시 히트다 — 그쪽은 _stale(용어집 revision 감시)이 담당한다.
+        """
         start = round(seg.start, 2) if seg.start is not None else 0.0
         return (start, seg.text or "")
+
+    @staticmethod
+    def _seg_id(seg):
+        """세그먼트 안정 식별자(= 프론트 line.id). 텍스트가 바뀌어도 불변."""
+        return round(seg.start, 3) if seg.start is not None else None
+
+    @staticmethod
+    def _current_glossary_revision() -> int:
+        """용어집 세대. 조회 실패는 기능 비활성과 같게 취급한다(번역 자체를 막지 않는다)."""
+        try:
+            return int(get_prompt_manager().revision)
+        except Exception:
+            return 0
 
     async def _translate_and_cache(self, key: tuple, text: str, src_lang: str) -> None:
         """번역 완료 후 캐시에 저장. 에러 시 in_flight 에서 제거.
@@ -52,7 +88,8 @@ class TranslationManager:
         (과거엔 예외·빈 결과가 캐시에 안 남아 매 tick 재번역되는 무한루프였다).
         """
         try:
-            result = await self.translator.translate_sentence(text, src_lang, use_rag=True)
+            async with self._sem:
+                result = await self.translator.translate_sentence(text, src_lang, use_rag=True)
             if result:
                 self._cache[key] = result
                 self._attempts.pop(key, None)
@@ -63,6 +100,7 @@ class TranslationManager:
             self._note_failure(key, text)
         finally:
             self._in_flight.discard(key)
+            self._stale.discard(key)
 
     def _note_failure(self, key: tuple, text: str) -> None:
         """확정 번역 실패 1회 기록. 상한 도달 시 캐시에 ""를 정착시켜 재시도를 종료한다."""
@@ -76,22 +114,80 @@ class TranslationManager:
                 count, text[:50],
             )
 
+    def _mark_stale_on_glossary_change(self, window) -> None:
+        """번역 용어집이 바뀌었으면 소급 창 안의 확정 문장을 재번역 대상으로 표시한다.
+
+        캐시 값은 지우지 않는다 — 새 번역이 도착할 때까지 기존 번역을 계속 보여주기 위함
+        (지우면 그 줄의 번역이 잠깐 빈칸이 됐다가 돌아온다).
+        """
+        rev = self._current_glossary_revision()
+        if rev == self._glossary_revision:
+            return
+        self._glossary_revision = rev
+        marked = 0
+        for seg in window:
+            key = self._cache_key(seg)
+            if key in self._cache:
+                self._stale.add(key)
+                marked += 1
+        if marked:
+            logger.info(
+                "[TranslationRetro] 용어집 변경 감지(rev=%d) — 최근 확정 %d개 소급 재번역 예약",
+                rev, marked,
+            )
+
     def apply_translations(self, segments) -> None:
-        """확정 세그먼트에 번역을 적용 (캐시에서) 또는 비차단 번역 task를 생성."""
-        for seg in segments:
-            if seg.is_silence() or not seg.finalized or not seg.text:
+        """확정 세그먼트에 번역을 적용 (캐시에서) 또는 비차단 번역 task를 생성.
+
+        소급 재적용 규칙 (녹음 중 대치어/번역용어 등록 대응):
+          - **최초** 번역은 항상 수행한다 — 소급 창과 무관(정상 실시간 경로 무변경).
+          - **재**번역(대치어로 텍스트가 바뀌었거나 용어집이 바뀐 경우)은 최근 _retro_scope개
+            확정 문장으로 제한한다. 흔한 단어를 등록하면 과거 수백 줄이 한꺼번에 재번역 대상이
+            되는데, 배포 LLM은 단일 서버라 전량을 던지면 진행 중인 실시간 번역이 밀린다.
+          - 새 번역이 도착하기 전까지는 직전 번역을 그대로 보여준다(빈칸 깜빡임 방지).
+        """
+        finals = [
+            seg for seg in segments
+            if not seg.is_silence() and seg.finalized and seg.text
+        ]
+        window = finals[-self._retro_scope:] if self._retro_scope > 0 else []
+        in_window = {id(seg) for seg in window}
+
+        self._mark_stale_on_glossary_change(window)
+
+        for seg in finals:
+            key = self._cache_key(seg)
+            sid = self._seg_id(seg)
+            cached = self._cache.get(key)
+
+            if cached is not None and key not in self._stale:
+                # 캐시 히트: 번역 결과 적용
+                seg.translation = cached
+                if sid is not None:
+                    self._last_translation_by_id[sid] = cached
                 continue
 
-            key = self._cache_key(seg)
+            # 캐시 미스(대치어로 텍스트가 바뀐 경우 포함) 또는 stale(용어집 변경).
+            # 새 번역이 도착할 때까지 직전 번역을 유지해 빈칸 깜빡임을 막는다.
+            previous = cached
+            if previous is None and sid is not None:
+                previous = self._last_translation_by_id.get(sid)
+            seg.translation = previous if previous is not None else ""
 
-            if key in self._cache:
-                # 캐시 히트: 번역 결과 적용
-                seg.translation = self._cache[key]
-            elif key not in self._in_flight:
-                # 캐시 미스 + 번역 중 아님: 비차단 task 생성
-                src_lang = seg.detected_language or "ko"
-                self._in_flight.add(key)
-                asyncio.ensure_future(self._translate_and_cache(key, seg.text, src_lang))
+            if key in self._in_flight:
+                continue
+
+            # 이 줄이 한 번이라도 번역된 적이 있으면 = 재번역 → 소급 창 안에서만 허용.
+            is_retranslation = previous is not None
+            if is_retranslation and id(seg) not in in_window:
+                # 창 밖이다. 소급 재번역을 포기하고 기존 번역으로 정착시킨다 — stale 표시를 남겨두면
+                # 이후 새 문장이 확정되며 창이 밀려도 그 줄이 영영 캐시 히트 경로로 돌아오지 못한다.
+                self._stale.discard(key)
+                continue
+
+            src_lang = seg.detected_language or "ko"
+            self._in_flight.add(key)
+            asyncio.ensure_future(self._translate_and_cache(key, seg.text, src_lang))
 
     async def _translate_interim_and_store(self, text: str, src_lang: str, line_id) -> None:
         """중간(미확정) 버퍼 번역 완료 후 결과 저장. 에러 시 로그만 남기고 삼킴.

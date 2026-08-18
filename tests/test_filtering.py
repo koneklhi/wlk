@@ -394,3 +394,102 @@ class TestUnclosedAnnotation:
     def test_plain_text_unchanged(self):
         # 7) 무관 텍스트 불변
         assert self._clean("정상 문장입니다") == "정상 문장입니다"
+
+
+# ─── 녹음 중 사전 갱신의 소급 적용 (원본 비파괴 · 멱등 · 원복) ────────────────
+
+def _isolated_filtering(monkeypatch, tmp_path, entries=(), user_rows=None):
+    """전역 싱글턴을 건드리지 않는 격리된 filtering 모듈 + 단어장을 반환한다."""
+    import whisperlivekit.filtering as fmod
+    monkeypatch.setattr(fmod, "_HALLUCINATIONS", [])
+    mgr = make_manager(tmp_path, list(entries), user_rows)
+    monkeypatch.setattr(fmod, "_word_manager", mgr)
+    return fmod, mgr
+
+
+class TestRetroWordCorrection:
+    """세션(녹음) 진행 중 /api/corrections 로 사전을 바꿨을 때의 소급 동작.
+
+    results_formatter()는 매 tick 세션 전체 lines에 filter_segments()를 다시 건다. 따라서
+    사전이 바뀌면 **이미 확정된 과거 문장에도** 그 tick부터 적용된다. 그 전제가 성립하려면
+    ① 원본 세그먼트를 변형하지 않아 매 tick 원문에서 다시 계산되고 ② 항목을 지우면 원복돼야 한다.
+    """
+
+    def test_correction_added_midsession_applies_to_past_segment(self, monkeypatch, tmp_path):
+        """녹음 중 추가한 단어가 이미 확정된 과거 세그먼트에도 적용된다."""
+        fmod, mgr = _isolated_filtering(monkeypatch, tmp_path)
+
+        segs = [_make_seg("6군 훈련을 실시했습니다.")]
+        before = fmod.filter_segments(segs)
+        assert before[0].text == "6군 훈련을 실시했습니다."
+
+        mgr.add_user_word("6군", "육군")          # ← 관리자 페이지 등록에 해당
+
+        after = fmod.filter_segments(segs)         # 같은(과거) 세그먼트를 다시 필터
+        assert after[0].text == "육군 훈련을 실시했습니다."
+
+    def test_original_segment_is_not_mutated(self, monkeypatch, tmp_path):
+        """치환은 사본에만 반영되고 원본 세그먼트는 원문을 유지한다."""
+        fmod, _ = _isolated_filtering(monkeypatch, tmp_path, [{"origin": "6군", "replaced": "육군"}])
+
+        seg = _make_seg("6군 훈련")
+        result = fmod.filter_segments([seg])
+
+        assert result[0].text == "육군 훈련"
+        assert seg.text == "6군 훈련", "원본이 in-place로 변형되면 매 tick 치환이 누적된다"
+        assert result[0] is not seg
+
+    def test_repeated_filtering_is_idempotent_for_self_referential_rule(self, monkeypatch, tmp_path):
+        """치환 결과가 다시 패턴에 걸리는 규칙도 tick 을 반복해서 누적되지 않는다.
+
+        비-diar 경로는 같은 세그먼트 객체가 tick 을 넘어 살아남는다. 과거에 원본을 in-place로
+        고쳤다면 "6군"→"제6군단"→"제제6군단단"으로 매 tick 불어났을 자리다.
+        """
+        fmod, _ = _isolated_filtering(monkeypatch, tmp_path, [{"origin": "6군", "replaced": "제6군단"}])
+
+        segs = [_make_seg("6군 훈련")]
+        for _ in range(5):
+            result = fmod.filter_segments(segs)
+
+        assert result[0].text == "제6군단 훈련"
+        assert segs[0].text == "6군 훈련"
+
+    def test_correction_removal_reverts_past_segment(self, monkeypatch, tmp_path):
+        """관리자 페이지에서 항목을 지우면 과거 세그먼트도 원문으로 되돌아간다."""
+        fmod, mgr = _isolated_filtering(monkeypatch, tmp_path)
+
+        segs = [_make_seg("6군 훈련")]
+        mgr.add_user_word("6군", "육군")
+        assert fmod.filter_segments(segs)[0].text == "육군 훈련"
+
+        mgr.delete_user_word("6군")
+        assert fmod.filter_segments(segs)[0].text == "6군 훈련"
+
+    def test_unchanged_segment_is_returned_as_is(self, monkeypatch, tmp_path):
+        """치환할 게 없으면 사본을 만들지 않는다(불필요한 복사 비용 회피)."""
+        fmod, _ = _isolated_filtering(monkeypatch, tmp_path, [{"origin": "6군", "replaced": "육군"}])
+
+        seg = _make_seg("해군 훈련")
+        result = fmod.filter_segments([seg])
+        assert result[0] is seg
+
+
+class TestApplyWordCorrections:
+    """미확정 버퍼(buffer_transcription/buffer_diarization)용 공개 헬퍼."""
+
+    def test_applies_dictionary_to_plain_string(self, monkeypatch, tmp_path):
+        fmod, _ = _isolated_filtering(monkeypatch, tmp_path, [{"origin": "6군", "replaced": "육군"}])
+        assert fmod.apply_word_corrections("6군 참모") == "육군 참모"
+
+    def test_picks_up_dictionary_added_midsession(self, monkeypatch, tmp_path):
+        """전사 중 추가한 단어가 다음 호출부터 버퍼에도 즉시 반영된다."""
+        fmod, mgr = _isolated_filtering(monkeypatch, tmp_path)
+        assert fmod.apply_word_corrections("6군 참모") == "6군 참모"
+
+        mgr.add_user_word("6군", "육군")
+        assert fmod.apply_word_corrections("6군 참모") == "육군 참모"
+
+    def test_empty_and_no_dictionary_are_passthrough(self, monkeypatch, tmp_path):
+        fmod, _ = _isolated_filtering(monkeypatch, tmp_path)
+        assert fmod.apply_word_corrections("") == ""
+        assert fmod.apply_word_corrections("변경 없음") == "변경 없음"

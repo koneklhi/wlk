@@ -476,6 +476,16 @@ def create_parser():
         dest="translation_model",
         help="번역 모델명. 기본값: gpt-oss-20b (배포 PC). dev는 qwen2.5:7b 지정.",
     )
+    parser.add_argument(
+        "--retro-retranslate-lines",
+        type=int,
+        default=None,
+        dest="retro_retranslate_lines",
+        help="녹음 중 관리자 페이지에서 대치어/번역용어를 등록했을 때 이미 확정된 문장 중 몇 개까지 "
+        "소급 **재**번역할지. 0이면 소급 재번역을 끄고 텍스트 대치만 소급한다. 기본값(None)은 "
+        "llm_translation.manager.RETRO_SCOPE_LINES(현재 20)를 사용. 전사 텍스트 대치는 이 값과 "
+        "무관하게 항상 세션 전 구간에 적용된다 — 제한 대상은 LLM 호출뿐이다(번역 서버 폭주 방지).",
+    )
     # Stage 2 Qdrant RAG는 CLI 플래그가 없다 — 자산 경로가
     # whisperlivekit/llm_translation/__init__.py에 고정돼 있고, 그 디렉터리가 있으면 켜진다.
 
