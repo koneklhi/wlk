@@ -84,12 +84,18 @@ BOUNDARY_PROTECT_SECS = 5.0          # 경계 이벤트로부터 이 시간 이�
 # 때를 커버한다. detect_current_language는 이미 @torch.no_grad라 신규 forward 경로가 아니다.
 BOUNDARY_QG_REPROBE_WINDOW = 2.5
 BOUNDARY_QG_REPROBE_MIN_PROB = 0.85
-# 동일언어 확인(예 ko→ko)일 때도 보존할지. False면 "언어가 이미 옳았는데도 QG가 3연속
-# 억제한" 구간은 기존 폐기로 보낸다 — 그런 구간은 언어 문제가 아니라 음성 자체가 어려운
-# 것이라, 보존해도 디코더가 다시 헤매며 없던 텍스트를 뱉을 뿐이다(환각 삽입 증가).
-# 실측 근거: ON2 보존 17건 중 ko→ko 7건이 있었고, 같은 조건에서 삽입 오류가 OFF 대비
-# bong1 +4·ytn1 +2 늘었다. 언어 교정/확정(en→ko·None→ko)은 진짜 유실 복구에 기여한다.
-BOUNDARY_QG_PRESERVE_ON_SAME_LANG = False
+# 동일언어 확인(예 ko→ko)일 때도 보존할지.
+#
+# **True 고정 권장 — False는 실측으로 기각됐다.** "언어가 이미 옳은데 QG가 3연속 억제한
+# 구간은 음성 자체가 어려운 것이니 보존해봐야 환각만 는다"는 가설로 False를 측정했으나
+# (짝지음 N=3, 4파일 median 합):
+#     OFF  삽입 37 / 삭제 46 (합 83)
+#     True 삽입 44 / 삭제 26 (합 70)   ← 최선
+#     False삽입 50 / 삭제 51 (합 101)  ← 최악 (양쪽 다 악화)
+# 동일언어 보존도 실제로 단어를 복구하고 있었고, 빼자 버퍼 폐기 → 유실 + 문맥 없는
+# 재시작 → 환각이라는 원래 실패 사슬이 되살아났다(bong1 삭제 10→38, ytn1 삽입 7→16).
+# 즉 "보존이 환각을 만든다"가 아니라 "폐기가 유실과 환각을 **함께** 만든다"가 맞다.
+BOUNDARY_QG_PRESERVE_ON_SAME_LANG = True
 
 # ── SOT 위치 사후분포 계측 (계측 전용 — 디코딩 행동 변경 0) ─────────────────────
 # infer()의 첫 forward는 new_segment일 때 전체 토큰 시퀀스를 넣으므로 logits shape이

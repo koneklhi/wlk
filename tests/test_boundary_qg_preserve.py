@@ -171,12 +171,9 @@ def test_probe_runs_before_refresh():
     assert order == ["probe", "refresh"], f"호출 순서가 잘못됨: {order}"
 
 
-def test_same_language_confirmation_falls_back_to_discard():
-    """언어가 이미 옳았는데 garbage 3연속 → 언어 문제가 아니므로 기존 폐기로 폴백.
-
-    보존해도 같은 오디오를 다시 헤매며 환각만 늘린다(ON2 실측: 보존 17건 중 ko→ko 7건,
-    같은 조건에서 삽입 오류 bong1 +4·ytn1 +2).
-    """
+def test_same_language_falls_back_when_opted_out(monkeypatch):
+    """플래그를 끄면 동일언어 확인은 기존 폐기로 폴백한다(측정으로 기각된 설정의 계약 고정)."""
+    monkeypatch.setattr(aab, "BOUNDARY_QG_PRESERVE_ON_SAME_LANG", False)
     fs = _make_fake_decoder(
         stream_time=11.0, last_boundary_event_at=10.0,
         detected_language="ko", reprobe_result="ko",
@@ -186,9 +183,11 @@ def test_same_language_confirmation_falls_back_to_discard():
     assert fs.state.qg_preserve_used is False, "폴백은 보존 예산을 소진하지 않아야 한다"
 
 
-def test_same_language_preserved_when_opted_in(monkeypatch):
-    """플래그를 켜면 동일언어 확인도 보존한다(ON2 동작 복원용 롤백 스위치)."""
-    monkeypatch.setattr(aab, "BOUNDARY_QG_PRESERVE_ON_SAME_LANG", True)
+def test_same_language_preserved_by_default():
+    """기본값(True)에서는 동일언어 확인도 보존한다 — 폐기가 유실·환각을 함께 만들기 때문.
+
+    실측(짝지음 N=3, 4파일 median 합): 보존 True = 삽입 44/삭제 26, False = 삽입 50/삭제 51.
+    """
     fs = _make_fake_decoder(
         stream_time=11.0, last_boundary_event_at=10.0,
         detected_language="ko", reprobe_result="ko",
