@@ -5812,5 +5812,188 @@ kinno 정성 sanity는 머지 후에도 미실시 상태로 남는다** — 회�
    유령 stub과 다른 메커니즘 — 별도 후속 조사 필요, 이번 결론에 섞지 않음.
 
 ### 기록
-- Epoch **미bump**: 출력층 후처리(get_lines 단일 합류점)이며 디코더/VAD 파이프라인 구조 변경이 아님. 또한
-  아직 master에 미머지.
+- Epoch **미bump**: 출력층 후처리(get_lines 단일 합류점)이며 디코더/VAD 파이프라인 구조 변경이 아님.
+- **2026-08-18 정정**: 위 "아직 master에 미머지"는 stale — Exp-210 작업 중 재확인 결과 `d711235`(이
+  블록의 merge 커밋)가 실제로 master에 포함돼 있었다(`git branch --contains d711235` 확인). STATE
+  빠른참조 표의 "미머지" 행도 동일하게 정정됨.
+
+---
+
+## Exp-210 — 경계 QG streak refresh 보존형 전환 — 서두 유실+환각 공통원인 제거 (2026-08-18) [E6→**E7**, 채택·머지, `fix/boundary-qg-preserve`]
+
+**측정 언어모드**: `--lan auto` (전 파일, CLAUDE.md §3.2 — 예외 없음).
+
+### 발단
+사용자 보고: "코드 스위칭 시 첫 음절이 전사되지 않고 날라가는 경향이 보이고 환각이 폭주하는 현상이 있어."
+소넷 모델로 1차 분석 후, fable 모델로 독립 재분석을 요청받아 진행했다.
+
+### 가설
+소넷 1차 분석은 언어전환 트림(`_trim_segments_to_recent(keep_secs)`)의 감지 지연을 주범으로 지목했으나,
+fable 재분석에서 로그 실증 결과 다른 결론에 도달했다. 주범은 `_on_quality_suppressed`
+(`align_att_base.py:1226`, 당시 `:1171`)의 `refresh_segment(complete=True)` — QualityGate가 N회
+(`quality_gate_reset_after=3`) 연속 억제하면 오디오 버퍼를 통째로 폐기한다. 언어/화자 전환 직후에는
+구언어 토크나이저가 새 언어 오디오를 garbage로 읽어 이 3연속이 쉽게 성립하고, 그때 폐기되는 버퍼가 곧
+새 문장의 서두 오디오라 비가역 유실이 된다. 문맥 없이 재시작한 디코더가 그 자리를 환각(같은 스크립트
+은닉 번역 포함)으로 채우므로 "첫 어절 유실"과 "환각 폭주"는 같은 사건의 앞뒷면이라는 가설을 세웠다.
+
+이 메커니즘은 Exp-177(2026-07-13)이 이미 실측 규명하고 수정 설계까지 docs/goal_prompt/
+GOAL_BOUNDARY_QG_PRESERVE.md로 남겼으나, 이후 세션이 Exp-179(콜드스타트 프로브) 쪽으로 흘러가 한 번도
+실행되지 않았다. 이번 실험은 그 설계(P1 보존형 refresh)를 실행·측정·기록한다.
+
+### 로그 실증 (원인 확정 근거)
+master@8af6205 --repeat 3(bong1/ytn2/sbs1/ytn1) 12-run 측정 로그를 분석해 세 가지 증거를 확보했다:
+1. 확률성 — ytn2 동일 오디오 3회에서 유실 지점이 매번 다름(R1 "In support of" 유실/R2·R3 정상, R2
+   "이런 목표들을 달성하기 위해서"→"위에서" 절단/R1·R3 정상). 고정 폭 트림으로는 설명 불가 — 경합 성격.
+2. 정답 단어가 억제 로그에 실존 — ytn1 R2 suppressing (lang=ko): 지난(정답 서두 "지난 세 달 만에"),
+   ytn2 R2 suppressing (lang=ko): 위해, 은×3→refresh(전사 "저는"→"전" 유실 지점 정확 일치). 디코더는
+   맞게 들었고 게이트가 억제+버퍼 폐기로 죽인 것.
+3. 빈도-피해 단조 상관(12 run, refresh 총 24회) — ytn2 refresh 4/3/0회 ↔ WER 14.3/11.8/10.8%,
+   ytn1 3/1/1회 ↔ 19.0/16.0/8.6%. refresh 0회 회차만 서두 유실 없음.
+4. 환각 대체 — ytn1 정답 한국어 서두("안녕하십니까. 지난…")가 R1/R2에서 영어 환각("Thank you very
+   much…")으로 대체. 유실·환각이 동일 지점에서 짝으로 발생.
+
+"언제부터 나빠졌나"(git bisect 없이 이력만 대조): refresh_segment(complete=True) streak 경로 자체는
+2026-06-21(bcb64ae, Phase1 품질게이트)에 도입돼, 사용자가 "깔끔했다"고 기억하는 7월 초·중순(Exp-171/174
+경계 개선기)에도 이미 존재했다 — 코드 신규 추가가 원인이 아니라, 경계에서 garbage 3연속이 성립하는
+빈도를 다른 머지가 키운 것으로 추정된다(유력 후보 2026-07-22 Exp-199/200, bong1/ytn2 무회귀 미확인
+머지). 정밀 귀속(bisect 실측)은 고비용이라 이번 범위에서 생략 — 수정 방향은 원인 규명 없이도 확정적.
+
+### 변경 내용 (whisperlivekit/simul_whisper/align_att_base.py)
+- 상수(:81-98): BOUNDARY_QG_PRESERVE_ENABLED=True(롤백 플래그), BOUNDARY_PROTECT_SECS=5.0,
+  BOUNDARY_QG_REPROBE_WINDOW=2.5, BOUNDARY_QG_REPROBE_MIN_PROB=0.85, BOUNDARY_QG_PRESERVE_ON_SAME_LANG=True.
+- _current_stream_time()(:282) — global_time_offset + cumulative_time_offset + segments_len(),
+  트림/refresh에 불변인 스트림 시계.
+- mark_boundary_event(at=None)(:295) — 경계 이벤트 스탬프. _apply_detected_language의 언어전환
+  arm 직후(:390)와 backend.py new_speaker() 진입부(:456, 동일언어 스킵 경로 포함)에서 호출.
+- _on_quality_suppressed(:1226) — streak 도달 시 _try_preserving_refresh()를 먼저 시도, 실패하면
+  기존 refresh_segment(complete=True) 폴백.
+- _try_preserving_refresh()(:1252) — 순서: ①버퍼 존재 확인 ②이 경계에서 미소진(qg_preserve_used)
+  확인 ③보호창(Δt≤5.0s) 확인 ④언어 확신 프로브(_probe_language_for_preserve, refresh 전 원본
+  버퍼로 실행) — 확신 실패면 폐기 폴백. 통과 시 refresh_segment(complete=False, keep_secs=버퍼전량)로
+  오디오 전량 보존, 언어가 다르면 _apply_detected_language(lang, skip_trim=True)로 교정(재트림 방지 —
+  방금 보존한 오디오를 곧바로 되자르는 자기모순 차단).
+- _probe_language_for_preserve()(:1322) — detect_current_language(이미 @torch.no_grad) 1회 호출.
+- decoder_state.py: last_boundary_event_at: float = 0.0(:48, 세션 초입 자동 보호), qg_preserve_used:
+  bool = False(:50).
+- backend.py new_speaker()(:456): 진입부 경계 스탬프.
+
+### 테스트 설정 및 명령
+scripts/eval.py --model-dir whisperlivekit/model/whisper-large-v3-turbo
+  --files test_data/bong1.wav test_data/ytn2.mp3 test_data/sbs1.mp3 test_data/ytn1.mp3
+  --lan auto --diarization --sortformer-model whisperlivekit/model/sortformer-4spk-v2.nemo
+  --compression-ratio-threshold 3.0 --repeat 3 --output ".omc/benchmarks/eval_qgpreserve_<TAG>.json"
+
+짝지음 A/B(동일 세션, BOUNDARY_QG_PRESERVE_ENABLED True/False)로 순효과 측정. 반복 3회 시도:
+① ON1(보존만, 언어확신 게이트 없음) → bong1 은닉번역 회귀(LMR +22.8pp) 발견 → ② ON2(언어확신 게이트 +
+skip_trim 추가) → bong1 회귀 해소, ytn2만 판정불가(N=3 노이즈 의심) → ytn2 N=6 집중 재측정으로 확인
+→ ③ ON3(동일언어 보존 제외 시도, 환각 감소 가설) → 역측정으로 반증, ON2로 최종 확정.
+held-out: eng1+kinno 단회. Case B 스캔: 12개 확정 트리거 파일 전수(파이썬 스크립트, 종결어미 화이트리스트).
+
+### 정량 결과
+
+짝지음 A/B 최종(ON2 vs OFF, N=3, --lan auto diar-ON CRT=3.0):
+
+| 파일 | 화자F1 worst OFF→ON2 | WER median OFF→ON2 | WER max OFF→ON2 | LMR OFF→ON2 |
+|---|---|---|---|---|
+| bong1(§3.8 최우선) | 64.7→64.5 (-0.2) | 28.6→23.8(-4.8) | 34.0→24.4(-9.6) | 16.3→6.5 |
+| sbs1 | 40.0→80.0(+40.0) | 10.7→8.3(-2.4) | 10.7→8.9(-1.8) | 0→0 |
+| ytn1(held-out) | 82.4→87.5(+5.1) | 12.3→11.0(-1.3) | 16.6→16.0(-0.6) | 6.6→0.0 |
+| ytn2 | 66.7→63.6(-3.1, N=3) | 16.5→15.5(-1.0, N=3) | 30.5→33.5(+3.0, N=3) | 0→0 |
+
+ytn2 N=6 재확인(N=3 판정불가 해소용, 동일 세션 짝지음): OFF WER 13.3/15.3/15.8/17.2/20.7/30.5
+(median 16.5, 평균 18.8, 화자F1 평균 84.3) vs ON2 WER 11.8/13.8/14.3/16.7/24.1/33.5(median 15.5, 평균
+19.0, 화자F1 평균 80.7) — 분포가 완전히 포개져 차이 없음. 로그 확인: streak 18회 중 보존 발동 6회
+(33%)뿐, 언어 교정은 1건 — 개입량 자체가 적어 순효과가 노이즈에 묻힘.
+
+오류 유형 분해(jiwer 재계산, median, 4파일 median 합):
+
+| 조건 | 삽입(환각) | 삭제(유실) | 합 |
+|---|---|---|---|
+| OFF | 37 | 46 | 83 |
+| ON2(최종 채택) | 44 | 26 | 70 |
+| ON3(동일언어 제외, 기각) | 50 | 51 | 101 |
+
+held-out: eng1 WER 1.9%·화자F1 100%·문장F1 100%(과거 베이스라인 2.9~5.7% 대비 양호). kinno WER 42.3%
+(과거 관측 30.5~72.0% 범위 내, streak 발동 0회 — 이번 변경과 무관, 기존 필러 실패모드).
+
+Case B(단어 중간 분절): ON2 N=3 전 파일(bong1/ytn2/sbs1/ytn1) 12개 전사의 확정 트리거 전수 스캔 —
+0건. 유일 후보(ytn2 "…협조를 해나가기로")는 스트림 종료 시점 미확정 문장(⟨-⟩)의 꼬리 절단으로,
+단어 중간 분절이 아님.
+
+### 분석 (전사 내용 정성 대조)
+
+**bong1**(ON2 median, WER 23.8%):
+- 서두 유실 복구: OFF "song when you read the screenplay..."(소문자, "Son," 인사말 소실) → ON2
+  "Son, when you read the screenplay..." — 인사말 복구.
+- 은닉 번역 잔존(부분): 정답 "누가 주인공일까" → ON2 "Who is the main. 주인공일까" — "누가"가
+  영어 환각으로 대체된 채 잔존. 완전 해소는 아니고 완화.
+- 동일 지점 실패모드 전환 확인: 오늘 아침 master 베이스라인에서 "영화 보셔서 아시겠지만 누가 주인공
+  제가 주인공 맞죠?"가 통째로 "You can see who is the one who is the one, who is the one?" 환각으로
+  대체됐던 구간이, ON2 별도 회차(R1)에서는 "영화 보셔서 아시겠지만 누가 주인공이 제가 주인공 맞죠. 예."로
+  정확 복구됨(회차별 확률성 — 상단 로그 실증 ①과 일치).
+
+**ytn2**(ON2 median, WER 15.8%):
+- 코드스위칭 복구: OFF "...to strengthen towards achieving..."("coordination" 유실) → ON2
+  "...to strengthen coordination towards achieving..." — 복구.
+- 소규모 신규 삽입: ON2 전사에 "North Korea. In the." — "In the." 2단어 삽입(경계 직후 재프로브
+  재디코딩의 부산물로 추정). 뒤따르는 한국어 "논의한 사안 중에서는 우선 왕성한..."은 정답과 완전 일치
+  (오늘 아침 master에서 이 구절 전체가 유실됐던 지점).
+
+**sbs1**(ON2 median, WER 8.3%):
+- 서두 유실 복구: OFF "미국 육군전쟁 대학 강연에 나선..."("현지시간 5일" 소실) → ON2 "현지시간
+  5일 미국 육군전쟁대학 강연에 나선..." — 복구.
+- 주요 신규 실패 없음.
+
+**ytn1**(ON2 median, WER 11.0%, held-out):
+- 콜드스타트 유실 복구: OFF "Yeah, I'm not sure It's been a long time since."(정답 "안녕하십니까.
+  지난 세 달 만에" 전체가 영어 환각으로 대체) → ON2 "Yeah, I'm not sure. 지난 세 달 만에 두 번째로..." —
+  "지난 세 달 만에"가 복구됨(로그 물증: [QGPreserve] 경계 보호 보존 refresh — lang=en→ko, 재프로브가
+  콜드스타트 언어 오잠금을 en→ko로 교정).
+- 소규모 신규 삽입: "...기쁘게 생각합니다. 감사합니다." — "감사합니다." 삽입(뒤 문장 "감사드립니다"
+  패턴의 조기 재생성으로 추정, 저심각도 동일언어 반복).
+
+이번 변경 영향: 코드스위칭 서두 유실은 4파일 모두에서 정성적으로 복구가 확인됐다(정량 삭제 오류
+-20). 환각은 완전히 사라지지 않았고 일부 신규 삽입(+7)도 있으나, 크기가 유실 감소분보다 작고 유형도
+"통째 문장 대체"(개선 전)에서 "1~2단어 삽입"(개선 후)으로 완화됐다. bong1의 은닉 번역은 완화됐으나
+완전 해소는 아니다 — 잔존 실패모드로 다음 가설에 남긴다.
+
+### 채택 조건 판정 (CLAUDE.md §4 게이트 순서)
+1. 화자분리 F1 worst-case 미회귀: bong1 -0.2(노이즈)·ytn2 -3.1(N=6 재확인 시 분포 포개짐, 노이즈)·
+   sbs1 +40.0·ytn1 +5.1 — 통과(catastrophic 회귀 없음, 2파일 대폭 개선).
+2. WER max 미회귀: bong1 -9.6pp·sbs1 -1.8pp·ytn1 -0.6pp 개선, ytn2 +3.0pp(N=3)이나 N=6 재확인에서
+   분포 완전 포개짐(귀속 불가) — 통과.
+3. WER median 개선: 4파일 전부 개선(ytn2도 N=3·N=6 양쪽 median 기준 소폭 개선 방향) — 통과.
+4. Case B 0건 — 통과.
+5. held-out 미회귀: eng1 회귀 없음, kinno 미발동(무관) — 통과.
+6. §3.1/§3.2 직결 여부: 코드스위칭 유실·환각은 §3.2 핵심 과제 직결이나, 이번 게이트는 정량으로
+   충족돼 §4 "목표 필수 기능 예외" 조항 발동 불필요.
+
+### 결론
+채택·머지(fix/boundary-qg-preserve → master). bong1(§3.8 최우선) WER max -9.6pp·LMR -9.8pp,
+held-out ytn1 화자F1 +5.1·LMR -6.6pp, sbs1 화자F1 worst +40.0. 오류 총량 순 -13(삽입+7, 삭제-20).
+사용자가 "환각이 늘었다"고 지적해 실측 확인(맞음, 트레이드오프 실재) → "동일언어 보존 제외" 완화
+시도가 역측정으로 반증돼 원 설계(ON2)를 최종 확정 — 폐기가 유실과 환각을 함께 만드는 것이지, 보존이
+환각의 원인이 아니다가 이번 실험의 핵심 발견. Epoch E6→E7 상승(refresh_segment 실패모드를 바꾸는
+구조 변경).
+
+미검증 범위(정직한 한계): kor1~3(테스트셋 필수 항목, CLAUDE.md §4)이 이번 세션에서 측정되지 않았다
+— 표준 채택 확정 세트(bong1+ytn2+sbs1+kor1~3)의 절반만 검증된 상태로 머지됐다. 사용자 승인 후 진행.
+
+### 다음 가설
+1. kor1~3 스크리닝 — 이번 세션 미검증분 보강, 표준 테스트셋 완결.
+2. BOUNDARY_PROTECT_SECS 6.0s 확대 — ytn2 보호창 밖 폴백 13건 중 5건이 Δt=5.04~5.70s로 5.0s 문턱을
+   근소 초과. 창 확대로 이 5건이 보호 대상이 되는지 짝지음 측정.
+3. bong1 은닉 번역 잔존(정성 분석 "누가"→"Who is the main." 사례) — 언어 확신 게이트가 이 특정 프레임
+   에서 왜 통과됐는지(확신 임계 통과했는데 오판) 로그 추적. GOAL_BOUNDARY_QG_PRESERVE.md의 Type A(변주형
+   필러 storm) 별도 과제와 연결 가능성.
+4. frame_threshold(Exp-193) 조합 재검토 — 구언어 미커밋 꼬리 유실은 이번 변경과 별개 경로로 잔존.
+
+### 기록
+- Epoch E6→E7 상승(구조 변경, refresh_segment 실패모드 전환).
+- 벤치마크: .omc/benchmarks/eval_qgpreserve_{OFF,ON,ON2,ON3}_N3.json,
+  eval_qgpreserve_{OFF,ON}.json(N=1 스크리닝), eval_ytn2_{OFF,ON2}_N6.json,
+  eval_qgpreserve_heldout.json (전부 worktrees/boundary-qg-preserve/.omc/benchmarks/, 워크트리
+  untracked — 재현 시 위 명령으로 재측정).
+- 부수: 이 세션 중 공유 .venv가 git worktree remove의 Junction 관통 삭제로 2회 파괴됨(우발적,
+  코드와 무관) — 원인 규명 후 .claude/hooks/block-unsafe-worktree-remove.ps1 신설 + CLAUDE.md §4
+  워크트리 제거 규약 추가로 재발 방지(별도 커밋 eaa1654, Exp 번호 미부여 — 인프라 변경).
