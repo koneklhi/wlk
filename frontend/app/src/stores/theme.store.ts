@@ -32,6 +32,13 @@ type STTThemeState = {
   // 문장 확정 원인(finalize_trigger) 배지 표시 여부.
   showFinalizeTrigger: boolean;
 
+  // 화면 레이아웃 — 배포 현장(화면 크기·시청 거리)에 맞춰 운용자가 조절한다.
+  screenPaddingXPercent: number; // 전사 영역 좌우 여백 (화면 너비 %)
+  blockGapPx: number; // 블록(원문+번역) 사이 간격 (px)
+  lineSpacingRatio: number; // 줄간격 배율. 원문↔번역 간격도 여기서 파생한다(SttThemeProvider).
+  processingOpacity: number; // 미확정(진행중) 전사·번역 대기 로더의 불투명도
+  bottomPaddingPercent: number; // 전사 목록 하단 여백 (화면 높이 %, vh)
+
   // 액션
   setBackgroundColor: (v: string) => void;
   setTitleBackgroundColor: (v: string) => void;
@@ -46,6 +53,11 @@ type STTThemeState = {
   setLogoSize: (size: 'sm' | 'md' | 'lg' | 'xl') => void;
   setShowTimestamp: (v: boolean) => void;
   setShowFinalizeTrigger: (v: boolean) => void;
+  setScreenPaddingXPercent: (v: number) => void;
+  setBlockGapPx: (v: number) => void;
+  setLineSpacingRatio: (v: number) => void;
+  setProcessingOpacity: (v: number) => void;
+  setBottomPaddingPercent: (v: number) => void;
   reset: () => void;
 };
 
@@ -66,6 +78,14 @@ const DEFAULTS = {
   colorTitleForeground: '#ffffff',
   showTimestamp: true,
   showFinalizeTrigger: true,
+  // 레이아웃 기본값: 문단 간격 56 = 종전 gap-14, 줄간격 1.75 = 종전 하드코딩,
+  // 투명도 0.4 = 종전 미확정 opacity. 좌우 여백·하단 여백만 종전(px-16=64px, pb-12=48px)에서
+  // 화면 비례값으로 바뀐다 — 큰 화면일수록 여백이 함께 커지도록 한 의도된 변경이다.
+  screenPaddingXPercent: 5,
+  blockGapPx: 56,
+  lineSpacingRatio: 1.75,
+  processingOpacity: 0.4,
+  bottomPaddingPercent: 20,
 };
 
 // ponytail: 4-digit hex (#rgb) → 6-digit (#rrggbb) for <input type="color">
@@ -107,6 +127,11 @@ export const useThemeStore = create<STTThemeState>()(
       },
       setShowTimestamp: (v: boolean) => set(() => ({ showTimestamp: v })),
       setShowFinalizeTrigger: (v: boolean) => set(() => ({ showFinalizeTrigger: v })),
+      setScreenPaddingXPercent: (v: number) => set(() => ({ screenPaddingXPercent: v })),
+      setBlockGapPx: (v: number) => set(() => ({ blockGapPx: v })),
+      setLineSpacingRatio: (v: number) => set(() => ({ lineSpacingRatio: v })),
+      setProcessingOpacity: (v: number) => set(() => ({ processingOpacity: v })),
+      setBottomPaddingPercent: (v: number) => set(() => ({ bottomPaddingPercent: v })),
       reset: () => set(() => ({ ...DEFAULTS })),
     }),
     {

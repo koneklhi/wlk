@@ -66,7 +66,10 @@ export const SttTextViewer = ({ row, showTimestamp, showFinalizeTrigger }: SttTe
   // 안에 넣으면 시각·배지 문구가 전사에 섞여 WER 이 조용히 오염된다.
   return (
     <div
-      className="flex flex-col gap-2"
+      className="flex flex-col"
+      // 블록 내부 간격([메타줄↔원문]·[원문↔번역])은 '문장 간격' 배율에서 파생된다 — 설정 하나로
+      // 줄 안 간격과 함께 움직이는 것이 의도다(블록↔블록 간격은 SttMain 의 --stt-block-gap).
+      style={{ gap: 'var(--stt-sentence-gap)' }}
       data-testid="stt-row"
       data-trigger={row.trigger ?? ''}
       data-finalized={row.finalized}
@@ -100,7 +103,7 @@ export const SttTextViewer = ({ row, showTimestamp, showFinalizeTrigger }: SttTe
         data-testid="stt-text"
         style={{
           ...orgStyle,
-          opacity: isProcessing && !hasTranslation ? 0.4 : 1,
+          opacity: isProcessing && !hasTranslation ? 'var(--stt-processing-opacity)' : 1,
         }}
       >
         {/* buffer 꼬리는 같은 문단 안에서 이어 붙인다 — 줄을 새로 만들면 화면이 출렁인다. */}
