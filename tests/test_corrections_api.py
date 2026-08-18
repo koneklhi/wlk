@@ -34,9 +34,9 @@ def create_test_app():
 
     @app.get("/api/corrections")
     async def get_corrections():
-        """단어 교정 사전 조회 (기본 base JSON + 사용자 추가분 병합)."""
+        """단어 교정 사전 조회 (사용자 DB 항목만 — base JSON 기본값은 관리자 UI에서 숨김)."""
         word_manager = get_word_manager()
-        return word_manager.combined_replacements
+        return word_manager.user_replacements
 
     @app.post("/api/corrections")
     async def add_correction(update: CorrectionUpdate):
@@ -199,20 +199,30 @@ def test_multiple_corrections(client, isolated_word_manager):
 
 
 # ---------------------------------------------------------------------------
-# base JSON 항목 노출 + 삭제 방지 (관리자 UI 가시성 버그 수정)
+# base JSON 항목 숨김 (관리자 UI 는 사용자가 직접 넣은 DB 항목만 보여준다)
+#
+# base JSON(admin_replacement.json)은 배포 전 관리자가 미리 채우는 기본값이고,
+# 관리자 페이지는 배포 후 현장 사용자가 직접 넣는 DB 항목을 위한 화면이다.
+# 그래서 GET 응답에서 base 를 제외한다 — 단 **치환에는 계속 적용**되므로
+# 아래 테스트들은 "GET 에는 없다 + combined_replacements 에는 있다"를 함께 확인한다.
 # ---------------------------------------------------------------------------
 
-def test_get_corrections_includes_base_json_entries(client, isolated_word_manager_with_base):
-    """GET /api/corrections - base JSON 항목이 응답에 포함되는지 (base+user 병합 확인)."""
+def test_get_corrections_hides_base_json_entries(client, isolated_word_manager_with_base):
+    """GET /api/corrections - base JSON 항목은 응답에서 제외된다(치환에는 여전히 적용)."""
     response = client.get("/api/corrections")
     assert response.status_code == 200
     data = response.json()
-    assert data.get("6군") == "육군"
-    assert data.get("공참총장") == "공군참모총장"
+    assert data == {}
+    assert "6군" not in data
+    assert "공참총장" not in data
+
+    # 화면에서만 숨긴 것이지 치환 사전에서 빠진 게 아니다
+    assert isolated_word_manager_with_base.combined_replacements["6군"] == "육군"
+    assert isolated_word_manager_with_base.combined_replacements["공참총장"] == "공군참모총장"
 
 
-def test_get_corrections_merges_base_and_user(client, isolated_word_manager_with_base):
-    """GET /api/corrections - base 항목 + 사용자 추가 항목이 함께 반환되는지."""
+def test_get_corrections_returns_user_entries_only(client, isolated_word_manager_with_base):
+    """GET /api/corrections - base 가 있어도 사용자 추가 항목만 반환된다."""
     client.post(
         "/api/corrections",
         json={"wrong_word": "테스트", "correct_word": "검증"}
@@ -220,19 +230,24 @@ def test_get_corrections_merges_base_and_user(client, isolated_word_manager_with
     response = client.get("/api/corrections")
     assert response.status_code == 200
     data = response.json()
-    assert data.get("6군") == "육군"
-    assert data.get("테스트") == "검증"
+    assert data == {"테스트": "검증"}
+    assert "6군" not in data
 
 
 def test_delete_base_only_entry_returns_warning(client, isolated_word_manager_with_base):
-    """DELETE /api/corrections/{wrong_word} - base 전용 항목은 삭제 시도 시 warning 반환, 실제로는 안 지워짐."""
+    """DELETE /api/corrections/{wrong_word} - base 전용 항목은 삭제 시도 시 warning 반환, 실제로는 안 지워짐.
+
+    base 항목은 GET 에 안 잡히므로 관리자 UI 에서는 이 경로에 도달할 수 없다.
+    API 를 직접 호출하는 경우를 막는 방어 로직이다.
+    """
     response = client.delete("/api/corrections/6군")
     assert response.status_code == 200
     assert response.json() == {"status": "warning", "message": "기본 사전 항목은 삭제할 수 없습니다."}
 
-    # 삭제되지 않고 여전히 GET 결과에 남아있는지 확인
+    # GET 에는 원래부터 안 보이고, 치환 사전에는 그대로 남아있다
     data = client.get("/api/corrections").json()
-    assert data.get("6군") == "육군"
+    assert "6군" not in data
+    assert isolated_word_manager_with_base.combined_replacements["6군"] == "육군"
 
 
 def test_delete_user_override_of_base_entry_succeeds(client, isolated_word_manager_with_base):
@@ -241,10 +256,15 @@ def test_delete_user_override_of_base_entry_succeeds(client, isolated_word_manag
         "/api/corrections",
         json={"wrong_word": "6군", "correct_word": "육군상급부대"}
     )
+    # 사용자 override 는 목록에 보인다
+    assert client.get("/api/corrections").json() == {"6군": "육군상급부대"}
+
     response = client.delete("/api/corrections/6군")
     assert response.status_code == 200
     assert response.json() == {"status": "success"}
 
-    # user DB 항목은 지워졌지만 base 항목은 여전히 병합 결과에 남는다(fallback)
+    # user DB 항목이 지워지면 목록에서 사라진다(base 는 숨김이라 fallback 이 보이지 않는다).
+    # 치환은 base 값으로 되돌아간다.
     data = client.get("/api/corrections").json()
-    assert data.get("6군") == "육군"
+    assert "6군" not in data
+    assert isolated_word_manager_with_base.combined_replacements["6군"] == "육군"

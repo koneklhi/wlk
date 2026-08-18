@@ -514,9 +514,14 @@ async def list_models():
 
 @app.get("/api/corrections")
 async def get_corrections():
-    """단어 교정 사전 조회 (기본 base JSON + 사용자 추가분 병합)."""
+    """단어 교정 사전 조회 — **사용자 DB(SQLite) 항목만** 반환.
+
+    base JSON(admin_replacement.json)은 배포 전 관리자가 미리 채워 넣는 기본값이라
+    관리자 페이지 목록에서는 숨긴다. 실제 치환에는 계속 적용된다
+    (치환 경로는 base+DB 병합인 combined_replacements 를 쓴다).
+    """
     word_manager = get_word_manager()
-    return word_manager.combined_replacements
+    return word_manager.user_replacements
 
 
 @app.post("/api/corrections")

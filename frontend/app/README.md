@@ -234,9 +234,18 @@ pnpm build
 - 화자분리 UI 는 배포 UI 에 **탑재돼 있지 않다** — 서버가 화자 번호(`speaker`)를 보내도 화면에 별도 뱃지/색상으로 표시하지 않는다(`transcriptRows.ts` 설계 주석 참조)
 
 ### 관리자 페이지 (`/admin`, `routes/admin.tsx`)
-- 단어교정 사전 CRUD (전사 후처리 오인식→정답 매핑)
-- 번역 용어(glossary) + 번역 예시(sentence) CRUD (2분할 화면)
-- 기본 내장 항목은 삭제 불가 — 서버가 HTTP 200 + `status:'warning'` 로 알려주며 토스트로 안내
+- **탭 없는 1페이지 좌우 2분할** — 좌: 단어교정 사전(전사 후처리 오인식→정답 매핑),
+  우: 번역 용어(glossary, 위) + 번역 예시(sentence, 아래). 세 목록이 항상 동시에 보인다
+- 페이지 전체 스크롤이 아니라 **패널별 내부 스크롤**이다(각 목록이 자기 영역 안에서만 스크롤)
+- **정적 JSON 기본값은 화면에 보이지 않는다** — 목록에 뜨는 건 사용자가 이 화면에서 직접 넣은
+  DB 항목뿐이다. 배포 전 관리자가 미리 채우는 base JSON(`admin_replacement.json`,
+  `admin_translation_glossary.json`)은 서버가 GET 응답에서 제외한다(정본 = `docs/API_SPEC.md`
+  §3.3·§3.4). **숨긴 항목도 전사·번역에는 그대로 적용되며**, 그 사실을 알리는 안내 문구나
+  건수 표시는 화면에 두지 않는다(운용자에게 보일 필요가 없다는 판단)
+  - 예외: 번역 예시(`sentence_block`)는 개발자 기본값도 계속 표시된다(서버가 기본값+사용자
+    사본을 합쳐 주는 Copy-on-Write 구조라 애초에 편집·삭제 가능한 항목이다)
+- 기본 내장 항목은 삭제 불가 — 서버가 HTTP 200 + `status:'warning'` 로 알려주며 토스트로 안내.
+  base 항목이 목록에 안 뜨므로 UI 로는 도달할 수 없고, API 직접 호출 방어용으로 남아 있다
 
 ### 백엔드 헬스체크
 - 15초 간격 자동 폴링(`GET /health`)
@@ -316,7 +325,13 @@ slider)을 얹지 않기 위해서**이고, 겉모습은 `styles.css` 의 `.stt-
 헬스체크 실패 시 표시되는 전체 화면 오버레이. 연결 시도 중/서버 오류(500)/네트워크 불가 상태를 구분해 안내.
 
 ### `routes/admin.tsx` (AdminPage)
-단어교정(`words`) 탭과 번역교정(`translate_split`, 번역용어+번역예시 2분할) 탭으로 구성. `useItems()` 내부 훅이 각 데이터 소스(`words`/`translate_words`/`translate_sentence`)에 대해 조회/추가/삭제를 처리한다.
+데이터 소스 3종(`words`/`translate_words`/`translate_sentence`)을 한 화면에 펼친다 — 탭이 없다.
+`Section` 컴포넌트 하나가 소스 하나를 맡아 `useItems()`(조회/추가/삭제) + 검색어 + 추가 다이얼로그
+상태를 자기 안에 들고, 배치(폭·높이)는 `className` 으로 부모(`AdminPage`)가 정한다.
+
+레이아웃은 `flex-1 min-h-0` 를 부모→패널로 내려 **패널별 내부 스크롤**을 만든다(`SectionUI` 의 목록
+div 가 `flex-1 min-h-0 overflow-y-auto`). 바깥에 `overflow-y-auto` 를 주면 페이지가 통째로 스크롤돼
+세 패널이 한 화면에 유지되지 않는다.
 
 ## 자동화 계약 (경로 C 측정이 의존한다 — 지우지 말 것)
 
