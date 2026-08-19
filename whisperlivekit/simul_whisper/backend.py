@@ -186,6 +186,118 @@ def _find_anchor_repeat_storm(
     return False
 
 
+# CASE3-B — 성장형 프리픽스 반복(regrow) 루프 게이트. 위 `_find_anchor_repeat_storm`의
+# 구조적 사각지대를 메우는 **독립 추가 경로**다(기존 경로는 그대로 두고 OR로 합친다).
+#
+# 배경(이번 사이클 실측): ytn2/kor3/bong1에서 기존 게이트가 전혀 못 잡는 더 심한 실패
+# 패턴이 관측됐다 — 디코더가 같은 구절을 **매번 처음부터 다시 시작하되 직전보다 한두
+# 단어 더 나아가고 또 재시작**하는 루프다(각 반복이 직전 반복의 상위집합/연장이며,
+# 기존 게이트가 겨냥한 "앵커 + 무관한 변주 접미부"가 아니다). 실측 ytn2 1회차에서
+# 이 루프 하나로 WER 56.7%, kor3 1회차 91.4%가 났다. 관측 형태(요약):
+#     이와 관련해서 한국군 사령관으로 조
+#     이와 관련해서 한국군 사령관으로 조건
+#     이와 관련해서 한국군 사령관으로 조건을 기초로 한 전작권
+#     ... (블록이 매 재시작마다 길어져 최종 16단어)
+#
+# 기존 경로가 왜 못 잡는가(실측 트레이스로 확인, 가설 아님):
+#   위 105단어 스트림에서 앵커 "이와 관련해서"의 등장 간격은 6,5,5,8,7,9,8,12,13,16으로
+#   **성장**한다. 그 결과 두 단계로 빠져나간다.
+#   ① 방출 45~85단어 구간: 40단어 윈도우 안 최다 2gram 등장수는 4~6회로 MIN_COUNT는
+#      넘지만 간격이 전부 MAX_GAP(5)을 초과해 best_cluster가 매번 1로 리셋된다 →
+#      `best_cluster < min_count`에서 기각. (MIN_CONCENTRATION 검사에는 **도달조차 하지
+#      않는다** — "집중도가 0.4라서 기각"이라는 추정은 실측으로 반증됐다.)
+#   ② 방출 90단어 이후: 블록이 16단어까지 자라 40단어 윈도우 안에 앵커가 3회 이하만
+#      남는다 → total < MIN_COUNT로 판정 자체가 성립하지 않는다(윈도우 escape).
+#   이 escape는 아래 process_iter 드롭 지점 주석이 이미 기록한 "결국 창밖으로 escape해
+#   무방비 폭주"와 같은 현상이다. 기존 경로의 파라미터를 완화해 메우려 하면 "북한"류
+#   자연 재등장(간격 8~20단어)까지 함께 잡혀 오탐하므로, **간격(위치)이 아니라 내용**을
+#   보는 별도 경로가 필요하다.
+#
+# 판정 원리(언어·문구 하드코딩 없음 — §3.8): 같은 앵커의 연속 등장쌍마다 "두 등장
+# 지점에서 시작하는 토큰열의 단어 단위 최장 공통 접두(lcp)"를 잰다. 성장형 루프에서는
+# 두 재시작 사이 구간 전체가 직전 구간의 (거의) 그대로의 재현이므로 lcp가 블록 길이를
+# 덮는다. 정상 문장은 앵커만 같고 뒤 내용이 달라 lcp가 1~2단어에 그친다.
+#
+# 값 근거(스윕·ablation으로 검증, tests/test_anchor_repeat_gate.py):
+#   WINDOW=80 — 실측 블록이 16단어까지 자라므로 재시작 3회를 담으려면 48단어+문맥이
+#     필요하다. 기존 40 윈도우로는 구조적으로 불가능(위 escape ②의 직접 원인). 80이면
+#     26단어 블록까지 3회를 담는다. 스윕상 60/80/100이 모두 동일하게 실측 5종 전부 검출·
+#     오탐 0이라 밴드 중앙인 80을 택했다(경계값 튜닝이 아님).
+#   MIN_BLOCK=6 — 기존 gap-tolerant 경로가 이미 커버하는 블록 길이(간격 <= MAX_GAP 5
+#     + n → 블록 <= 7)의 바로 바깥부터만 맡는다. 짧은 주기 반복은 기존 경로 담당.
+#   MIN_COVERAGE=0.7 — 실측 ytn2 쌍의 최저 재현율이 6/8=0.75다(재시작 때 잘렸던 어절이
+#     완성되며 어긋난다: "조"→"조건"→"조건을", "전작"→"전작권"). 여유를 둬 0.70.
+#     스윕상 0.70~0.90 전 구간에서 검출 5/5·오탐 0 — 절벽이 아니라 평지다.
+#   MIN_RUN=3 — 재시작 3회(=연속쌍 2개)를 요구한다. 4로 올리면 실측 kor3형 짧은 성장
+#     루프를 놓치고(스윕 5/5→4/5), 2로 내리면 단일 쌍만으로 발동해 오탐 위험이 급증한다.
+#   성장 조건(run 안에서 lcp가 한 번이라도 증가) — **오탐을 막는 핵심 판별자**다.
+#     ablation 실측: 이 조건을 빼면 ① 기존 오탐방지 픽스처(고유명사 + 동일 필러 8단어가
+#     완전 주기로 반복되는 `test_scattered_mention_across_document_not_flagged`)
+#     ② 긴 스템 anaphora("대한민국 국방부 장관과 미합중국 국방부 장관은 X" ×3)
+#     ③ 영어 긴 스템 anaphora 가 전부 오탐한다. 조건을 넣으면 0건.
+#     근거: anaphora·열거·후렴은 매 반복이 **같은 스템만** 재현하므로 lcp가 일정한 반면,
+#     재디코딩 성장 루프는 재시작마다 **직전보다 더 많은 부분**을 재현해 lcp가 늘어난다.
+#     안전 성질: lcp는 윈도우 끝에서 잘리고(상한 = n_tail - cur_pos, run 뒤로 갈수록
+#     감소) 그 절단은 오직 "증가 없음" 쪽으로만 편향된다 — 절단이 가짜 증가를 만들 수 없다.
+#   오탐 실증: 정답 전사 9종(1,703단어)과 실제 경로 C ASR 전사 45파일(약 3만 단어)의
+#     **모든 prefix**에 대해 발동 0건. 비용은 정상 텍스트 0.04ms/호출, 최악(동일 단어
+#     80개) 0.39ms/호출.
+ANCHOR_REGROW_GATE_ENABLED = True  # 롤백 장치: False면 이 경로 완전 무동작(기존 동작 복귀)
+_ANCHOR_REGROW_WINDOW = 80
+_ANCHOR_REGROW_MIN_BLOCK = 6
+_ANCHOR_REGROW_MIN_COVERAGE = 0.7
+_ANCHOR_REGROW_MIN_RUN = 3
+# 두 경로가 서로 다른 창 길이를 쓰므로 롤링 버퍼는 더 긴 쪽에 맞춰 보관한다. 기존 경로는
+# `_find_anchor_repeat_storm`이 내부에서 다시 [-40:]을 취하므로 동작이 완전히 동일하다.
+_ANCHOR_REPEAT_STORE = max(_ANCHOR_REPEAT_WINDOW, _ANCHOR_REGROW_WINDOW)
+
+
+def _find_growing_repeat_storm(
+    words: List[str],
+    window: int = _ANCHOR_REGROW_WINDOW,
+    min_block: int = _ANCHOR_REGROW_MIN_BLOCK,
+    min_coverage: float = _ANCHOR_REGROW_MIN_COVERAGE,
+    min_run: int = _ANCHOR_REGROW_MIN_RUN,
+) -> bool:
+    """롤링 윈도우에서 "성장형 프리픽스 재시작 루프"를 판정한다(True면 storm).
+
+    앵커(2gram → 1gram)의 연속 등장쌍 (prev_pos, cur_pos)이 아래를 모두 만족하면
+    그 쌍을 '재생성(regenerative) 쌍'으로 본다:
+      * block = cur_pos - prev_pos >= min_block  (기존 gap-tolerant 경로 사각지대 밖)
+      * lcp   >= min_coverage * block            (두 재시작 사이가 (거의) 그대로의 재현)
+    재생성 쌍이 끊기지 않고 이어진 run에 등장이 min_run회 이상 쌓이고, 그 run 안에서
+    lcp가 **한 번이라도 증가**하면(= 재시작할수록 더 멀리 재현 = 성장) storm으로 본다.
+    lcp 증가 조건이 anaphora/열거/후렴/완전주기 반복 같은 정상·모호 구조를 걸러낸다
+    (상단 상수 주석의 ablation 근거 참조). 언어·문구 하드코딩 없음 — 순수 구조 통계.
+    """
+    tail = words[-window:] if window > 0 else list(words)
+    n_tail = len(tail)
+    for n in (2, 1):
+        if n_tail < n:
+            continue
+        occurrences: Dict[Tuple[str, ...], List[int]] = {}
+        for k in range(n_tail - n + 1):
+            occurrences.setdefault(tuple(tail[k:k + n]), []).append(k)
+        for positions in occurrences.values():
+            if len(positions) < min_run:
+                continue
+            run_lcp: List[int] = []
+            for prev_pos, cur_pos in zip(positions, positions[1:]):
+                block = cur_pos - prev_pos
+                lcp = 0
+                while cur_pos + lcp < n_tail and tail[prev_pos + lcp] == tail[cur_pos + lcp]:
+                    lcp += 1
+                if block < min_block or lcp < min_coverage * block:
+                    run_lcp = []          # 재생성 연쇄 끊김 — 이 쌍은 run에 넣지 않는다
+                    continue
+                run_lcp.append(lcp)
+                if len(run_lcp) + 1 < min_run:   # run_lcp는 쌍 개수, 등장 수 = 쌍 + 1
+                    continue
+                if any(later > earlier for earlier, later in zip(run_lcp, run_lcp[1:])):
+                    return True
+    return False
+
+
 # 스크립트-앵커 재감지 게이트 (GOAL_SCRIPT_ANCHOR_REDETECT — 코드스위칭 서두유실 근본수정).
 # 배경: LanguageSwitch 마커는 _apply_detected_language의 is_switch일 때만 arm되는데,
 # 중간 재감지 트리거 4종(짧은침묵≥0.5s·긴침묵≥2.0s·화자전환 eager·PLC=기본 None 비활성)은
@@ -693,15 +805,40 @@ class SimulStreamingOnlineProcessor:
         `_update_script_mismatch_streak`과 달리 seg_lang/스크립트 불일치 전제가 없다 —
         같은 스크립트 안에서 앵커 1개만 정확반복하고 주변부가 변주되는 storm(ytn2
         "김정은"류)까지 잡기 위함이다. 이번 배치 단어를 롤링 윈도우에 잠정 추가해
-        storm 여부를 검사하고, storm이면 이번 배치 단어는 윈도우에 반영하지 않은 채
-        True(드롭)를 반환한다(반복 유발원을 윈도우에서 제외해 연쇄 재트리거를 줄인다).
-        storm이 아니면 윈도우를 갱신하고 False.
+        storm 여부를 검사하고, storm이면 True(드롭)를, 아니면 윈도우를 갱신하고 False를
+        반환한다.
+
+        두 판정 경로를 OR로 합친다(CASE3-B 추가 — 기존 경로는 무변경):
+          ① `_find_anchor_repeat_storm` — 짧은 간격으로 몰려 반복되는 필러 storm.
+             드롭 시 이번 배치 단어를 윈도우에 반영하지 **않는다**(반복 유발원을
+             윈도우에서 제외해 연쇄 재트리거를 줄이는 기존 정책 — 무변경).
+          ② `_find_growing_repeat_storm` — 재시작마다 조금씩 더 나아가는 성장형 루프.
+             ①이 구조적으로 못 보는 사각지대만 맡는다(상수 주석의 실측 트레이스 참조).
+             드롭 시에도 윈도우에는 **반영한다**(아래 분기 주석의 근거 참조).
+        어느 경로로 드롭하든 호출부는 동일하게 처리한다 — 특히 **언어 재감지를 arm하지
+        않는다**(사이클2 실측 회귀, process_iter 드롭 지점 주석 참조).
         """
         words = [w.lower() for w in _WORD_TOKEN_PATTERN.findall(decoded_text)]
         if not words:
             return False
-        candidate = (self._anchor_repeat_window + words)[-_ANCHOR_REPEAT_WINDOW:]
+        candidate = (self._anchor_repeat_window + words)[-_ANCHOR_REPEAT_STORE:]
         if _find_anchor_repeat_storm(candidate):
+            return True
+        if ANCHOR_REGROW_GATE_ENABLED and _find_growing_repeat_storm(candidate):
+            # ①과 달리 드롭한 단어도 윈도우에 반영한다. 윈도우의 의미는 "디코더가 최근
+            # 무엇을 내놓았는가"이고, 성장형 루프는 드롭 여부와 무관하게 디코더가 계속
+            # 재생성하는 상태이기 때문이다. 증거를 버리면(=윈도우 동결) 다음 배치에서
+            # 루프의 최신 재시작을 보지 못해 곧바로 escape한다 — 실측 스트리밍 시뮬에서
+            # 동결 시 storm 억제율 10%, 반영 시 64%였다. 반영은 자기제한적이다: 윈도우가
+            # 정상적으로 전진하므로 루프가 멈추면 패턴은 창(80단어) 밖으로 밀려난다.
+            # 부수효과: 루프가 마지막에 내놓는 "정상 완성 문장"까지 함께 억제될 수 있다
+            # (스트리밍에서 어느 재시작이 마지막인지 알 수 없다). 삽입 ~90단어를 지우는
+            # 대신 정상 ~16단어를 잃는 교환이라 순이득으로 판단했다.
+            self._anchor_repeat_window = candidate
+            logger.warning(
+                "[AnchorRegrowFilter] 성장형 재시작 루프 감지 — 배치 드롭: %.200s",
+                decoded_text,
+            )
             return True
         self._anchor_repeat_window = candidate
         return False
