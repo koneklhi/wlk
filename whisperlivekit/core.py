@@ -186,6 +186,7 @@ class TranscriptionEngine:
                     "lang_detect_general_secs": config.lang_detect_general_secs,
                     "no_speech_threshold": config.no_speech_threshold,
                     "quality_gate_reset_after": config.quality_gate_reset_after,
+                    "rewind_threshold": config.rewind_threshold,
                 }
 
                 self.tokenizer = None

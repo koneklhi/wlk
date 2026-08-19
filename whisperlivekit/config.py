@@ -91,6 +91,14 @@ class WhisperLiveKitConfig:
     no_speech_threshold: Optional[float] = None
     quality_gate_reset_after: Optional[int] = None
 
+    # 파라미터 스윕 전용 (2026-08 캠페인) — 미지정(None)이면 각 소비 지점의 기존 하드코딩 상수로 폴백.
+    # 시나리오 프리셋 대상이 아니다(개별 플래그로만 조정). quality_gate_reset_after는 위 "시나리오
+    # 튜닝" 절에서 master가 이미 등록했으므로(Exp-214, 기본 5) 여기 중복 정의하지 않는다
+    # (Stage 0' 리베이스 충돌해소, 2026-08-19).
+    min_silence_duration_ms: Optional[int] = None   # audio_processor FixedVADIterator (현재 200)
+    speech_pad_ms: Optional[int] = None             # Silero VADIterator 기본 30 (현재 미전달)
+    rewind_threshold: Optional[int] = None          # AlignAttConfig (현재 200)
+
     # Diarization — Sortformer
     sortformer_model: str = "nvidia/diar_streaming_sortformer_4spk-v2"
 

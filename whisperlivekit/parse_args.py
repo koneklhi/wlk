@@ -588,6 +588,38 @@ def create_parser():
         "필러 환각 위험이 커진다. 기본값(None)은 AlignAttConfig.nonspeech_prob(현재 0.5)를 사용.",
     )
 
+    sweep_group = parser.add_argument_group(
+        'Parameter sweep arguments (2026-08 캠페인 — --scenario 프리셋 대상 아님)'
+    )
+    sweep_group.add_argument(
+        "--min-silence-duration-ms",
+        type=int,
+        default=None,
+        dest="min_silence_duration_ms",
+        help="Silero VAD가 발화 종료로 판정하기까지 요구하는 최소 침묵 길이(ms). 올리면(↑) 단어 내부 "
+        "미세정적으로 발화가 쪼개지는 일이 줄어 조각 재디코딩·필러 환각이 감소하고, 내리면(↓) 경계를 "
+        "빨리 잡아 지연이 준다. 기본값(None)은 audio_processor의 현재 상수(200ms)를 사용.",
+    )
+    sweep_group.add_argument(
+        "--speech-pad-ms",
+        type=int,
+        default=None,
+        dest="speech_pad_ms",
+        help="Silero VAD가 확정한 발화 구간 양끝에 덧붙이는 패딩(ms). 올리면(↑) 단어 onset/offset이 "
+        "잘려나가는 것을 막아 조각 단어가 줄고, 내리면(↓) 무음이 덜 섞인다. 기본값(None)은 "
+        "Silero VADIterator 기본값(30ms)을 사용.",
+    )
+    # --quality-gate-reset-after는 simulstreaming_group(위)에서 master가 이미 CLI 승격했다
+    # (Exp-214, 기본 5) — 이 그룹에 중복 정의하지 않는다(Stage 0' 리베이스 충돌해소, 2026-08-19).
+    sweep_group.add_argument(
+        "--rewind-threshold",
+        type=int,
+        default=None,
+        dest="rewind_threshold",
+        help="AlignAtt last_attend_frame 되감기 임계값(프레임). 기본값(None)은 "
+        "AlignAttConfig.rewind_threshold(현재 200)를 사용.",
+    )
+
     scenario_group.add_argument(
         "--scenario",
         type=str,

@@ -342,9 +342,28 @@ class AlignAtt(AlignAttBase):
                 tokens, encoder_feature, return_cross_attn=True,
             )
 
+    def _sot_pos(self) -> int:
+        """토큰 시퀀스에서 `<|sot|>`의 실제 절대 위치.
+
+        `state.sot_index`는 `sot_sequence` 내부의 상대 인덱스라 context 길이를 반영하지 않는다.
+        `_current_tokens()`가 context 토큰(`<|startofprev|>` 시작)을 **앞에** 붙이므로, context가
+        비어 있지 않으면 그 길이만큼 뒤로 밀어야 한다. context가 비면 오프셋 0 → 기존 동작과 동일.
+        """
+        ctx_len = 0
+        ctx = getattr(self.state, "context", None)
+        if ctx is not None and not ctx.is_empty():
+            ctx_len = len(ctx.as_token_ids())
+        return ctx_len + int(self.state.sot_index)
+
     def _check_no_speech(self, logits):
         if self.tokenizer.no_speech is not None:
-            probs_at_sot = logits[:, self.state.sot_index, :].float().softmax(dim=-1)
+            # context 보정 필수 — 보정 없이 읽으면 `--max-context-tokens>0` /
+            # `--static-init-prompt` 사용 시 `<|startofprev|>` 위치의 분포를 읽어
+            # 무음 판정이 무의미해진다(스퓨리어스 "no speech, stop").
+            sot_pos = self._sot_pos()
+            if sot_pos < 0 or sot_pos >= logits.shape[1]:
+                return False
+            probs_at_sot = logits[:, sot_pos, :].float().softmax(dim=-1)
             no_speech_probs = probs_at_sot[:, self.tokenizer.no_speech].tolist()
             if no_speech_probs[0] > self.cfg.nonspeech_prob:
                 logger.info("no speech, stop")
@@ -383,16 +402,9 @@ class AlignAtt(AlignAttBase):
         if logits is None or getattr(logits, "ndim", 0) != 3:
             return None
 
-        # sot 위치는 context 토큰 길이만큼 뒤로 밀린다(_current_tokens가 앞에 붙임).
-        # NOTE(백로그): state.sot_index 자체는 context 길이를 반영하지 않는다 —
-        # --max-context-tokens>0 / --static-init-prompt 사용 시 _check_no_speech가
-        # <|startofprev|> 위치를 읽는 잠재 버그. 운영 기본값(context 항상 빔)에선
-        # 잠복이며 여기서 고치지 않는다(행동 변경 금지). 신규 코드만 방어적으로 보정.
-        ctx_len = 0
-        ctx = getattr(self.state, "context", None)
-        if ctx is not None and not ctx.is_empty():
-            ctx_len = len(ctx.as_token_ids())
-        sot_pos = ctx_len + int(self.state.sot_index)
+        # sot 위치는 context 토큰 길이만큼 뒤로 밀린다(_current_tokens가 앞에 붙임) — _sot_pos() 참조.
+        # (2026-08 캠페인에서 _check_no_speech도 같은 보정을 쓰도록 통일했다.)
+        sot_pos = self._sot_pos()
         if sot_pos < 0 or sot_pos + 1 >= logits.shape[1]:
             return None
 
@@ -447,7 +459,7 @@ class AlignAtt(AlignAttBase):
             "resid": vals[4], "H_lang": vals[5],
             "p_translate": vals[6], "p_transcribe": vals[7],
             "p_nospeech": None if ns_id is None else vals[8],
-            "sot_pos": sot_pos, "ctx_len": ctx_len,
+            "sot_pos": sot_pos, "ctx_len": sot_pos - int(self.state.sot_index),
         }
 
     def _suppress_blank_tokens(self, logits):

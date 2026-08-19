@@ -91,6 +91,10 @@ def _probe_provenance(cwd: Path, args) -> dict:
             "quality_gate_reset_after": getattr(args, "quality_gate_reset_after", None),
         },
         "diarization": getattr(args, "diarization", False),
+        # 파라미터 스윕 arm 식별자 — --server-arg로 서버에 그대로 넘긴 인자 원문.
+        # decoder 블록의 beams/CRT는 빈 인자로 parse_args를 프로브한 정적 기본값이라
+        # 오버라이드를 반영하지 못하는 cosmetic 표시다. arm 라벨링은 반드시 이 필드로 한다.
+        "server_args": list(getattr(args, "server_args", None) or []),
         "vbcable_loopback": "pending",  # eval 실행 후 갱신
         "files": [str(f) for f in getattr(args, "files", [])],
         "repeat": getattr(args, "repeat", 1),
@@ -662,7 +666,7 @@ def main() -> None:
         type=float,
         default=None,
         dest="audio_max_len",
-        help="오디오 버퍼 최대 길이(초, 서버 기본 30.0). P2 sbs1 lag 진단용. 지정 시 서버에 --audio-max-len 전달.",
+        help="오디오 버퍼 최대 길이(초, 서버 기본 15.0 — Exp-161 채택). 지정 시 서버에 --audio-max-len 전달.",
     )
     parser.add_argument(
         "--frame-threshold",
@@ -716,7 +720,17 @@ def main() -> None:
         action="store_true",
         dest="continue_on_harness_error",
         help="하니스 고장(브라우저 자동화 실패·전사 0줄 등)이 나도 다음 회차/파일로 계속 진행한다. "
-        "기본은 즉시 중단 — 하니스 실패를 WER 100%짜리 측정치로 기록하면 잘못된 회귀 판정을 낳는다.",
+        "기본은 즉시 중단 — 하니스 실패를 WER 100%%짜리 측정치로 기록하면 잘못된 회귀 판정을 낳는다.",
+    )
+    parser.add_argument(
+        "--server-arg",
+        action="append",
+        default=[],
+        dest="server_args",
+        metavar="ARG",
+        help="서버(basic_server)에 그대로 전달할 추가 인자. 반복 지정 가능하며 플래그와 값을 각각 넘긴다. "
+        "예: --server-arg=--vad-threshold --server-arg=0.25 . 파라미터 스윕 전용 — 위 전용 플래그와 "
+        "중복되면 이쪽이 우선한다(뒤에 붙으므로). 넘긴 원문은 provenance/결과 JSON에 arm 식별자로 기록된다.",
     )
     parser.add_argument(
         "--expect-code-root",
@@ -770,6 +784,7 @@ def main() -> None:
         f" PLC={_plc}"
         f" QGreset={_qgr}"
         f" diar={_diar_str}"
+        f" arm={' '.join(_prov['server_args']) if _prov['server_args'] else '-'}"
         f" vbcable=pending"
     )
 
@@ -801,6 +816,10 @@ def main() -> None:
         extra_server_args.extend(["--silence-hard-secs", str(args.silence_hard_secs)])
     if args.server_frontend_dir is not None:
         extra_server_args.extend(["--frontend-dir", args.server_frontend_dir])
+    # --server-arg는 항상 마지막에 붙인다 — argparse는 같은 플래그가 중복되면 뒤쪽이 이기므로
+    # 스윕에서 명시한 값이 위 전용 플래그들보다 우선한다.
+    if args.server_args:
+        extra_server_args.extend(args.server_args)
 
     for f in args.files:
         if not f.exists():
@@ -856,6 +875,7 @@ def main() -> None:
                 f" PLC={_plc2}"
                 f" QGreset={_qgr2}"
                 f" diar={_diar_str2}"
+                f" arm={' '.join(_prov['server_args']) if _prov['server_args'] else '-'}"
                 f" vbcable={'ok' if vbcable_ok else 'FAIL'}"
             )
             if not vbcable_ok:
