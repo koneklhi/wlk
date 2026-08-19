@@ -278,7 +278,7 @@ Whisper가 찍는 마침표(`.`/`。`)를 문장 분할 신호로 쓰되, **진�
 | `filter_segments` | `whisperlivekit/filtering/__init__.py` | 드롭/치환 | CJK·가나·비음성주석·환각·구두점-only 세그먼트 드롭 + 단어 치환. 라인이 사라질 순 있으나 새 경계 생성 안 함 |
 | `_append_terminal_punctuation` | `audio_processor.py:32-43` | 표시 수정자 | finalized 세그먼트 끝에 온점 부착(멱등, WER·경계 무영향) |
 | 환각/반복 필터 (BatchRepeat/CrossBatch/단일음절/ScriptMismatch/AnchorStorm) | `backend.py` — CrossBatchFilter 실위치는 `_filter_cross_batch_repetitions`(`backend.py:516~`)이며 `filtering/__init__.py` 아님(위 `filter_segments`와 별개 계층 — 과거 혼동 오류 정정, Exp-192) | 드롭 | 토큰/배치 드롭. Silence/LanguageSwitch 마커 미방출 → 경계 직접 생성 안 함(텍스트 억제로 간접 영향). 직전 1단어 완전일치만 비교 + 경계에서 `_last_emitted_word=None` 리셋 → 경계 중복은 못 잡음(경계 중복은 Exp-192 시간 소유권 dedup이 전담) |
-| QualityGate (logprob/compression) | `align_att_base.py:592-645` (`quality_gate_reset_after=3`) | 드롭/디코더리셋 | 저품질 세그먼트 억제. refresh는 디코더 내부 상태만 리셋, 마커 미방출 |
+| QualityGate (logprob/compression) | `align_att_base.py:592-645` (`quality_gate_reset_after=5`) | 드롭/디코더리셋 | 저품질 세그먼트 억제. refresh는 디코더 내부 상태만 리셋, 마커 미방출 |
 | stall 복구 refresh | `backend.py:554-563` (`STALL_RECOVER_SEC=10.0`, `:41`) | 디코더리셋 | 마커 미방출 → 경계 직접 생성 안 함 |
 | 버퍼 최대길이 트림 `audio_max_len` | config/`parse_args.py` (`--audio-max-len`) | 타이밍 수정자 | 디코더 버퍼 상한 — 타임스탬프 영향, 경계 미생성 |
 | 스트림 종료 flush (SENTINEL/`_finish_transcription`) | `audio_processor.py:28,311-338,740-746` | flush | 남은 토큰 flush. **강제 finalize/경계 생성 없음** — 마지막 줄은 Silence/boundary가 없으면 `finalized=false`로 남음(트리거 null) |

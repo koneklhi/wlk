@@ -110,18 +110,24 @@ def test_b1_punct_at_end_splits():
 # ─── B2: QG 온점-only 억제 refresh streak 미산입 ──────────────────────────────
 
 def _make_fake_decoder(decode_str: str, reset_after: int = 3):
-    """B2 스텁 — 경계 보호창 **밖**(스탬프 0.0, 현재 시각 1000s)으로 고정한다.
+    """B2 스텁 — 경계 보호창 **밖**(실제 경계 스탬프 10.0, 현재 시각 1000s)으로 고정한다.
 
     보존형 refresh(BOUNDARY_QG_PRESERVE, tests/test_boundary_qg_preserve.py)는 경계 직후
     구간에서만 개입하므로, 여기서는 그 창을 벗어나게 두어 B2가 검증하려던 **기존 폐기
     동작**을 그대로 측정한다. 보호창 안쪽 거동은 전용 테스트 파일이 담당한다.
+
+    last_boundary_event_at은 반드시 0.0이 아닌 값(10.0)을 써야 한다 — 0.0은 "이 세션에서
+    아직 실제 경계 이벤트가 한 번도 스탬프되지 않음"을 뜻하는 콜드스타트 센티널로,
+    _try_preserving_refresh가 이 경우 Δt 상한 자체를 적용하지 않는다(decoder_state.py
+    설계의도, align_att_base.py의 boundary_at > 0.0 게이트). 여기서는 "실제 경계가
+    한참 전에 일어났다"는 시나리오를 표현해야 하므로 0.0을 쓰면 안 된다.
     """
     fs = SimpleNamespace(
         tokenizer=SimpleNamespace(decode=lambda h: decode_str),
         state=SimpleNamespace(
             quality_suppress_streak=0,
             detected_language=None,
-            last_boundary_event_at=0.0,
+            last_boundary_event_at=10.0,
             qg_preserve_used=False,
         ),
         cfg=SimpleNamespace(quality_gate_reset_after=reset_after),
@@ -129,7 +135,7 @@ def _make_fake_decoder(decode_str: str, reset_after: int = 3):
     fs._clean_cache = lambda: None
     fs.refresh_segment = MagicMock()
     fs.segments_len = lambda: 1.5
-    fs._current_stream_time = lambda: 1000.0  # 경계로부터 한참 뒤 = 보호창 밖
+    fs._current_stream_time = lambda: 1000.0  # 경계(10.0)로부터 한참 뒤 = 보호창 밖
     for name in ("_is_punct_only", "_try_preserving_refresh"):
         setattr(fs, name, types.MethodType(getattr(AlignAttBase, name), fs))
     return fs

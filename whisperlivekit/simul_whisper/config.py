@@ -23,7 +23,7 @@ class AlignAttConfig():
     max_context_tokens: int = field(default=None)
     logprob_threshold: Optional[float] = field(default=None)
     compression_ratio_threshold: Optional[float] = field(default=None)
-    quality_gate_reset_after: int = 3
+    quality_gate_reset_after: int = 5
     periodic_lang_check_secs: Optional[float] = field(default=None)
     lang_restrict_koen: bool = True
     lang_detect_general_secs: Optional[float] = field(default=None)
