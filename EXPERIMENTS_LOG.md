@@ -6248,3 +6248,134 @@ CLI 노출 파라미터 축에서 환각을 줄이는 단독 설정은 찾지 �
   노이즈 밴드 산출에 아침 master 런 `eval_20260818_0807_codeswitch.json`(`8af6205`) 병합 사용.
 - 전사: `.omc/transcripts_hallu_{A,B,C,D,D_heldout}/`.
 - 측정 시각 2026-08-18 17:14~18:53(설정당 N=3 순차, VBCable 단일 장치라 병렬 불가).
+
+---
+
+## Exp-213 — `quality_gate_reset_after` CLI 승격 + 스윕 — BOUNDARY_PROTECT_SECS 충돌 규명(신규 실패모드) (2026-08-18) [E7, 기각(held-out 회귀) — 코드는 CLI 배선만 유지]
+
+**측정 언어모드**: `auto` (전 설정·전 파일)
+
+### 발단
+사용자 지시(2026-08-18): "12시간 이상 자율로 최적 파라미터 서치 계속 진행" — Exp-212의 "다음 가설 ①"을 직접 실행.
+Exp-212가 규명한 "QualityGate logprob 임계값이 ①쓰레기 출력 차단과 ②3연속 시 오디오 폐기 트리거를 겸직한다"는
+구조에서, 억제 강도(`logprob_threshold`)는 그대로 두고 폐기 트리거만(`quality_gate_reset_after`) 완화하면
+D(logprob −2.5)가 얻은 이득(폐기 감소 → 화자F1·유실 개선)을 그 부작용(콜드스타트 은닉번역) 없이 얻을 수
+있다는 가설이었다.
+
+### 가설
+`config.py:26`에 필드(`quality_gate_reset_after: int = 3`)는 있으나 CLI 미노출이므로, 이를 CLI로 승격해
+3(기준)·4·5·6·8을 스윕하면 억제 강도는 그대로 두고 폐기 빈도만 낮춰 화자F1·WER max를 개선할 수 있을 것이다.
+
+### 변경 내용 (워크트리 `worktrees/qg-reset-after`, 브랜치 `exp/qg-reset-after`)
+`--quality-gate-reset-after` CLI 플래그를 기존 `no_speech_threshold` 배선 패턴 그대로 4개 지점에 승격:
+- `whisperlivekit/parse_args.py` (simulstreaming_group에 신규 인자, `dest=quality_gate_reset_after`, 기본 `None`)
+- `whisperlivekit/config.py:92` (`WhisperLiveKitConfig.quality_gate_reset_after: Optional[int] = None`)
+- `whisperlivekit/core.py:188` (`simulstreaming_params` dict에 키 추가)
+- `whisperlivekit/simul_whisper/backend.py:1093` (`AlignAttConfig(...)`에 `getattr(self, 'quality_gate_reset_after', None) or 3` 폴백)
+- `scripts/eval.py` (자체 argparse 화이트리스트 + `extra_server_args` 패스스루 + provenance 라인에 `QGreset=` 추가, 6곳)
+`whisperlivekit/simul_whisper/config.py:26`의 `AlignAttConfig` 기본값(3)은 무변경. `pytest tests/ -x -q` 856 passed, 1 skipped(무회귀).
+
+### 테스트 설정 및 명령
+```powershell
+.venv\Scripts\python.exe scripts/eval.py --model-dir whisperlivekit/model/whisper-large-v3-turbo `
+  --files test_data/bong1.wav test_data/ytn2.mp3 test_data/sbs1.mp3 --lan auto `
+  --diarization --sortformer-model whisperlivekit/model/sortformer-4spk-v2.nemo `
+  --compression-ratio-threshold 3.0 --quality-gate-reset-after <3|4|5|6|8> `
+  --output ".omc/benchmarks/eval_qgreset<N>_screen_<ts>.json"   # 스크리닝, 각 --repeat 1
+# 유망 후보(5) 채택 확정: 위 명령에 --repeat 3 추가 + held-out(ytn1+eng1) 단회 추가 측정
+```
+
+### 정량 결과
+
+**① 스크리닝(N=1, 5개 값)**
+
+| val | bong1 WER | bong1 화자F1 | ytn2 WER | ytn2 화자F1 | sbs1 WER | sbs1 화자F1 | bong1 LMR | refresh발동(bong1+ytn2+sbs1 합) |
+|---|---|---|---|---|---|---|---|---|
+| 3(기준) | 32.5% | 76.5%* | 14.8% | 100.0% | 12.5%* | 50.0%* | 2.2% | 1+0+2=3 |
+| 4 | 25.3% | 72.7% | 13.8% | 94.7% | 8.3% | 100.0% | **19.6%** | 1+1+1=3 |
+| 5 | 21.7% | 60.6% | 12.3% | 94.7% | 9.5% | 100.0% | 8.7% | 1+0+1=2 |
+| 6 | 28.3% | 64.5% | 10.3% | 100.0% | 10.1% | 80.0% | 12.0% | 0+0+1=1 |
+| 8 | 20.8% | 80.0% | 12.8% | 94.7% | 9.5% | 100.0% | 2.2% | 0+0+0=0 |
+
+\*val=3(기준) 회차 자체가 노이즈로 sbs1 WER·화자F1이 기존 N=9 밴드(8.3~10.7% / 40~100%) 상단·하단 경계에 걸림 — 단일 회차 특성.
+
+**② 채택 확정(val=5, N=3)** — 기준선은 Exp-212 노이즈 바닥 N=9(bong1 med 29.8%·범위 19.9~34.6%·stdev4.3·화자F1 61.1~66.7%; ytn2 med 13.3%·범위 10.8~21.7%·화자F1 63.2~94.7%; sbs1 med 8.9%·범위 8.3~10.7%·화자F1 40.0~100.0%):
+
+| 파일 | WER median | WER max | WER stdev | 화자F1 median | 화자F1 worst |
+|---|---|---|---|---|---|
+| bong1 | 25.9%(기준 29.8, −3.9pp) | 26.2%(기준 34.6, **−8.4pp**) | **0.5**(기준 4.3) | 64.9%(밴드 내) | 64.9%(밴드 내) |
+| ytn2 | 11.8%(기준 13.3, −1.5pp) | 13.3%(기준 21.7, **−8.4pp**) | — | 100%(기준 88.9) | 94.7%(기준 63.2, **+31.5pp**) |
+| sbs1 | 10.1%(기준 8.9, +1.2pp·밴드내) | 10.1%(기준 10.7) | — | 100%(동일) | 80%(기준 40, **+40pp**) |
+
+**③ held-out(val=5, 단회)** — ⚠️ **catastrophic 회귀**:
+
+| 파일 | WER | 화자F1 | LMR |
+|---|---|---|---|
+| ytn1 | **23.3%**(기준 N=3 median 16.0%·범위 8.6~19.0% 밖) | 80.0% | **19.7%**(기준 2.6%) |
+| eng1 | 5.7%(회귀 없음) | 0%(단일화자 all-or-nothing 아티팩트, Exp-186) | N/A |
+
+### 분석 (전사 내용 정성 대조 + 서버 로그 인과 규명)
+
+**bong1/ytn2/sbs1** (val=5, R_median 기준): 3파일×3회 전사 9개 전수 정독 — **Case B(단어 중간 분절) 0건**.
+ytn2는 3회 전부 `합의점에 이르었습니다`(frame_threshold 꼬리유실 Exp-193 표적 구간) 정상 보존, `한국군 사성자…
+한국군 사령관으로`·`상당한 진전이` 등 기지정 실발화 반복(§4 원본 발화 확인 규칙)도 정확히 유지. bong1은 기존
+"Thank you" 필러 환각(Exp-159/163, 미해결 별개 이슈)이 일부 잔존하나 신규 악화는 아님.
+
+**ytn1(held-out) — 신규 실패모드의 정확한 인과 확정**: 세션 서두 정답 `안녕하십니까. 지난 세 달 만에…`가
+`Yeah, I'm not sure Thank you very much. Thank you very much for joining us today...`로 통째 대체(Exp-178①·
+Exp-212 D와 동일한 콜드스타트 은닉번역 패턴). 서버 로그로 정확한 메커니즘을 특정:
+```
+[QualityGate] avg_logprob ... suppressing (lang=en): Yeah / how / how much it ...   (5회 연속, 세션 서두)
+[QualityGate] 5 consecutive suppressions — refresh_segment (lang=en)
+[QGPreserve] 보호창 밖(Δt=6.15s > 5.00s) — 기존 폐기 유지
+```
+**`quality_gate_reset_after`를 올리면 streak이 임계값에 도달하는 데 더 많은 디코드 사이클(=더 긴 wall-clock)이
+필요해지고, 그만큼 `BOUNDARY_PROTECT_SECS=5.0s`(Exp-210) 보호창을 벗어날 확률이 커진다.** 보호창 밖이면
+Exp-210의 언어 재확신(`_probe_language_for_preserve`) 없이 **기존 무조건 폐기**로 폴백하는데, 이 폴백 경로는
+언어를 재확인하지 않으므로 콜드스타트에서 이미 `en`으로 오감지된 상태가 **그대로 지속**된다. 즉 `reset_after`를
+올리는 행위 자체가 "보호창 안에서 preserve가 언어를 스스로 교정할 기회"를 구조적으로 깎아 먹는다 — 이것은
+노이즈가 아니라 **재현 가능한 파라미터 간 상호작용 버그**다. 동일 패턴이 **스크리닝 val=4에서도 재현**됐다
+(bong1 LMR 19.6%↑ + ytn2 로그에 동일한 `보호창 밖(Δt=5.62s > 5.00s)` 메시지 확인) — N=1 우연이 아니라
+val≥4에서 반복 재현되는 구조적 현상이다. val=6·8이 이번 스크리닝에서 무사했던 것은 해당 회차의 bong1/ytn2/
+sbs1에서 streak이 그 값까지 아예 도달하지 않아(refresh 0회) 이 경로 자체를 타지 않은 것일 뿐 — **면제된 것이
+아니라 우연히 표본에 안 걸린 것**이므로 안전하다고 볼 근거가 없다.
+
+**이번 변경 영향 요약**: 테스트셋(bong1/ytn2/sbs1)만 보면 val=5는 화자분리 F1 worst-case·WER max **전 지표
+개선**(1·2순위 게이트 통과)이었으나, held-out에서 `BOUNDARY_PROTECT_SECS`와의 상호작용으로 인한 **재현 가능한
+catastrophic 회귀**가 확인돼 테스트셋 결과만으로는 채택 여부를 판단할 수 없었던 사례 — held-out 검증 단계의
+필요성을 재확인.
+
+### 채택 조건 판정
+
+- ① 화자분리 F1 worst-case 미회귀: ✓ (bong1 밴드 내, ytn2·sbs1 대폭 개선)
+- ② WER max 미회귀: ✓ (테스트셋 전 파일 개선/밴드 내)
+- ③ Case B 없음: ✓ (9개 전사 전수 확인)
+- ④ pytest: ✓ (856 passed, 1 skipped)
+- ⑤ held-out catastrophic 회귀 없음: **✗ — ytn1 WER/LMR 밴드 밖, 콜드스타트 은닉번역 재현**
+
+**결론**: val=4/5/6/8 전부 **기각**(held-out 회귀 위험이 구조적으로 내재 — val=6/8도 무죄가 아니라 미검증).
+`quality_gate_reset_after` 기본값은 **3(무변경) 유지**. 단 CLI 배선 자체(4개 파일 + eval.py)는 향후 연구·
+콜드스타트 전용 방어 설계에 재사용 가능한 진단 레버이므로 **유지**(마스터 기본 동작 무변경 — 미지정 시 여전히
+None→3 폴백, 회귀 없음).
+
+### 다음 가설
+1. **[1순위] 콜드스타트 전용 방어**: 세션의 **첫** boundary-protect 윈도우(t=0~5s, `last_boundary_event_at`
+   기본값 0.0이 커버)에 한해 Δt 초과 여부와 무관하게 preserve(언어 재확신)를 시도하거나, 최소한 무조건 폐기
+   전에 1회 언어 재프로브를 강제하는 안전장치를 검토. `reset_after`를 건드리지 않고 이 콜드스타트 특례만
+   추가하면 Exp-210 이후 구조를 깨지 않고 이번 회귀를 원천 차단할 수 있을 것으로 예상 — 데이터 특화
+   하드코딩이 아니라 세션-단계(cold start) 특화이므로 §3.8 일반화 원칙과 상충하지 않는다.
+2. **BOUNDARY_PROTECT_SECS를 reset_after에 연동**: 예컨대 `max(BOUNDARY_PROTECT_SECS, reset_after * 평균
+   디코드주기)`처럼 동적으로 보호창을 넓히는 방안. 단 Exp-211이 단순 확대(5.0→6.0)만으로도 bong1이 회귀함을
+   보였으므로, reset_after와 **결합**했을 때만 시도하고 단독 확대는 재시도하지 않는다.
+3. **C(logprob −1.5) held-out 측정**: Exp-212에서 보류 상태로 남은 항목, 해소 필요.
+4. 이번 실험에서 새로 확인된 사실 — **`quality_gate_reset_after` 상향은 held-out에서 반복 재현 가능한
+   콜드스타트 회귀를 유발**하므로, 향후 이 축을 단독으로 재시도하지 않는다(위 1·2의 결합 방안에서만 재검토).
+
+### 기록
+- Epoch 변화 없음(파라미터 값 실험 + CLI 배선 추가 — 실패모드를 바꾸는 구조 변경 아님, 세대 경계 규칙상 구조 변경 아님).
+- 워크트리: `worktrees/qg-reset-after`(브랜치 `exp/qg-reset-after`) — CLI 배선 코드는 마스터에 반영하지 않음(미채택),
+  향후 재사용 시 이 브랜치에서 cherry-pick.
+- 벤치마크: `.omc/benchmarks/eval_qgreset{3,4,5,6,8}_screen_*.json` · `eval_qgreset5_confirm_*.json` ·
+  `eval_qgreset5_heldout_*.json`.
+- 전사: `.omc/transcripts_qgreset/{v3,v4,v5,v6,v8}/`(스크리닝) · `v5_confirm/` · `v5_heldout/`.
+- 측정 시각 2026-08-18 20:20~21:31(스크리닝 5값 순차 + val=5 확정 N=3 + held-out, VBCable 단일 장치).
