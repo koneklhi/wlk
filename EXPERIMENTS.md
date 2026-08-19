@@ -55,25 +55,29 @@
 - **채택 우선순위(② 단계, regime v2)**: **화자분리 F1 worst-case 미회귀 → WER max 미회귀 → WER median 개선 → 문장분리 F1**(후순위·Case A 허용). **Case B(단어 중간 분절)는 수치 무관 hard-fail.**
 - **개선 1순위**: `ytn2`(짧은 텀 코드스위칭) + `bong1`(다화자 장시간) 공동 최우선. **데이터 특화 하드코딩 금지 — 개선은 일반화돼야 한다.**
 
-## 현재 베이스라인 (Epoch 5 — turbo, 확정 — ⚠️ E6 재측정 대기)
+## 현재 베이스라인 (Epoch 8 — turbo, Exp-218 시점)
 
-> **[E5·재검증 대기]**: 이 표는 Exp-161(Epoch 5) 시점 값이다. 이후 Epoch 6(Exp-196~)까지 구조적 변경이 여러 건 머지됐고, Exp-200 bong1 auto median 33.4%는 이미 아래 게이트(≤30.5%)를 초과한 채 사용자 승인으로 채택됐다 — 게이트 자체가 stale 상태다. 새 스크리닝/채택 판단은 이 절대 수치를 확정 사실로 인용하지 말고, EXPERIMENTS_LOG.md의 최신 Exp 결과를 방향 신호로 참고할 것. E6 기준 재측정 후 이 절을 갱신한다.
->
-> **turbo 기질 baseline (2026-07-06, Exp-161 최신)** — PLC 기본값 None 전환(Exp-160) + `audio_max_len` 30.0→15.0 전환(Exp-161) 이후 수치가 **현재 master 기본 설정 기준**. diar-ON, CRT=3.0, **PLC=None**, **audio_max_len=15.0(기본)**, beams=2.
-> **확정 게이트(max, E5 시점)**: bong1≤30.5% / ytn2≤34.5% / sbs1≤16.1% (Exp-161 N=3로 갱신 — 3파일 모두 개선).
-> JSON: `.omc/benchmarks/eval_20260705_2338_audiomax15_N3.json`(테스트 N=3) · `eval_20260706_0002_audiomax15_heldout.json`(held-out)
+> **갱신(2026-08-19, Exp-218 직후)**: 아래 표는 Exp-213~218(콜드스타트 boundary-protect 무제한화+유한상한
+> fix, `quality_gate_reset_after` 기본값 5, 성장형 반복루프 게이트)이 전부 반영된 **현재 master** 기준.
+> diar-ON, CRT=3.0, **logprob=-2.0(기본)**, **quality_gate_reset_after=5(기본, Exp-215)**,
+> **COLD_START_PROTECT_SECS=10.0**(Exp-215), **ANCHOR_REGROW_GATE_ENABLED=True**(Exp-218), beams=2.
+> kor1~3 포함 6파일 전부 N=3(Exp-215/Exp-218 측정 병합 — 동일 코드 상태, 순차 측정) + held-out N=3.
+> 이 표를 다시 stale 취급해야 할 시점: 다음 구조 변경(epoch bump) 또는 6파일 동시 재측정 시.
 
-| 파일 | WER median | WER max | WER min | WER stdev | F1 median(구 regime) | 측정 N |
-|------|-----------|---------|---------|-----------|-----------|--------|
-| bong1 | 30.5% | 30.5% | 29.3% | 0.7% | 50.0% | 3 |
-| ytn2  | **28.1%** | 34.5% | 24.6% | 5.0% | 38.5% | 3 |
-| sbs1  | **14.9%** | 16.1% | 13.1% | 1.5% | 16.7% | 3 |
-| ytn1(held-out) | 21.5% | — | — | — | 38.1% | 1 |
-| eng1(held-out) | 4.8% | — | — | — | 0.0% | 1 |
+| 파일 | WER median | WER max | WER min | WER stdev | 측정 N |
+|------|-----------|---------|---------|-----------|--------|
+| bong1 | 22.3% | 31.0% | 21.7% | 4.3 | 3 |
+| ytn2  | 14.3% | 19.7% | 11.8% | 3.3 | 3 |
+| sbs1  | 9.5% | 10.1% | 8.9% | 0.5 | 3 |
+| kor1  | 16.4% | 22.2% | 16.4% | 2.7 | 3 |
+| kor2  | 16.6% | 17.2% | 14.5% | 1.2 | 3 |
+| kor3  | 33.1% | 44.4% | 26.5% | 7.4 | 3 |
+| ytn1(held-out) | 11.0% | 12.9% | 9.2% | — | 3 |
+| eng1(held-out) | 4.8% | 4.8% | 3.8% | — | 3 |
 
-> **F1 열 = 구 regime**(단일 문장분리 F1, 정답 빈 줄=화자전환 경계). **신 regime v2의 화자분리 F1/문장분리 F1과 직접 비교 불가** — 2-F1 metric 코드는 구현 완료(master 머지됨); **2-F1 신 베이스라인 재측정이 다음 실행 단계**(kinno held-out은 정성 sanity라 이 표에 미포함). 요구사항·측정 정본 = [docs/TRANSCRIPTION_REQUIREMENTS.md](docs/TRANSCRIPTION_REQUIREMENTS.md).
-
-**테스트 평균(median)**: WER 24.5% (Exp-160 직후 27.9%에서 대폭 개선, sbs1이 주도) · **분산 대폭 감소**(전 파일 stdev 1~5%대 — worst-case 안정성 확보, §3.8 최우선 원칙과 정합). **sbs1 실시간 lag**: 41s → **2s대**로 안정화(Exp-161).
+> 화자분리F1/문장분리F1 신 regime v2 6파일 동시 베이스라인은 아직 이 표에 통합되지 않음(개별 Exp 로그에는
+> 산출돼 있음 — Exp-214/215/218 참조). kor3가 6파일 중 가장 높고 분산도 큼(33.1%·stdev7.4) — 성장루프
+> 재발은 아님(Exp-218 확인), 통상 치환/블렌딩 오류가 원인으로 별도 조사 과제.
 
 **참고(audio_max_len=30.0 시절, PLC=None만 적용 — Exp-160, `audio_max_len` 변경으로 대체됨)**: bong1 30.5%/max33.5%/stdev3.0 · ytn2 30.0%/max38.4%/stdev7.2 · sbs1 23.2%/max30.4%/stdev10.6 · ytn1(held-out) 22.7% · eng1(held-out) 7.6%.
 
