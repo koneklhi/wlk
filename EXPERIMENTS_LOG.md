@@ -6595,3 +6595,34 @@ kor3 재측정 3회 전사 전수 정독 — 성장형 반복루프 완전 소�
   결과 미사용.
 - 전사: `.omc/transcripts_coldstart2/{kor_confirm,heldout,bong1_confirm}/`.
 - 측정 시각 2026-08-19 11:36~12:15대.
+
+---
+
+## Exp-216 — Exp-212 D(logprob −2.5) 재시도 — 콜드스타트 fix로도 미해소, 기각 재확정 (2026-08-19) [E8, 기각]
+
+**측정 언어모드**: `auto`
+
+### 발단
+Exp-214/215가 QualityGate의 "폐기 트리거" 역할발(refresh/preserve 타이밍)을 고쳤으므로, Exp-212에서
+같은 held-out 실패(콜드스타트 은닉번역)로 보류됐던 D(`logprob_threshold=-2.5`)도 이제는 안전해졌을지
+재검증. `--logprob-threshold -2.5 --quality-gate-reset-after 5`(신 기본값) N=3 + held-out.
+
+### 결과 — 가설 반증
+테스트셋(bong1 med26.4·max27.4 / ytn2 med12.3·max13.8 / sbs1 med9.5·max10.1)은 양호했으나, **held-out
+ytn1이 다시 회귀**: WER **30.1%**·LMR **19.7%**(Exp-212 D와 완전히 동일한 수치) — 세션 서두가 `Yeah, I'm
+not sure how much it is, but it's been a long time ago. It's been a long time for the second time to visit
+the United States, so I'm happy to see you again.`로 **또 통째 은닉번역**됐다(정답 `안녕하십니까. 지난 세 달
+만에...`). 서버 로그 확인: 이 구간 억제 로그가 `< -2.500`(즉 -2.0~-2.5 구간 텍스트는 더 이상 억제되지 않고
+그대로 커밋)이다.
+
+### 결론(원인 재확정)
+Exp-214/215의 수정은 QualityGate의 **② 폐기 트리거 타이밍**(streak 도달 후 preserve/discard 판단)만
+고쳤을 뿐, Exp-212가 규명한 **① 쓰레기 출력 직접 억제** 역할과는 무관하다. logprob 임계를 완화하면 콜드스타트
+구간의 확신에 찬(avg_logprob −2.0~−2.5) 은닉번역 텍스트가 **애초에 억제조차 되지 않고 커밋**되므로, 폐기
+경로가 아무리 안전해져도 이 실패는 그대로 재현된다 — 두 역할은 진짜로 독립적이며, D는 **어떤 폐기 정책과
+결합해도 구조적으로 안전할 수 없다**(Exp-212의 "겸직" 진단이 재확인됨, 반증 시도 실패). **D는 영구 기각**
+— 이 축의 추가 재시도는 하지 않는다.
+
+### 기록
+- Epoch 변화 없음. 벤치마크: `eval_lp25_confirm_*.json` · `eval_lp25_heldout_*.json`.
+- 전사: `.omc/transcripts_lp25/{confirm,heldout}/`. 측정 시각 2026-08-19 12:19~12:47대.
