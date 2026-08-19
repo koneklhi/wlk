@@ -185,6 +185,7 @@ class TranscriptionEngine:
                     "new_speaker_max_keep_secs": config.new_speaker_max_keep_secs,
                     "lang_detect_general_secs": config.lang_detect_general_secs,
                     "no_speech_threshold": config.no_speech_threshold,
+                    "quality_gate_reset_after": config.quality_gate_reset_after,
                 }
 
                 self.tokenizer = None

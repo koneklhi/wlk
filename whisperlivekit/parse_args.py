@@ -381,6 +381,17 @@ def create_parser():
     )
 
     simulstreaming_group.add_argument(
+        "--quality-gate-reset-after",
+        type=int,
+        default=None,
+        dest="quality_gate_reset_after",
+        help="QualityGate(logprob) 연속 억제 N회 시 buffer refresh 발동 임계값. 억제 자체(logprob_threshold)와 "
+        "폐기/보존 트리거(refresh 발동 빈도)를 분리 제어하기 위한 레버(Exp-212 후속). 기본값(None)은 5 "
+        "(AlignAttConfig.quality_gate_reset_after 기본값)을 사용. 높이면(↑) refresh가 덜 자주 발동해 "
+        "폐기로 인한 유실/환각 위험은 줄지만, garbage 세그먼트가 더 오래 버퍼에 남을 수 있다.",
+    )
+
+    simulstreaming_group.add_argument(
         "--model-path",
         type=str,
         default=None,

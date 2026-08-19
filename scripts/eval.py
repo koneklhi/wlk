@@ -88,6 +88,7 @@ def _probe_provenance(cwd: Path, args) -> dict:
             "compression_ratio_threshold": getattr(args, "compression_ratio_threshold", None),
             "logprob_threshold": getattr(args, "logprob_threshold", None),
             "periodic_lang_check": getattr(args, "periodic_lang_check_secs", None),
+            "quality_gate_reset_after": getattr(args, "quality_gate_reset_after", None),
         },
         "diarization": getattr(args, "diarization", False),
         "vbcable_loopback": "pending",  # eval 실행 후 갱신
@@ -650,6 +651,13 @@ def main() -> None:
         help="주기적 언어재감지 간격(초). 기본값 None(비활성 — 서버 기본값과 동일, Exp-160). 지정 시 서버에 --periodic-lang-check 전달.",
     )
     parser.add_argument(
+        "--quality-gate-reset-after",
+        type=int,
+        default=None,
+        dest="quality_gate_reset_after",
+        help="QualityGate 연속 억제 N회 시 buffer refresh 발동 임계값(서버 기본 5). 지정 시 서버에 --quality-gate-reset-after 전달.",
+    )
+    parser.add_argument(
         "--audio-max-len",
         type=float,
         default=None,
@@ -753,12 +761,14 @@ def main() -> None:
     _diar_str = "on" if _prov["diarization"] else "off"
     _crt = _prov["decoder"]["compression_ratio_threshold"]
     _plc = _prov["decoder"]["periodic_lang_check"]
+    _qgr = _prov["decoder"]["quality_gate_reset_after"]
     print(
         f"[provenance] code={Path(_prov['whisperlivekit_file']).parent.parent.name}"
         f" branch={_prov['git_branch']}@{_prov['git_sha']}"
         f" beams={_prov['decoder']['beams']}"
         f" CRT={_crt}"
         f" PLC={_plc}"
+        f" QGreset={_qgr}"
         f" diar={_diar_str}"
         f" vbcable=pending"
     )
@@ -775,6 +785,8 @@ def main() -> None:
         extra_server_args.append("--trace-tokens")
     if args.periodic_lang_check_secs is not None:
         extra_server_args.extend(["--periodic-lang-check", str(args.periodic_lang_check_secs)])
+    if args.quality_gate_reset_after is not None:
+        extra_server_args.extend(["--quality-gate-reset-after", str(args.quality_gate_reset_after)])
     if args.audio_max_len is not None:
         extra_server_args.extend(["--audio-max-len", str(args.audio_max_len)])
     if args.frame_threshold is not None:
@@ -835,12 +847,14 @@ def main() -> None:
             _diar_str2 = "on" if _prov["diarization"] else "off"
             _crt2 = _prov["decoder"]["compression_ratio_threshold"]
             _plc2 = _prov["decoder"]["periodic_lang_check"]
+            _qgr2 = _prov["decoder"]["quality_gate_reset_after"]
             print(
                 f"[provenance] code={Path(_prov['whisperlivekit_file']).parent.parent.name}"
                 f" branch={_prov['git_branch']}@{_prov['git_sha']}"
                 f" beams={_prov['decoder']['beams']}"
                 f" CRT={_crt2}"
                 f" PLC={_plc2}"
+                f" QGreset={_qgr2}"
                 f" diar={_diar_str2}"
                 f" vbcable={'ok' if vbcable_ok else 'FAIL'}"
             )

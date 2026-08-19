@@ -89,6 +89,7 @@ class WhisperLiveKitConfig:
     new_speaker_max_keep_secs: Optional[float] = None
     lang_detect_general_secs: Optional[float] = None
     no_speech_threshold: Optional[float] = None
+    quality_gate_reset_after: Optional[int] = None
 
     # Diarization — Sortformer
     sortformer_model: str = "nvidia/diar_streaming_sortformer_4spk-v2"

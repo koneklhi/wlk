@@ -1090,6 +1090,7 @@ class SimulStreamingASR:
                 periodic_lang_check_secs=getattr(self, 'periodic_lang_check_secs', None),
                 lang_detect_general_secs=getattr(self, 'lang_detect_general_secs', None),
                 nonspeech_prob=getattr(self, 'no_speech_threshold', None) or 0.5,
+                quality_gate_reset_after=getattr(self, 'quality_gate_reset_after', None) or 5,
         )
 
         # Set up tokenizer for translation if needed

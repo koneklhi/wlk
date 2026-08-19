@@ -1274,7 +1274,14 @@ class AlignAttBase(ABC):
         boundary_at = getattr(self.state, "last_boundary_event_at", 0.0)
         now = self._current_stream_time()
         since = now - boundary_at
-        if since > BOUNDARY_PROTECT_SECS:
+        # boundary_at > 0.0 게이트: last_boundary_event_at 기본값 0.0은 "세션 초입, 아직 실제
+        # 경계 이벤트(화자/언어 전환) 없음"을 뜻한다(decoder_state.py 설계의도). 이 상태에서는
+        # Δt 상한을 적용하지 않는다 — 그렇지 않으면 콜드스타트 streak 형성이 느릴 때(예:
+        # quality_gate_reset_after가 높거나 디코드 사이클이 느릴 때) BOUNDARY_PROTECT_SECS를
+        # 넘겨 보호에서 빠지고, 언어 재확신 없는 구폐기로 폴백해 콜드스타트 언어오감지가 그대로
+        # 지속된다(실측 재현: Δt=5.62s·6.15s에서 발동). qg_preserve_used 1회성 가드가 이미 위에서
+        # 무한 재시도를 막고 있으므로, 이 게이트는 "첫 실제 경계 이후"에만 Δt 상한을 적용한다.
+        if boundary_at > 0.0 and since > BOUNDARY_PROTECT_SECS:
             # warning 레벨 필수 — 위 빈-버퍼 분기 주석 참조(root 로거 WARNING).
             logger.warning(
                 "[QGPreserve] 보호창 밖(Δt=%.2fs > %.2fs) — 기존 폐기 유지",
