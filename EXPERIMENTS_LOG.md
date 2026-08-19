@@ -6379,3 +6379,145 @@ None→3 폴백, 회귀 없음).
   `eval_qgreset5_heldout_*.json`.
 - 전사: `.omc/transcripts_qgreset/{v3,v4,v5,v6,v8}/`(스크리닝) · `v5_confirm/` · `v5_heldout/`.
 - 측정 시각 2026-08-18 20:20~21:31(스크리닝 5값 순차 + val=5 확정 N=3 + held-out, VBCable 단일 장치).
+
+---
+
+## Exp-214 — 콜드스타트 boundary-protect 버그수정 + `quality_gate_reset_after` 기본값 3→5 채택·머지 (2026-08-19) [E7→E8, 채택·머지]
+
+**측정 언어모드**: `auto` (전 설정·전 파일)
+
+### 발단
+Exp-213이 규명한 상호작용 버그(reset_after↑ → QG streak 도달 wall-clock 증가 → `BOUNDARY_PROTECT_SECS`
+보호창을 벗어나 구폐기로 폴백 → 콜드스타트 언어오감지 지속)의 근본 원인을 코드로 직접 수정하는 시도.
+
+### 가설
+`_try_preserving_refresh`의 Δt 상한 체크가 `last_boundary_event_at`의 기본값 `0.0`(decoder_state.py 설계
+의도상 "세션 초입, 아직 실제 경계 이벤트 없음"을 뜻하는 센티널)에도 무조건 적용되고 있는 것이 근본 원인이다.
+이 상태(아직 어떤 화자/언어 전환도 없었던 세션 초입)에 한해 Δt 상한을 제거하면, `quality_gate_reset_after`를
+올려도 콜드스타트 보호가 조기 만료되지 않아 Exp-213의 held-out 회귀를 원천 차단할 수 있을 것이다.
+
+### 변경 내용 (워크트리 `worktrees/coldstart-boundary-protect`, 브랜치 `exp/coldstart-boundary-protect`, 커밋 `0217d66`, master 머지 `755fcc7`+병합커밋)
+- `whisperlivekit/simul_whisper/align_att_base.py` `_try_preserving_refresh`: `if since > BOUNDARY_PROTECT_SECS:`
+  → `if boundary_at > 0.0 and since > BOUNDARY_PROTECT_SECS:` — 실제 경계 이벤트가 한 번이라도 스탬프된
+  **이후**에만 Δt 상한을 적용. `qg_preserve_used` 1회성 가드가 이미 무한 재시도를 막고 있어 콜드스타트
+  구간의 보호 무제한 연장이 안전함(경계 발생 즉시 `mark_boundary_event()`가 `boundary_at`을 실값으로
+  갱신하므로, 그 이후부터는 기존 5.0s 상한이 그대로 적용된다).
+- `whisperlivekit/simul_whisper/config.py:26` `quality_gate_reset_after: int = 3` → `= 5`.
+- `whisperlivekit/simul_whisper/backend.py`: `getattr(self, 'quality_gate_reset_after', None) or 3` → `or 5`.
+- `whisperlivekit/parse_args.py`/`scripts/eval.py`: `--quality-gate-reset-after` CLI 플래그 승격(Exp-213에서
+  이미 배선, 기본 `None`→5 폴백으로 도움말만 갱신) — 향후 재검증·롤백용 오버라이드 레버로 유지.
+  `tests/test_case1_expB.py`의 `_make_fake_decoder` 픽스처가 `last_boundary_event_at=0.0`을 "보호창 밖"
+  대역으로 잘못 가정하고 있어 `10.0`(실경계 오래전 발생)으로 정정(단언 자체는 무변경, 픽스처의 센티널
+  해석만 수정). `pytest tests/ -x -q` 856 passed, 1 skipped(master 머지 후 재확인 완료).
+
+### 테스트 설정 및 명령
+```powershell
+.venv\Scripts\python.exe scripts/eval.py --model-dir whisperlivekit/model/whisper-large-v3-turbo `
+  --files test_data/bong1.wav test_data/ytn2.mp3 test_data/sbs1.mp3 --lan auto `
+  --diarization --sortformer-model whisperlivekit/model/sortformer-4spk-v2.nemo `
+  --compression-ratio-threshold 3.0 --quality-gate-reset-after 5 --repeat 3
+# + held-out(ytn1+eng1) 단회, + kinno 정성 sanity 단회
+# + val=3(수정코드, 기본값 그대로)로 "수정 자체가 무해한가" 대조측정
+```
+
+### 정량 결과
+
+**① val=5(수정코드) N=3 확정** — 기준선(Exp-212 노이즈 N=9: bong1 med29.8·범위19.9~34.6·화자F1범위61.1~66.7;
+ytn2 med13.3·범위10.8~21.7·화자F1범위63.2~94.7; sbs1 med8.9·범위8.3~10.7·화자F1범위40.0~100.0)과
+Exp-213의 val=5(수정 전) N=3(bong1 med25.9·max26.2; ytn2 med11.8·max13.3; sbs1 med10.1·max10.7) 대비:
+
+| 파일 | WER median | WER max | 화자F1 median | 화자F1 worst |
+|---|---|---|---|---|
+| bong1 | 27.4%(기준29.8·Exp213-val5 25.9) | **36.1%**(기준34.6·Exp213-val5 26.2 — ⚠️아래 원인분석) | 76.5% | **58.5%**(기준61.1~66.7 밖 — ⚠️아래) |
+| ytn2 | 11.8%(기준13.3) | 13.3%(기준21.7, **−8.4pp**) | 90.0% | 90.0%(기준63.2, **+26.8pp**) |
+| sbs1 | 10.1%(기준8.9) | 10.7%(기준10.7, 동급) | 100.0% | 66.7%(기준40.0, **+26.7pp**) |
+
+**② val=5(수정코드) held-out** — Exp-213의 catastrophic 회귀 대비:
+
+| 파일 | WER | 화자F1 | LMR |
+|---|---|---|---|
+| ytn1 | **8.0%**(Exp-213 회귀 23.3%→**완전 해소**, 원 기준선 16.0%보다도 개선) | 94.1% | **0.0%**(Exp-213 19.7%→완전 해소) |
+| eng1 | 3.8%(회귀 없음) | 0%(단일화자 아티팩트, Exp-186) | N/A |
+
+**③ val=3(수정코드, `reset_after` 기본값 그대로) N=3 대조** — 수정 자체가 무해한지 확인:
+
+| 파일 | WER median | WER max | 비고 |
+|---|---|---|---|
+| bong1 | 28.9%(기준29.8, 동급) | 32.2%(기준34.6, 동급) | — |
+| ytn2 | 13.8%(기준13.3, 동급) | **56.7%**(기준21.7 — ⚠️아래 원인분석) | — |
+| sbs1 | 8.7%(기준8.9, 동급) | 10.7%(기준10.7, 동급) | — |
+
+**④ val=3(수정코드) held-out** — 수정만으로도(파라미터 무변경) held-out이 개선되는지 확인: ytn1 WER **8.0%**·
+화자F1 94.1%·LMR **0.0%**(②와 동일값) — **`quality_gate_reset_after`를 건드리지 않아도 수정 단독으로
+held-out이 개선**됨을 확인. 이는 이번 채택이 "파라미터 상향의 부작용을 막는 임시방편"이 아니라 **마스터에
+이미 존재하던 잠재 버그(Exp-210 도입 당시부터 있었을 가능성)를 고친 것**임을 보여준다.
+
+**⑤ kinno(정성 sanity, val=5)**: WER 24.8%(수치 불신 대상). 대규모 누락/환각 없음, 한/영 순차통역 화자·언어
+전환이 대체로 정상 분리됨(`Thank Thank. Thank you very much.` 정도의 경미한 필러만 관측). 이상 없음.
+
+### 분석 (전사 내용 정성 대조 + ⚠️ 표시 항목 원인 감사)
+
+**Case B(단어 중간 분절)**: val=5·val=3 confirm 전사 다수(bong1 6개·ytn2 4개·held-out 4개) 정독 — **0건**.
+
+**⚠️ bong1 val=5 R2 max=36.1%·화자F1=58.5% 원인감사**: 전사 대조 결과 `하하하하 아틀렙이가? 하하하. That's
+how I'm done, yeah. Yeah. Yeah That, So, what.`로, 정답의 `주인공이 저기 주인공이 아니구나 참 주인공 그
+아들내미가 죄송합니다 형님 그 들고서 메타포리칼하다고 하잖아요...` 구절 전체가 **영어 필러로 대체**됐다.
+이는 Exp-159/163/164/165가 규명하고 **미해결로 남겨둔** bong1 웃음구간 "Thank you류 필러 환각"의 변주이며,
+이번 변경(콜드스타트 fix·reset_after)과 **무관**함을 서버 로그로 확인: 이 필러가 발생한 구간에는 QGPreserve
+발동 로그 자체가 없다(별도 실패 경로 — Layer 3b 비음성 게이팅 미해결, 기존에 알려진 이슈).
+
+**⚠️ ytn2 val=3 R2 max=56.7% 원인감사**: 전사에 `이와 관련해서 한국군 사령관으로 조건을 기초로 한 전작권
+전환을...`류 구절이 **길이가 점점 늘어나며 반복**되는 전형적인 성장형 반복루프(growing-phrase repetition
+loop) 관측. 서버 로그에서 이 구간의 refresh 이벤트 4건을 전수 대조: 3건은 `보호창 밖(Δt=13.48s/6.00s>5.00s)`
+(실경계 이후 발생, `boundary_at>0` — **수정 전후 동일하게 동작**하는 경로)·1건은 정상 preserve(Δt=0.72s,
+보호창 안). **네 건 모두 이번 수정이 바꾼 조건(`boundary_at==0.0` 콜드스타트 구간)을 타지 않는다** — 즉 이
+catastrophic 반복은 수정 전 마스터 코드에서도 **동일하게 발생했을 사건**이며, 반복 억제 필터(Exp-002/028/057
+베이스라인)가 "점점 길어지는" 변주형 반복을 못 잡는 기존 사각지대(Exp-169가 규명한 "가변 변주구 storm" 계열과
+동일 범주)일 뿐이다.
+
+**이번 변경 영향 요약**: 두 ⚠️ 항목 모두 발동 로그 전수 대조로 **이번 코드 변경과 무관한, 기존에 이미 알려진
+별개 실패모드**(필러 환각·성장형 반복루프)임을 확인했다 — Exp-208/212의 "발동 전수 감사" 방법론과 동일하게
+raw 수치가 아니라 실제 발동 경로를 감사해 귀속을 확정했다. 콜드스타트 fix 자체는 **의도한 경로에서만
+정확히 동작**(콜드스타트 언어오감지 완전 해소, held-out LMR 19.7→0%)하며 다른 실패모드를 유발·악화하지 않는다.
+
+### 채택 조건 판정
+
+- ① 화자분리 F1 worst-case 미회귀: **부분 미회귀** — bong1 58.5%(밴드 61.1~66.7 밖, 원인=무관한 필러환각),
+  ytn2·sbs1 대폭 개선. bong1은 원인 감사로 이번 변경과 무관함을 확인했으므로 실질적 미회귀로 판단.
+- ② WER max 미회귀: **부분 미회귀** — bong1(36.1 vs 34.6)·ytn2 val=3대조(56.7 vs 21.7)는 원인 감사로 무관함
+  확인(콜드스타트 fix가 바꾸는 경로를 타지 않음). ytn2 val=5는 대폭 개선(13.3 vs 21.7).
+- ③ Case B 없음: ✓ (다수 전사 정독)
+- ④ pytest: ✓ (856 passed, 1 skipped, master 머지 후 재확인)
+- ⑤ held-out catastrophic 회귀 없음: ✓✓ — **Exp-213의 회귀를 완전 해소하고 원 기준선보다 개선**
+  (WER 23.3→8.0%·LMR 19.7→0.0%), 수정 단독(파라미터 무변경)으로도 동일 개선 재현.
+
+**결론**: **채택·머지**(`0217d66` + master 병합 커밋). 겉보기 ⚠️ 수치 2건은 raw gate로는 "미회귀 실패"처럼
+보이나, 발동 로그 전수 감사로 **이번 변경과 인과관계가 없음**을 구체적으로 확인했다(Exp-208/212 선례와 동일
+방법론) — 채택 결정은 raw 수치가 아니라 이 인과 감사에 근거했다. 콜드스타트 fix는 순수 버그수정(마스터에
+잠재해 있던 결함)이고 `reset_after=5`는 그 수정이 있어야만 안전한 개선이므로, 두 변경을 하나의 채택 결정으로
+묶어 처리했다.
+
+### 다음 가설
+1. **bong1 필러 환각(Thank you류) — 여전히 미해결.** Exp-164/165가 no_speech 계열 원천차단을 폐기 확정했으므로,
+   웃음 전용 비-ASR 분류기(별도 설계 세션)가 유일한 남은 경로. 이번 실험으로 재확인된 잔존 과제.
+2. **ytn2 성장형 반복루프(growing-phrase repetition) — 새로 특정된 사각지대.** Exp-169의 "가변 변주구 storm"과
+   근친이나, 이번 사례는 완전동일 반복이 아니라 **매 반복마다 길이가 늘어나는 접두사 성장형**이라 앵커
+   게이트의 MIN_COUNT/MAX_GAP 튜닝으로 잡히지 않을 가능성. 반복 감지를 "완전동일" 대신 "접두사 포함관계"로
+   일반화하는 방향 검토 가치 있음 — 데이터 특화 아님(구조적 반복 탐지 개선).
+3. **kor1~3 재검증**: Exp-210부터 미검증 상태 유지. 다음 스크리닝에 포함 권장.
+4. **quality_gate_reset_after 추가 상향(6·8) 재검토**: Exp-213 스크리닝에서 6·8도 유망했으나(refresh 0회
+   재현) 콜드스타트 fix 적용 후 N=3 확정 미실시 — 5가 이미 게이트를 통과했으므로 후순위.
+
+### 기록
+- **코드 세대(Epoch) E7→E8** — `_try_preserving_refresh`의 보호창 적용 조건 자체를 변경(실패모드 변화:
+  콜드스타트 구간의 무조건 폐기 가능성을 제거)하는 구조적 수정이므로 세대 상승. E7까지 QG streak/보호창
+  경계에 걸린 파라미터 결론(Exp-210·211·212·213 포함)은 `[E7·재검증]` 대상 — 특히 Exp-212의 D(logprob −2.5)
+  기각 사유였던 held-out 콜드스타트 회귀는 이 fix 이후 재현되지 않을 가능성이 있어 재검토 여지 있음(단,
+  이번 세션에서 재측정하지 않았으므로 확정 아님).
+- 벤치마크: `.omc/benchmarks/eval_coldstart{3,5}_screen_*.json` · `eval_coldstart5_confirm_*.json` ·
+  `eval_coldstart5_heldout_*.json` · `eval_coldstart3_confirm_*.json` · `eval_coldstart3_heldout_*.json` ·
+  `eval_coldstart5_kinno_*.json`.
+- 전사: `.omc/transcripts_coldstart/{v3_screen,v5_confirm,v5_heldout,v3_confirm,v3_heldout,v5_kinno}/`.
+- 측정 시각 2026-08-19 09:04~10:20대(스크리닝+확정 N=3×2+held-out×2+kinno, VBCable 단일 장치 순차).
+- 워크트리: `worktrees/coldstart-boundary-protect`(브랜치 `exp/coldstart-boundary-protect`, 커밋 `0217d66`) —
+  master 병합 완료, `worktrees/qg-reset-after`(Exp-213, 미채택 CLI 배선만)는 참고용으로 보존.
