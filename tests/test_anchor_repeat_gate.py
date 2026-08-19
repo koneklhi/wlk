@@ -14,18 +14,26 @@ storm(bong1 "thank you"×3, ytn2 "김정은"×4)을 유발한다. 기존 `_is_sc
 무관하게 "최근 방출 단어 윈도우 안에서 앵커(1~2gram)가 gap-tolerant하게 비정상적으로
 몰려 반복되는가"만 판정한다(§3.8: 특정 문구·언어 하드코딩 금지 — 구조만 본다).
 
-이 테스트는 두 레벨을 검증한다:
+CASE3-B(`_find_growing_repeat_storm`) — 위 게이트도 못 잡는 **성장형 프리픽스 루프**
+(재시작마다 직전보다 한두 단어 더 나아가고 또 처음부터 다시 시작)를 맡는 독립 추가
+경로. 실측 근거·임계값 근거는 backend.py 상수 주석 참조. 이 파일 §3에서 검증한다.
+
+이 테스트는 세 레벨을 검증한다:
 1. `_find_anchor_repeat_storm` 순수 함수 — 오탐 방지 케이스를 최우선으로 검증.
 2. `SimulStreamingOnlineProcessor.process_iter` 배선 — 드롭 시 refresh_segment를
    호출하지 않고 기존 언어 재감지 arm 매커니즘만 재사용하는지.
+3. `_find_growing_repeat_storm` 순수 함수 + 배선 — 성장형 루프 검출과, §1의 오탐
+   방지 시나리오가 새 경로에서도 그대로 통과하는지.
 """
 
+import logging
 from unittest.mock import MagicMock
 
 from whisperlivekit.simul_whisper.backend import (
     STALL_RECOVER_SEC,
     SimulStreamingOnlineProcessor,
     _find_anchor_repeat_storm,
+    _find_growing_repeat_storm,
 )
 
 # ── 1. 순수 함수 단위 테스트 ────────────────────────────────────────────────────
@@ -309,4 +317,302 @@ def test_process_iter_normal_korean_flow_unaffected():
 
     assert all(len(r) == len(batch) for r, batch in zip(results, batches))
     assert proc.model.state.detected_language == "ko"
+    proc.model.refresh_segment.assert_not_called()
+
+
+# ── 3. CASE3-B 성장형 프리픽스 루프 게이트 ──────────────────────────────────────
+#
+# 실패 형태(이번 사이클 실측 ytn2/kor3/bong1): 디코더가 같은 구절을 매번 처음부터 다시
+# 시작하되 직전보다 한두 단어 더 나아가고 또 재시작한다 — 각 반복이 직전 반복의 연장
+# (상위집합)이라 §1 게이트가 겨냥한 "앵커 + 무관한 변주 접미부"와 구조가 다르다.
+# 반복이 길어질수록 앵커 간격이 MAX_GAP(5)을 넘겨 클러스터가 형성되지 않고, 끝내는
+# 40단어 윈도우 안에 앵커가 MIN_COUNT(4)회도 안 남아 판정 자체가 성립하지 않는다.
+
+
+def _emitted(text):
+    """실제 방출 형태(단어마다 선행 공백)로 변환 — 실측 배치 모양을 흉내낸다."""
+    return [f" {w}" for w in text.split()]
+
+
+# 실측 관측 그대로. 정답(정상 발화)은 마지막 줄 하나뿐이고 그 앞은 전부 재시작 환각이다.
+_REGROW_TEXT_KO = (
+    "이와 관련해서 "
+    "한국군 사성장 한국군 사령관 "
+    "이와 관련해서 한국군 사령관으로 조 "
+    "이와 관련해서 한국군 사령관으로 조건 "
+    "이와 관련해서 한국군 사령관으로 조건을 기초로 한 전작권 "
+    "이와 관련해서 한국군 사령관으로 조건을 기초로 한 "
+    "이와 관련해서 한국군 사령관으로 조건을 기초로 한 전작권 전환 "
+    "이와 관련해서 한국군 사령관으로 조건을 기초로 한 전작 "
+    "이와 관련해서 한국군 사령관으로 조건을 기초로 한 전작권 전환을 하는 방향으로 상당한 "
+    "이와 관련해서 한국군 사령관으로 조건을 기초로 한 전작권 전환을 하는 방향으로 상당한 진전 "
+    "이와 관련해서 한국군 사령관으로 조건을 기초로 한 전작권 전환을 하는 방향으로 상당한 진전이 "
+    "있었음에 합의를 했습니다 "
+    "이와 관련해서 한국군 사령관으로 조건을 기초로 한 전작권 전환을 하는 방향으로 상당한 진전이 "
+    "있었음에 합의를 했습니다"
+)
+
+# kor3형(단일 화자 연속 낭독)에서 관측된 두 번째 실패 형태 — 다른 구절이 1~3단어씩
+# 길어지며 8회 재시작. 하나의 예시에 과적합되지 않았음을 확인하기 위한 두 번째 shape.
+_REGROW_TEXT_KOR3 = (
+    "원거리 타격과 "
+    "원거리 타격과 기동전력 "
+    "원거리 타격과 기동전력 강화를 위한 "
+    "원거리 타격과 기동전력 강화를 위한 기동함대사 "
+    "원거리 타격과 기동전력 강화를 위한 기동함대사 이하의 기동전달을 "
+    "원거리 타격과 기동전력 강화를 위한 기동함대사 이하의 기동전달을 창설하고 첨단 "
+    "원거리 타격과 기동전력 강화를 위한 기동함대사 이하의 기동전달을 창설하고 첨단 함정 장비 "
+    "원거리 타격과 기동전력 강화를 위한 기동함대사 이하의 기동전달을 창설하고 첨단 함정 장비 "
+    "운용의 전문성 고장과"
+)
+
+# 구조 일반화 검증용 — 위 두 실측 문구를 전혀 다른 무의미 어휘로 치환한 같은 shape.
+_REGROW_TEXT_NONSENSE = (
+    "글로프 바 "
+    "글로프 바 튜링 "
+    "글로프 바 튜링 미르마 "
+    "글로프 바 튜링 미르마 젠토 "
+    "글로프 바 튜링 미르마 젠토 카룬 다 "
+    "글로프 바 튜링 미르마 젠토 카룬 다 헤스티 "
+    "글로프 바 튜링 미르마 젠토 카룬 다 헤스티 올루 반 "
+    "글로프 바 튜링 미르마 젠토 카룬 다 헤스티 올루 반 시크로 무"
+)
+
+# ko↔en 대칭(§3.8) — 영어에서도 같은 구조면 잡혀야 한다.
+_REGROW_TEXT_EN = (
+    "we have reached "
+    "we have reached an agreement "
+    "we have reached an agreement on the "
+    "we have reached an agreement on the conditions based "
+    "we have reached an agreement on the conditions based transfer of wartime "
+    "we have reached an agreement on the conditions based transfer of wartime operational control "
+    "we have reached an agreement on the conditions based transfer of wartime operational control "
+    "authority today"
+)
+
+
+# ── 3a. 성장형 루프 검출(positive) ──────────────────────────────────────────────
+
+
+def test_growing_prefix_loop_with_actual_observed_words_flagged():
+    """(a) 실측 관측 그대로(ytn2 "이와 관련해서 …" 성장 루프) — 새 경로가 잡아야 한다.
+
+    같은 입력에 대해 기존 경로(`_find_anchor_repeat_storm`)는 **잡지 못한다**는 것도
+    함께 고정한다(이 테스트가 메우려는 사각지대의 정의). 실측 트레이스: 앵커
+    "이와 관련해서"의 등장 간격이 6,5,5,8,7,9,8,12,13,16으로 성장해 ① 간격이 전부
+    MAX_GAP(5) 초과라 클러스터 미형성 → ② 블록이 16단어까지 자라 40단어 윈도우 안에
+    앵커가 3회 이하만 남아 MIN_COUNT(4) 미달(윈도우 escape).
+    """
+    words = _REGROW_TEXT_KO.split()
+    assert _find_anchor_repeat_storm(words) is False  # 기존 경로 사각지대(회귀 감시)
+    assert _find_growing_repeat_storm(words) is True
+
+
+def test_growing_prefix_loop_second_real_shape_flagged():
+    """(b) kor3형 — 다른 구절이 1~3단어씩 길어지며 8회 재시작하는 두 번째 실패 shape.
+
+    하나의 예시(ytn2)에 과적합되지 않았음을 확인한다.
+    """
+    words = _REGROW_TEXT_KOR3.split()
+    assert _find_anchor_repeat_storm(words) is False
+    assert _find_growing_repeat_storm(words) is True
+
+
+def test_growing_prefix_loop_generalizes_to_arbitrary_vocabulary():
+    """(c) 구조 일반화 검증(§3.8) — 실측 문구를 전혀 다른 무의미 어휘로 바꿔도 같은
+    구조면 동일하게 검출돼야 한다. 로직이 특정 문구에 의존한다면 이 테스트만 실패한다."""
+    words = _REGROW_TEXT_NONSENSE.split()
+    assert _find_growing_repeat_storm(words) is True
+
+
+def test_growing_prefix_loop_generalizes_to_english():
+    """(d) ko↔en 대칭 — 영어 어휘로도 구조만 맞으면 동일 검출."""
+    words = _REGROW_TEXT_EN.split()
+    assert _find_growing_repeat_storm(words) is True
+
+
+# ── 3b. 오탐 방지(가장 중요) ────────────────────────────────────────────────────
+
+
+def test_regrow_gate_does_not_flag_scattered_mention():
+    """(e, 가장 중요) §1의 "북한" 흩어진 재등장 픽스처를 새 경로도 잡으면 안 된다.
+
+    이 픽스처는 필러가 매 반복 동일해 **완전 주기 반복**(블록 길이 일정 + 블록 내용
+    완전 일치)이 된다 — 새 경로가 lcp 성장 조건 없이 "블록 반복"만 봤다면 여기서
+    오탐한다(실측 ablation으로 확인). 성장 조건이 이를 걸러낸다.
+    """
+    filler_block = [f"단어{i}" for i in range(8)]
+    words = []
+    for _ in range(4):
+        words.append("북한")
+        words.extend(filler_block)
+    assert _find_growing_repeat_storm(words) is False
+
+
+def test_regrow_gate_does_not_flag_exactly_periodic_block():
+    """(f) 완전 주기 반복은 창을 가득 채워도 새 경로 대상이 아니다(의도된 제외).
+
+    성장형 루프는 재시작마다 재현 길이가 **늘어나는** 것이 정의다. 길이가 전혀 변하지
+    않는 완전 주기 반복은 열거·후렴 같은 정상 구조와 구조적으로 구분되지 않으므로
+    이 경로가 맡지 않는다(짧은 주기 반복은 기존 gap-tolerant 경로 담당).
+    """
+    block = ["북한"] + [f"단어{i}" for i in range(8)]
+    assert _find_growing_repeat_storm(block * 12) is False
+
+
+def test_regrow_gate_does_not_flag_long_stem_anaphora_korean():
+    """(g) 긴 스템 anaphora — 같은 6단어 구절로 문장을 시작하는 수사적 반복.
+
+    각 반복이 스템만 재현하고 뒤는 매번 다른 내용이라 재현 길이(lcp)가 늘지 않는다.
+    새 경로가 "블록 반복 + 높은 재현율"만 봤다면 여기서 오탐한다(ablation 확인).
+    """
+    words = (
+        "대한민국 국방부 장관과 미합중국 국방부 장관은 첫째 합의했습니다 "
+        "대한민국 국방부 장관과 미합중국 국방부 장관은 둘째 논의했습니다 "
+        "대한민국 국방부 장관과 미합중국 국방부 장관은 셋째 검토했습니다"
+    ).split()
+    assert _find_growing_repeat_storm(words) is False
+
+
+def test_regrow_gate_does_not_flag_long_stem_anaphora_variable_length():
+    """(h) 위와 같되 뒤 내용의 길이가 매번 달라 블록 길이가 흔들리는 경우.
+
+    "블록 길이가 일정하지 않으면 성장"이라는 더 느슨한 판정을 썼다면 여기서 오탐한다 —
+    실제 채택한 조건은 "재현 길이(lcp)가 증가"라서 통과한다.
+    """
+    words = (
+        "대한민국 국방부 장관과 미합중국 국방부 장관은 첫째 합의했습니다 "
+        "대한민국 국방부 장관과 미합중국 국방부 장관은 둘째로 이를 논의했습니다 "
+        "대한민국 국방부 장관과 미합중국 국방부 장관은 셋째 검토"
+    ).split()
+    assert _find_growing_repeat_storm(words) is False
+
+
+def test_regrow_gate_does_not_flag_long_stem_anaphora_english():
+    """(i) 영어 긴 스템 anaphora — ko↔en 대칭으로 오탐도 대칭 검증."""
+    words = (
+        "the secretary of defense and i agreed that we will "
+        "the secretary of defense and i agreed that we should "
+        "the secretary of defense and i agreed that we must"
+    ).split()
+    assert _find_growing_repeat_storm(words) is False
+
+
+def test_regrow_gate_does_not_flag_rhetorical_repetition():
+    """(j) 문장 서두 2~3단어를 의도적으로 되쓰는 수사적 반복("그리고 이것은 …" ×2)."""
+    words = (
+        "그리고 이것은 우리가 반드시 지켜야 할 원칙입니다 "
+        "그리고 이것은 우리가 반드시 기억해야 할 약속입니다 "
+        "앞으로도 계속 이러한 노력을 이어가겠습니다"
+    ).split()
+    assert _find_growing_repeat_storm(words) is False
+
+
+def test_regrow_gate_does_not_flag_refrain():
+    """(k) 후렴(같은 구절이 3회 되풀이되되 사이 내용이 매번 새로운 경우)."""
+    words = (
+        "함께 가면 길이 됩니다 오늘 우리가 그 길을 엽니다 "
+        "함께 가면 길이 됩니다 내일 우리가 그 길을 걷습니다 "
+        "함께 가면 길이 됩니다 모두가 그 길에 섭니다"
+    ).split()
+    assert _find_growing_repeat_storm(words) is False
+
+
+def test_regrow_gate_does_not_flag_enumeration():
+    """(l) 열거("첫째 … 둘째 … 셋째 …" 같은 꼬리 구절 반복)."""
+    words = (
+        "첫째 경제 협력 방안을 논의했습니다 둘째 안보 협력 방안을 논의했습니다 "
+        "셋째 문화 교류 방안을 논의했습니다 넷째 인적 교류 방안을 논의했습니다"
+    ).split()
+    assert _find_growing_repeat_storm(words) is False
+
+
+def test_regrow_gate_does_not_flag_speaker_disfluency():
+    """(m) 화자 비유창성(더듬기·구절 재시작)은 결함이 아니다(CLAUDE.md §4 원본 발화 확인
+    규칙) — 1~2회 짧은 되풀이는 성장 루프가 아니므로 드롭 대상이 아니다."""
+    words = (
+        "상당한 상당한 진전이 있었음에 합의를 했습니다 "
+        "한국군 사성자 한국군 사령관으로 조건을 기초로 한 전작권 전환을 추진합니다"
+    ).split()
+    assert _find_growing_repeat_storm(words) is False
+
+
+def test_regrow_gate_does_not_flag_normal_sentences():
+    """(n) §1의 정상 문장 시나리오는 새 경로에서도 전부 통과."""
+    codeswitch = (
+        "우리는 operational control transition 관련 진척을 검토했습니다 "
+        "그리고 initial operational capability 평가 결과에 합의했습니다"
+    ).split()
+    english = (
+        "Minister Jung and I reviewed progress on the operational control "
+        "transition and reached an agreement on the results of the evaluation"
+    ).split()
+    assert _find_growing_repeat_storm(codeswitch) is False
+    assert _find_growing_repeat_storm(english) is False
+    assert _find_growing_repeat_storm(["네", "네", "네", "알겠습니다", "여러분"]) is False
+
+
+def test_regrow_gate_ignores_short_input():
+    """(o) 입력이 지나치게 짧으면(블록 문턱 미달) 판정 자체가 성립하지 않는다."""
+    assert _find_growing_repeat_storm([]) is False
+    assert _find_growing_repeat_storm(["가", "나", "다"]) is False
+
+
+# ── 3c. process_iter 배선 ───────────────────────────────────────────────────────
+
+
+def test_process_iter_drops_growing_prefix_loop_without_touching_language_state(caplog):
+    """(p) 성장형 루프가 배치로 흘러들어오면 해당 배치에서 committed=[]가 되고,
+    **언어 재감지를 arm하지 않는다**.
+
+    재감지 arm 금지는 하드 제약이다 — 사이클2 실측에서 이 게이트의 드롭 직후 재감지를
+    arm하자 `_apply_detected_language`가 is_switch=False에도 컨텍스트를 매번 초기화해
+    컨텍스트기아 재환각을 스스로 유발했고 bong1 WER 24.5%→113.3%로 붕괴했다. 새 경로도
+    같은 드롭 지점을 공유하므로 동일하게 검증한다.
+
+    caplog로 `[AnchorRegrowFilter]` 태그를 확인해 **새 경로가** 드롭시켰음을 고정한다
+    (기존 경로가 우연히 잡아서 통과하는 위양성 테스트 방지).
+    """
+    proc = _make_processor(detected_language="ko", lang_before_reset=None)
+    proc.model.refresh_segment = MagicMock()
+
+    caplog.set_level(logging.WARNING, logger="whisperlivekit.simul_whisper.backend")
+    batches = _chunked(_emitted(_REGROW_TEXT_KO), 2)
+    results = _run_batches(proc, batches, detected_language="ko")
+
+    assert any(r == [] for r in results), "성장형 루프가 끝내 한 번도 드롭되지 않음"
+    assert "[AnchorRegrowFilter]" in caplog.text, "드롭이 새 경로에서 나오지 않음"
+    assert proc.model.state.detected_language == "ko"
+    assert proc.model.state.first_timestamp == 1.0
+    assert proc.model.state.lang_before_reset is None
+    proc.model.refresh_segment.assert_not_called()
+
+
+def test_process_iter_regrow_gate_rollback_switch(monkeypatch):
+    """(q) 롤백 장치 — ANCHOR_REGROW_GATE_ENABLED=False면 새 경로가 완전히 무동작해
+    변경 이전 동작으로 돌아간다."""
+    monkeypatch.setattr(
+        "whisperlivekit.simul_whisper.backend.ANCHOR_REGROW_GATE_ENABLED", False
+    )
+    proc = _make_processor(detected_language="ko", lang_before_reset=None)
+    proc.model.refresh_segment = MagicMock()
+
+    batches = _chunked(_emitted(_REGROW_TEXT_KO), 2)
+    _run_batches(proc, batches, detected_language="ko")
+
+    # 순수 함수 자체는 그대로 True를 반환한다(스위치는 배선 지점에서만 작동).
+    assert _find_growing_repeat_storm(_REGROW_TEXT_KO.split()) is True
+    proc.model.refresh_segment.assert_not_called()
+
+
+def test_process_iter_regrow_gate_preserves_scattered_mention():
+    """(r, 가장 중요) 새 경로 도입 후에도 §2(d)의 흩어진 재등장 시나리오는 드롭되면 안
+    된다 — 배선 레벨에서도 회귀를 고정한다."""
+    proc = _make_processor(detected_language="ko", lang_before_reset=None)
+    proc.model.refresh_segment = MagicMock()
+
+    batches = _chunked(_SCATTERED_MENTION_WORDS_KO, 3)
+    results = _run_batches(proc, batches, detected_language="ko")
+
+    assert all(len(r) == len(batch) for r, batch in zip(results, batches))
     proc.model.refresh_segment.assert_not_called()
