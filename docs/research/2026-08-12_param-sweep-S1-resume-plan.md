@@ -1,5 +1,11 @@
 # 인계: 파라미터 튜닝 캠페인 S1 재개 (2026-08-12)
 
+> ⚠️ **SUPERSEDED (2026-08-19)** — 이 문서 기준의 재개는 더 이상 불가능하다: 캠페인 워크트리가 삭제돼
+> 미커밋 원장(S1 9 arm 결과)이 유실됐고, master가 E6→E8(Exp-210/214/215/218)·하니스 H1→H2(Exp-207)로
+> 바뀌어 §3 중간 결과는 전량 stale(방향 신호로만 유효)이며, Track B는 Exp-212~219로 전면 종결됐다.
+> **후속 정본 = [2026-08-19_param-sweep-restart-plan.md](2026-08-19_param-sweep-restart-plan.md).**
+> 이 파일은 구 S1 중간 결과 표(§3)의 보존용으로만 남긴다.
+
 > **이 파일을 새 Claude Code 세션의 첫 메시지로 통째로 붙여넣으면 이어서 진행할 수 있다.**
 > 전체 캠페인 지침 정본 = [docs/goal_prompt/GOAL_PARAM_TUNING_CAMPAIGN.md](../goal_prompt/GOAL_PARAM_TUNING_CAMPAIGN.md)
 > (master `c9f8a74`). 이 문서는 그 위에 **직전 세션에서 새로 확정된 사실 + 지금 당장 할 일**만 얹은 인계장이다.
