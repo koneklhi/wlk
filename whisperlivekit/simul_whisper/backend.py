@@ -1206,6 +1206,18 @@ class SimulStreamingASR:
         #     if not hasattr(self, '_full_mlx_disabled'):
         #         self.use_full_mlx = True
 
+        # 파라미터 스윕(2026-08) — 미지정(None)이면 키를 아예 넘기지 않아 AlignAttConfig 기본값
+        # (rewind_threshold=200)이 그대로 적용된다(무회귀). quality_gate_reset_after는 master가
+        # 독립적으로 CLI 승격(Exp-214, 기본값 5)했으므로 아래 AlignAttConfig 호출에서 그 경로를
+        # 그대로 쓰고, 이 오버라이드 딕셔너리에는 담지 않는다(중복 kwarg 방지 — Stage 0' 리베이스
+        # 충돌해소, 2026-08-19).
+        # `or` 폴백을 쓰지 않는다 — 명시적 0이 falsy로 삼켜지는 것을 막기 위함.
+        _sweep_overrides = {}
+        for _k in ("rewind_threshold",):
+            _v = getattr(self, _k, None)
+            if _v is not None:
+                _sweep_overrides[_k] = _v
+
         self.cfg = AlignAttConfig(
                 tokenizer_is_multilingual= is_multilingual,
                 segment_length=self.min_chunk_size,
@@ -1228,6 +1240,7 @@ class SimulStreamingASR:
                 lang_detect_general_secs=getattr(self, 'lang_detect_general_secs', None),
                 nonspeech_prob=getattr(self, 'no_speech_threshold', None) or 0.5,
                 quality_gate_reset_after=getattr(self, 'quality_gate_reset_after', None) or 5,
+                **_sweep_overrides,
         )
 
         # Set up tokenizer for translation if needed

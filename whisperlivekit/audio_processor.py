@@ -104,6 +104,12 @@ class AudioProcessor:
             getattr(self.args, "min_real_silence_secs", None) or MIN_DURATION_REAL_SILENCE
         )
         self.vad_threshold: float = float(getattr(self.args, "vad_threshold", None) or 0.3)
+        # 파라미터 스윕(2026-08) — CLI 미지정(None)이면 기존 상수/Silero 기본값으로 폴백(무회귀).
+        # `or` 폴백을 쓰지 않는다: 명시적 0이 falsy로 삼켜지면 조용히 기본값으로 되돌아간다.
+        _msd = getattr(self.args, "min_silence_duration_ms", None)
+        self.vad_min_silence_ms: int = int(_msd) if _msd is not None else 200
+        _spd = getattr(self.args, "speech_pad_ms", None)
+        self.vad_speech_pad_ms: int = int(_spd) if _spd is not None else 30
 
         # State management
         self.is_stopping: bool = False
@@ -123,11 +129,16 @@ class AudioProcessor:
         if self.args.vac:
             # 단어 내부 미세정적(≈0.1s 숨/조음 휴지)이 발화를 분할해 한 단어가
             # 두 줄로 쪼개지는 것을 막기 위해 min_silence를 100→200ms로 올린다.
+            _vac_kw = {
+                "threshold": self.vad_threshold,
+                "min_silence_duration_ms": self.vad_min_silence_ms,
+                "speech_pad_ms": self.vad_speech_pad_ms,
+            }
             if models.vac_session is not None:
                 vac_model = OnnxWrapper(session=models.vac_session)
-                self.vac = FixedVADIterator(vac_model, threshold=self.vad_threshold, min_silence_duration_ms=200)
+                self.vac = FixedVADIterator(vac_model, **_vac_kw)
             else:
-                self.vac = FixedVADIterator(load_jit_vad(), threshold=self.vad_threshold, min_silence_duration_ms=200)
+                self.vac = FixedVADIterator(load_jit_vad(), **_vac_kw)
         self.ffmpeg_manager: Optional[FFmpegManager] = None
         self.ffmpeg_reader_task: Optional[asyncio.Task] = None
         self._ffmpeg_error: Optional[str] = None
