@@ -6521,3 +6521,77 @@ raw 수치가 아니라 실제 발동 경로를 감사해 귀속을 확정했다
 - 측정 시각 2026-08-19 09:04~10:20대(스크리닝+확정 N=3×2+held-out×2+kinno, VBCable 단일 장치 순차).
 - 워크트리: `worktrees/coldstart-boundary-protect`(브랜치 `exp/coldstart-boundary-protect`, 커밋 `0217d66`) —
   master 병합 완료, `worktrees/qg-reset-after`(Exp-213, 미채택 CLI 배선만)는 참고용으로 보존.
+
+---
+
+## Exp-215 — 콜드스타트 보호창 유한 상한(`COLD_START_PROTECT_SECS=10.0`) 추가 — Exp-214 부작용 수정 (2026-08-19) [E8 유지, 채택·머지]
+
+**측정 언어모드**: `auto` (kor1~3 대상 실험)
+
+### 발단
+Exp-214 채택 직후 자율 루프 연장으로 kor1~3(§4 다음가설#3, 재검증 예정)을 포함한 E8 종합 베이스라인
+(bong1/ytn2/sbs1/kor1/kor2/kor3 N=3 + held-out)을 재측정하던 중 `kor3.wav`가 **WER 91.4%**로 붕괴하는
+신규 catastrophic 케이스를 발견. (측정 도중 사용자가 VBCable을 실수로 중단시켜 그 회차 전체를 폐기하고
+재측정한 뒤 재현됨 — 하니스 결함 아님.)
+
+### 가설(원인 규명)
+Exp-214의 fix가 `_try_preserving_refresh`의 Δt 상한을 `last_boundary_event_at<=0.0`(콜드스타트, 무경계)
+구간에서 **완전히 제거**했는데, `kor3.wav`는 단일화자 장시간 낭독이라 세션 내내 화자/언어 전환이 **한 번도**
+없어 이 상태가 파일 전체에 걸쳐 지속된다. 그 결과 QG streak이 세션 깊숙이(Δt=18.80s)까지 늦게 형성돼도
+무조건 preserve를 시도하는데, 이 시점엔 버퍼가 이미 `audio_max_len`(15.0s) 근처까지 정체된 상태라 그
+큰 버퍼를 그대로 재디코딩하는 것이 성장형 반복루프(growing-phrase repetition)를 유발한다고 가정.
+
+### 변경 내용 (워크트리 `worktrees/coldstart-boundary-protect`, 커밋 `b3cb4d8`, master 병합)
+`whisperlivekit/simul_whisper/align_att_base.py`: 신규 상수 `COLD_START_PROTECT_SECS = 10.0`(콜드스타트
+전용, `BOUNDARY_PROTECT_SECS=5.0`보다 넉넉하되 유한) 추가. `_try_preserving_refresh`의 조건을
+`effective_limit = COLD_START_PROTECT_SECS if boundary_at <= 0.0 else BOUNDARY_PROTECT_SECS` /
+`if since > effective_limit:`로 교체 — 실경계 이후(`boundary_at>0`) 경로는 완전 무변경(`BOUNDARY_PROTECT_SECS`
+그대로). 10.0s는 관측된 건강한 콜드스타트 케이스(Δt=0.72s·4.80s)에 넉넉한 여유를 두면서 kor3의 병리적
+케이스(Δt=18.80s)를 배제하도록 선택. `pytest tests/ -x -q` 856 passed, 1 skipped(무회귀, 기존 테스트 조정 불요).
+
+### 정량 결과 — 원인 감사 포함
+
+**kor1~3 N=3 재측정(수정 후)**:
+
+| 파일 | WER(N=3) | 비고 |
+|---|---|---|
+| kor1 | 16.4/16.4/22.2% | 안정 |
+| kor2 | 14.5/16.6/17.2% | 안정 |
+| kor3 | 27.8/34.4/41.7% | **91.4%(수정 전) → 반복루프 완전 해소**, 잔존 오차는 일반 치환 오류 수준 |
+
+**held-out(ytn1+eng1, 단회)**: ytn1 WER 14.1%·화자F1 88.9%·LMR **0.0%**(Exp-214의 held-out 개선 유지, 무회귀).
+eng1 WER 5.7%(무회귀).
+
+**bong1 N=3 회귀 대조**: WER 27.1/33.1/36.1%, LMR 15.2~18.5%(다소 높음) — **서버 로그 전수 감사**: 3회차 중
+2회차는 QGPreserve/refresh 이벤트 **0건**(이번 변경과 완전 무관), 1회차는 이벤트 1건이나 `boundary_at>0`
+경로(Δt=5.60s>5.00s, `BOUNDARY_PROTECT_SECS` 그대로, **이번 변경이 건드리지 않는 코드**)로 처리됨 — 3회차
+전부 이번 커밋과 인과관계 없음 확정. 관측된 편차는 bong1의 기존 필러환각/노이즈 밴드 내.
+
+### 분석 (전사 내용 정성 대조)
+
+kor3 재측정 3회 전사 전수 정독 — 성장형 반복루프 완전 소멸(정상 문장 흐름 회복), Case B 0건. 화자F1이
+0.0으로 뜨는 것은 kor3가 단일화자·화자경계 0개라 Exp-186의 all-or-nothing 아티팩트(정상, 실패 아님).
+
+### 채택 조건 판정
+① kor3 catastrophic 회귀 해소: ✓  ② held-out 무회귀(Exp-214 성과 유지): ✓  ③ bong1 무관 확인(로그 감사): ✓
+④ Case B 없음: ✓  ⑤ pytest: ✓
+
+**결론**: **채택·머지**(`b3cb4d8`). Epoch 변화 없음 — E8 메커니즘의 파라미터 보정(경계 케이스 상한 조정)이지
+새 실패모드를 도입하는 구조 변경이 아님.
+
+### 다음 가설
+1. kor1(16~22%)·kor2(14~17%) 자체는 안정적이나 kor3(28~42%)은 여전히 3파일 중 가장 높음 — 성장형 반복루프는
+   해소됐지만 잔존 치환오류 원인은 미조사(모델 한계 vs 개선여지 후속 판단 필요).
+2. Exp-214 "다음가설#2"(ytn2 성장형 반복루프 일반화 방지)는 이번 사례로 재확인·강화됨 — bong1(Exp-214)·
+   ytn2(Exp-214 대조군)·kor3(이번) **3개 서로 다른 파일**에서 동일 패턴 관측. 반복 탐지를 "완전동일" 대신
+   "접두사 성장형" 인식으로 일반화하는 방향의 우선순위를 상향.
+3. Exp-212의 D(logprob −2.5, held-out 회귀로 보류)를 이번 fix 이후 재시도 — 원래 그 기각 사유(콜드스타트
+   은닉번역)가 이번 fix로 해소됐을 가능성.
+
+### 기록
+- Epoch 변화 없음(E8 유지).
+- 벤치마크: `.omc/benchmarks/eval_coldstart2_kor_*.json` · `eval_coldstart2_heldout_*.json` ·
+  `eval_coldstart2_bong1_*.json`. 사용자 VBCable 중단으로 폐기된 회차(`eval_e8_baseline_testset_20260819_1036`대)는
+  결과 미사용.
+- 전사: `.omc/transcripts_coldstart2/{kor_confirm,heldout,bong1_confirm}/`.
+- 측정 시각 2026-08-19 11:36~12:15대.
