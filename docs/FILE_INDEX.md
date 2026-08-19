@@ -76,3 +76,12 @@
 - [scripts/vbcable_test.py](../scripts/vbcable_test.py) — VBCable 브라우저 자동화. 기본은 **배포 UI**(`/wlkies/`,
   `data-testid` 계약), `--ui inline`으로 내장 UI(`/dev`) 대조군. 하니스 고장은 `HarnessError`로 즉시 중단
 - [scripts/audio_device.py](../scripts/audio_device.py) — VBCable 장치 자동 설정/복원
+
+## 폐쇄망 배포 진단 (배포 PC에서 실행, 읽기 전용)
+
+- [scripts/verify_deploy_tree.py](../scripts/verify_deploy_tree.py) — 배포 PC의 실행 중인 소스 트리를
+  `deploy/deploy_source.zip`과 대조해 `STALE`/`MISSING` 파일을 찾는다. 증분 반입 배치를 한 번 놓치면 그
+  파일이 영구히 구세대로 남는 사고([DEPLOYMENT_OFFLINE.md](DEPLOYMENT_OFFLINE.md) §8)를 잡는 유일한 수단
+- [scripts/diagnose_translation.py](../scripts/diagnose_translation.py) — 번역 결과가 빈 문자열이 되는
+  단계를 찾는다. 프로덕션과 동일한 요청을 보내고 **후처리 이전의 원본 LLM 응답**을 찍은 뒤 `<` 절단 ·
+  `_sanitize_result`를 단계별로 적용해 어디서 비는지 보여준다
