@@ -80,6 +80,9 @@ _PUNCT_ONLY_CHARS = frozenset({'.', '?', '!', '。', '！', '？', ',', ';', ':'
 # 보호창 밖·재시도 소진 시 동작은 현행과 100% 동일하므로 비회귀가 구조적으로 보장된다.
 BOUNDARY_QG_PRESERVE_ENABLED = True  # False = 완전 기존 동작 — 짝지음 A/B 롤백 플래그
 BOUNDARY_PROTECT_SECS = 5.0          # 경계 이벤트로부터 이 시간 이내의 streak만 보호
+COLD_START_PROTECT_SECS = 10.0       # boundary_at==0.0(콜드스타트, 아직 무경계)일 때 적용하는 별도 상한 —
+                                       # BOUNDARY_PROTECT_SECS(5.0)보다 넉넉하되 무제한은 아니다. 이유는
+                                       # 아래 _try_preserving_refresh의 사용 지점 주석 참조.
 # 보존 직후 언어 재프로브 창(초) 상한 — garbage 원인이 "오디오 난이도"가 아니라 "언어 오판"일
 # 때를 커버한다. detect_current_language는 이미 @torch.no_grad라 신규 forward 경로가 아니다.
 BOUNDARY_QG_REPROBE_WINDOW = 2.5
@@ -1274,18 +1277,21 @@ class AlignAttBase(ABC):
         boundary_at = getattr(self.state, "last_boundary_event_at", 0.0)
         now = self._current_stream_time()
         since = now - boundary_at
-        # boundary_at > 0.0 게이트: last_boundary_event_at 기본값 0.0은 "세션 초입, 아직 실제
-        # 경계 이벤트(화자/언어 전환) 없음"을 뜻한다(decoder_state.py 설계의도). 이 상태에서는
-        # Δt 상한을 적용하지 않는다 — 그렇지 않으면 콜드스타트 streak 형성이 느릴 때(예:
-        # quality_gate_reset_after가 높거나 디코드 사이클이 느릴 때) BOUNDARY_PROTECT_SECS를
-        # 넘겨 보호에서 빠지고, 언어 재확신 없는 구폐기로 폴백해 콜드스타트 언어오감지가 그대로
-        # 지속된다(실측 재현: Δt=5.62s·6.15s에서 발동). qg_preserve_used 1회성 가드가 이미 위에서
-        # 무한 재시도를 막고 있으므로, 이 게이트는 "첫 실제 경계 이후"에만 Δt 상한을 적용한다.
-        if boundary_at > 0.0 and since > BOUNDARY_PROTECT_SECS:
+        # boundary_at == 0.0(기본값)은 "세션 초입, 아직 실제 경계 이벤트 없음"을 뜻한다
+        # (decoder_state.py 설계의도) — 이 콜드스타트 구간은 BOUNDARY_PROTECT_SECS(5.0)보다
+        # 넉넉한 COLD_START_PROTECT_SECS(10.0)를 적용한다. 단, 여전히 상한이 있다: 무경계
+        # 구간(예: 단일화자 장시간 낭독 — 화자/언어 전환이 아예 없어 boundary_at이 세션 내내
+        # 0.0으로 남는 파일)에서 streak이 아주 늦게(예 Δt=18.80s) 형성되면, 그 시점엔 버퍼가
+        # 이미 audio_max_len 근처까지 찬 채로 오래 정체돼 있었다는 뜻이라 preserve(그 큰 버퍼를
+        # 그대로 재디코딩)가 오히려 성장형 반복루프를 유발할 수 있음이 실측 확인됐다(kor3.wav,
+        # buffered=14.97s≈audio_max_len, WER 91.4% 성장형 반복). 건강한 콜드스타트 케이스는
+        # 전부 Δt≤6.15s에서 관측돼 10.0s면 충분한 여유가 있다.
+        effective_limit = COLD_START_PROTECT_SECS if boundary_at <= 0.0 else BOUNDARY_PROTECT_SECS
+        if since > effective_limit:
             # warning 레벨 필수 — 위 빈-버퍼 분기 주석 참조(root 로거 WARNING).
             logger.warning(
                 "[QGPreserve] 보호창 밖(Δt=%.2fs > %.2fs) — 기존 폐기 유지",
-                since, BOUNDARY_PROTECT_SECS,
+                since, effective_limit,
             )
             return False
 
