@@ -89,6 +89,8 @@ description: master 변경사항을 배포 반입 산출물(deploy/, wlk_in/)에
 
 6. **동기화 반영**
    - `git archive master --output=deploy\deploy_source.zip`을 재생성해 `wlk_in`에도 동일 반영한다.
+     **이 zip은 배포 PC 무결성 점검(`scripts/verify_deploy_tree.py`, 8단계 "검증(필수)")의 정답 기준이기도
+     하므로 매 동기화마다 반드시 재생성한다** — zip이 낡으면 점검이 멀쩡한 파일을 STALE로 잘못 지목한다.
      의존성 wheelhouse를 재구성했으면 `deploy\wheelhouse\`(신규/갱신분)도 `wlk_in\deploy\wheelhouse\`에
      복사한다 — whisperlivekit 프로젝트는 wheel로 빌드하지 않으므로 복사할 project wheel은 없다.
    - **`wlk_in` 원본 미러는 파일 단위로 갱신한다** — 전체 트리 재추출(`git archive` 통짜 압축 해제)이나
@@ -158,7 +160,12 @@ description: master 변경사항을 배포 반입 산출물(deploy/, wlk_in/)에
        ...
        (의존성 wheelhouse를 재빌드했을 때만 추가)
        C:\Python312\python.exe -m pip install --no-index --find-links C:\whist\wlk\deploy\wheelhouse -r C:\whist\wlk\deploy\requirements-deploy.txt
-     **검증(권장)**: 배포 PC에서 `C:\Python312\python.exe -c "import whisperlivekit; print(whisperlivekit.__file__)"`로
+     **검증(필수)**: 배포 PC에서 아래를 돌려 `STALE`/`MISSING` 0건(exit 0)인지 확인한다. 파일 단위 복사가
+     빠짐없이 됐는지 배포 PC 안에서 확인할 수 있는 유일한 수단이다(폐쇄망이라 dev PC와 직접 `diff` 불가).
+       cd C:\whist\wlk
+       C:\Python312\python.exe scripts\verify_deploy_tree.py --zip deploy\deploy_source.zip
+     하나라도 잡히면 그 파일을 다시 덮어쓰고 재실행한다. 이어서
+     `C:\Python312\python.exe -c "import whisperlivekit; print(whisperlivekit.__file__)"`로
      실제 로드 경로가 `C:\whist\wlk\whisperlivekit\...`인지 확인한다 — `python -m whisperlivekit.basic_server`는
      항상 저장소 루트(cwd)를 우선 로드하므로, 이 경로가 아니라면 저장소 루트 밖에서 실행했는지 의심한다.
      **주의**: 여기까지는 dev PC `wlk_in` 스테이징 갱신입니다. 배포 PC는 폐쇄망이라 자동 반영이

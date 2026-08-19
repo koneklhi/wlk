@@ -33,6 +33,13 @@ C:\Python312\python.exe -m whisperlivekit.basic_server
 # → 브라우저에서 http://localhost:8900/ 접속 후 마이크로 발화
 ```
 
+> **터미널이 로그로 도배되면 `-l INFO`를 붙인다.** `--log-level` 기본값은 **DEBUG**라(parse_args.py)
+> 아무 것도 안 붙이면 배포 PC도 디버그 모드로 돈다. 상시 운용은
+> `C:\Python312\python.exe -m whisperlivekit.basic_server -l INFO`를 권장한다 — 청크 단위 계측
+> (`internal_buffer=...s | lag=...s`, DEBUG)은 사라지고 기동·번역·오류 메시지는 남는다.
+> 문제를 파고들 때만 `-l DEBUG`(기본값)로 되돌린다. **경로 C 측정은 기본값 DEBUG 그대로 둔다** —
+> `scripts/analyze_case1_boundaries.py`가 그 `lag=` 값을 파싱한다.
+>
 > **⚠️ 항상 저장소 루트에서 실행한다(요청 1).** 기본값의 모델·warmup 경로(`whisperlivekit/model/...`,
 > `test_data/sbs1_10s.mp3`)는 **루트 기준 상대경로**다. 다른 폴더에서 띄우면 모델을 못 찾는다.
 >
@@ -805,6 +812,7 @@ C:\Python312\python.exe -c "import torch, transformers, tokenizers; print(torch.
 
 > **빠른 기능 검증은 §4.4의 단계들**(배포 UI 전사 → 정적 서빙 배선 확인 → 번역)을 따른다. 아래는 **설치 무결성 + 정량 측정 + 단어 교정**까지 포함한 전체 점검 체크리스트로, §4.4를 감싸는 상위 순서다.
 
+0. **반입 무결성 점검 (필수, 가장 먼저)**: `C:\Python312\python.exe scripts\verify_deploy_tree.py --zip deploy\deploy_source.zip` → `STALE`/`MISSING` 0건(exit 0)이어야 한다. 하나라도 잡히면 그 파일을 반입 USB에서 덮어쓴 뒤 다시 돌린다(§8 트랩 "증분 배치 1회 누락 = 그 파일 영구 stale"). **이 점검을 건너뛰면 구세대 파일이 조용히 실행돼 아래 모든 단계의 결과를 믿을 수 없다** — 실제로 2026-08에 이 경로로 실시간 번역이 죽었다.
 1. **설치 확인**: `C:\Python312\python.exe -c "import whisperlivekit, torch; print(torch.cuda.is_available())"` → `True`.
 2. **경로 A 스모크**(§4.3): 파일 송신으로 전사가 나오는지 — 코드/모델 로드 정상 확인.
 3. **배포 UI 전사**(§4.4 1단계): 브라우저 마이크로 한·영 발화 → 전사·화자 배지 정성 확인.
@@ -841,5 +849,6 @@ C:\Python312\python.exe -c "import torch, transformers, tokenizers; print(torch.
 | **sounddevice 누락** | `C:\Python312\python.exe scripts/closed_test.py ...`(경로 C) 실행 시 `ModuleNotFoundError: No module named 'sounddevice'` | `scripts/vbcable_test.py`가 `sd.play()`로 VBCable에 오디오를 재생하는 하드 의존성인데 과거 `vbcable` extra(playwright+comtypes만)에 빠져 있었음 — master에서 수정 완료(pyproject.toml `vbcable` extra에 `sounddevice` 추가, requirements-deploy.txt·wheelhouse 갱신). 이미 설치된 PC는 `C:\Python312\python.exe -m pip install --no-index --find-links C:\whist\wlk\deploy\wheelhouse sounddevice==0.5.5`로 단건 추가하면 된다(전체 재설치 불필요) |
 | **공유 `.venv` 반쪽 손상** (dev PC §2.2 패키징 전용 — 배포/협업 PC는 venv가 없어 해당 없음) | dev PC에서 `.venv\Scripts\python.exe`가 `No pyvenv.cfg file`(exit 106)로 기동 불가 → 측정·pytest 전면 차단. `.venv` 최상위에 `Lib`/`pyvenv.cfg` 없이 `Scripts`/`share`만 잔존 | **원인**: 배포/wheelhouse 작업(§2.2)의 `uv venv`/`uv pip`/`uv sync`를 **공유(Junction) `.venv`에 실행**했고, 그 순간 IDE Jedi 언어서버가 python.exe를 잠가 Scripts 제거가 실패한 반쪽 손상. **예방**: §2.2 경고대로 wheelhouse 빌드는 독립 `.venv`에서 + IDE 인터프리터 분리. **복구(무중단)**: `uv venv` 출력의 base python(`Using CPython … at <경로>`)으로 임시 probe venv 생성 → 그 `pyvenv.cfg`를 손상된 `.venv\`에 복사 → python 기동 회복 → `uv sync --extra diarization-sortformer --extra vbcable --extra cu128`로 Lib 재설치(Scripts 제거를 안 하므로 IDE 잠금과 무관). 진행 중 uv 경합이 있으면 먼저 멈춘 뒤 복구 |
 | **`wlk_in` 최신화 ≠ 배포 PC 반영** | dev PC의 `wlk_in`은 최신 master 기준으로 갱신됐는데, 배포 PC(`C:\whist\wlk`)는 여전히 구버전 코드로 동작(예: `model_dir` 미전파로 인터넷 다운로드 시도 → `getaddrinfo failed`) | `wlk_in`을 갱신하는 것과 그걸 USB로 옮겨 배포 PC에 실제로 덮어쓰는 것은 별개 단계다. `wlk_in\SYNC_STATE.txt`의 `deploy_pc_confirmed_applied`가 `unknown`이면 아직 배포 PC 반영이 확인되지 않은 것 — 매번 USB 반입·적용 여부를 사용자에게 확인한다 |
-| **raw 소스 파일 복사 누락** | 일부 `whisperlivekit/**` 변경이 반영 안 된 듯 보이는데 재설치할 wheel이 없음(예: 특정 버그 수정이 재현되거나, 신규 서브패키지의 API가 404) | whisperlivekit 프로젝트는 wheel로 설치하지 않으므로 유일한 반영 경로는 raw 소스 파일 복사뿐이다 — `C:\Python312\python.exe -c "import whisperlivekit; print(whisperlivekit.__file__)"`로 실제 로드 경로(`C:\whist\wlk\whisperlivekit\...`)를 확인하고, `deploy-sync` 절차의 `git diff --name-status` 목록과 `wlk_in`/배포 PC의 실제 파일을 `diff -q`로 대조해 빠짐없이 복사됐는지 확인한다 — wheel이라는 안전장치가 사라졌으므로 이 확인이 유일한 검증 수단이다 |
+| **raw 소스 파일 복사 누락** | 일부 `whisperlivekit/**` 변경이 반영 안 된 듯 보이는데 재설치할 wheel이 없음(예: 특정 버그 수정이 재현되거나, 신규 서브패키지의 API가 404) | whisperlivekit 프로젝트는 wheel로 설치하지 않으므로 유일한 반영 경로는 raw 소스 파일 복사뿐이다 — `C:\Python312\python.exe -c "import whisperlivekit; print(whisperlivekit.__file__)"`로 실제 로드 경로(`C:\whist\wlk\whisperlivekit\...`)를 확인하고, **배포 PC에서 `scripts\verify_deploy_tree.py`(§7 0단계)를 돌려** 빠짐없이 복사됐는지 확인한다. (폐쇄망이라 dev PC와 직접 `diff -q`를 돌릴 수 없다 — 그래서 배포 PC 안에서 `deploy_source.zip`과 대조하는 이 도구가 필요하다) |
+| **증분 배치 1회 누락 = 그 파일 영구 stale** | 최신 파일과 구세대 파일이 한 패키지 안에 섞여 `TypeError: ... got an unexpected keyword argument`류로 죽는다. **2026-08 실사고**: `llm_translation/manager.py`는 최신인데 `translator.py`만 2026-07-23(b08e2fa) 이전 세대로 남아, 미확정 **실시간 번역이 매 tick TypeError로 죽고 확정 번역만 나왔다**(확정 경로는 `retry_on_echo`를 넘기지 않아 구버전과도 호환돼 증상이 "실시간만 안 됨"으로 보였다) | 증분 반입은 `git diff <직전 커밋>..master` 목록만 옮긴다. 따라서 **배치를 한 번 놓치면, 그 뒤로 안 바뀐 파일은 이후 어떤 배치에도 실리지 않아 영구히 구세대로 남는다**(`translator.py`는 2026-07-23 이후 무변경이었다). `deploy_pc_confirmed_applied`가 `unknown`인 동안은 이 상태를 늘 의심한다. **탐지·복구**: §7 0단계의 `verify_deploy_tree.py`로 STALE/MISSING을 전부 나열한 뒤 그 파일만 덮어쓴다. 일괄 복사는 `robocopy <USB>\wlk_in\whisperlivekit C:\whist\wlk\whisperlivekit /E`까지만 — **`/MIR`·`/PURGE`는 금지**(RAG 자산·모델 가중치·`user_*.db`가 삭제된다) |
 | **`git show`로 반입 복사 시 줄바꿈만 다른 거짓 mismatch** | `deploy-sync` 6단계에서 `git show master:<path> > wlk_in\<path>`로 복사하면 `diff -q`가 매번 실제 변경 없는 파일까지 mismatch로 잡음 | 이 저장소는 `core.autocrlf=true`라 워킹트리 체크아웃 파일은 CRLF인데, `git show`는 blob 원본(LF 정규화됨)을 그대로 출력한다 — 내용은 같고 줄바꿈만 달라 `diff -q`가 오탐한다. 반입 복사는 `git show`가 아니라 **워킹트리 파일을 직접 복사**(`cp`/`Copy-Item`)한다 |
