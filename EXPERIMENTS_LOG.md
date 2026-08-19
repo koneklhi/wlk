@@ -6656,3 +6656,88 @@ C는 D와 달리 held-out에서 **catastrophic 회귀가 없다** — "보류" �
 ### 기록
 - Epoch 변화 없음. 벤치마크: `eval_lp15_confirm_*.json` · `eval_lp15_heldout_*.json`.
 - 전사: `.omc/transcripts_lp15/{confirm,heldout}/`. 측정 시각 2026-08-19 12:51~13:15대.
+
+---
+
+## Exp-218 — 성장형 프리픽스 반복루프(regrow) 탐지 게이트 추가 (2026-08-19) [E8 유지, 채택·머지]
+
+**측정 언어모드**: `auto`
+
+### 발단
+Exp-215/216에서 관측된 성장형 반복(같은 구절을 매 재시작마다 한두 단어씩 더 길게 재생성하는 루프 —
+kor3 WER 91.4%, ytn2 WER 56.7%)이 기존 `_find_anchor_repeat_storm`(AnchorRepeatFilter, Exp-169 도입)로
+잡히지 않는 사각지대임을 확인. Exp-169가 이미 "가변 변주구 storm"으로 예견한 문제의 구체 재현.
+
+### 가설(원인 규명, 실측 트레이스로 확인)
+기존 게이트는 앵커(1~2gram) 재등장 간격이 `MAX_GAP=5` 이내로 몰릴 때만 클러스터를 형성한다. 성장형
+루프는 재시작마다 블록이 길어져 간격이 6→16단어로 커지므로 ① 초반엔 클러스터가 매번 리셋되고
+(`best_cluster<MIN_COUNT`에서 기각, `MIN_CONCENTRATION` 검사에는 도달조차 못함) ② 후반엔 블록이
+너무 길어져 40단어 윈도우 안에 앵커가 `MIN_COUNT` 미만만 남는다("윈도우 escape"). 간격(위치) 기반
+완화는 "북한"류 자연 재등장을 오탐시키므로, 내용을 보는 독립 경로가 필요.
+
+### 변경 내용 (워크트리 `worktrees/anchor-growing-repeat`, 커밋 `b2808dc`, master 병합)
+`whisperlivekit/simul_whisper/backend.py`: 신규 함수 `_find_growing_repeat_storm`을 기존 경로와 **OR**로
+결합(`ANCHOR_REGROW_GATE_ENABLED` 롤백 스위치). 연속 앵커 등장쌍의 최장공통접두(LCP)가 재시작마다
+**증가**하는지를 판별 신호로 사용 — 아나포라·후렴·열거는 매번 같은 어간만 재현해 LCP가 일정한 반면,
+재생성 루프는 매번 더 많이 재현해 LCP가 오른다. 파라미터(`WINDOW=80·MIN_BLOCK=6·MIN_COVERAGE=0.7·
+MIN_RUN=3`)는 96포인트 스윕(창×블록×커버리지×런)으로 검증된 평지(절벽 아님). "LCP 증가" 조건이 오탐
+방지 핵심 — ablation상 이 조건 없이는 기존 오탐방지 픽스처(`북한` 시나리오 포함) 4/8이 오탐한다.
+드롭 시 기존 경로와 동일하게 언어 재감지를 arm하지 않는다(사이클2 회귀 방지 하드 제약 유지).
+`tests/test_anchor_repeat_gate.py`에 신규 테스트 18개 추가(양성 4·음성 8·배선 6) — 오탐 방지 최우선으로
+설계(§3.8), 임의 어휘 치환으로 구조 일반화도 검증.
+
+### 정량 결과
+
+**오프라인 검증**: pytest 874 passed(신규18, 회귀0). 정답 전사 9종+실제 ASR 출력 45파일(약 2.8만 단어)의
+**모든 prefix**에서 발동 0건.
+
+**경로 C 스크리닝(N=1, 6파일)**: bong1 19.6%·ytn2 12.3%·sbs1 10.7%·kor1 22.2%·kor2 20.0%·kor3 26.5%,
+held-out ytn1 9.2%·LMR0%·eng1 4.8% — 전부 밴드 내, catastrophic 없음.
+
+**N=3 확정(bong1/ytn2/sbs1/kor3) + held-out N=3**:
+
+| 파일 | WER(N=3) | 비고 |
+|---|---|---|
+| bong1 | 21.7/22.3/31.0% | R3 LMR26%↑이나 서버로그 0-firing 확인(무관) |
+| ytn2 | 11.8/14.3/19.7% | R1 LMR17%↑이나 서버로그 0-firing 확인(무관) |
+| sbs1 | 8.9/9.5/10.1% | 안정 |
+| kor3 | 26.5/33.1/44.4% | 성장루프 재발 없음(R2 44.4%는 통상 블렌딩 노이즈, 재시작형 아님) |
+| ytn1(held-out) | 9.2/11.0/12.9% | LMR≈0, 무회귀 |
+| eng1(held-out) | 3.8/4.8/4.8% | 무회귀 |
+
+**발동 감사(핵심 근거)**: 15개 회차 전 서버로그에서 `[AnchorRegrowFilter]` grep — **발동 0건**. 즉 이번
+측정에서 관측된 모든 WER/LMR 변동은 이 변경과 **완전히 무관**하다(0-firing 노이즈, Exp-212/208와 동일
+방법론). 게이트의 "발동 시 실제로 옳게 억제하는가"는 이번 실측이 아니라 오프라인 검증(단위테스트+실제
+전사 0건 오탐)으로만 뒷받침됨 — 원 catastrophic 사례(ytn2 56.7%·kor3 91.4%)가 이번 15회차에 재현되지
+않아 "발동하는 순간"을 라이브로 다시 포착하지는 못했다(정직하게 기록).
+
+### 분석 (전사 내용 정성 대조)
+bong1 R3(LMR26%): `I. go. Plus, I'm sorry. Malang malang on what to make sure we're going to have a safe
+platform.` — 기존 "Thank you"류 필러환각의 변주(Exp-159/163, 미해결 별개 이슈), 신규 아님.
+ytn2 R1(LMR17%): `But we still have to do a lot of work, and regarding this, we still have to do a close
+cooperation with` — 세션 말미 은닉 패러프레이즈, 신규 아님. 두 사례 모두 Case B 0건.
+kor3 R2(44.4%): `강화를 이한 기동함세 기동함대사 이하의 기동전달을 창설하고... 안정적인 운용을 이한
+강화를 이하의 기동 전달을 창설하고...` — 구절 앞부분이 아니라 중간 조각이 뒤섞이는 통상 블렌딩
+노이즈로, 매번 처음부터 재시작하는 성장형 패턴과 구조가 다르다(게이트가 미발동한 것이 정확한 판정).
+
+### 채택 조건 판정
+① 화자F1 worst-case 미회귀: ✓(밴드 내)  ② WER max 미회귀: ✓(관측 편차 전부 무관 확인)
+③ Case B 없음: ✓  ④ pytest: ✓(874 passed)  ⑤ held-out 무회귀: ✓
+⑥ 오탐(정상 발화 삭제) 위험: 오프라인 검증 강함(0/28,431 단어)이나 라이브 발동 재현은 이번에 없었음 — 정직히 명시.
+
+**결론**: **채택·머지**(`b2808dc`+병합커밋). Epoch 변화 없음(Exp-170 선례와 동일 — 출력/필터 계층 전용
+추가로 디코더·QG 메커니즘 자체는 무변경).
+
+### 다음 가설
+1. 향후 measurement에서 `[AnchorRegrowFilter]` 발동이 관측되면 그 회차를 정성 대조해 "발동 시 옳게
+   억제했는가"를 라이브로 검증 — 현재 유일한 미검증 축.
+2. kor3의 잔존 WER(26.5~44.4%)은 성장루프가 아닌 통상 치환/블렌딩 오류가 원인 — 별개 조사 필요.
+3. 부수 확인 사항(이번 세션 발견, 미변경): 기존 `_find_anchor_repeat_storm`은 순수 열거("첫째…둘째…셋째")·
+   긴 스템 아나포라에도 True를 반환할 수 있음(기존 동작, 이번 변경 아님) — 향후 오탐 의심 시 이 경로도 감사 대상.
+
+### 기록
+- Epoch 변화 없음(E8 유지).
+- 벤치마크: `eval_anchor_screen_*.json` · `eval_anchor_heldout_*.json` · `eval_anchor_confirm_*.json` ·
+  `eval_anchor_heldout_confirm_*.json`.
+- 전사: `.omc/transcripts_anchor/{screen,heldout,confirm,heldout_confirm}/`.
+- 측정 시각 2026-08-19 13:40~14:50대.
