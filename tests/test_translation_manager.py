@@ -361,22 +361,26 @@ def test_interim_time_debounce_holds_within_interval():
 
 def test_interim_delta_gate_holds_small_growth():
     """델타 게이트: 직전 소스 대비 12자 미만 성장은 dispatch 안 됨, 12자 이상은 됨.
-    (시간 게이트는 통과하도록 last_dispatch_ts=0.0 + 큰 monotonic 값으로 격리.)"""
+
+    (시간 게이트는 통과하도록 last_dispatch_ts=0.0 + 큰 monotonic 값으로 격리.)
+    라틴 텍스트로 성장분을 구성한다 — effective_len에서 라틴은 _HANGUL_WEIGHT 값과 무관하게
+    raw len과 같으므로, 이 테스트가 게이트의 델타 산술 자체를 검증하지 한글 가중치 튜닝값에
+    종속되지 않는다(가중치를 2.8→4.0으로 올렸을 때 한글 텍스트 픽스처였다면 깨졌을 것)."""
     import unittest.mock as mock_module
 
     translator = make_translator_mock()
     manager = TranslationManager(translator)
     # 줄 전환 리셋을 피하려 line_id 를 미리 맞추고, 이미 번역된 소스를 세팅
     manager._interim_line_id = 1.0
-    manager._interim_source = "기존에 번역된 긴 소스 텍스트"
+    manager._interim_source = "existing translated source text"
 
-    small = manager._interim_source + "가나다"  # 델타 3자 < 12
+    small = manager._interim_source + "abc"  # 델타 3자 < 12
     with mock_module.patch("asyncio.ensure_future") as mock_ensure, \
          mock_module.patch("time.monotonic", return_value=100.0):
         manager.apply_interim_translation(small, "ko", line_id=1.0)
     mock_ensure.assert_not_called()
 
-    big = manager._interim_source + "가나다라마바사아자차카타"  # 델타 12자 >= 12
+    big = manager._interim_source + "abcdefghijkl"  # 델타 12자 >= 12
     with mock_module.patch("asyncio.ensure_future", make_closing_ensure_future()) as mock_ensure, \
          mock_module.patch("time.monotonic", return_value=100.0):
         manager.apply_interim_translation(big, "ko", line_id=1.0)
