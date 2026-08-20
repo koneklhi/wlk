@@ -125,7 +125,7 @@ export const SttTextViewer = ({
         data-testid="stt-text"
         style={{
           ...orgStyle,
-          opacity: awaitingTranslation ? 'var(--stt-processing-opacity)' : 1,
+          opacity: isProcessing ? 'var(--stt-processing-opacity)' : 1,
         }}
       >
         {/* buffer 꼬리는 같은 문단 안에서 이어 붙인다 — 줄을 새로 만들면 화면이 출렁인다. */}
