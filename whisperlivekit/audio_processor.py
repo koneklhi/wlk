@@ -188,6 +188,12 @@ class AudioProcessor:
             self.llm_translation_manager = TranslationManager(
                 _translator,
                 retro_scope=getattr(self.args, "retro_retranslate_lines", None),
+                interim_min_chars=getattr(self.args, "interim_min_chars", None),
+                interim_min_delta_chars=getattr(self.args, "interim_min_delta_chars", None),
+                interim_min_interval=getattr(self.args, "interim_min_interval", None),
+                interim_hangul_weight=getattr(self.args, "interim_hangul_weight", None),
+                interim_echo_policy=getattr(self.args, "interim_echo_policy", None),
+                interim_strict_direction=getattr(self.args, "interim_strict_direction", None),
             )
 
     async def _push_silence_event(self) -> None:

@@ -120,6 +120,14 @@ class WhisperLiveKitConfig:
     # None = llm_translation.manager.RETRO_SCOPE_LINES 폴백, 0 = 소급 재번역 비활성(텍스트 대치만).
     # 전사 텍스트 대치는 이 값과 무관하게 항상 세션 전 구간에 적용된다.
     retro_retranslate_lines: Optional[int] = None
+    # 미확정 미리보기(interim) 번역 튜닝 노브. 전부 None = 코드 상수 폴백(무회귀).
+    # 첫 미리보기 발동 임계는 min_chars가 아니라 **min_delta_chars**다(새 줄은 직전 소스가 비어 있음).
+    interim_min_chars: Optional[int] = None
+    interim_min_delta_chars: Optional[int] = None
+    interim_min_interval: Optional[float] = None
+    interim_hangul_weight: Optional[float] = None
+    interim_echo_policy: Optional[str] = None        # retry(기본) | discard | off
+    interim_strict_direction: Optional[bool] = None  # None = ON
     # Stage 2 Qdrant RAG(유사 예시 검색)는 설정 필드가 없다 — 자산 경로가
     # whisperlivekit/llm_translation/__init__.py에 고정돼 있고, 그 디렉터리 존재 여부로만 켜지고 꺼진다.
 
