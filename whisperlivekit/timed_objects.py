@@ -165,6 +165,10 @@ class Segment(TimedText):
     speaker: Optional[str]
     tokens: Optional[ASRToken] = None
     translation: Optional[Translation] = None
+    translation_pending: bool = False   # 확정됐지만 번역 왕복이 아직 안 끝난 상태. 프론트가 '번역 중…'
+                                        # 표시를 유지하는 근거다. 번역이 빈값으로 **정착**한 경우
+                                        # (에코 재시도 실패 → _MAX_FINAL_ATTEMPTS)는 False라, 프론트가
+                                        # 영원히 도착하지 않을 번역을 기다리며 스피너를 남기지 않는다.
     finalized: bool = False
     finalize_trigger: Optional[str] = None
 
@@ -224,6 +228,8 @@ class Segment(TimedText):
         _dict['finalize_trigger'] = self.finalize_trigger    # None 이어도 항상 방출
         if self.translation:
             _dict['translation'] = self.translation
+        if self.translation_pending:          # True 일 때만 방출 — 기본 상태는 전송량에 싣지 않는다
+            _dict['translation_pending'] = True
         if self.detected_language:
             _dict['detected_language'] = self.detected_language
             _dict['lang'] = self.detected_language    # React 호환 별칭

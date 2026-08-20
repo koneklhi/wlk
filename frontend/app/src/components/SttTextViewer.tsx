@@ -60,6 +60,11 @@ export const SttTextViewer = ({
   const translation = incoming && incoming.length > 0 ? incoming : lastTranslation;
   const hasTranslation = Boolean(translation && translation.length > 0);
   const isProcessing = !row.finalized;
+  // 번역 대기 표시는 확정 경계에서 끊기면 안 된다. 과거엔 조건이 isProcessing 뿐이라 문장이
+  // **확정되는 순간** 로더가 사라지고 확정 번역이 도착할 때까지 번역칸이 빈칸이 됐다.
+  // 서버가 주는 translationPending 으로 확정 이후 구간을 이어받는다 — 번역이 빈값으로 정착한
+  // 줄(에코 재시도 실패)은 pending 이 오지 않으므로 스피너가 영구히 남지 않는다.
+  const awaitingTranslation = (isProcessing || row.translationPending === true) && !hasTranslation;
 
   // 메타 줄(시각 + 확정 원인)은 둘 다 없으면 아예 렌더하지 않는다 — 빈 div 를 남기면
   // 부모의 flex gap 만 잡아먹어 행 간격이 벌어진다. 미확정 줄은 trigger 가 null 이라 배지가 없다.
@@ -120,13 +125,13 @@ export const SttTextViewer = ({
         data-testid="stt-text"
         style={{
           ...orgStyle,
-          opacity: isProcessing && !hasTranslation ? 'var(--stt-processing-opacity)' : 1,
+          opacity: awaitingTranslation ? 'var(--stt-processing-opacity)' : 1,
         }}
       >
         {/* buffer 꼬리는 같은 문단 안에서 이어 붙인다 — 줄을 새로 만들면 화면이 출렁인다. */}
         {row.bufferText ? `${row.text}${row.bufferText}` : row.text}
       </div>
-      {isProcessing && !hasTranslation && <SttTranslateLoader />}
+      {awaitingTranslation && <SttTranslateLoader />}
       {hasTranslation && <div style={transStyle}>{translation}</div>}
     </div>
   );

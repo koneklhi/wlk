@@ -36,6 +36,8 @@ export interface TranscriptRow {
   bufferText?: string;
   /** 마지막 행에만 — 실시간 번역 buffer 꼬리. */
   bufferTranslation?: string;
+  /** 확정됐지만 번역이 아직 도착하지 않음 — 확정 후에도 '번역 중…' 표시를 유지하는 근거. */
+  translationPending?: boolean;
   /** 화면 표시용 블록 번호. 관리자 페이지가 이 번호로 블록을 지목한다(blockNumbers.ts). */
   blockNo?: number;
 }
@@ -109,6 +111,9 @@ export function buildRows(inp: RowInput): TranscriptRow[] {
     end: seg.end,
     finalized: isFinalized(seg),
     trigger: seg.finalize_trigger ?? null,
+    // 재번역 override 가 이미 번역을 채웠다면 더 기다릴 게 없다 — 서버 pending 을 무시한다.
+    translationPending: seg.translation_pending === true
+      && !pickTranslation(seg, translationOverrides),
   }));
 
   const last = rows[rows.length - 1];

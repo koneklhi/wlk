@@ -4,6 +4,7 @@ import time
 from typing import TYPE_CHECKING, Optional
 
 from whisperlivekit.llm_translation import get_prompt_manager
+from whisperlivekit.llm_translation.translator import effective_len
 
 if TYPE_CHECKING:
     from whisperlivekit.llm_translation.translator import TranslatorBase
@@ -12,6 +13,7 @@ logger = logging.getLogger(__name__)
 
 _MIN_INTERIM_CHARS = 6  # 미확정 버퍼가 이 미만이면 문맥 부족 → 환각 위험이 커 아직 번역 요청하지 않는다.
                         # (확정 경로 apply_translations는 이 게이트와 무관 — 짧은 확정 발화 "다음"→"Next"는 정상 번역)
+                        # **단위 = effective_len(한글 가중)** — raw 문자수가 아니다(아래 델타 게이트 주석 참조).
 
 _MAX_FINAL_ATTEMPTS = 2  # 확정 번역 실패(에코 2연속·예외) 허용 시도 횟수. temperature=0이라 에코는
                          # 결정적 반복 — 초과 시 캐시에 ""로 정착시켜 매 tick 재번역 무한루프를
@@ -21,6 +23,10 @@ _INTERIM_MIN_INTERVAL_S = 0.5   # 직전 interim 번역 발동 후 이 간격(�
                                 # 버퍼가 tick마다 갱신돼도 초당 발동 수를 묶어 LLM 서버 부하·확정 지연을 막는다.
 _INTERIM_MIN_DELTA_CHARS = 12   # 버퍼가 직전 번역 소스 대비 이만큼 자라지 않았으면 보류 — 잔단어 성장마다
                                 # ("미래의"→"미래의 합동"→"미래의 합동작전") 재번역하는 낭비를 방지한다.
+                                # **단위 = effective_len(한글 가중)**. raw 문자수로 재면 한글이 라틴보다
+                                # 정보 밀도가 높아 같은 임계에 2.8배 늦게 도달 → 한→영 미리보기만 늦게
+                                # 뜬다(한국어 2.2s vs 영어 0.8s, test_data 실측). effective_len으로 재면
+                                # 양방향 모두 _INTERIM_MIN_INTERVAL_S(0.5s)가 병목이 되어 지연이 대칭이 된다.
 
 RETRO_SCOPE_LINES = 20   # 소급 **재**번역 대상 = 최근 확정 문장 N개. 0이면 소급 재번역 비활성.
                          # 녹음 중 대치어/번역용어를 등록하면 과거 문장이 한꺼번에 재번역 대상이 되는데,
@@ -161,7 +167,9 @@ class TranslationManager:
             cached = self._cache.get(key)
 
             if cached is not None and key not in self._stale:
-                # 캐시 히트: 번역 결과 적용
+                # 캐시 히트: 번역 결과 적용. cached == "" (재시도 상한 도달로 정착)도 '완료'다 —
+                # 더 이상 도착할 번역이 없으므로 pending 을 내려 프론트 스피너를 끝낸다.
+                seg.translation_pending = False
                 seg.translation = cached
                 if sid is not None:
                     self._last_translation_by_id[sid] = cached
@@ -173,6 +181,9 @@ class TranslationManager:
             if previous is None and sid is not None:
                 previous = self._last_translation_by_id.get(sid)
             seg.translation = previous if previous is not None else ""
+            # 여기 도달 = 번역이 아직 없거나 재번역 대상. 기본적으로 '대기 중'이고,
+            # 아래 소급 창 밖 포기 분기에서만 확정적으로 내려간다.
+            seg.translation_pending = True
 
             if key in self._in_flight:
                 continue
@@ -183,6 +194,7 @@ class TranslationManager:
                 # 창 밖이다. 소급 재번역을 포기하고 기존 번역으로 정착시킨다 — stale 표시를 남겨두면
                 # 이후 새 문장이 확정되며 창이 밀려도 그 줄이 영영 캐시 히트 경로로 돌아오지 못한다.
                 self._stale.discard(key)
+                seg.translation_pending = False   # 재번역을 포기했으므로 더 도착할 번역이 없다
                 continue
 
             src_lang = seg.detected_language or "ko"
@@ -205,6 +217,12 @@ class TranslationManager:
             # 번역 왕복 중 줄(블록)이 바뀌었으면 이전 줄 결과이므로 버린다(캐리오버 방지).
             if result and line_id == self._interim_line_id:
                 self._interim_result = result
+            elif not result:
+                # 에코 폐기(retry_on_echo=False) 또는 빈 응답. _interim_source는 이미 이 텍스트로
+                # 전진해 있어 **같은 텍스트는 재시도되지 않는다** — 버퍼가 델타 임계만큼 더 자라야
+                # 다음 발동이 온다. 롤백하지 않는 것은 의도다(temperature=0이라 같은 입력은 같은
+                # 에코 → 0.5초마다 무한 재시도가 된다). 미리보기가 멎어 보일 때 이 로그로 귀속한다.
+                logger.debug("[Translation] interim 결과 폐기(에코/빈응답) — 재시도 없음 (text=%r)", text[:50])
         except Exception as e:
             logger.warning(f"중간 번역 실패: {e}")
         finally:
@@ -241,22 +259,27 @@ class TranslationManager:
         # 문장으로 상상해 늘어놓는(멀티라인) 폭주를 예방. 직전 결과를 그대로 유지해 반환한다.
         # 이 게이트는 미확정 미리보기 경로 전용이며, 확정 경로(apply_translations)는 무관하다
         # ("다음"(2글자) 같은 짧은 확정 발화도 apply_translations에서 정상 번역돼야 하므로).
-        if len(text.strip()) < _MIN_INTERIM_CHARS:
+        stripped = text.strip()
+        if effective_len(stripped) < _MIN_INTERIM_CHARS:
             return self._interim_result
 
-        if not self._interim_in_flight and text != self._interim_source:
+        # 이하 모든 비교·저장·전송은 stripped 기준으로 통일한다(단위 일관성).
+        if not self._interim_in_flight and stripped != self._interim_source:
             now = time.monotonic()
             # 시간 디바운스: 직전 발동 후 최소 간격 미만이면 보류(직전 결과 유지 반환).
             if now - self._interim_last_dispatch_ts < _INTERIM_MIN_INTERVAL_S:
                 return self._interim_result
             # 델타 게이트: 버퍼가 직전 번역 소스 대비 충분히 자라지 않았으면 보류.
-            # (새 줄이면 _interim_source="" 라 len 차이가 곧 text 길이 → 첫 발동 실효 임계는
-            #  _INTERIM_MIN_DELTA_CHARS(=12)로, 위 _MIN_INTERIM_CHARS(=6) 게이트보다 엄격하다.)
-            if len(text) - len(self._interim_source) < _INTERIM_MIN_DELTA_CHARS:
+            # (새 줄이면 _interim_source="" 라 길이 차이가 곧 text 길이 → 첫 발동 실효 임계는
+            #  _INTERIM_MIN_DELTA_CHARS(=12 effective)로, 위 _MIN_INTERIM_CHARS(=6) 게이트보다
+            #  엄격하다. 12 effective = 라틴 12자 / 한글 약 4.3자 ≈ 양쪽 모두 발화 0.8초.)
+            # 최소길이 게이트와 같은 strip 기준으로 잰다 — 과거엔 여기만 unstripped라 앞뒤 공백이
+            # 델타에는 들어가고 최소길이에는 안 들어가는 단위 불일치가 있었다.
+            if effective_len(stripped) - effective_len(self._interim_source) < _INTERIM_MIN_DELTA_CHARS:
                 return self._interim_result
             self._interim_in_flight = True
-            self._interim_source = text
+            self._interim_source = stripped
             self._interim_last_dispatch_ts = now
-            asyncio.ensure_future(self._translate_interim_and_store(text, src_lang, line_id))
+            asyncio.ensure_future(self._translate_interim_and_store(stripped, src_lang, line_id))
 
         return self._interim_result

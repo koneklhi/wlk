@@ -113,6 +113,7 @@ export function sameSegment(a: Segment, b: Segment): boolean {
     a.start === b.start &&
     a.speaker === b.speaker &&
     a.translation === b.translation &&
+    a.translation_pending === b.translation_pending &&
     a.finalize_trigger === b.finalize_trigger &&
     a.detected_language === b.detected_language
   );
