@@ -198,12 +198,13 @@ def _manager() -> TranslationManager:
     return TranslationManager(translator)
 
 
-@pytest.mark.parametrize("short", ["가가", "We ar"])
+@pytest.mark.parametrize("short", ["가", "We ar"])
 def test_interim_gate_blocks_short_text(short):
     """미확정 버퍼가 _MIN_INTERIM_CHARS(effective) 미만이면 새 LLM 요청을 트리거하지 않는다.
 
-    게이트 단위가 effective_len(한글 가중)이므로 한글 2자(5.6 eff)·라틴 5자(5 eff) 모두
-    6 eff 미만이라 보류된다 — 두 언어에서 '너무 짧다'의 기준이 정보량으로 일치한다.
+    게이트 단위가 effective_len(한글 가중, 기본 4.0)이므로 한글 1자(4.0 eff)·라틴 5자(5 eff)
+    모두 6 eff 미만이라 보류된다 — 두 언어에서 '너무 짧다'의 기준이 정보량으로 일치한다.
+    한글 글자수를 리터럴로 박지 않고 effective_len()으로 전제를 검증하는 이유는 아래 assert 참조.
     """
     manager = _manager()
     manager._interim_result = "직전 결과"  # 직전 완료된 미리보기 결과
@@ -475,36 +476,44 @@ def _dispatch_count(manager, text, src_lang="ko"):
     return m.call_count
 
 
-def test_interim_first_fire_is_language_symmetric():
-    """새 줄의 첫 미리보기 번역이 한·영 모두 '발화 약 0.8초' 분량에서 발동한다.
+def test_interim_first_fire_korean_beats_raw_char_gate():
+    """새 줄의 첫 미리보기 번역이 한국어에서 raw 문자수 게이트보다 훨씬 빨리 발동한다.
 
-    이 테스트가 이 변경의 본체다. 게이트를 raw 문자수로 재던 시절엔 첫 발동 임계가 12자
-    고정이라, test_data 실측 기준 영어는 0.79초·한국어는 2.2초 만에 걸렸다(한국어 5.5자/초 vs
-    영어 15.3자/초). 그래서 한국어 발화에서만 "문장 절반이 지나야 영어 번역이 뜬다"는 배포
-    실측 증상이 났다. effective_len으로 재면 양쪽이 같은 정보량에서 발동한다.
+    게이트를 raw 문자수로 재던 시절엔 첫 발동 임계가 12자 고정이라, test_data 실측 기준
+    영어는 0.79초·한국어는 2.2초 만에 걸렸다(한국어 5.5자/초 vs 영어 15.3자/초) — 한국어
+    발화에서만 "문장 절반이 지나야 영어 번역이 뜬다"는 배포 실측 증상이 났다.
+
+    effective_len 도입(2026-08-20)은 이를 영어와 대칭(약 0.9초)으로 맞췄고, 이후 배포 실측
+    요청(2026-08-20)으로 한국어를 **영어보다 더 빠르게** 우선하도록 _HANGUL_WEIGHT를 올렸다
+    (기본 4.0) — 아래는 그 결과 한국어 3자(효과길이 12)면 이미 발동한다는 회귀 방어다.
     """
-    # 한국어 5자 ≈ 발화 0.9초. 과거 raw 5 < 12 라 보류됐고, 이제는 5*2.8=14 ≥ 12 라 발동한다.
-    ko_buffer = "미래의 합동"
-    assert len(ko_buffer) < _INTERIM_MIN_DELTA_CHARS, "과거 raw 게이트였다면 보류됐을 길이"
-    assert _dispatch_count(_manager(), ko_buffer) == 1, "한국어 5자는 이제 첫 발동해야 한다"
+    # 한국어 3자 = 3 * _HANGUL_WEIGHT(기본 4.0) = 12 effective — raw 3 << 12 인데도 발동한다.
+    ko_buffer = "전투발"
+    assert len(ko_buffer) < _INTERIM_MIN_DELTA_CHARS, "raw 게이트였다면 절대 보류됐을 길이"
+    assert _dispatch_count(_manager(), ko_buffer) == 1, "가중치 적용 시 한국어 3자로 첫 발동해야 한다"
 
-    # 영어는 종전과 완전히 동일 — 12자 이상만 발동(무회귀).
+    # 영어는 가중치와 무관 — 12자 이상만 발동(무회귀).
     assert _dispatch_count(_manager(), "We are goin") == 0, "라틴 11자는 종전대로 보류"
     assert _dispatch_count(_manager(), "We are going") == 1, "라틴 12자는 종전대로 발동"
 
 
-def test_interim_first_fire_thresholds_are_close_in_speech_time():
-    """두 언어의 첫 발동 임계를 실측 문자율로 환산하면 발화 시간이 거의 같다.
+def test_interim_first_fire_korean_now_faster_than_english():
+    """두 언어의 첫 발동 임계를 실측 문자율로 환산하면, 한국어가 영어보다 더 빠르다(의도적).
 
     test_data 실측: 한국어 5.47자/초(kor1~3 평균), 영어 15.28자/초(eng1).
+    _HANGUL_WEIGHT=2.8은 raw 문자수 게이트가 만들던 방향 비대칭(한국어만 2.2초)을 해소해
+    양쪽을 대칭(약 0.9초)으로 맞추는 값이었다. 이후 배포 실측 요청으로 한국어를 영어보다
+    더 빠르게 우선하도록 가중치를 올렸다(기본 4.0) — 이 테스트는 그 방향성(ko < en)을
+    고정한다. 값 자체가 아니라 **부등호**를 지키는 것이 핵심이라 _HANGUL_WEIGHT를 상수로
+    박지 않고 import해서 쓴다.
     """
     KO_CHARS_PER_SEC, EN_CHARS_PER_SEC = 5.47, 15.28
     ko_secs = (_INTERIM_MIN_DELTA_CHARS / _HANGUL_WEIGHT) / KO_CHARS_PER_SEC
     en_secs = _INTERIM_MIN_DELTA_CHARS / EN_CHARS_PER_SEC
 
-    assert en_secs == pytest.approx(0.79, abs=0.02)
-    assert ko_secs == pytest.approx(0.78, abs=0.05)
-    assert abs(ko_secs - en_secs) < 0.15, "첫 미리보기 지연이 방향에 따라 크게 달라선 안 된다"
+    assert en_secs == pytest.approx(0.79, abs=0.02), "영어 임계는 가중치와 무관 — 무회귀"
+    assert ko_secs < en_secs, "한국어 첫 발동이 영어보다 빨라야 한다(2026-08-20 배포 요청)"
+    assert ko_secs > 0, "0에 붙을 정도로 과도하게 짧으면 LLM 컨텍스트 부족으로 에코가 급증한다"
 
 
 # ─── 에코 정책 + 선제 방향지시문 (배포 실측: interim 에코 폐기 다발) ────────────
@@ -599,9 +608,9 @@ def test_hangul_weight_knob_shifts_korean_threshold():
             mgr.apply_interim_translation(text, "ko", line_id=1.0)
         return m.call_count
 
-    short_ko = "미래의"                                  # 한글 3자
-    assert dispatches(short_ko) == 0, "기본 가중치(2.8)에선 3자(8.4 eff) < 12 라 보류"
-    assert dispatches(short_ko, interim_hangul_weight=5.0) == 1, "가중치를 올리면 같은 3자가 발동"
+    short_ko = "미래"                                     # 한글 2자
+    assert dispatches(short_ko) == 0, "기본 가중치(4.0)에선 2자(8.0 eff) < 12 라 보류"
+    assert dispatches(short_ko, interim_hangul_weight=8.0) == 1, "가중치를 더 올리면 같은 2자가 발동"
     assert dispatches(short_ko, interim_min_delta_chars=6) == 1, "델타 임계를 낮춰도 발동"
 
 
