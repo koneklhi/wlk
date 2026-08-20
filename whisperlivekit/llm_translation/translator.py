@@ -31,6 +31,23 @@ _SCRIPT_DOMINANCE = 0.6  # 우세 스크립트 비율이 이 미만이면 진짜
 _PURE_LATIN_MIN = 4  # 라틴 단독을 en으로 확정하는 최소 글자수. 영어 약어(GPS·ROK)는 2~3자라 보류 유지.
                      # 한글은 스크립트가 한국어 배타적이라 1자면 ko 확정.
 
+_HANGUL_WEIGHT = 2.8  # 한글 1자가 차지하는 발화 시간을 라틴 몇 자로 볼지. test_data 실측치
+                      # (kor1~3 5.4~5.6자/초 vs eng1 15.3자/초 → 비 2.79)에서 나왔다.
+                      # 문자수 게이트를 raw len으로 재면 같은 임계에 한국어가 2.8배 늦게
+                      # 도달해 한→영 미리보기 번역만 뒤늦게 뜬다(배포 실측 증상).
+
+
+def effective_len(text: str) -> float:
+    """스크립트 밀도를 보정한 '체감 길이'.
+
+    한글은 라틴 대비 정보 밀도가 높아 같은 발화 시간에 문자가 적게 쌓인다. 길이 게이트를
+    raw len으로 재면 한국어만 늦게 발동하므로, 한글 문자에 _HANGUL_WEIGHT를 줘 '발화 시간'
+    기준으로 맞춘다. 혼용문(code-switching)은 한글/라틴 비율에 따라 자연히 중간값이 된다.
+
+    공백·구두점·숫자는 가중치 1 — 한·영 양쪽에 같은 비율로 섞이므로 보정 대상이 아니다.
+    """
+    return len(text) + len(_HANGUL_RE.findall(text)) * (_HANGUL_WEIGHT - 1.0)
+
 
 def _infer_script_lang(text: str) -> str | None:
     """텍스트의 문자 구성으로 실제 언어를 추정. 판단 불가하면 None.

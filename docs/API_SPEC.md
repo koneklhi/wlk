@@ -252,6 +252,7 @@ function applyMessage(lines, msg) {
 | `completed`         | bool           |     O     | `finalized`와 동일         | 호환 별칭                                                |
 | `finalize_trigger`  | string \| null |     O     | §2.7                       | 확정·분리 원인. `null`=미확정                            |
 | `translation`       | string         |     ✕     | `"Hello"`                  | 인라인 번역(§4). 번역 활성 + `finalized=true` 세그먼트만 |
+| `translation_pending` | bool         |     ✕     | `true`                     | 확정됐지만 번역 왕복이 **아직 진행 중**. **`true`일 때만 방출**한다 — 번역이 빈값으로 정착(에코 재시도 실패)했거나 소급 재번역을 포기한 줄에는 오지 않는다. 프론트는 이 값으로 확정 이후에도 '번역 중…' 표시를 유지하며, 필드가 없으면 더 기다리지 않는다 |
 | `detected_language` | string         |     ✕     | `"ko"`,`"en"`              | 감지 언어 코드(감지됐을 때만)                            |
 | `lang`              | string         |     ✕     | `detected_language`와 동일 | 호환 별칭                                                |
 

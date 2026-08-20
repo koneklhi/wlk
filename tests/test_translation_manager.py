@@ -579,3 +579,76 @@ async def test_final_translation_concurrency_is_capped():
     assert not manager._in_flight
     assert seen["max"] <= _MAX_CONCURRENT_FINAL
     assert all(manager._cache[manager._cache_key(seg)] == f"T-{seg.text}" for seg in segs)
+
+
+# ─── translation_pending — 확정됐지만 번역 왕복이 안 끝난 상태 표시 ─────────────
+
+def test_translation_pending_true_while_awaiting_first_translation():
+    """번역이 아직 없는 확정 세그먼트는 pending=True — 프론트가 '번역 중…'을 유지한다."""
+    import unittest.mock as mock_module
+
+    manager = TranslationManager(make_translator_mock())
+    seg = make_text_seg("안녕하세요.", start=1.0, end=2.0, finalized=True)
+
+    with mock_module.patch("asyncio.ensure_future", make_closing_ensure_future()):
+        manager.apply_translations([seg])
+
+    assert seg.translation_pending is True
+    assert seg.translation == ""
+
+
+def test_translation_pending_false_on_cache_hit():
+    """번역이 도착해 캐시에 있으면 pending=False."""
+    manager = TranslationManager(make_translator_mock())
+    seg = make_text_seg("안녕하세요.", start=1.0, end=2.0, finalized=True)
+    manager._cache[manager._cache_key(seg)] = "Hello."
+
+    manager.apply_translations([seg])
+
+    assert seg.translation == "Hello."
+    assert seg.translation_pending is False
+
+
+def test_translation_pending_false_when_settled_empty():
+    """재시도 상한 도달로 빈 번역이 '정착'한 줄은 pending=False.
+
+    이게 이 플래그가 필요한 이유다 — 프론트가 `!hasTranslation` 만 보고 로더를 띄우면
+    영영 도착하지 않을 번역을 기다리며 스피너가 영구히 남는다.
+    """
+    manager = TranslationManager(make_translator_mock())
+    seg = make_text_seg("안녕하세요.", start=1.0, end=2.0, finalized=True)
+    manager._cache[manager._cache_key(seg)] = ""   # _MAX_FINAL_ATTEMPTS 도달 후 정착 상태
+
+    manager.apply_translations([seg])
+
+    assert seg.translation == ""
+    assert seg.translation_pending is False, "더 도착할 번역이 없으므로 대기 상태가 아니다"
+
+
+def test_translation_pending_false_when_retro_window_gives_up():
+    """소급 창 밖이라 재번역을 포기한 줄도 pending=False (기존 번역으로 정착)."""
+    import unittest.mock as mock_module
+
+    manager = TranslationManager(make_translator_mock(), retro_scope=1)
+    old = make_text_seg("옛 문장.", start=1.0, end=2.0, finalized=True)
+    recent = make_text_seg("최근 문장.", start=9.0, end=10.0, finalized=True)
+
+    # old 는 과거에 번역된 적이 있고(=_last_translation_by_id), 용어집 변경으로 stale 이 된 상태.
+    manager._last_translation_by_id[manager._seg_id(old)] = "Old sentence."
+    manager._cache[manager._cache_key(old)] = "Old sentence."
+    manager._stale.add(manager._cache_key(old))
+
+    with mock_module.patch("asyncio.ensure_future", make_closing_ensure_future()):
+        manager.apply_translations([old, recent])   # retro_scope=1 → old 는 창 밖
+
+    assert old.translation == "Old sentence."
+    assert old.translation_pending is False, "재번역을 포기했으므로 대기 상태가 아니다"
+
+
+def test_translation_pending_not_emitted_when_false():
+    """to_dict 는 pending=True 일 때만 필드를 방출한다(기본 상태를 전송량에 싣지 않는다)."""
+    seg = make_text_seg("안녕하세요.", start=1.0, end=2.0, finalized=True)
+
+    assert "translation_pending" not in seg.to_dict()
+    seg.translation_pending = True
+    assert seg.to_dict()["translation_pending"] is True

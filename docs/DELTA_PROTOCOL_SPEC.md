@@ -105,6 +105,12 @@ ws://<host>:<port>/asr?mode=delta
 > 클라이언트는 §4 알고리즘을 그대로 따르면 되고 추가 처리가 필요 없다 — 다만 **`new_lines`를 append
 > 하는 잘못된 구현(§5 실수 1)은 이때 눈에 띄게 중복을 만든다**. 적용 범위 = [API_SPEC.md §3.5](API_SPEC.md).
 
+> **확정 이력 갱신 판정(`sameSegment`)에 넣어야 할 필드.** `deltaProtocol.ts`의 `sameSegment()`는
+> "이 줄이 실제로 바뀌었는가"를 **렌더에 영향을 주는 필드 집합**으로만 판정한다 — 현재
+> `text`·`start`·`end`·`speaker`·`translation`·`translation_pending`·`finalize_trigger`·`detected_language`.
+> **렌더에 쓰는 Segment 필드를 새로 추가하면 이 비교 집합에도 반드시 넣어야 한다.** 빠뜨리면 그 필드만
+> 바뀐 메시지가 "변경 없음"으로 판정돼 **화면이 조용히 갱신되지 않는다**(에러도 경고도 나지 않는다).
+
 ---
 
 ## 4. 재구성 알고리즘

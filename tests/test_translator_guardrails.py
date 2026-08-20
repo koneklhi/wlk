@@ -23,10 +23,12 @@ from whisperlivekit.llm_translation.manager import (
     TranslationManager,
 )
 from whisperlivekit.llm_translation.translator import (
+    _HANGUL_WEIGHT,
     LlamaTranslator,
     OllamaTranslator,
     TranslatorBase,
     _infer_script_lang,
+    effective_len,
 )
 
 
@@ -196,12 +198,17 @@ def _manager() -> TranslationManager:
     return TranslationManager(translator)
 
 
-def test_interim_gate_blocks_short_text():
-    """미확정 버퍼가 _MIN_INTERIM_CHARS 미만이면 새 LLM 요청을 트리거하지 않는다."""
+@pytest.mark.parametrize("short", ["가가", "We ar"])
+def test_interim_gate_blocks_short_text(short):
+    """미확정 버퍼가 _MIN_INTERIM_CHARS(effective) 미만이면 새 LLM 요청을 트리거하지 않는다.
+
+    게이트 단위가 effective_len(한글 가중)이므로 한글 2자(5.6 eff)·라틴 5자(5 eff) 모두
+    6 eff 미만이라 보류된다 — 두 언어에서 '너무 짧다'의 기준이 정보량으로 일치한다.
+    """
     manager = _manager()
     manager._interim_result = "직전 결과"  # 직전 완료된 미리보기 결과
 
-    short = "가" * (_MIN_INTERIM_CHARS - 1)
+    assert effective_len(short) < _MIN_INTERIM_CHARS, "테스트 전제: effective 기준으로 짧아야 한다"
     with mock_module.patch("asyncio.ensure_future") as mock_ensure:
         result = manager.apply_interim_translation(short, "ko")
 
@@ -432,3 +439,69 @@ async def test_ollama_strict_direction_injects_directive_into_system_text():
 
     system_text = t._call_chat.call_args[0][0]
     assert "ONLY in" in system_text
+
+
+# ─── effective_len — 스크립트 밀도 보정 길이 ────────────────────────────────────
+
+def test_effective_len_latin_is_raw_len():
+    """순수 라틴/공백/구두점/숫자는 가중치 1 — raw len과 같아야 영어 동작이 무회귀다."""
+    for text in ["We are going", "OK.", "  ", "2026-08-20", ""]:
+        assert effective_len(text) == len(text)
+
+
+def test_effective_len_hangul_is_weighted():
+    """순수 한글은 _HANGUL_WEIGHT 배로 계산된다."""
+    assert effective_len("가") == pytest.approx(_HANGUL_WEIGHT)
+    assert effective_len("가나다") == pytest.approx(3 * _HANGUL_WEIGHT)
+
+
+def test_effective_len_mixed_interpolates():
+    """혼용문은 한글만 가중되고 라틴·공백은 1배 — 두 비율 사이 중간값이 된다."""
+    # "AI 시대" = 라틴 2 + 공백 1 + 한글 2
+    assert effective_len("AI 시대") == pytest.approx(3 + 2 * _HANGUL_WEIGHT)
+    assert len("AI 시대") < effective_len("AI 시대") < len("AI 시대") * _HANGUL_WEIGHT
+
+
+# ─── 언어 대칭성 — 이 변경의 본체 ──────────────────────────────────────────────
+
+def _dispatch_count(manager, text, src_lang="ko"):
+    """apply_interim_translation 1회 호출이 번역 task를 띄웠는지 센다."""
+    def closing(coro):
+        coro.close()   # RuntimeWarning 방지
+        return MagicMock()
+
+    with mock_module.patch("asyncio.ensure_future", side_effect=closing) as m:
+        manager.apply_interim_translation(text, src_lang)
+    return m.call_count
+
+
+def test_interim_first_fire_is_language_symmetric():
+    """새 줄의 첫 미리보기 번역이 한·영 모두 '발화 약 0.8초' 분량에서 발동한다.
+
+    이 테스트가 이 변경의 본체다. 게이트를 raw 문자수로 재던 시절엔 첫 발동 임계가 12자
+    고정이라, test_data 실측 기준 영어는 0.79초·한국어는 2.2초 만에 걸렸다(한국어 5.5자/초 vs
+    영어 15.3자/초). 그래서 한국어 발화에서만 "문장 절반이 지나야 영어 번역이 뜬다"는 배포
+    실측 증상이 났다. effective_len으로 재면 양쪽이 같은 정보량에서 발동한다.
+    """
+    # 한국어 5자 ≈ 발화 0.9초. 과거 raw 5 < 12 라 보류됐고, 이제는 5*2.8=14 ≥ 12 라 발동한다.
+    ko_buffer = "미래의 합동"
+    assert len(ko_buffer) < _INTERIM_MIN_DELTA_CHARS, "과거 raw 게이트였다면 보류됐을 길이"
+    assert _dispatch_count(_manager(), ko_buffer) == 1, "한국어 5자는 이제 첫 발동해야 한다"
+
+    # 영어는 종전과 완전히 동일 — 12자 이상만 발동(무회귀).
+    assert _dispatch_count(_manager(), "We are goin") == 0, "라틴 11자는 종전대로 보류"
+    assert _dispatch_count(_manager(), "We are going") == 1, "라틴 12자는 종전대로 발동"
+
+
+def test_interim_first_fire_thresholds_are_close_in_speech_time():
+    """두 언어의 첫 발동 임계를 실측 문자율로 환산하면 발화 시간이 거의 같다.
+
+    test_data 실측: 한국어 5.47자/초(kor1~3 평균), 영어 15.28자/초(eng1).
+    """
+    KO_CHARS_PER_SEC, EN_CHARS_PER_SEC = 5.47, 15.28
+    ko_secs = (_INTERIM_MIN_DELTA_CHARS / _HANGUL_WEIGHT) / KO_CHARS_PER_SEC
+    en_secs = _INTERIM_MIN_DELTA_CHARS / EN_CHARS_PER_SEC
+
+    assert en_secs == pytest.approx(0.79, abs=0.02)
+    assert ko_secs == pytest.approx(0.78, abs=0.05)
+    assert abs(ko_secs - en_secs) < 0.15, "첫 미리보기 지연이 방향에 따라 크게 달라선 안 된다"

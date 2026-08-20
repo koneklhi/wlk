@@ -76,6 +76,12 @@ export interface Segment {
   finalize_trigger?: FinalizeTrigger | null;
   /** truthy 일 때만 존재. */
   translation?: string;
+  /**
+   * 확정됐지만 번역 왕복이 아직 안 끝난 상태. **true 일 때만 존재**한다.
+   * 번역이 빈값으로 정착한 경우(에코 재시도 실패)는 이 필드가 오지 않으므로,
+   * 프론트는 영영 오지 않을 번역을 기다리며 로더를 남기지 않는다.
+   */
+  translation_pending?: boolean;
   /** truthy 일 때만 존재. */
   detected_language?: string;
   /** detected_language 의 별칭. */
