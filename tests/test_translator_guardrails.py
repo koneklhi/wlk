@@ -198,13 +198,12 @@ def _manager() -> TranslationManager:
     return TranslationManager(translator)
 
 
-@pytest.mark.parametrize("short", ["가", "We ar"])
+@pytest.mark.parametrize("short", ["가가", "We ar"])
 def test_interim_gate_blocks_short_text(short):
     """미확정 버퍼가 _MIN_INTERIM_CHARS(effective) 미만이면 새 LLM 요청을 트리거하지 않는다.
 
-    게이트 단위가 effective_len(한글 가중, 기본 4.0)이므로 한글 1자(4.0 eff)·라틴 5자(5 eff)
-    모두 6 eff 미만이라 보류된다 — 두 언어에서 '너무 짧다'의 기준이 정보량으로 일치한다.
-    한글 글자수를 리터럴로 박지 않고 effective_len()으로 전제를 검증하는 이유는 아래 assert 참조.
+    게이트 단위가 effective_len(한글 가중)이므로 한글 2자(5.6 eff)·라틴 5자(5 eff) 모두
+    6 eff 미만이라 보류된다 — 두 언어에서 '너무 짧다'의 기준이 정보량으로 일치한다.
     """
     manager = _manager()
     manager._interim_result = "직전 결과"  # 직전 완료된 미리보기 결과
@@ -476,157 +475,33 @@ def _dispatch_count(manager, text, src_lang="ko"):
     return m.call_count
 
 
-def test_interim_first_fire_korean_beats_raw_char_gate():
-    """새 줄의 첫 미리보기 번역이 한국어에서 raw 문자수 게이트보다 훨씬 빨리 발동한다.
+def test_interim_first_fire_is_language_symmetric():
+    """새 줄의 첫 미리보기 번역이 한·영 모두 '발화 약 0.8초' 분량에서 발동한다.
 
-    게이트를 raw 문자수로 재던 시절엔 첫 발동 임계가 12자 고정이라, test_data 실측 기준
-    영어는 0.79초·한국어는 2.2초 만에 걸렸다(한국어 5.5자/초 vs 영어 15.3자/초) — 한국어
-    발화에서만 "문장 절반이 지나야 영어 번역이 뜬다"는 배포 실측 증상이 났다.
-
-    effective_len 도입(2026-08-20)은 이를 영어와 대칭(약 0.9초)으로 맞췄고, 이후 배포 실측
-    요청(2026-08-20)으로 한국어를 **영어보다 더 빠르게** 우선하도록 _HANGUL_WEIGHT를 올렸다
-    (기본 4.0) — 아래는 그 결과 한국어 3자(효과길이 12)면 이미 발동한다는 회귀 방어다.
+    이 테스트가 이 변경의 본체다. 게이트를 raw 문자수로 재던 시절엔 첫 발동 임계가 12자
+    고정이라, test_data 실측 기준 영어는 0.79초·한국어는 2.2초 만에 걸렸다(한국어 5.5자/초 vs
+    영어 15.3자/초). 그래서 한국어 발화에서만 "문장 절반이 지나야 영어 번역이 뜬다"는 배포
+    실측 증상이 났다. effective_len으로 재면 양쪽이 같은 정보량에서 발동한다.
     """
-    # 한국어 3자 = 3 * _HANGUL_WEIGHT(기본 4.0) = 12 effective — raw 3 << 12 인데도 발동한다.
-    ko_buffer = "전투발"
-    assert len(ko_buffer) < _INTERIM_MIN_DELTA_CHARS, "raw 게이트였다면 절대 보류됐을 길이"
-    assert _dispatch_count(_manager(), ko_buffer) == 1, "가중치 적용 시 한국어 3자로 첫 발동해야 한다"
+    # 한국어 5자 ≈ 발화 0.9초. 과거 raw 5 < 12 라 보류됐고, 이제는 5*2.8=14 ≥ 12 라 발동한다.
+    ko_buffer = "미래의 합동"
+    assert len(ko_buffer) < _INTERIM_MIN_DELTA_CHARS, "과거 raw 게이트였다면 보류됐을 길이"
+    assert _dispatch_count(_manager(), ko_buffer) == 1, "한국어 5자는 이제 첫 발동해야 한다"
 
-    # 영어는 가중치와 무관 — 12자 이상만 발동(무회귀).
+    # 영어는 종전과 완전히 동일 — 12자 이상만 발동(무회귀).
     assert _dispatch_count(_manager(), "We are goin") == 0, "라틴 11자는 종전대로 보류"
     assert _dispatch_count(_manager(), "We are going") == 1, "라틴 12자는 종전대로 발동"
 
 
-def test_interim_first_fire_korean_now_faster_than_english():
-    """두 언어의 첫 발동 임계를 실측 문자율로 환산하면, 한국어가 영어보다 더 빠르다(의도적).
+def test_interim_first_fire_thresholds_are_close_in_speech_time():
+    """두 언어의 첫 발동 임계를 실측 문자율로 환산하면 발화 시간이 거의 같다.
 
     test_data 실측: 한국어 5.47자/초(kor1~3 평균), 영어 15.28자/초(eng1).
-    _HANGUL_WEIGHT=2.8은 raw 문자수 게이트가 만들던 방향 비대칭(한국어만 2.2초)을 해소해
-    양쪽을 대칭(약 0.9초)으로 맞추는 값이었다. 이후 배포 실측 요청으로 한국어를 영어보다
-    더 빠르게 우선하도록 가중치를 올렸다(기본 4.0) — 이 테스트는 그 방향성(ko < en)을
-    고정한다. 값 자체가 아니라 **부등호**를 지키는 것이 핵심이라 _HANGUL_WEIGHT를 상수로
-    박지 않고 import해서 쓴다.
     """
     KO_CHARS_PER_SEC, EN_CHARS_PER_SEC = 5.47, 15.28
     ko_secs = (_INTERIM_MIN_DELTA_CHARS / _HANGUL_WEIGHT) / KO_CHARS_PER_SEC
     en_secs = _INTERIM_MIN_DELTA_CHARS / EN_CHARS_PER_SEC
 
-    assert en_secs == pytest.approx(0.79, abs=0.02), "영어 임계는 가중치와 무관 — 무회귀"
-    assert ko_secs < en_secs, "한국어 첫 발동이 영어보다 빨라야 한다(2026-08-20 배포 요청)"
-    assert ko_secs > 0, "0에 붙을 정도로 과도하게 짧으면 LLM 컨텍스트 부족으로 에코가 급증한다"
-
-
-# ─── 에코 정책 + 선제 방향지시문 (배포 실측: interim 에코 폐기 다발) ────────────
-
-class _EchoTranslator(LlamaTranslator):
-    """_translate_once 를 가로채 호출 인자를 기록하고 지정한 결과를 돌려주는 스텁."""
-
-    def __init__(self, results):
-        super().__init__("m", "http://x")
-        self._results = list(results)
-        self.calls = []
-
-    async def _translate_once(self, content, src_lang, use_rag=False, strict_direction=False):
-        self.calls.append({"src_lang": src_lang, "strict_direction": strict_direction})
-        return self._results[min(len(self.calls) - 1, len(self._results) - 1)]
-
-
-@pytest.mark.anyio
-async def test_echo_policy_discard_returns_empty_without_retry():
-    """discard = 구 동작. 재시도 없이 빈 문자열 — LLM 호출 1회."""
-    tr = _EchoTranslator(["미래의 합동"])          # 한국어 입력에 한국어 출력 = 에코
-    out = await tr.translate_sentence("미래의 합동", "ko", echo_policy="discard")
-    assert out == ""
-    assert len(tr.calls) == 1
-
-
-@pytest.mark.anyio
-async def test_echo_policy_retry_makes_second_call_with_direction():
-    """retry = 방향 지시문을 붙여 1회 재시도. 재시도가 성공하면 그 결과를 쓴다."""
-    tr = _EchoTranslator(["미래의 합동", "Future joint operations"])
-    out = await tr.translate_sentence("미래의 합동", "ko", echo_policy="retry")
-    assert out == "Future joint operations"
-    assert len(tr.calls) == 2
-    assert tr.calls[0]["strict_direction"] is False
-    assert tr.calls[1]["strict_direction"] is True, "재시도는 방향 지시문을 붙여야 한다"
-
-
-@pytest.mark.anyio
-async def test_echo_policy_off_passes_result_through():
-    """off = 에코 게이트 미적용. 위양성 진단용 — 결과를 그대로 통과시킨다."""
-    tr = _EchoTranslator(["미래의 합동"])
-    out = await tr.translate_sentence("미래의 합동", "ko", echo_policy="off")
-    assert out == "미래의 합동"
-    assert len(tr.calls) == 1
-
-
-@pytest.mark.anyio
-async def test_strict_direction_first_applies_directive_on_first_call():
-    """선제 방향지시문 — 첫 호출부터 지시문을 붙여 에코를 예방한다(왕복 증가 없음)."""
-    tr = _EchoTranslator(["Future joint operations"])
-    out = await tr.translate_sentence("미래의 합동", "ko", strict_direction_first=True)
-    assert out == "Future joint operations"
-    assert len(tr.calls) == 1
-    assert tr.calls[0]["strict_direction"] is True
-
-
-@pytest.mark.anyio
-async def test_strict_direction_first_skips_identical_retry():
-    """첫 호출이 이미 방향 지시문 경로였고 src 도 같으면, 재시도는 **완전히 동일한 요청**이다.
-
-    temperature=0 이라 결과도 같으므로 LLM 왕복만 낭비한다 — 재시도를 생략해야 한다.
-    """
-    tr = _EchoTranslator(["미래의 합동"])
-    out = await tr.translate_sentence(
-        "미래의 합동", "ko", echo_policy="retry", strict_direction_first=True
-    )
-    assert out == ""
-    assert len(tr.calls) == 1, "동일 요청 재시도로 LLM 왕복을 낭비하면 안 된다"
-
-
-@pytest.mark.anyio
-async def test_retry_on_echo_false_still_means_discard():
-    """하위호환: retry_on_echo=False 는 echo_policy='discard' 와 같게 동작한다."""
-    tr = _EchoTranslator(["미래의 합동"])
-    out = await tr.translate_sentence("미래의 합동", "ko", retry_on_echo=False)
-    assert out == ""
-    assert len(tr.calls) == 1
-
-
-# ─── CLI 노브가 실제로 게이트를 움직이는가 ────────────────────────────────────
-
-def test_hangul_weight_knob_shifts_korean_threshold():
-    """--interim-hangul-weight 를 올리면 한국어가 더 적은 글자수에서 발동한다."""
-    from whisperlivekit.llm_translation.manager import TranslationManager
-
-    def dispatches(text, **knobs):
-        mgr = TranslationManager(MagicMock(translate_sentence=AsyncMock(return_value="x")), **knobs)
-        def closing(coro):
-            coro.close()
-            return MagicMock()
-        with mock_module.patch("asyncio.ensure_future", side_effect=closing) as m:
-            mgr.apply_interim_translation(text, "ko", line_id=1.0)
-        return m.call_count
-
-    short_ko = "미래"                                     # 한글 2자
-    assert dispatches(short_ko) == 0, "기본 가중치(4.0)에선 2자(8.0 eff) < 12 라 보류"
-    assert dispatches(short_ko, interim_hangul_weight=8.0) == 1, "가중치를 더 올리면 같은 2자가 발동"
-    assert dispatches(short_ko, interim_min_delta_chars=6) == 1, "델타 임계를 낮춰도 발동"
-
-
-def test_knobs_default_to_module_constants():
-    """노브를 안 주면 모듈 상수 폴백 — 무회귀(Phase A 인자 관례)."""
-    from whisperlivekit.llm_translation.manager import (
-        _INTERIM_MIN_DELTA_CHARS,
-        _INTERIM_MIN_INTERVAL_S,
-        _MIN_INTERIM_CHARS,
-        TranslationManager,
-    )
-
-    mgr = TranslationManager(MagicMock())
-    assert mgr._min_chars == _MIN_INTERIM_CHARS
-    assert mgr._min_delta == _INTERIM_MIN_DELTA_CHARS
-    assert mgr._min_interval == _INTERIM_MIN_INTERVAL_S
-    assert mgr._hangul_weight == _HANGUL_WEIGHT
-    assert mgr._echo_policy == "retry"
-    assert mgr._strict_direction is True
+    assert en_secs == pytest.approx(0.79, abs=0.02)
+    assert ko_secs == pytest.approx(0.78, abs=0.05)
+    assert abs(ko_secs - en_secs) < 0.15, "첫 미리보기 지연이 방향에 따라 크게 달라선 안 된다"

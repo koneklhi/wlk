@@ -4,7 +4,7 @@ import time
 from typing import TYPE_CHECKING, Optional
 
 from whisperlivekit.llm_translation import get_prompt_manager
-from whisperlivekit.llm_translation.translator import _HANGUL_WEIGHT, effective_len
+from whisperlivekit.llm_translation.translator import effective_len
 
 if TYPE_CHECKING:
     from whisperlivekit.llm_translation.translator import TranslatorBase
@@ -39,32 +39,8 @@ _MAX_CONCURRENT_FINAL = 2  # 확정 번역 동시 실행 상한. 미확정 미�
 class TranslationManager:
     """확정 세그먼트 LLM 번역 캐시 및 비차단 스케줄러."""
 
-    def __init__(
-        self,
-        translator: "TranslatorBase",
-        retro_scope: Optional[int] = None,
-        interim_min_chars: Optional[int] = None,
-        interim_min_delta_chars: Optional[int] = None,
-        interim_min_interval: Optional[float] = None,
-        interim_hangul_weight: Optional[float] = None,
-        interim_echo_policy: Optional[str] = None,
-        interim_strict_direction: Optional[bool] = None,
-    ):
+    def __init__(self, translator: "TranslatorBase", retro_scope: Optional[int] = None):
         self.translator = translator
-        # 미확정 미리보기 튜닝 노브 — 전부 None이면 모듈 상수 폴백(Phase A 인자 관례, 무회귀).
-        # 배포 PC에서 코드 수정 없이 CLI로 쓸어보려고 노출한다(--interim-* 계열).
-        self._min_chars: int = _MIN_INTERIM_CHARS if interim_min_chars is None else int(interim_min_chars)
-        self._min_delta: int = (
-            _INTERIM_MIN_DELTA_CHARS if interim_min_delta_chars is None else int(interim_min_delta_chars)
-        )
-        self._min_interval: float = (
-            _INTERIM_MIN_INTERVAL_S if interim_min_interval is None else float(interim_min_interval)
-        )
-        self._hangul_weight: float = (
-            _HANGUL_WEIGHT if interim_hangul_weight is None else float(interim_hangul_weight)
-        )
-        self._echo_policy: str = interim_echo_policy or "retry"
-        self._strict_direction: bool = True if interim_strict_direction is None else bool(interim_strict_direction)
         self._cache: dict[tuple, str] = {}        # (start_rounded, text) -> 번역 결과
         self._in_flight: set[tuple] = set()       # 번역 중인 키 집합
         self._attempts: dict[tuple, int] = {}     # 확정 번역 실패 시도 횟수 (키별) — 상한 도달 시 "" 정착
@@ -237,13 +213,7 @@ class TranslationManager:
         상태(_interim_result·_interim_in_flight)를 덮어쓰지 않는다(캐리오버 방지).
         """
         try:
-            result = await self.translator.translate_sentence(
-                text,
-                src_lang,
-                use_rag=False,
-                echo_policy=self._echo_policy,
-                strict_direction_first=self._strict_direction,
-            )
+            result = await self.translator.translate_sentence(text, src_lang, use_rag=False, retry_on_echo=False)
             # 번역 왕복 중 줄(블록)이 바뀌었으면 이전 줄 결과이므로 버린다(캐리오버 방지).
             if result and line_id == self._interim_line_id:
                 self._interim_result = result
@@ -290,14 +260,14 @@ class TranslationManager:
         # 이 게이트는 미확정 미리보기 경로 전용이며, 확정 경로(apply_translations)는 무관하다
         # ("다음"(2글자) 같은 짧은 확정 발화도 apply_translations에서 정상 번역돼야 하므로).
         stripped = text.strip()
-        if effective_len(stripped, self._hangul_weight) < self._min_chars:
+        if effective_len(stripped) < _MIN_INTERIM_CHARS:
             return self._interim_result
 
         # 이하 모든 비교·저장·전송은 stripped 기준으로 통일한다(단위 일관성).
         if not self._interim_in_flight and stripped != self._interim_source:
             now = time.monotonic()
             # 시간 디바운스: 직전 발동 후 최소 간격 미만이면 보류(직전 결과 유지 반환).
-            if now - self._interim_last_dispatch_ts < self._min_interval:
+            if now - self._interim_last_dispatch_ts < _INTERIM_MIN_INTERVAL_S:
                 return self._interim_result
             # 델타 게이트: 버퍼가 직전 번역 소스 대비 충분히 자라지 않았으면 보류.
             # (새 줄이면 _interim_source="" 라 길이 차이가 곧 text 길이 → 첫 발동 실효 임계는
@@ -305,10 +275,7 @@ class TranslationManager:
             #  엄격하다. 12 effective = 라틴 12자 / 한글 약 4.3자 ≈ 양쪽 모두 발화 0.8초.)
             # 최소길이 게이트와 같은 strip 기준으로 잰다 — 과거엔 여기만 unstripped라 앞뒤 공백이
             # 델타에는 들어가고 최소길이에는 안 들어가는 단위 불일치가 있었다.
-            grown = effective_len(stripped, self._hangul_weight) - effective_len(
-                self._interim_source, self._hangul_weight
-            )
-            if grown < self._min_delta:
+            if effective_len(stripped) - effective_len(self._interim_source) < _INTERIM_MIN_DELTA_CHARS:
                 return self._interim_result
             self._interim_in_flight = True
             self._interim_source = stripped

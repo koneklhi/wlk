@@ -551,16 +551,14 @@ def test_build_system_blocks_defaults_to_no_rag(tmp_path):
 
 
 class _RecordingTranslator:
-    """translate_sentence 호출 시 use_rag/에코 정책 값을 기록하는 스텁."""
+    """translate_sentence 호출 시 use_rag/retry_on_echo 값을 기록하는 스텁."""
 
     def __init__(self):
         self.calls = []
 
-    async def translate_sentence(self, content, src_lang, use_rag=False, retry_on_echo=True,
-                                 echo_policy="retry", strict_direction_first=False):
+    async def translate_sentence(self, content, src_lang, use_rag=False, retry_on_echo=True):
         self.calls.append({"content": content, "src_lang": src_lang, "use_rag": use_rag,
-                           "retry_on_echo": retry_on_echo, "echo_policy": echo_policy,
-                           "strict_direction_first": strict_direction_first})
+                           "retry_on_echo": retry_on_echo})
         return f"translated:{content}"
 
 
@@ -574,18 +572,13 @@ def test_manager_confirmed_path_uses_rag():
     key = (1.0, "확정된 문장입니다")
     asyncio.run(manager._translate_and_cache(key, "확정된 문장입니다", "ko"))
 
-    assert len(translator.calls) == 1
-    assert translator.calls[0]["content"] == "확정된 문장입니다"
-    assert translator.calls[0]["use_rag"] is True
+    assert translator.calls == [{"content": "확정된 문장입니다", "src_lang": "ko",
+                                 "use_rag": True, "retry_on_echo": True}]
     assert manager._cache[key] == "translated:확정된 문장입니다"
 
 
 def test_manager_interim_path_does_not_use_rag():
-    """미확정 버퍼 번역(_translate_interim_and_store)은 use_rag=False로 호출한다(RAG는 확정 전용).
-
-    에코 처리 정책(echo_policy/strict_direction_first)은 CLI 노브라 여기서 고정값을 못박지 않는다 —
-    이 테스트의 관심사는 RAG가 미확정 경로로 새지 않는다는 것 하나다.
-    """
+    """미확정 버퍼 번역(_translate_interim_and_store)은 use_rag=False + retry_on_echo=False로 호출한다."""
     from whisperlivekit.llm_translation.manager import TranslationManager
 
     translator = _RecordingTranslator()
@@ -593,7 +586,6 @@ def test_manager_interim_path_does_not_use_rag():
 
     asyncio.run(manager._translate_interim_and_store("아직 확정 안 된", "ko", line_id=None))
 
-    assert len(translator.calls) == 1
-    assert translator.calls[0]["content"] == "아직 확정 안 된"
-    assert translator.calls[0]["use_rag"] is False, "미확정 경로에 RAG가 새면 실시간성이 무너진다"
+    assert translator.calls == [{"content": "아직 확정 안 된", "src_lang": "ko",
+                                 "use_rag": False, "retry_on_echo": False}]
     assert manager._interim_result == "translated:아직 확정 안 된"

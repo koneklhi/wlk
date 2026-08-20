@@ -31,32 +31,22 @@ _SCRIPT_DOMINANCE = 0.6  # 우세 스크립트 비율이 이 미만이면 진짜
 _PURE_LATIN_MIN = 4  # 라틴 단독을 en으로 확정하는 최소 글자수. 영어 약어(GPS·ROK)는 2~3자라 보류 유지.
                      # 한글은 스크립트가 한국어 배타적이라 1자면 ko 확정.
 
-_HANGUL_WEIGHT = 4.0  # 한글 1자가 차지하는 발화 시간을 라틴 몇 자로 볼지.
-                      # 2.8(=test_data 실측 비율, kor1~3 5.4~5.6자/초 vs eng1 15.3자/초)은
-                      # 한→영 미리보기를 영어와 **대칭**으로만 맞췄다(양쪽 다 발화 약 0.9초).
-                      # 배포 실측 요청(2026-08-20)으로 한국어를 영어보다 **더 빠르게** 우선한다.
-                      # 4.0에서 새 줄 첫 발동은 한글 3자(예: "미래의")로 낮아져 발화 약 0.55초
-                      # (raw 2.8 대비 -40%) — 영어(raw 12자, 약 0.79초)보다도 빨라진다.
-                      # 조각이 더 짧아지는 만큼 gpt-oss-20b 에코 위험이 올라가는데, 이는
-                      # strict_direction_first(선제 방향지시문, 기본 ON) + echo_policy="retry"
-                      # (기본)로 상쇄한다 — 이 둘이 없던 상태에서 값만 올렸다면 에코 폐기가
-                      # 오히려 늘어 체감 지연이 악화됐을 것(배포 로그 `에코 감지(interim)` 다발로 확인).
-                      # 더 낮추고 싶으면 --interim-hangul-weight로 코드 수정 없이 조정 가능.
+_HANGUL_WEIGHT = 2.8  # 한글 1자가 차지하는 발화 시간을 라틴 몇 자로 볼지. test_data 실측치
+                      # (kor1~3 5.4~5.6자/초 vs eng1 15.3자/초 → 비 2.79)에서 나왔다.
+                      # 문자수 게이트를 raw len으로 재면 같은 임계에 한국어가 2.8배 늦게
+                      # 도달해 한→영 미리보기 번역만 뒤늦게 뜬다(배포 실측 증상).
 
 
-def effective_len(text: str, hangul_weight: float = _HANGUL_WEIGHT) -> float:
+def effective_len(text: str) -> float:
     """스크립트 밀도를 보정한 '체감 길이'.
 
     한글은 라틴 대비 정보 밀도가 높아 같은 발화 시간에 문자가 적게 쌓인다. 길이 게이트를
-    raw len으로 재면 한국어만 늦게 발동하므로, 한글 문자에 hangul_weight를 줘 '발화 시간'
+    raw len으로 재면 한국어만 늦게 발동하므로, 한글 문자에 _HANGUL_WEIGHT를 줘 '발화 시간'
     기준으로 맞춘다. 혼용문(code-switching)은 한글/라틴 비율에 따라 자연히 중간값이 된다.
 
     공백·구두점·숫자는 가중치 1 — 한·영 양쪽에 같은 비율로 섞이므로 보정 대상이 아니다.
-
-    hangul_weight를 **올리면** 한국어 미리보기가 더 이른 시점(= 더 적은 한글 글자수)에 발동한다
-    (`--interim-hangul-weight`). 라틴 전용 텍스트는 가중치와 무관하게 항상 raw len과 같다.
     """
-    return len(text) + len(_HANGUL_RE.findall(text)) * (hangul_weight - 1.0)
+    return len(text) + len(_HANGUL_RE.findall(text)) * (_HANGUL_WEIGHT - 1.0)
 
 
 def _infer_script_lang(text: str) -> str | None:
@@ -258,57 +248,26 @@ class TranslatorBase:
         )
 
     async def translate_sentence(
-        self,
-        content: str,
-        src_lang: str,
-        use_rag: bool = False,
-        retry_on_echo: bool = True,
-        echo_policy: str = "retry",
-        strict_direction_first: bool = False,
+        self, content: str, src_lang: str, use_rag: bool = False, retry_on_echo: bool = True
     ) -> str:
         """번역 오케스트레이션(템플릿 메서드) — 백엔드 본체는 _translate_once가 담당.
 
-        출력측 에코 게이트: 결과가 원문과 같은 언어면(번역 방향이 반전됐거나 LLM이 짧은 조각을
-        번역하지 못하고 원문을 되돌려줌) 아래 정책에 따라 처리한다.
-
-        echo_policy — 에코를 감지했을 때의 반응(확정 경로는 항상 "retry"):
-          - "retry"  : 문자구성 기반 src 강제 + 방향 지시문으로 1회 재시도. 재시도도 에코면 실패("").
-          - "discard": 재시도 없이 즉시 폐기(""). 실시간성 우선 — 과거 interim 기본값.
-          - "off"    : 에코 게이트를 적용하지 않고 결과를 그대로 통과시킨다. `_is_echo` 위양성이
-                       의심될 때(번역이 정상인데 폐기되는 정황) 진단·회피용.
-
-        strict_direction_first=True면 **첫 호출부터** 방향 지시문을 붙인다. 에코가 난 뒤 재시도로
-        고치는 대신 애초에 예방하는 쪽이라 LLM 왕복이 늘지 않는다 — 짧은 미확정 조각에서 에코가
-        잦은 배포 실측(gpt-oss-20b)에 대응한 경로다.
-
-        retry_on_echo는 하위호환용 별칭 — False면 echo_policy="discard"와 같다.
+        출력측 에코 게이트: 결과가 원문과 같은 언어면(detected_language 캐리오버로 번역
+        방향이 반전돼 LLM이 원문을 에코) 확정 경로(retry_on_echo=True)는 문자구성 기반
+        src 강제 + 방향 지시문으로 1회 재시도하고, 재시도도 에코면 빈 문자열로 실패 처리한다.
+        interim 경로(retry_on_echo=False)는 실시간성 우선 — 재시도 없이 즉시 폐기한다.
         """
-        if not retry_on_echo and echo_policy == "retry":
-            echo_policy = "discard"
         src_lang = self.resolve_src_lang(content, src_lang)
-        result = await self._translate_once(
-            content, src_lang, use_rag, strict_direction=strict_direction_first
-        )
-        if echo_policy == "off":
-            return result
+        result = await self._translate_once(content, src_lang, use_rag)
         if not self._is_echo(content, result):
             return result
-        if echo_policy == "discard":
+        if not retry_on_echo:
             logger.warning(
                 "[Translation] 에코 감지(interim) — 재시도 없이 폐기 (src=%s content=%r result=%r)",
                 src_lang, content[:50], result[:50],
             )
             return ""
         forced_src = _infer_script_lang(content) or src_lang
-        if strict_direction_first and forced_src == src_lang:
-            # 첫 호출이 이미 '방향 지시문 + 같은 src' 였다면 재시도는 **완전히 동일한 요청**이다
-            # (temperature=0이라 결과도 같다). LLM 왕복만 낭비하므로 바로 실패 처리한다.
-            logger.warning(
-                "[Translation] 에코 감지 — 첫 호출이 이미 방향 지시문 경로라 재시도 생략 "
-                "(src=%s content=%r result=%r)",
-                src_lang, content[:50], result[:50],
-            )
-            return ""
         logger.warning(
             "[Translation] 에코 감지 — src=%s 강제 + 방향 지시문 재시도 (content=%r result=%r)",
             forced_src, content[:50], result[:50],

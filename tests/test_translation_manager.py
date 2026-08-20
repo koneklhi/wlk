@@ -234,10 +234,8 @@ async def test_translate_interim_stores_when_line_id_matches():
 
     assert manager._interim_result == "현재 줄 번역"
     assert manager._interim_in_flight is False
-    # 미확정 경로이므로 use_rag=False 로 호출돼야 한다(RAG는 확정 전용).
-    # 에코 정책은 CLI 노브라 값을 못박지 않는다 — 기본값 변경이 이 테스트를 깨뜨려선 안 된다.
-    translator.translate_sentence.assert_called_once()
-    assert translator.translate_sentence.call_args.kwargs["use_rag"] is False
+    # 미확정 경로이므로 use_rag=False + 에코 재시도 없음(retry_on_echo=False) 으로 호출돼야 한다.
+    translator.translate_sentence.assert_called_once_with("block source", "en", use_rag=False, retry_on_echo=False)
 
 
 # ─── 확정 경로 실패 시도 상한 (_attempts / _note_failure) ─────────────────────
@@ -361,26 +359,22 @@ def test_interim_time_debounce_holds_within_interval():
 
 def test_interim_delta_gate_holds_small_growth():
     """델타 게이트: 직전 소스 대비 12자 미만 성장은 dispatch 안 됨, 12자 이상은 됨.
-
-    (시간 게이트는 통과하도록 last_dispatch_ts=0.0 + 큰 monotonic 값으로 격리.)
-    라틴 텍스트로 성장분을 구성한다 — effective_len에서 라틴은 _HANGUL_WEIGHT 값과 무관하게
-    raw len과 같으므로, 이 테스트가 게이트의 델타 산술 자체를 검증하지 한글 가중치 튜닝값에
-    종속되지 않는다(가중치를 2.8→4.0으로 올렸을 때 한글 텍스트 픽스처였다면 깨졌을 것)."""
+    (시간 게이트는 통과하도록 last_dispatch_ts=0.0 + 큰 monotonic 값으로 격리.)"""
     import unittest.mock as mock_module
 
     translator = make_translator_mock()
     manager = TranslationManager(translator)
     # 줄 전환 리셋을 피하려 line_id 를 미리 맞추고, 이미 번역된 소스를 세팅
     manager._interim_line_id = 1.0
-    manager._interim_source = "existing translated source text"
+    manager._interim_source = "기존에 번역된 긴 소스 텍스트"
 
-    small = manager._interim_source + "abc"  # 델타 3자 < 12
+    small = manager._interim_source + "가나다"  # 델타 3자 < 12
     with mock_module.patch("asyncio.ensure_future") as mock_ensure, \
          mock_module.patch("time.monotonic", return_value=100.0):
         manager.apply_interim_translation(small, "ko", line_id=1.0)
     mock_ensure.assert_not_called()
 
-    big = manager._interim_source + "abcdefghijkl"  # 델타 12자 >= 12
+    big = manager._interim_source + "가나다라마바사아자차카타"  # 델타 12자 >= 12
     with mock_module.patch("asyncio.ensure_future", make_closing_ensure_future()) as mock_ensure, \
          mock_module.patch("time.monotonic", return_value=100.0):
         manager.apply_interim_translation(big, "ko", line_id=1.0)
