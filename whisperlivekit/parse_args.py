@@ -497,6 +497,44 @@ def create_parser():
         "llm_translation.manager.RETRO_SCOPE_LINES(현재 20)를 사용. 전사 텍스트 대치는 이 값과 "
         "무관하게 항상 세션 전 구간에 적용된다 — 제한 대상은 LLM 호출뿐이다(번역 서버 폭주 방지).",
     )
+    # ── 미확정 미리보기(interim) 번역 튜닝 노브 ────────────────────────────────
+    # 전부 기본 None = 코드 상수 폴백(무회귀). 배포 PC에서 코드 수정 없이 쓸어보라고 노출한다.
+    parser.add_argument(
+        "--interim-min-chars", type=int, default=None, dest="interim_min_chars",
+        help="미확정 버퍼가 이 길이 미만이면 미리보기 번역을 요청하지 않는다. **단위는 raw 문자수가 "
+        "아니라 effective_len**(한글 1자 = --interim-hangul-weight 자). 기본값(None)은 "
+        "llm_translation.manager._MIN_INTERIM_CHARS(현재 6).",
+    )
+    parser.add_argument(
+        "--interim-min-delta-chars", type=int, default=None, dest="interim_min_delta_chars",
+        help="미확정 버퍼가 직전 번역 소스 대비 이만큼(effective) 자라야 다시 번역한다. **새 줄에서는 "
+        "직전 소스가 비어 있어 이 값이 곧 '첫 미리보기 발동 임계'다** — 첫 번역을 앞당기려면 "
+        "--interim-min-chars 가 아니라 이 값을 줄여야 한다. 기본값(None)은 _INTERIM_MIN_DELTA_CHARS(현재 12).",
+    )
+    parser.add_argument(
+        "--interim-min-interval", type=float, default=None, dest="interim_min_interval",
+        help="미리보기 번역 발동 최소 간격(초) — LLM 요청률 상한. 기본값(None)은 _INTERIM_MIN_INTERVAL_S(현재 0.5).",
+    )
+    parser.add_argument(
+        "--interim-hangul-weight", type=float, default=None, dest="interim_hangul_weight",
+        help="effective_len에서 한글 1자를 라틴 몇 자로 셀지. **올리면 한국어 미리보기가 더 적은 글자수에서 "
+        "= 더 빨리 발동**한다(라틴 전용 텍스트는 영향 없음). 기본값(None)은 translator._HANGUL_WEIGHT"
+        "(현재 2.8 — test_data 실측 한국어 5.5자/초 vs 영어 15.3자/초에서 유도).",
+    )
+    parser.add_argument(
+        "--interim-echo-policy", type=str, default=None, dest="interim_echo_policy",
+        choices=["retry", "discard", "off"],
+        help="미리보기 번역 결과가 원문과 같은 언어(에코)일 때의 처리. retry=방향 지시문으로 1회 재시도"
+        "(기본), discard=재시도 없이 폐기(구 동작 — 그 텍스트는 버퍼가 더 자랄 때까지 재시도되지 않아 "
+        "미리보기가 멎어 보인다), off=에코 게이트 미적용(정상 번역이 위양성으로 폐기되는지 진단용).",
+    )
+    parser.add_argument(
+        "--interim-strict-direction", action=BooleanOptionalAction, default=None,
+        dest="interim_strict_direction",
+        help="미리보기 번역의 **첫 호출부터** 출력 언어 강제 지시문을 붙인다(기본 ON). 에코가 난 뒤 "
+        "재시도로 고치는 대신 애초에 예방하므로 LLM 왕복이 늘지 않는다. --no-interim-strict-direction 으로 끈다.",
+    )
+
     # Stage 2 Qdrant RAG는 CLI 플래그가 없다 — 자산 경로가
     # whisperlivekit/llm_translation/__init__.py에 고정돼 있고, 그 디렉터리가 있으면 켜진다.
 

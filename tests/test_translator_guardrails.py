@@ -505,3 +505,119 @@ def test_interim_first_fire_thresholds_are_close_in_speech_time():
     assert en_secs == pytest.approx(0.79, abs=0.02)
     assert ko_secs == pytest.approx(0.78, abs=0.05)
     assert abs(ko_secs - en_secs) < 0.15, "첫 미리보기 지연이 방향에 따라 크게 달라선 안 된다"
+
+
+# ─── 에코 정책 + 선제 방향지시문 (배포 실측: interim 에코 폐기 다발) ────────────
+
+class _EchoTranslator(LlamaTranslator):
+    """_translate_once 를 가로채 호출 인자를 기록하고 지정한 결과를 돌려주는 스텁."""
+
+    def __init__(self, results):
+        super().__init__("m", "http://x")
+        self._results = list(results)
+        self.calls = []
+
+    async def _translate_once(self, content, src_lang, use_rag=False, strict_direction=False):
+        self.calls.append({"src_lang": src_lang, "strict_direction": strict_direction})
+        return self._results[min(len(self.calls) - 1, len(self._results) - 1)]
+
+
+@pytest.mark.anyio
+async def test_echo_policy_discard_returns_empty_without_retry():
+    """discard = 구 동작. 재시도 없이 빈 문자열 — LLM 호출 1회."""
+    tr = _EchoTranslator(["미래의 합동"])          # 한국어 입력에 한국어 출력 = 에코
+    out = await tr.translate_sentence("미래의 합동", "ko", echo_policy="discard")
+    assert out == ""
+    assert len(tr.calls) == 1
+
+
+@pytest.mark.anyio
+async def test_echo_policy_retry_makes_second_call_with_direction():
+    """retry = 방향 지시문을 붙여 1회 재시도. 재시도가 성공하면 그 결과를 쓴다."""
+    tr = _EchoTranslator(["미래의 합동", "Future joint operations"])
+    out = await tr.translate_sentence("미래의 합동", "ko", echo_policy="retry")
+    assert out == "Future joint operations"
+    assert len(tr.calls) == 2
+    assert tr.calls[0]["strict_direction"] is False
+    assert tr.calls[1]["strict_direction"] is True, "재시도는 방향 지시문을 붙여야 한다"
+
+
+@pytest.mark.anyio
+async def test_echo_policy_off_passes_result_through():
+    """off = 에코 게이트 미적용. 위양성 진단용 — 결과를 그대로 통과시킨다."""
+    tr = _EchoTranslator(["미래의 합동"])
+    out = await tr.translate_sentence("미래의 합동", "ko", echo_policy="off")
+    assert out == "미래의 합동"
+    assert len(tr.calls) == 1
+
+
+@pytest.mark.anyio
+async def test_strict_direction_first_applies_directive_on_first_call():
+    """선제 방향지시문 — 첫 호출부터 지시문을 붙여 에코를 예방한다(왕복 증가 없음)."""
+    tr = _EchoTranslator(["Future joint operations"])
+    out = await tr.translate_sentence("미래의 합동", "ko", strict_direction_first=True)
+    assert out == "Future joint operations"
+    assert len(tr.calls) == 1
+    assert tr.calls[0]["strict_direction"] is True
+
+
+@pytest.mark.anyio
+async def test_strict_direction_first_skips_identical_retry():
+    """첫 호출이 이미 방향 지시문 경로였고 src 도 같으면, 재시도는 **완전히 동일한 요청**이다.
+
+    temperature=0 이라 결과도 같으므로 LLM 왕복만 낭비한다 — 재시도를 생략해야 한다.
+    """
+    tr = _EchoTranslator(["미래의 합동"])
+    out = await tr.translate_sentence(
+        "미래의 합동", "ko", echo_policy="retry", strict_direction_first=True
+    )
+    assert out == ""
+    assert len(tr.calls) == 1, "동일 요청 재시도로 LLM 왕복을 낭비하면 안 된다"
+
+
+@pytest.mark.anyio
+async def test_retry_on_echo_false_still_means_discard():
+    """하위호환: retry_on_echo=False 는 echo_policy='discard' 와 같게 동작한다."""
+    tr = _EchoTranslator(["미래의 합동"])
+    out = await tr.translate_sentence("미래의 합동", "ko", retry_on_echo=False)
+    assert out == ""
+    assert len(tr.calls) == 1
+
+
+# ─── CLI 노브가 실제로 게이트를 움직이는가 ────────────────────────────────────
+
+def test_hangul_weight_knob_shifts_korean_threshold():
+    """--interim-hangul-weight 를 올리면 한국어가 더 적은 글자수에서 발동한다."""
+    from whisperlivekit.llm_translation.manager import TranslationManager
+
+    def dispatches(text, **knobs):
+        mgr = TranslationManager(MagicMock(translate_sentence=AsyncMock(return_value="x")), **knobs)
+        def closing(coro):
+            coro.close()
+            return MagicMock()
+        with mock_module.patch("asyncio.ensure_future", side_effect=closing) as m:
+            mgr.apply_interim_translation(text, "ko", line_id=1.0)
+        return m.call_count
+
+    short_ko = "미래의"                                  # 한글 3자
+    assert dispatches(short_ko) == 0, "기본 가중치(2.8)에선 3자(8.4 eff) < 12 라 보류"
+    assert dispatches(short_ko, interim_hangul_weight=5.0) == 1, "가중치를 올리면 같은 3자가 발동"
+    assert dispatches(short_ko, interim_min_delta_chars=6) == 1, "델타 임계를 낮춰도 발동"
+
+
+def test_knobs_default_to_module_constants():
+    """노브를 안 주면 모듈 상수 폴백 — 무회귀(Phase A 인자 관례)."""
+    from whisperlivekit.llm_translation.manager import (
+        _INTERIM_MIN_DELTA_CHARS,
+        _INTERIM_MIN_INTERVAL_S,
+        _MIN_INTERIM_CHARS,
+        TranslationManager,
+    )
+
+    mgr = TranslationManager(MagicMock())
+    assert mgr._min_chars == _MIN_INTERIM_CHARS
+    assert mgr._min_delta == _INTERIM_MIN_DELTA_CHARS
+    assert mgr._min_interval == _INTERIM_MIN_INTERVAL_S
+    assert mgr._hangul_weight == _HANGUL_WEIGHT
+    assert mgr._echo_policy == "retry"
+    assert mgr._strict_direction is True

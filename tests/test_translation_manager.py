@@ -234,8 +234,10 @@ async def test_translate_interim_stores_when_line_id_matches():
 
     assert manager._interim_result == "현재 줄 번역"
     assert manager._interim_in_flight is False
-    # 미확정 경로이므로 use_rag=False + 에코 재시도 없음(retry_on_echo=False) 으로 호출돼야 한다.
-    translator.translate_sentence.assert_called_once_with("block source", "en", use_rag=False, retry_on_echo=False)
+    # 미확정 경로이므로 use_rag=False 로 호출돼야 한다(RAG는 확정 전용).
+    # 에코 정책은 CLI 노브라 값을 못박지 않는다 — 기본값 변경이 이 테스트를 깨뜨려선 안 된다.
+    translator.translate_sentence.assert_called_once()
+    assert translator.translate_sentence.call_args.kwargs["use_rag"] is False
 
 
 # ─── 확정 경로 실패 시도 상한 (_attempts / _note_failure) ─────────────────────
