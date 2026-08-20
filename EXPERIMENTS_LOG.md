@@ -6812,3 +6812,177 @@ Exp-218의 LCP 방식과 유사한 재설계가 필요하나, 기존에 검증�
 
 ### 기록
 - Epoch 변화 없음. 코드 변경 없음(측정·감사 전용). 벤치마크·전사 없음(경로 C 미사용).
+
+---
+
+## Exp-221 — 파라미터 스윕 캠페인 S1 v2 스크리닝 23/27 arm (2026-08-20) [E8, 방향신호 확보·기본값 무변경]
+
+**측정 언어모드**: `auto` 단일 (테스트 6파일 + Track C의 kor1 전부 `--lan auto`)
+
+### 발단
+2026-08-12 중단된 파라미터 튜닝 캠페인을 재시작했다. 직전 S1(58-arm, E6·H1)은 워크트리 삭제로 원장이
+유실됐고, 그 사이 master가 58커밋 전진하며 **epoch E6→E8**(Exp-210/214/215/218)·**하니스 H1→H2**
+(Exp-207, 배포 React UI `/wlkies/` 스크래핑)로 바뀌어 구 결과가 이중으로 stale이었다(파국 실패모드
+자체가 달라짐). Track B(QualityGate) 3축은 Exp-212~219가 표적 실험으로 이미 종결해 arm이 55→27로 줄었다.
+
+### 방법
+- 경로 C(VBCable), `--lan auto`, diar-ON(Sortformer), CRT 3.0, **`repeat=2`**, 스크리닝 6파일
+  (bong1/ytn2/sbs1/kor2/kor3/eng1). Track C arm만 kor1 추가(7파일).
+- OFAT(1 arm = 1 knob), `scripts/sweep_runner.py`가 `--server-arg`로 서버에 인자를 넘기고 arm 단위로
+  원장(append-only JSON)에 flush. 워크트리 `worktrees/param-tuning-campaign`(master `07d5a9a` 위 리베이스).
+- **파국(catastrophe) 정의**: 파일별 E8 baseline median + 8%p 초과 회차 수 / 총 회차. 판정은 절대율이
+  아니라 **같은 세션 BASE-0 대비** 비교(Exp-212가 실측한 무개입 노이즈 밴드가 임계를 걸치므로).
+- 실행: 2026-08-19 20:59 ~ 08-20 08:05(11h 06m), 27 arm 중 **23개 완료** 후 시간예산 소진으로 중단
+  (24번째 D3-min-chunk-size-0.2 진행 중). 미측정 4 arm(D3 2개·D4 2개)은 원장에 `pending`.
+
+### 테스트 세트 결과
+
+파국 = 초과회차/총회차. WER은 2회 평균(%).
+
+| arm | 파국 | bong1 | ytn2 | sbs1 | kor2 | kor3 | eng1 | kor1 |
+|---|---|---|---|---|---|---|---|---|
+| **BASE-0**(대조군) | 1/12 | 28.8 | 14.0 | 8.0 | 19.7 | 37.7 | 4.8 | — |
+| A2-speech-pad-ms-60 | 1/12 | 25.9 | 12.1 | 8.6 | 20.3 | 35.1 | 5.2 | — |
+| A2-speech-pad-ms-100 | 1/12 | 22.4 | 11.6 | 16.7 | 15.9 | 34.1 | 5.2 | — |
+| A2-speech-pad-ms-150 | 1/12 | 27.3 | 10.8 | 9.2 | 16.9 | 35.8 | 5.2 | — |
+| A3-vad-threshold-0.25 | 1/12 | 24.7 | **9.4** | 10.4 | 24.5 | 35.1 | 6.2 | — |
+| A3-vad-threshold-0.2 | 2/12 | 33.0 | 10.1 | 8.6 | 14.8 | 39.4 | 4.8 | — |
+| A1-min-silence-duration-ms-300 | 2/12 | 24.7 | 11.1 | 10.7 | 20.0 | 33.4 | 4.8 | — |
+| D2-audio-max-len-10 | 2/12 | 27.9 | 13.8 | 10.4 | 28.3 | 37.1 | 5.2 | — |
+| D2-audio-max-len-12 | 1/12 | 28.8 | 13.5 | 9.5 | 16.6 | 47.0 | 6.2 | — |
+| D2-audio-max-len-20 | 2/12 | 27.9 | 11.8 | 20.8 | 17.9 | 37.4 | 5.2 | — |
+| D1-frame-threshold-22 | 2/12 | 24.7 | 18.5 | 11.0 | 20.3 | 41.4 | 4.3 | — |
+| D1-frame-threshold-20 | 2/12 | 30.7 | 19.2 | 10.4 | 16.2 | 32.5 | 3.3 | — |
+| D1-frame-threshold-18 | 3/12 | 35.2 | 22.2 | 8.9 | 17.6 | 30.1 | 4.8 | — |
+| C1-max-context-tokens-25 | 1/14 | 22.6 | 12.8 | 9.2 | 16.6 | 33.8 | 4.8 | 19.9 |
+| C1-max-context-tokens-50 | **6/14** | 29.1 | 14.8 | 32.1 | 19.7 | 37.7 | 6.7 | 25.1 |
+| C1-max-context-tokens-100 | **5/14** | 27.4 | 11.1 | 19.9 | 23.4 | 31.5 | 6.7 | 27.5 |
+| C1-max-context-tokens-200 | **6/14** | 27.0 | 12.6 | 24.1 | 40.3 | 54.6 | 4.3 | 43.9 |
+| A5-min-real-silence-secs-0.3 | **0/12** | 27.7 | 10.1 | 9.2 | 16.2 | 35.4 | 4.8 | — |
+| A5-min-real-silence-secs-0.5 | 2/12 | 31.9 | 15.3 | 9.5 | 16.2 | 41.4 | 5.7 | — |
+| A5-min-real-silence-secs-0.6 | **0/12** | **20.9** | 13.1 | 8.6 | 13.4 | 38.1 | 3.3 | — |
+| A4-vac-chunk-size-0.1 | 1/12 | 22.7 | 15.5 | 10.4 | 19.0 | 43.7 | 4.8 | — |
+| A4-vac-chunk-size-0.32 | 3/12 | 27.4 | 19.0 | 9.5 | 16.9 | 44.7 | 5.2 | — |
+| A4-vac-chunk-size-0.5 | **0/12** | **21.4** | 15.0 | 9.5 | **12.4** | **28.1** | 5.7 | — |
+
+**무출력(전사 0자)은 23 arm 전부 0건**(`empty_transcripts` 신규 집계). 거동 카운터가 BASE-0와 동일한
+noise-control arm도 0개 — 23 arm 전부 파이프라인을 실제로 건드렸다.
+
+> **검정력 경고(중요)**: `repeat=2`라 파일당 회차가 2회뿐이다. 파국 **±1건은 노이즈**이며(BASE-0 자신이
+> 1/12), WER도 2회 평균이라 Exp-212가 N=9로 실측한 무개입 밴드(bong1 19.9~34.6 · ytn2 10.8~21.7 ·
+> sbs1 8.3~10.7)를 넘지 못한다. 아래는 전부 **방향 신호**이며 채택/기각 확정이 아니다.
+
+### 분석 (전사 내용 정성 대조)
+
+> 대조 기준: arm·파일별 **2회 중 WER이 높은 회차**(보수적 선택)이므로 아래 인용 옆 수치는 위 표의 2회
+> 평균과 다르다. `hyp_len`/`ref_len`은 전사·정답 문자 수.
+
+**C1-max-context-tokens-200** (파국 6/14 — 붕괴 기전 확인):
+- **단어 유실·잘림(지배적)**: kor3 `hyp_len=340` / `ref_len=675` — **정답의 절반이 사라졌다**(WER 73.5%).
+  kor2도 `398/600`, sbs1 `566/754`. 파국의 실체는 환각 폭주가 아니라 **대량 절단**이다.
+- **환각 폭주(동반)**: kor3 전사 `"기동함세, 기둥함대사, 기동함대. 사나 기동전달을 향상하고"` / 정답
+  `"기동함대사 이하의 기동전달을 창설하고"` — 같은 어구가 변주 반복되며 뒤 문장을 밀어냄.
+- ytn2만 12.8%로 정상(`hyp_len=1190`) — 영어 단일언어 구간은 긴 문맥에 덜 취약.
+
+**D1-frame-threshold-18** (파국 3/12 — 조기 커밋 기전):
+- **중복 방출(삽입형)**: ytn2 `hyp_len=1315` / `ref_len=1148`로 **과잉 출력**(WER 29.1%), 반복 4-gram
+  `"in our enforcement of the United"` ×2 — 같은 구간이 두 번 확정됐다.
+- **문장 첫 대문자 소실**: bong1 전사 `"song when you read"` / 정답 `"Song, when you read"` — 문장 시작
+  문맥 없이 조각을 조기 확정한 흔적.
+- 거동 카운터가 같은 방향으로 단조 증가(QG실단어 228→242→258, anchor_repeat 11→32→50) — 조기 커밋이
+  저품질 토큰을 확정시키고 후처리 필터가 더 도는 그림과 정합.
+
+**A4-vac-chunk-size-0.5** (파국 0/12 — 개선 기전):
+- **길이 수렴**: kor3 `hyp_len=671` / `ref_len=675`(BASE-0은 `739/675`로 과잉), bong1 `1678/1655`,
+  sbs1 `749/754` — **과잉 방출이 줄어 정답 길이에 수렴**. QG 실단어 억제 143→75(절반)와 정합.
+- **코드스위칭 경계 단어 복원**: bong1 전사 `"누가 주인공일까 이런 생각을 제가 제일 많이 했어요"` ·
+  `"who is the main prota…"` / BASE-0 동일 구간은 `"주인공일까 이런 생각을 제가 제일"`(**"누가"·"많이
+  했어요" 유실**) · `"who is protagonist"`(**"the main" 유실**). 한↔영 전환 경계의 유실이 회복됐다.
+
+**BASE-0**(기준선 실패 모드):
+- **과분할**: kor3 전사 `"원거리 타격과. 기동전력 강화를 위한. 기동함세 기동함대사 이하의."` — 정답에
+  없는 온점이 구절마다 삽입돼 문장이 조각남.
+- **코드스위칭 경계 유실**: bong1 위 인용 참조.
+
+**이번 변경 영향**: 이번 실험은 **코드 변경 없이 CLI 파라미터만** 바꾼 스윕이므로 위 실패 모드는 각
+knob의 효과다. `max-context-tokens` 상향은 절단+반복을, `frame-threshold` 하향은 중복 방출을 만들고,
+`vac-chunk-size` 상향(0.5)은 과잉 방출을 줄여 경계 유실까지 함께 회복시켰다. Case B(단어 중간 분절)는
+대조한 4 arm 전 파일에서 0건.
+
+### 채택 (조건) 판정
+- **①최악 케이스 미회귀 / ②median 개선** 판정은 이번 단계에서 **적용 불가** — S1은 스크리닝(`repeat=2`)이라
+  max/median을 분리할 표본이 없다. **어떤 arm도 채택하지 않았고 기본값은 하나도 바꾸지 않았다.**
+- 채택 게이트는 S2(`repeat=16`)에서만 적용한다.
+
+### 결론 (방향 신호)
+**기각 방향 (신호가 노이즈를 명확히 초과):**
+1. **`--max-context-tokens` ≥50** — 파국률 BASE 8% → 36~43%(4~6배). 200에서 한국어 낭독 전면 붕괴
+   (kor2 40.3·kor3 54.6·kor1 43.9). **25는 정상 범위**(1/14)이므로 "이전 문맥을 늘리는 방향" 자체가 유해.
+   turbo에서 긴 문맥이 절단·반복을 먹인다는 해석과 정성 대조가 일치.
+2. **`--frame-threshold` 하향** — 22→20→18로 파국 17%→17%→25%, ytn2 18.5→19.2→22.2 **단조 악화**.
+   상향(35)은 Exp-193에서 배포 opt-in으로 이미 종결 → **D1 축 양방향 정리 완료**.
+3. **`--vad-threshold 0.2`** — 2/12(bong1 33.0). 구 S1(E6·H1)의 "하향은 맞되 과하면 역효과"를 E8에서 재확인
+   (0.25는 BASE 동률이고 ytn2 9.4%로 전 arm 최저).
+
+**S2(`repeat=16`) 승격 후보:**
+- **A4-vac-chunk-size-0.5** — 파국 0/12, bong1 −7.4pp·kor2 −7.3pp·kor3 −9.6pp(BASE-0 대비), QG 실단어
+  억제 143→75(거동 변화 증거 뚜렷, noise-control 아님). 정성 대조에서 경계 유실 회복 확인.
+- **A5-min-real-silence-secs-0.6** — 파국 0/12, bong1 −7.9pp·kor2 −6.3pp, anchor_repeat 35→5.
+- 차순위: A5-0.3(0/12이나 0.5가 2/12라 **비단조** → 노이즈 가능), A2-speech-pad-ms-100/150(구 S1 최유력
+  신호를 E8에서 재현, 단 100은 sbs1 8.0→16.7 단발 급등), A3-vad-threshold-0.25.
+
+### 부수 발견 — 거동 계측 결함 2건 (서버 로그 301개 전수 grep)
+1. **`refresh_segment` 카운터 사문화** — `[RefreshSegment]`가 **301개 로그 전부 0회**. 태그·로그레벨은
+   정상(`align_att_base.py:272` `logger.info`, 같은 로그에 INFO 24줄 존재)이나 E7(Exp-210)이 QG refresh를
+   조건부 보존 경로(`_try_preserving_refresh`)로 바꾸면서 이 로그 지점에 도달하지 않는 것으로 보인다.
+   **Exp-212의 CRT 사문화와 같은 부류** — 이 카운터로는 refresh 발동량을 판정할 수 없다.
+2. **`qg_preserve`가 `qg_reset`과 완전 중복** — 23 arm 전부 1:1 정확히 일치했고 로그 단위로도 각각 53개
+   로그에서만 등장해 집합이 같다. QG streak 도달이 곧 보존 시도이므로 구조상 당연하나 독립 정보가 없다 —
+   보존 성공/실패 분기를 따로 세도록 패턴을 바꿔야 의미가 생긴다.
+
+### 하니스 버그 2건 (실측 착수까지 3차 기동을 요한 원인, 전부 수정)
+1. **dist staleness** — Stage 0′의 `pnpm build` 이후 남은 git 작업이 `routeTree.gen.ts`(TanStack Router가
+   재생성하는 git 추적 파일) mtime을 재갱신해 `vbcable_test.dist_staleness()` 가드에 걸렸다. 가드는 정상
+   동작. **교훈: `pnpm build`는 모든 git 작업이 끝난 뒤 마지막에 실행한다.**
+2. **스테일 `--server-frontend-dir`** — `sweep_runner.py`가 존재한 적 없는 `.omc/eval_empty_frontend`를 모든
+   arm에 강제 지정했다. H1(내장 UI 기본) 시절 무해했던 스텁이 **H2 전환(Exp-207) 후 방치**돼 배포 UI 대신
+   내장 UI가 서빙됐고(서버 로그 `GET /web/src/save.svg 404`) 배포 UI 셀렉터를 못 찾아 실패. 제거로 해소.
+- 부수: `sweep_runner.py`가 eval.py의 stderr를 버려 원장만으로는 진단이 불가능했다 → stderr tail도 원장
+  `note`에 기록하도록 수정. **이 수정이 2번째 버그를 즉시 표면화**시켰다(1번째는 수동 재현이 필요했다).
+- 방법론 자성 1건: 1차 진단에서 `--server-frontend-dir` 가설을 세웠다가 "제거해도 실패"로 기각했는데, 그
+  재현 테스트가 dist staleness와 **동시에 걸려 있어 변수 하나만 바꾼 게 아니었다**. 한 번에 한 변수 원칙 위반.
+
+### master 반영 (커밋 `54c65af` → merge `a794706`)
+기본값 무변경이 검증된 것만 선별 이식했다. **파라미터 기본값 변경 없음**(S1 결과는 채택 근거가 아니므로).
+- `eval.py` `--continue-on-harness-error` help의 리터럴 `%` → `%%` — master `dbc70fa`(2026-08-14) 이래
+  `eval.py --help`가 `ValueError: unsupported format character`로 죽던 **잠복 버그**(어떤 테스트도 `--help`를
+  실행하지 않아 미발견). 검증: master는 ValueError, 수정본은 exit 0.
+- `_check_no_speech`의 sot_index 보정(`_sot_pos()`) — master에 `NOTE(백로그)`로 남아 있던 항목 해소.
+  `--max-context-tokens>0`/`--static-init-prompt` 사용 시 `<|startofprev|>` 위치 분포를 읽어 스퓨리어스
+  "no speech, stop"을 내던 것. **운영 기본값(context 빔)에선 `ctx_len=0`이라 무동작.**
+- `eval.py --server-arg` 범용 패스스루 + provenance `server_args` + 배너 `arm=` (기존 화이트리스트 방식은
+  새 knob마다 eval.py를 고쳐야 했다).
+- CLI knob 3종 노출: `--min-silence-duration-ms`/`--speech-pad-ms`/`--rewind-threshold`. 전부 `default=None`
+  이고 소비 지점에서 기존 상수로 폴백(200 / 30=`silero_vad_iterator.py:200` 기본값 / AlignAttConfig 200).
+  `getattr(...) or` 대신 `is None`을 써 명시적 `0`이 falsy로 삼켜지지 않게 했다.
+- `eval.py --audio-max-len` help "서버 기본 30.0"→15.0 정정(Exp-161 반영 누락).
+- `tests/test_param_sweep_knobs.py` 동반 이식. 검증: pytest **909 passed / 1 skipped**(pre-existing
+  `pytest_asyncio` 미설치), ruff clean, 신규 knob 기본값 전부 `None` 확인.
+- 캠페인 전용 자산(`sweep_runner.py`·원장·진행리포트·transcripts)은 `feat/param-tuning-campaign`에 잔류.
+
+### 다음 가설
+1. **S2 승격**(`repeat=16`, arm당 ~3.6h) — 1순위 A4-vac-chunk-size-0.5, 2순위 A5-min-real-silence-secs-0.6.
+   두 arm 모두 "과잉 방출 억제"라는 같은 기전을 공유하므로, S2에서 **둘의 조합(2-factor)**도 후보.
+2. 미측정 4 arm(D3-min-chunk-size 0.2/0.3 · D4-rewind-threshold 100/400) 완주 — 같은 명령 재실행 시 원장의
+   `done` 23개를 건너뛰고 이어간다.
+3. 계측 결함 2건 수정을 **S2 이전에** — 안 고치면 S2의 거동 귀속(noise-control 판정)이 부정확해진다.
+4. `--max-context-tokens`는 25 이하 구간만 남았다(50 이상 기각). 25도 BASE 대비 우위가 없어 우선순위 낮음.
+
+### 기록
+- Epoch 변화 없음(**E8 유지**) — master 반영분은 인프라·잠복버그 수정이고 기본 동작을 바꾸지 않는다
+  (기본값 무변경, sot_index 보정은 context 빔에서 무동작). 실패 모드를 바꾸는 구조 변경이 아니다.
+- 하니스 세대 **H2**(배포 React UI 스크래핑).
+- 원장(SoT, 기계 판독): `docs/research/2026-08-19_param-sweep-ledger-v2.json` (feat/param-tuning-campaign)
+- 진행 리포트: `docs/research/2026-08-19_param-sweep-progress-v2.md` / 계획 정본:
+  `docs/research/2026-08-19_param-sweep-restart-plan.md`
+- eval JSON 23개: `worktrees/param-tuning-campaign/.omc/benchmarks/eval_*_S1.json`(gitignore, 로컬)
